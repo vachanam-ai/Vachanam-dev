@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 
@@ -12,6 +13,9 @@ class SessionState:
     patient_name: str | None = None
     patient_phone: str | None = None
     complaint: str | None = None
+
+    # Cached branch context (set in on_enter to avoid repeated DB lookups)
+    emergency_contact: str | None = None
 
     # Token / slot tracking
     token_held: bool = False
@@ -31,6 +35,8 @@ class SessionState:
     # Solo plan 4-minute cap
     elapsed_seconds: int = 0
     plan: str | None = None  # solo | clinic | multi
+    call_start: datetime | None = None  # set at entrypoint, used for cap enforcement
+    solo_warning_sent: bool = False  # gate the 4-minute warning to fire only once
 
     # Logging
     livekit_room_id: str | None = None
