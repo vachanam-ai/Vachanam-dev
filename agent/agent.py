@@ -125,7 +125,8 @@ async def _llm_with_fallback(messages: list) -> str:
         genai.configure(api_key=settings.gemini_api_key)
         model = genai.GenerativeModel("gemini-2.5-flash")
         # Run synchronous SDK call in thread to avoid blocking the event loop
-        response = await asyncio.to_thread(model.generate_content, messages[-1]["content"])
+        combined = "\n".join(m["content"] for m in messages)
+        response = await asyncio.to_thread(model.generate_content, combined)
         return response.text
     except Exception as e:
         logger.error("gemini_failed_switching_to_openai", error=str(e))
