@@ -164,7 +164,7 @@ async def assign_token(
             await redis_client.decr(redis_key)  # rollback
             return {"success": False, "reason": "full"}
 
-        logger.info("token_assigned", doctor_id=str(doctor_id), token=token_number, date=str(booking_date))
+        logger.info("token_assigned", branch_id=str(branch_id), doctor_id=str(doctor_id), token=token_number, date=str(booking_date))
         return {"success": True, "token_number": token_number, "redis_key": redis_key}
 
     else:  # appointment type
@@ -183,7 +183,7 @@ async def assign_token(
             await redis_client.decr(slot_key)  # rollback
             return {"success": False, "reason": "full"}
 
-        logger.info("slot_assigned", doctor_id=str(doctor_id), time=str(appointment_time), date=str(booking_date))
+        logger.info("slot_assigned", branch_id=str(branch_id), doctor_id=str(doctor_id), time=str(appointment_time), date=str(booking_date))
         return {
             "success": True,
             "token_number": slot_count,
@@ -270,7 +270,7 @@ async def confirm_booking(
         branch_id=str(branch_id),
         doctor_id=str(doctor_id),
         token_number=token_number,
-        patient_phone=patient_phone[-4:] if patient_phone else "None",
+        patient_phone=patient_phone[-4:] if patient_phone else "unknown",
         via=source,
     )
 
