@@ -1,11 +1,7 @@
-import pytest
 import pytest_asyncio
 from datetime import date, timedelta
-from uuid import uuid4
 
-from sqlalchemy import select
-
-from backend.models.schema import Organization, Branch, Doctor, Patient, Token
+from backend.models.schema import Organization, Branch, Doctor
 from agent.tools.booking_tools import check_availability, assign_token
 
 
@@ -48,7 +44,6 @@ async def seeded_clinic(db):
     return {"org": org, "branch": branch, "doctor": doctor}
 
 
-@pytest.mark.asyncio
 async def test_check_availability_returns_speech_string(seeded_clinic, db, redis):
     branch = seeded_clinic["branch"]
     doctor = seeded_clinic["doctor"]
@@ -60,11 +55,10 @@ async def test_check_availability_returns_speech_string(seeded_clinic, db, redis
     assert str(today.day) in result or "0" in result
 
 
-@pytest.mark.asyncio
 async def test_assign_token_returns_sequential_numbers(seeded_clinic, db, redis):
     branch = seeded_clinic["branch"]
     doctor = seeded_clinic["doctor"]
-    today = date.today() + timedelta(days=1)  # tomorrow to avoid test pollution
+    today = date.today() + timedelta(days=1)
 
     result1 = await assign_token(doctor.id, branch.id, today, db)
     result2 = await assign_token(doctor.id, branch.id, today, db)
@@ -74,26 +68,21 @@ async def test_assign_token_returns_sequential_numbers(seeded_clinic, db, redis)
     assert result2["token_number"] == result1["token_number"] + 1
 
 
-@pytest.mark.asyncio
 async def test_assign_token_respects_daily_limit(seeded_clinic, db, redis):
     branch = seeded_clinic["branch"]
     doctor = seeded_clinic["doctor"]
     today = date.today() + timedelta(days=2)
 
-    # Fill up the queue (limit=20)
     for _ in range(20):
         await assign_token(doctor.id, branch.id, today, db)
 
-    # 21st should fail
     result = await assign_token(doctor.id, branch.id, today, db)
     assert result["success"] is False
     assert result["reason"] == "full"
 
 
-@pytest.mark.asyncio
 async def test_token_rollback_on_full(seeded_clinic, db, redis):
     """After a 'full' rejection, the Redis counter must not have incremented."""
-    import redis.asyncio as aioredis
     branch = seeded_clinic["branch"]
     doctor = seeded_clinic["doctor"]
     today = date.today() + timedelta(days=3)
@@ -101,11 +90,9 @@ async def test_token_rollback_on_full(seeded_clinic, db, redis):
     for _ in range(20):
         await assign_token(doctor.id, branch.id, today, db)
 
-    r = aioredis.from_url("redis://localhost:6379", decode_responses=True)
-    counter_before = int(await r.get(f"token:{doctor.id}:{branch.id}:{today}") or 0)
+    counter_before = int(await redis.get(f"token:{doctor.id}:{branch.id}:{today}") or 0)
 
     await assign_token(doctor.id, branch.id, today, db)  # 21st — should fail + DECR
 
-    counter_after = int(await r.get(f"token:{doctor.id}:{branch.id}:{today}") or 0)
+    counter_after = int(await redis.get(f"token:{doctor.id}:{branch.id}:{today}") or 0)
     assert counter_after == counter_before  # DECR rolled it back
-    await r.aclose()
