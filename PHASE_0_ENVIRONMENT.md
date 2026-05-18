@@ -44,7 +44,6 @@ Create all accounts before writing code. Some take days to approve.
 | Meta Business Manager | business.facebook.com | GST number + address proof | 2–4 days |
 | Razorpay | razorpay.com | GST number + bank account | After GST |
 | Vobiz Partner API | docs.vobiz.ai | Email support@vobiz.ai | 1 business day |
-| Twilio (dev backup) | twilio.com | Just Gmail — no documents | Instant |
 
 ### Email to send today — Vobiz Partner API
 
@@ -373,16 +372,13 @@ class Settings(BaseSettings):
     livekit_api_key: str = "devkey"
     livekit_api_secret: str = "devsecret"
 
-    # Telephony — Vobiz
-    vobiz_api_key: str = ""
-    vobiz_api_secret: str = ""
-    vobiz_webhook_secret: str = ""
+    # Telephony — Vobiz SIP trunk
+    vobiz_sip_domain: str = ""
+    vobiz_sip_username: str = ""
+    vobiz_sip_password: str = ""
+    vobiz_did_number: str = ""
     vobiz_partner_auth_id: str = ""
     vobiz_partner_auth_token: str = ""
-
-    # Telephony — Twilio (backup)
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
 
     # WhatsApp — Meta Cloud API
     meta_access_token: str = ""

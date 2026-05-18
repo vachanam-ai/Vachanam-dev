@@ -255,7 +255,6 @@
 | Deploy backend to Render | ⬜ | `infra/render.yaml` |
 | Deploy frontend to Cloudflare Pages | ⬜ | |
 | UptimeRobot: monitor all 3 services | ⬜ | SMS alert on downtime |
-| Twilio SIP backup configured | ⬜ | Failover from Vobiz |
 | Load test: 10 concurrent calls | ⬜ | |
 | First real clinic onboarded | ⬜ | 🎯 |
 

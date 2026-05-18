@@ -88,7 +88,6 @@ analytics on a dashboard. Everything runs automatically.
 | LLM fallback | GPT-4o mini | latest | Auto-fallback if Gemini fails. 99.99% uptime. |
 | Voice pipeline | LiveKit Agents | 1.4.x | Self-hosted. Open source. SIP + WebSocket. |
 | Telephony | Vobiz | — | Indian DID. ₹0.65/min streaming. Partner API. |
-| Telephony backup | Twilio | — | Backup SIP trunk. $1/DID/month. |
 | Token locking | Upstash Redis | 7.x | Managed. Free tier. Atomic INCR. |
 | Calendar | Google Calendar API | v3 | Free. Doctors already use it. |
 | WhatsApp | Meta Cloud API | v20+ | Zero BSP fee. Direct integration. |
@@ -147,7 +146,7 @@ Fly.io + Render + Neon + Vobiz test DID + domain/email = ₹3,048/month
 
 ---
 
-## ENVIRONMENT VARIABLES — ALL 25 REQUIRED
+## ENVIRONMENT VARIABLES — ALL 26 REQUIRED
 
 ```bash
 # ── AI ────────────────────────────────────────────────────────────────
@@ -160,16 +159,13 @@ LIVEKIT_URL=wss://vachanam-agent.fly.dev
 LIVEKIT_API_KEY=                  # generated during LiveKit server setup
 LIVEKIT_API_SECRET=               # generated during LiveKit server setup
 
-# ── Telephony (Vobiz) ─────────────────────────────────────────────────
-VOBIZ_API_KEY=                    # from Vobiz Partner dashboard
-VOBIZ_API_SECRET=                 # from Vobiz Partner dashboard
-VOBIZ_WEBHOOK_SECRET=             # for verifying Vobiz webhooks
-VOBIZ_PARTNER_AUTH_ID=            # your master partner account ID
-VOBIZ_PARTNER_AUTH_TOKEN=         # your master partner token
-
-# ── Telephony backup (Twilio) ─────────────────────────────────────────
-TWILIO_ACCOUNT_SID=               # from twilio.com console
-TWILIO_AUTH_TOKEN=                # from twilio.com console
+# ── Telephony (Vobiz SIP trunk) ───────────────────────────────────────
+VOBIZ_SIP_DOMAIN=                 # e.g. abc123.sip.vobiz.ai (trunk address in LiveKit)
+VOBIZ_SIP_USERNAME=               # auth credential from Vobiz trunk setup
+VOBIZ_SIP_PASSWORD=               # auth credential from Vobiz trunk setup
+VOBIZ_DID_NUMBER=                 # purchased DID in E.164 format e.g. +914066XXXXXX
+VOBIZ_PARTNER_AUTH_ID=            # your master partner account ID (for provisioning)
+VOBIZ_PARTNER_AUTH_TOKEN=         # your master partner token (for provisioning)
 
 # ── WhatsApp (Meta Cloud API — no BSP) ───────────────────────────────
 META_ACCESS_TOKEN=                # permanent token from Meta Business
@@ -554,7 +550,7 @@ Each phase has a checklist at the end. Every item must be checked before moving 
 | Fly.io Mumbai | 99.0–99.5% | Singapore standby VM |
 | Render backend | 99.9% | Auto-restart |
 | Neon Postgres | 99.9% | Daily automatic backups |
-| Vobiz | 99.9% | Twilio backup SIP |
+| Vobiz | 99.9% | Retry + graceful "call back" message to patient |
 | Overall app | 99.4% | All mitigations active |
 
 ---

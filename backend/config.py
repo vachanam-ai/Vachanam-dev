@@ -12,14 +12,13 @@ class Settings(BaseSettings):
     livekit_api_key: str
     livekit_api_secret: str
 
-    # Telephony
-    vobiz_api_key: str = ""
-    vobiz_api_secret: str = ""
-    vobiz_webhook_secret: str = ""
+    # Telephony — Vobiz SIP trunk
+    vobiz_sip_domain: str = ""
+    vobiz_sip_username: str = ""
+    vobiz_sip_password: str = ""
+    vobiz_did_number: str = ""
     vobiz_partner_auth_id: str = ""
     vobiz_partner_auth_token: str = ""
-    twilio_account_sid: str = ""
-    twilio_auth_token: str = ""
 
     # WhatsApp
     meta_access_token: str = ""

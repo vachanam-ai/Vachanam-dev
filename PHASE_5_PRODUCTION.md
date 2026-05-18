@@ -216,9 +216,10 @@ fly secrets set \
   OPENAI_API_KEY="your_openai_key" \
   GEMINI_API_KEY="your_gemini_key" \
   GEMINI_API_KEY="your_gemini_key" \
-  VOBIZ_API_KEY="your_vobiz_key" \
-  VOBIZ_API_SECRET="your_vobiz_secret" \
-  VOBIZ_WEBHOOK_SECRET="your_webhook_secret" \
+  VOBIZ_SIP_DOMAIN="abc123.sip.vobiz.ai" \
+  VOBIZ_SIP_USERNAME="your_sip_username" \
+  VOBIZ_SIP_PASSWORD="your_sip_password" \
+  VOBIZ_DID_NUMBER="+914066XXXXXX" \
   VOBIZ_PARTNER_AUTH_ID="your_partner_id" \
   VOBIZ_PARTNER_AUTH_TOKEN="your_partner_token" \
   LIVEKIT_URL="wss://vachanam-agent.fly.dev" \
@@ -396,34 +397,6 @@ OPENAI_API_KEY=sk-real-key
 
 ---
 
-## STEP 8: TWILIO BACKUP SIP TRUNK
-
-```bash
-# Twilio is your insurance policy.
-# If Vobiz goes down, you re-route all clinics to Twilio in < 5 minutes.
-
-# Setup:
-# 1. Create Twilio account (just Gmail, no documents)
-# 2. Buy Indian DID: +1 = $1/month (Twilio India numbers are US numbers)
-#    OR: buy Indian local number from Twilio India portal
-# 3. Configure SIP trunk in Twilio to point to your LiveKit agent
-
-# Configure LiveKit to accept Twilio SIP:
-# In LiveKit server config, add Twilio as allowed SIP source
-
-# When Vobiz fails (procedure takes 5 minutes):
-# 1. UptimeRobot SMS alert fires
-# 2. Log into Vobiz Partner portal — confirm outage
-# 3. Update LiveKit SIP configuration to use Twilio trunk
-# 4. Clinics re-dial USSD with Twilio DID: **21*+1-XXXXXXXXXX#
-#    (send them this code via WhatsApp immediately)
-# 5. Voice calls routed via Twilio
-
-# This procedure should be documented and practiced before first client.
-```
-
----
-
 ## PRE-LAUNCH CHECKLIST — 40 ITEMS
 
 **Every single item must be checked. No exceptions.**
@@ -555,8 +528,8 @@ Sarvam status fails:
 
 Vobiz status fails:
   → Test by calling DID from another phone
-  → If calls not connecting: activate Twilio backup SIP
-  → Send clinics new USSD code for Twilio number
+  → If calls not connecting: contact Vobiz Partner support immediately
+  → Send clinics WhatsApp message to retry in a few minutes
 ```
 
 **Step 3: Communicate**
@@ -613,7 +586,7 @@ After every incident (even minor):
 |---|---|---|---|
 | Sarvam STT/TTS | 99.99% | 53 minutes | Graceful callback message |
 | Gemini 2.5 Flash | 99.9% | 8.7 hours | Auto-switch to GPT-4o mini (fallback) |
-| Vobiz telephony | 99.9% | 8.7 hours | Twilio backup SIP (5 min switchover) |
+| Vobiz telephony | 99.9% | 8.7 hours | Retry + graceful "call back" message to patient |
 | Fly.io bom | 99.0–99.5% | 1.8–3.6 days | Singapore standby (auto-failover 60s) |
 | Render backend | 99.9% | 8.7 hours | Auto-restart (30s recovery) |
 | Neon Postgres | 99.9% | 8.7 hours | Daily automatic backups |
@@ -645,7 +618,7 @@ END-TO-END
 
 FAILOVER
 □ Singapore failover: manually tested and confirmed working
-□ Twilio backup: SIP trunk configured, tested in staging
+□ Vobiz outage procedure: documented, support contact saved
 □ GPT-4o → Gemini fallback: tested in staging, logs confirm switch
 □ Rollback procedure: tested once and documented
 
@@ -681,7 +654,6 @@ INFRASTRUCTURE (fixed, shared across all clients)
   Upstash Redis:             ₹0 (free tier through ~30 clients)
   Cloudflare Pages:          ₹0
   UptimeRobot:               ₹0
-  Twilio DID (backup):       ₹84/month
   ────────────────────────────────────────────────
   Total fixed infra:         ₹2,352/month
 

@@ -41,7 +41,6 @@ Receptionist marks attendance on mobile PWA. Clinic owner sees analytics on dash
 | LLM fallback | **GPT-4o mini** | Auto-fallback if Gemini fails |
 | Voice pipeline | LiveKit Agents 1.4.x | Self-hosted on Fly.io bom (Mumbai) |
 | Telephony | Vobiz | ₹0.65/min + ₹1,000/DID/month |
-| Telephony backup | Twilio | Backup SIP trunk |
 | Token locking | Upstash Redis | Atomic INCR for both token + slot booking |
 | Calendar | Google Calendar API v3 | Free |
 | WhatsApp | Meta Cloud API v20+ | Direct, no BSP, ₹0.115/message |
