@@ -1,0 +1,82 @@
+services:
+  - type: web
+    name: vachanam-backend
+    runtime: python
+    plan: starter        # $7/month, always-on
+    region: singapore    # closest to India in Render's network
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 2
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: info
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: VOBIZ_SIP_DOMAIN
+        sync: false
+      - key: VOBIZ_SIP_USERNAME
+        sync: false
+      - key: VOBIZ_SIP_PASSWORD
+        sync: false
+      - key: VOBIZ_DID_NUMBER
+        sync: false
+      - key: VOBIZ_PARTNER_AUTH_ID
+        sync: false
+      - key: VOBIZ_PARTNER_AUTH_TOKEN
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: META_PHONE_NUMBER_ID
+        sync: false
+      - key: META_WABA_ID
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /etc/secrets/google-service-account.json
+      - key: GOOGLE_CALENDAR_SERVICE_EMAIL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRE_HOURS
+        value: "24"
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: RAZORPAY_PLAN_SOLO_ID
+        sync: false
+      - key: RAZORPAY_PLAN_CLINIC_ID
+        sync: false
+      - key: RAZORPAY_PLAN_MULTI_ID
+        sync: false
+      - key: BASE_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: ADMIN_PHONE
+        sync: false

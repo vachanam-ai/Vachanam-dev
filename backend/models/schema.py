@@ -31,6 +31,7 @@ class Organization(Base):
 
     branches: Mapped[list["Branch"]] = relationship(back_populates="organization")
     billing_cycles: Mapped[list["BillingCycle"]] = relationship(back_populates="organization")
+    users: Mapped[list["User"]] = relationship(back_populates="organization")
 
 
 class Branch(Base):
@@ -41,7 +42,10 @@ class Branch(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     address: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str | None] = mapped_column(String(100))
+    # whatsapp_number: human-readable phone (+91XXXXXXXXXX) used in messages
     whatsapp_number: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    # meta_phone_number_id: Meta's internal numeric ID — used to identify receiving branch in webhook
+    meta_phone_number_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     did_number: Mapped[str | None] = mapped_column(String(20))
     vobiz_did_id: Mapped[str | None] = mapped_column(String(255))
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
@@ -81,6 +85,7 @@ class Doctor(Base):
     max_concurrent_per_slot: Mapped[int | None] = mapped_column(Integer)
     pre_appointment_reminder: Mapped[bool] = mapped_column(Boolean, default=False)
     daily_token_limit: Mapped[int | None] = mapped_column(Integer)
+    # whatsapp_number: doctor's personal WhatsApp for receiving commands and EOD summaries
     whatsapp_number: Mapped[str | None] = mapped_column(String(20))
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(
@@ -124,15 +129,21 @@ class Token(Base):
         Enum("voice", "whatsapp", "walk_in", name="booking_source"),
         nullable=False,
     )
+    # Status lifecycle: confirmed → attended | no_show | cancelled_by_clinic
     status: Mapped[str] = mapped_column(
-        Enum("waiting", "attended", "no_show", "cancelled_by_clinic", name="token_status"),
-        default="waiting",
+        Enum("confirmed", "attended", "no_show", "cancelled_by_clinic", name="token_status"),
+        default="confirmed",
         nullable=False,
     )
+    is_urgent: Mapped[bool] = mapped_column(Boolean, default=False)
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
     call_duration_seconds: Mapped[int | None] = mapped_column(Integer)
     google_calendar_event_id: Mapped[str | None] = mapped_column(String(255))
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # marked_by_user_id: UUID of User who marked attendance (plain UUID, no FK to avoid circular deps)
+    marked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -184,7 +195,14 @@ class FollowupTask(Base):
     patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False)
     requested_by_doctor_whatsapp: Mapped[str | None] = mapped_column(String(20))
     topic: Mapped[str | None] = mapped_column(Text)
-    specific_question: Mapped[str | None] = mapped_column(Text)
+    # what_to_ask: the specific question/instruction to relay to the patient
+    what_to_ask: Mapped[str | None] = mapped_column(Text)
+    # channel: how to reach the patient
+    channel: Mapped[str] = mapped_column(
+        Enum("whatsapp", "voice", "both", name="followup_channel"),
+        default="whatsapp",
+        nullable=False,
+    )
     response_summary: Mapped[str | None] = mapped_column(Text)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
@@ -193,6 +211,8 @@ class FollowupTask(Base):
         default="pending",
         nullable=False,
     )
+    # scheduled_date: which day to run the follow-up (compared to date.today() in job)
+    scheduled_date: Mapped[date | None] = mapped_column(Date)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -245,6 +265,7 @@ class WhatsAppSession(Base):
         default="GREETING",
         nullable=False,
     )
+    # session_data: stores context between messages (doctor_id, date_str, token_redis_key, etc.)
     session_data: Mapped[dict | None] = mapped_column(JSONB)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -253,3 +274,27 @@ class WhatsAppSession(Base):
     )
 
     branch: Mapped["Branch"] = relationship(back_populates="whatsapp_sessions")
+
+
+class User(Base):
+    """Clinic staff: owners, receptionists. Also used for Vachanam platform admin (is_admin=True)."""
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"))
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    name: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    role: Mapped[str] = mapped_column(
+        Enum("super_admin", "org_admin", "receptionist", name="user_role"),
+        nullable=False,
+    )
+    # branch_ids: JSONB list of branch UUID strings this user can access
+    branch_ids: Mapped[list | None] = mapped_column(JSONB)
+    # google_sub: Google OAuth subject ID (from JWT "sub" claim) for login matching
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # is_admin: Vachanam platform admin (Vinay only) — gives access to AdminDashboard
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    organization: Mapped["Organization | None"] = relationship(back_populates="users")

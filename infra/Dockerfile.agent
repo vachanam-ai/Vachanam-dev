@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system deps for asyncpg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY agent/requirements.txt agent/requirements.txt
+RUN pip install --no-cache-dir -r agent/requirements.txt
+
+# Copy source
+COPY agent/ agent/
+COPY backend/ backend/
+COPY alembic/ alembic/
+COPY alembic.ini .
+
+# Google service account mounted as secret at runtime
+# Set GOOGLE_APPLICATION_CREDENTIALS=/etc/secrets/google-service-account.json
+
+EXPOSE 8080
+
+CMD ["python", "-m", "agent.agent"]

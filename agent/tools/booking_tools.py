@@ -241,7 +241,8 @@ async def confirm_booking(
         token_number=token_number,
         appointment_time=appointment_time,
         source=source,
-        status="waiting",
+        status="confirmed",
+        confirmed_at=datetime.utcnow(),
     )
     db.add(token)
     await db.flush()
