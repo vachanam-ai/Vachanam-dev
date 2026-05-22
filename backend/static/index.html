@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vachanam — Healing starts with being heard.</title>
+<meta name="description" content="AI-powered appointment booking for Indian clinics. Patients call in their language. Doctors manage via WhatsApp. Healing starts with being heard.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,600;0,700;1,400&family=Outfit:wght@300;400;500;600&family=Pacifico&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --teal:#006B6B;
+  --teal-deep:#004F4F;
+  --teal-light:#008F8F;
+  --teal-pale:#E0F2F1;
+  --teal-mint:#F0FAFA;
+  --slate:#708090;
+  --slate-light:#A0ADB8;
+  --ink:#1A2E2E;
+  --ink-soft:#2D4444;
+  --cream:#FAFCFC;
+  --border:#D0E4E4;
+  --muted:#708090;
+  --white:#FFFFFF;
+}
+html{scroll-behavior:smooth;}
+body{font-family:'Outfit',sans-serif;background:var(--cream);color:var(--ink);line-height:1.6;}
+
+/* NAV */
+nav{
+  position:fixed;top:0;left:0;right:0;z-index:100;
+  background:rgba(0,75,75,0.97);
+  backdrop-filter:blur(8px);
+  padding:0 60px;height:64px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+}
+.nav-logo{
+  font-family:'Pacifico',cursive;
+  font-size:22px;color:#B2DFDF;
+  text-transform:lowercase;letter-spacing:0.5px;
+}
+.nav-links{display:flex;gap:36px;align-items:center;}
+.nav-link{
+  font-size:12px;font-weight:400;
+  letter-spacing:1.5px;text-transform:uppercase;
+  color:rgba(255,255,255,0.45);
+  text-decoration:none;transition:color 0.2s;
+}
+.nav-link:hover{color:rgba(255,255,255,0.85);}
+.nav-cta{
+  font-size:11px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;
+  background:var(--teal-light);color:white;
+  padding:10px 24px;text-decoration:none;
+  transition:background 0.2s;border-radius:2px;
+}
+.nav-cta:hover{background:var(--teal);}
+
+/* HERO */
+.hero{
+  background:var(--teal-deep);
+  min-height:100vh;padding:140px 60px 100px;
+  display:flex;align-items:center;
+  position:relative;overflow:hidden;
+}
+.hero-circle{
+  position:absolute;border-radius:50%;
+  border:1px solid rgba(255,255,255,0.04);
+  top:50%;left:50%;transform:translate(-50%,-50%);
+}
+.hero-inner{
+  max-width:1100px;margin:0 auto;width:100%;
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:80px;align-items:center;
+  position:relative;z-index:1;
+}
+.hero-eyebrow{
+  font-size:11px;font-weight:500;
+  letter-spacing:3px;text-transform:uppercase;
+  color:rgba(178,223,219,0.6);
+  margin-bottom:24px;
+  display:flex;align-items:center;gap:12px;
+}
+.hero-eyebrow::before{
+  content:'';width:28px;height:1px;
+  background:rgba(178,223,219,0.4);
+}
+.hero-title{
+  font-family:'Spectral',serif;
+  font-size:56px;font-weight:700;
+  color:white;line-height:1.1;
+  letter-spacing:-0.5px;margin-bottom:20px;
+}
+.hero-title em{
+  font-style:italic;color:#80CBC4;
+}
+.hero-tagline{
+  font-family:'Spectral',serif;
+  font-size:20px;font-style:italic;
+  color:rgba(178,223,219,0.7);
+  margin-bottom:16px;line-height:1.5;
+}
+.hero-desc{
+  font-size:15px;font-weight:300;
+  color:rgba(255,255,255,0.45);
+  line-height:1.9;margin-bottom:44px;
+  max-width:420px;
+}
+.hero-btns{display:flex;gap:14px;flex-wrap:wrap;}
+.btn-primary{
+  font-size:11px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;
+  background:var(--teal-light);color:white;
+  padding:16px 36px;text-decoration:none;
+  border-radius:2px;transition:background 0.2s;
+  display:inline-block;
+}
+.btn-primary:hover{background:var(--teal);}
+.btn-ghost{
+  font-size:11px;font-weight:400;
+  letter-spacing:1.5px;text-transform:uppercase;
+  background:transparent;
+  color:rgba(255,255,255,0.4);
+  padding:16px 36px;text-decoration:none;
+  border:1px solid rgba(255,255,255,0.12);
+  border-radius:2px;
+  transition:all 0.2s;display:inline-block;
+}
+.btn-ghost:hover{border-color:rgba(255,255,255,0.3);color:rgba(255,255,255,0.7);}
+
+/* HERO CARD */
+.hero-card{
+  background:rgba(255,255,255,0.04);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:8px;padding:36px;
+}
+.hero-card-label{
+  font-size:10px;letter-spacing:3px;
+  text-transform:uppercase;
+  color:rgba(128,203,196,0.5);
+  margin-bottom:24px;text-align:center;
+  font-family:'Outfit',sans-serif;
+}
+.stat-grid{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:1px;background:rgba(255,255,255,0.06);
+  border-radius:4px;overflow:hidden;
+}
+.stat{
+  background:rgba(0,75,75,0.6);
+  padding:24px 20px;text-align:center;
+}
+.stat-num{
+  font-family:'Spectral',serif;
+  font-size:38px;font-weight:700;
+  color:white;line-height:1;margin-bottom:6px;
+}
+.stat-num span{font-size:20px;color:#80CBC4;}
+.stat-label{
+  font-size:11px;font-weight:300;
+  color:rgba(255,255,255,0.3);
+  letter-spacing:0.5px;
+}
+.hero-divider{
+  height:1px;background:rgba(255,255,255,0.06);
+  margin:24px 0;
+}
+.hero-promise{
+  font-family:'Spectral',serif;
+  font-size:14px;font-style:italic;
+  color:rgba(178,223,219,0.35);
+  text-align:center;line-height:1.7;
+}
+
+/* BAND */
+.band{
+  background:var(--teal);
+  padding:18px 60px;
+  display:flex;align-items:center;
+  justify-content:center;gap:48px;flex-wrap:wrap;
+}
+.band-item{
+  font-size:11px;font-weight:500;
+  letter-spacing:2px;text-transform:uppercase;
+  color:rgba(255,255,255,0.7);white-space:nowrap;
+}
+.band-dot{
+  width:4px;height:4px;
+  background:rgba(255,255,255,0.25);
+  border-radius:50%;flex-shrink:0;
+}
+
+/* SECTIONS */
+section{padding:96px 60px;}
+.section-inner{max-width:1100px;margin:0 auto;}
+.eyebrow{
+  font-size:10px;font-weight:600;
+  letter-spacing:4px;text-transform:uppercase;
+  color:var(--teal-light);margin-bottom:14px;
+}
+.section-heading{
+  font-family:'Spectral',serif;
+  font-size:44px;font-weight:700;
+  color:var(--ink);line-height:1.15;margin-bottom:16px;
+}
+.section-sub{
+  font-size:15px;font-weight:300;
+  color:var(--muted);line-height:1.9;
+  max-width:520px;
+}
+
+/* FEATURES */
+.features{background:var(--teal-mint);}
+.features-header{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:60px;align-items:end;margin-bottom:60px;
+}
+.features-pull{
+  font-family:'Spectral',serif;
+  font-size:21px;font-style:italic;
+  color:var(--ink-soft);line-height:1.6;
+  padding-left:20px;
+  border-left:3px solid var(--teal-light);
+}
+.features-grid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:1px;background:var(--border);
+  border:1px solid var(--border);
+}
+.feat{
+  background:var(--white);
+  padding:36px 32px;
+  position:relative;
+  transition:background 0.2s;
+}
+.feat:hover{background:#FDFEFE;}
+.feat::after{
+  content:'';position:absolute;
+  top:0;left:0;right:0;height:3px;
+  background:transparent;transition:background 0.25s;
+}
+.feat:hover::after{background:var(--teal-light);}
+.feat-num{
+  font-family:'Spectral',serif;
+  font-size:11px;font-style:italic;
+  color:var(--teal-light);letter-spacing:2px;
+  margin-bottom:16px;
+}
+.feat h3{
+  font-family:'Spectral',serif;
+  font-size:19px;font-weight:700;
+  color:var(--ink);margin-bottom:12px;line-height:1.3;
+}
+.feat p{
+  font-size:13px;font-weight:300;
+  color:var(--muted);line-height:1.85;
+}
+.feat-tag{
+  display:inline-block;margin-top:18px;
+  font-size:10px;font-weight:500;
+  letter-spacing:2px;text-transform:uppercase;
+  color:var(--teal-light);
+  border-bottom:1px solid var(--teal-pale);
+  padding-bottom:2px;
+}
+
+/* HOW */
+.how{background:var(--ink);}
+.how .eyebrow{color:rgba(128,203,196,0.5);}
+.how .section-heading{color:white;}
+.how .section-sub{color:rgba(255,255,255,0.3);}
+.how-steps{
+  display:grid;grid-template-columns:repeat(4,1fr);
+  gap:0;margin-top:60px;
+  border:1px solid rgba(255,255,255,0.05);
+  position:relative;
+}
+.how-step{padding:36px 28px;}
+.how-step+.how-step{border-left:1px solid rgba(255,255,255,0.05);}
+.step-num{
+  font-family:'Spectral',serif;
+  font-size:48px;font-weight:700;
+  color:rgba(128,203,196,0.12);
+  line-height:1;margin-bottom:20px;
+}
+.step-bar{
+  width:20px;height:2px;
+  background:var(--teal-light);
+  margin-bottom:20px;opacity:0.5;
+}
+.how-step h4{
+  font-family:'Spectral',serif;
+  font-size:17px;font-weight:600;
+  color:white;margin-bottom:10px;
+}
+.how-step p{
+  font-size:13px;font-weight:300;
+  color:rgba(255,255,255,0.3);line-height:1.8;
+}
+.step-time{
+  display:inline-block;margin-top:16px;
+  font-size:10px;letter-spacing:2px;text-transform:uppercase;
+  color:rgba(128,203,196,0.4);
+}
+
+/* WHO */
+.who{background:var(--cream);}
+.who-grid{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:24px;margin-top:56px;
+}
+.who-card{
+  border:1px solid var(--border);
+  background:white;padding:36px;
+}
+.who-card-num{
+  font-family:'Spectral',serif;
+  font-size:13px;font-weight:400;font-style:italic;
+  color:var(--teal-light);margin-bottom:16px;
+}
+.who-card h3{
+  font-family:'Spectral',serif;
+  font-size:20px;font-weight:700;
+  color:var(--ink);margin-bottom:20px;
+}
+.who-card ul{list-style:none;padding:0;}
+.who-card ul li{
+  font-size:13px;font-weight:300;
+  color:var(--muted);padding:9px 0;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:flex-start;gap:12px;
+  line-height:1.6;
+}
+.who-card ul li:last-child{border-bottom:none;}
+.who-card ul li::before{
+  content:'';width:5px;height:5px;
+  background:var(--teal-light);
+  border-radius:50%;margin-top:7px;flex-shrink:0;
+}
+
+/* PRICING */
+.pricing{background:var(--teal-mint);}
+.pricing-grid{
+  display:grid;grid-template-columns:repeat(3,1fr);
+  gap:1px;background:var(--border);
+  border:1px solid var(--border);
+  margin-top:56px;
+}
+.plan{background:white;padding:40px 36px;}
+.plan.featured{background:var(--teal-deep);}
+.plan-name{
+  font-size:10px;font-weight:600;
+  letter-spacing:3px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:20px;
+}
+.plan.featured .plan-name{color:rgba(178,223,219,0.5);}
+.plan-price{
+  font-family:'Spectral',serif;
+  font-size:48px;font-weight:700;
+  color:var(--ink);line-height:1;
+}
+.plan.featured .plan-price{color:white;}
+.plan-per{
+  font-size:12px;color:var(--muted);
+  margin-bottom:32px;margin-top:6px;
+}
+.plan.featured .plan-per{color:rgba(255,255,255,0.3);}
+.plan-list{list-style:none;padding:0;margin-bottom:36px;}
+.plan-list li{
+  font-size:13px;font-weight:300;
+  color:var(--muted);padding:9px 0;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:flex-start;gap:10px;
+}
+.plan.featured .plan-list li{
+  color:rgba(255,255,255,0.4);
+  border-color:rgba(255,255,255,0.06);
+}
+.plan-list li:last-child{border-bottom:none;}
+.plan-list li::before{
+  content:'';width:5px;height:5px;
+  background:var(--teal-light);
+  border-radius:50%;margin-top:7px;flex-shrink:0;
+}
+.plan-btn{
+  display:block;text-align:center;
+  font-size:11px;font-weight:600;
+  letter-spacing:2px;text-transform:uppercase;
+  padding:14px;text-decoration:none;
+  border-radius:2px;transition:all 0.2s;
+}
+.plan-btn-outline{
+  border:1px solid var(--border);color:var(--ink);
+}
+.plan-btn-outline:hover{border-color:var(--teal-light);color:var(--teal-light);}
+.plan-btn-fill{background:var(--teal-light);color:white;}
+.plan-btn-fill:hover{background:var(--teal);}
+.pricing-note{
+  text-align:center;margin-top:24px;
+  font-size:13px;color:var(--muted);
+  font-family:'Spectral',serif;font-style:italic;
+}
+
+/* CONTACT */
+.contact{background:white;text-align:center;}
+.contact-inner{max-width:580px;margin:0 auto;}
+.contact-tagline{
+  font-family:'Spectral',serif;
+  font-size:18px;font-style:italic;
+  color:var(--teal-light);margin:16px 0 48px;
+}
+.contact-box{
+  border:1px solid var(--border);
+  padding:52px 48px;
+}
+.contact-box p{
+  font-size:15px;font-weight:300;
+  color:var(--muted);line-height:1.9;margin-bottom:36px;
+}
+.contact-email-label{
+  font-size:10px;letter-spacing:3px;
+  text-transform:uppercase;color:var(--muted);
+  margin-bottom:12px;
+}
+.contact-email{
+  font-family:'Spectral',serif;
+  font-size:24px;font-weight:700;
+  color:var(--ink);text-decoration:none;
+  display:block;margin-bottom:32px;
+  transition:color 0.2s;
+}
+.contact-email:hover{color:var(--teal-light);}
+.contact-chips{
+  display:flex;gap:10px;justify-content:center;flex-wrap:wrap;
+}
+.chip{
+  font-size:11px;color:var(--muted);
+  background:var(--teal-mint);
+  padding:8px 16px;border:1px solid var(--border);
+  border-radius:2px;
+}
+
+/* FOOTER */
+footer{
+  background:var(--ink);
+  padding:56px 60px 28px;
+  border-top:2px solid var(--teal-light);
+}
+.footer-top{
+  max-width:1100px;margin:0 auto;
+  display:grid;grid-template-columns:1fr auto;
+  gap:48px;align-items:center;
+  padding-bottom:36px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  margin-bottom:28px;
+}
+.footer-logo{
+  font-family:'Pacifico',cursive;
+  font-size:24px;color:#B2DFDF;
+  text-transform:lowercase;
+  display:block;margin-bottom:8px;
+}
+.footer-tagline{
+  font-family:'Spectral',serif;
+  font-size:14px;font-style:italic;
+  color:rgba(255,255,255,0.2);
+}
+.footer-social{display:flex;gap:10px;}
+.social-link{
+  width:40px;height:40px;
+  border:1px solid rgba(255,255,255,0.08);
+  display:flex;align-items:center;justify-content:center;
+  text-decoration:none;border-radius:2px;
+  transition:border-color 0.2s,background 0.2s;
+}
+.social-link:hover{
+  border-color:var(--teal-light);
+  background:rgba(0,143,143,0.1);
+}
+.social-link svg{
+  width:15px;height:15px;
+  fill:rgba(255,255,255,0.3);transition:fill 0.2s;
+}
+.social-link:hover svg{fill:#80CBC4;}
+.footer-bottom{
+  max-width:1100px;margin:0 auto;
+  display:flex;align-items:center;
+  justify-content:space-between;flex-wrap:wrap;gap:8px;
+}
+.footer-copy{font-size:11px;color:rgba(255,255,255,0.18);letter-spacing:0.5px;}
+.footer-made{font-size:11px;color:rgba(255,255,255,0.18);font-style:italic;font-family:'Spectral',serif;}
+
+/* RESPONSIVE */
+@media(max-width:900px){
+  nav{padding:0 24px;}
+  .nav-links{display:none;}
+  .hero{padding:120px 24px 80px;}
+  .hero-inner{grid-template-columns:1fr;}
+  .hero-title{font-size:40px;}
+  .hero-card{display:none;}
+  section{padding:72px 24px;}
+  .band{padding:16px 24px;gap:20px;}
+  .features-header{grid-template-columns:1fr;}
+  .features-grid,.pricing-grid{grid-template-columns:1fr;}
+  .how-steps{grid-template-columns:1fr 1fr;}
+  .how-step+.how-step{border-left:none;border-top:1px solid rgba(255,255,255,0.05);}
+  .who-grid{grid-template-columns:1fr;}
+  .footer-top{grid-template-columns:1fr;gap:28px;}
+  footer{padding:40px 24px 20px;}
+  .footer-bottom{flex-direction:column;text-align:center;gap:6px;}
+  .contact-box{padding:36px 24px;}
+}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+.hero-eyebrow{animation:fadeUp 0.5s ease both;}
+.hero-title{animation:fadeUp 0.5s 0.1s ease both;}
+.hero-tagline{animation:fadeUp 0.5s 0.15s ease both;}
+.hero-desc{animation:fadeUp 0.5s 0.2s ease both;}
+.hero-btns{animation:fadeUp 0.5s 0.25s ease both;}
+.hero-card{animation:fadeUp 0.5s 0.3s ease both;}
+</style>
+</head>
+<body>
+
+<div id="test-banner" style="background:#fff4d6;border-bottom:1px solid #f0c674;padding:10px 30px;font-size:13px;color:#5a4500;text-align:center;font-family:'Outfit',sans-serif;line-height:1.6;">
+  <b>TEST MODE</b> &middot; Easiest path: in the Razorpay modal click <b>Netbanking</b> &rarr; pick any bank (e.g. HDFC) &rarr; <b>Pay</b> &rarr; on the simulated bank page click the green <b>Success</b> button.<br/>
+  Real cards and live UPI scans are rejected by Razorpay sandbox &mdash; that&rsquo;s the test-mode behavior, not a bug in our integration.
+</div>
+
+<nav>
+  <div class="nav-logo">vachanam</div>
+  <div class="nav-links">
+    <a href="#features" class="nav-link">Features</a>
+    <a href="#how" class="nav-link">How it works</a>
+    <a href="#pricing" class="nav-link">Pricing</a>
+    <a href="mailto:hello@vachanam.in" class="nav-cta">Get early access</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <div class="hero-circle" style="width:700px;height:700px;"></div>
+  <div class="hero-circle" style="width:450px;height:450px;"></div>
+  <div class="hero-inner">
+    <div>
+      <div class="hero-eyebrow">Building for Hyderabad</div>
+      <h1 class="hero-title">AI appointment<br>booking for<br><em>Indian clinics.</em></h1>
+      <p class="hero-tagline">Healing starts with being heard.</p>
+      <p class="hero-desc">Patients call in Telugu, Hindi, Tamil, or Kannada. Your AI answers every call, books every appointment, and notifies every doctor — automatically.</p>
+      <div class="hero-btns">
+        <a href="mailto:hello@vachanam.in" class="btn-primary">Get early access</a>
+        <a href="#how" class="btn-ghost">See how it works</a>
+      </div>
+    </div>
+    <div class="hero-card">
+      <div class="hero-card-label">What changes from day one</div>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="stat-num">24<span>/7</span></div>
+          <div class="stat-label">Always answering</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num">0</div>
+          <div class="stat-label">Missed calls</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num">2<span>min</span></div>
+          <div class="stat-label">Per booking</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num">30<span>min</span></div>
+          <div class="stat-label">To go live</div>
+        </div>
+      </div>
+      <div class="hero-divider"></div>
+      <div class="hero-promise">Every patient call answered.<br>Every doctor notified.<br>Every promise kept.</div>
+    </div>
+  </div>
+</section>
+
+<div class="band">
+  <span class="band-item">Telugu voice agent</span>
+  <div class="band-dot"></div>
+  <span class="band-item">WhatsApp for doctors</span>
+  <div class="band-dot"></div>
+  <span class="band-item">Token &amp; slot booking</span>
+  <div class="band-dot"></div>
+  <span class="band-item">Zero missed calls</span>
+  <div class="band-dot"></div>
+  <span class="band-item">30-minute setup</span>
+</div>
+
+<section class="features" id="features">
+  <div class="section-inner">
+    <div class="features-header">
+      <div>
+        <div class="eyebrow">What we do</div>
+        <h2 class="section-heading">Built for the way<br>India's clinics work.</h2>
+        <p class="section-sub">Not a foreign product retrofitted for India. Built from the ground up — for Indian languages, Indian patients, and the way Indian doctors actually operate.</p>
+      </div>
+      <div class="features-pull">
+        &ldquo;Your receptionist handles 30 calls a day. Your AI handles 300 — simultaneously, in 5 languages, at 3 in the morning.&rdquo;
+      </div>
+    </div>
+    <div class="features-grid">
+      <div class="feat">
+        <div class="feat-num">01 &mdash; Voice</div>
+        <h3>Speaks your patients' language</h3>
+        <p>Patients call your existing clinic number and speak naturally in Telugu, Hindi, Tamil, Kannada, or English. No IVR menus. Just a conversation that ends with a confirmed appointment.</p>
+        <span class="feat-tag">Voice AI</span>
+      </div>
+      <div class="feat">
+        <div class="feat-num">02 &mdash; WhatsApp</div>
+        <h3>Doctors manage via WhatsApp</h3>
+        <p>No app to install. Doctors receive booking notifications, view daily schedules, mark leave, and cancel slots — all through WhatsApp. The tool they already use every day.</p>
+        <span class="feat-tag">WhatsApp</span>
+      </div>
+      <div class="feat">
+        <div class="feat-num">03 &mdash; Booking</div>
+        <h3>Token queues and time slots — both</h3>
+        <p>High-demand specialists get a token queue with atomic assignment — no double bookings even with simultaneous callers. Time-based clinics get Google Calendar integration.</p>
+        <span class="feat-tag">Smart Booking</span>
+      </div>
+      <div class="feat">
+        <div class="feat-num">04 &mdash; Follow-ups</div>
+        <h3>Patients followed up automatically</h3>
+        <p>Doctors send follow-up instructions at end of day via WhatsApp. The system calls patients next morning, reports their status back to the doctor before noon.</p>
+        <span class="feat-tag">Care Continuity</span>
+      </div>
+      <div class="feat">
+        <div class="feat-num">05 &mdash; Staff</div>
+        <h3>Receptionist app on any phone</h3>
+        <p>Open a web link on any phone. See today's queue. Tap Attended or No-show per patient. Real-time queue display. Replaces the paper register your receptionist still uses.</p>
+        <span class="feat-tag">Attendance</span>
+      </div>
+      <div class="feat">
+        <div class="feat-num">06 &mdash; Analytics</div>
+        <h3>Dashboard that answers one question</h3>
+        <p>Are you growing? Monthly patients, no-show rates, busiest days, most common issues, doctor performance — all in a clean dashboard your staff can open on any phone.</p>
+        <span class="feat-tag">Analytics</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="how" id="how">
+  <div class="section-inner">
+    <div class="eyebrow">How it works</div>
+    <h2 class="section-heading">Live in 30 minutes.<br>No technician needed.</h2>
+    <p class="section-sub">Your existing phone number stays. Your patients dial the same number. You just dial one code to forward calls — takes 30 seconds.</p>
+    <div class="how-steps">
+      <div class="how-step">
+        <div class="step-num">01</div>
+        <div class="step-bar"></div>
+        <h4>Sign up and add your clinic</h4>
+        <p>Your clinic details, doctors, working hours, and booking type. Our guided setup takes 15 minutes.</p>
+        <span class="step-time">15 minutes</span>
+      </div>
+      <div class="how-step">
+        <div class="step-num">02</div>
+        <div class="step-bar"></div>
+        <h4>We assign your number</h4>
+        <p>A dedicated Indian phone number is provisioned for your clinic instantly — included in your plan, no extra charge.</p>
+        <span class="step-time">Instant</span>
+      </div>
+      <div class="how-step">
+        <div class="step-num">03</div>
+        <div class="step-bar"></div>
+        <h4>Forward your existing number</h4>
+        <p>Dial one code on your clinic phone. 30 seconds. Your patients keep calling the same number they always have.</p>
+        <span class="step-time">30 seconds</span>
+      </div>
+      <div class="how-step">
+        <div class="step-num">04</div>
+        <div class="step-bar"></div>
+        <h4>Your AI answers every call</h4>
+        <p>From this moment — every call answered, every appointment booked, every doctor notified. You focus on medicine.</p>
+        <span class="step-time">Forever</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="who" id="who">
+  <div class="section-inner">
+    <div class="eyebrow">Who it's for</div>
+    <h2 class="section-heading">Every kind of Indian clinic.</h2>
+    <p class="section-sub">From a single-doctor clinic in Kukatpally to a hospital group with branches across Andhra Pradesh and Telangana.</p>
+    <div class="who-grid">
+      <div class="who-card">
+        <div class="who-card-num">01</div>
+        <h3>Single-doctor clinics</h3>
+        <ul>
+          <li>One receptionist answering calls, managing queue, taking payments</li>
+          <li>Patients calling a personal number — missed when busy</li>
+          <li>Appointments tracked in a register or notebook</li>
+          <li>No booking possible after clinic closes</li>
+          <li>No record of who didn't show up</li>
+        </ul>
+      </div>
+      <div class="who-card">
+        <div class="who-card-num">02</div>
+        <h3>Multi-doctor clinics</h3>
+        <ul>
+          <li>Different doctors, different hours, different booking types</li>
+          <li>High call volume during peak morning hours</li>
+          <li>Token queue management for specialists</li>
+          <li>Patient follow-up across multiple doctors</li>
+          <li>Staff attendance and daily reporting</li>
+        </ul>
+      </div>
+      <div class="who-card">
+        <div class="who-card-num">03</div>
+        <h3>Hospital groups</h3>
+        <ul>
+          <li>Multiple branches — one platform, separate operations</li>
+          <li>Branch-level analytics and performance comparison</li>
+          <li>Same doctor appearing at multiple locations</li>
+          <li>Centralised management, independent branch controls</li>
+          <li>Consistent patient experience across every location</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="pricing" id="pricing">
+  <div class="section-inner">
+    <div class="eyebrow">Pricing</div>
+    <h2 class="section-heading">Transparent pricing.<br>No hidden charges.</h2>
+    <p class="section-sub">All plans include your dedicated phone number, WhatsApp notifications, receptionist app, analytics dashboard, and setup support.</p>
+    <div class="pricing-grid">
+      <div class="plan">
+        <div class="plan-name">Starter</div>
+        <div class="plan-price">&#8377;99</div>
+        <div class="plan-per">per month &mdash; up to 200 calls</div>
+        <ul class="plan-list">
+          <li>1 branch, up to 3 doctors</li>
+          <li>Voice booking in Indian languages</li>
+          <li>WhatsApp confirmations and reminders</li>
+          <li>Receptionist attendance app</li>
+          <li>Analytics dashboard</li>
+          <li>Dedicated phone number included</li>
+        </ul>
+        <button type="button" class="plan-btn plan-btn-outline" data-plan="Starter" data-amount="9900">Get started</button>
+      </div>
+      <div class="plan featured">
+        <div class="plan-name">Growth &mdash; Most popular</div>
+        <div class="plan-price">&#8377;9,999</div>
+        <div class="plan-per">per month &mdash; up to 500 calls</div>
+        <ul class="plan-list">
+          <li>1 branch, unlimited doctors</li>
+          <li>Everything in Starter</li>
+          <li>Automated follow-up calls</li>
+          <li>End-of-day doctor summaries</li>
+          <li>Patient callback management</li>
+          <li>Advanced analytics and trends</li>
+        </ul>
+        <button type="button" class="plan-btn plan-btn-fill" data-plan="Growth" data-amount="999900">Get started</button>
+      </div>
+      <div class="plan">
+        <div class="plan-name">Unlimited</div>
+        <div class="plan-price">&#8377;14,999</div>
+        <div class="plan-per">per month &mdash; unlimited calls</div>
+        <ul class="plan-list">
+          <li>1 branch, unlimited doctors</li>
+          <li>Everything in Growth</li>
+          <li>Unlimited calls, no overage</li>
+          <li>Priority support</li>
+          <li>Custom WhatsApp templates</li>
+          <li>Dedicated onboarding call</li>
+        </ul>
+        <button type="button" class="plan-btn plan-btn-outline" data-plan="Unlimited" data-amount="1499900">Get started</button>
+      </div>
+    </div>
+    <p class="pricing-note">Additional branch: &#8377;5,000/month &nbsp;&middot;&nbsp; 14-day free trial &nbsp;&middot;&nbsp; Cancel anytime</p>
+  </div>
+</section>
+
+<section class="contact" id="contact">
+  <div class="section-inner">
+    <div class="contact-inner">
+      <div class="eyebrow">Get in touch</div>
+      <h2 class="section-heading">Building for<br>Hyderabad clinics.</h2>
+      <p class="contact-tagline">Healing starts with being heard.</p>
+      <div class="contact-box">
+        <p>We are currently building this for clinics in Hyderabad. If you are interested, write to us and we will reach out when ready.</p>
+        <div class="contact-email-label">Write to us</div>
+        <a href="mailto:hello@vachanam.in" class="contact-email">hello@vachanam.in</a>
+        <div class="contact-chips">
+          <span class="chip">Response within 24 hours</span>
+          <span class="chip">14-day free trial</span>
+          <span class="chip">No credit card to start</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="footer-top">
+    <div>
+      <span class="footer-logo">vachanam</span>
+      <span class="footer-tagline">Healing starts with being heard.</span>
+    </div>
+    <div class="footer-social">
+      <a href="#" class="social-link" aria-label="Instagram">
+        <svg viewBox="0 0 24 24"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/></svg>
+      </a>
+      <a href="#" class="social-link" aria-label="LinkedIn">
+        <svg viewBox="0 0 24 24"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+      </a>
+      <a href="#" class="social-link" aria-label="Twitter / X">
+        <svg viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.737-8.835L1.254 2.25H8.08l4.253 5.622 5.911-5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+      </a>
+      <a href="#" class="social-link" aria-label="Facebook">
+        <svg viewBox="0 0 24 24"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+      </a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <span class="footer-copy">&copy; 2026 Vachanam &nbsp;&middot;&nbsp; Hyderabad, India</span>
+    <span class="footer-made">Built for Indian clinics.</span>
+  </div>
+</footer>
+
+<!-- Razorpay integration -->
+<style>
+  button.plan-btn{
+    border:none;cursor:pointer;font:inherit;width:100%;
+  }
+  button.plan-btn:disabled{opacity:0.6;cursor:not-allowed;}
+  #pay-toast{
+    position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+    background:#1A2E2E;color:#fff;padding:14px 22px;border-radius:6px;
+    font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,0.2);
+    max-width:90vw;display:none;z-index:9999;
+  }
+  #pay-toast.ok{background:#006B6B;}
+  #pay-toast.err{background:#a51d2d;}
+</style>
+<div id="pay-toast"></div>
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<script>
+(function(){
+  const toast = document.getElementById('pay-toast');
+  let toastTimer;
+  function showToast(msg, kind){
+    toast.className = kind || '';
+    toast.textContent = msg;
+    toast.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=>{ toast.style.display='none'; }, 6000);
+  }
+
+  async function startCheckout(btn){
+    const plan = btn.dataset.plan;
+    const amount = parseInt(btn.dataset.amount, 10);
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    showToast('Creating order for ' + plan + '...', '');
+
+    let order;
+    try {
+      const resp = await fetch('/api/create-order', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          amount: amount,
+          currency: 'INR',
+          receipt: 'vachanam_' + plan.toLowerCase() + '_' + Date.now(),
+          notes: {plan: plan}
+        })
+      });
+      if(!resp.ok){
+        const body = await resp.text();
+        throw new Error('HTTP ' + resp.status + ': ' + body);
+      }
+      order = await resp.json();
+    } catch(e) {
+      showToast('Order failed: ' + e.message, 'err');
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+      return;
+    }
+
+    const rzp = new Razorpay({
+      key: order.key_id,
+      amount: order.amount,
+      currency: order.currency,
+      order_id: order.order_id,
+      name: 'Vachanam',
+      description: plan + ' plan subscription',
+      theme: {color: '#006B6B'},
+      handler: async function(response){
+        showToast('Verifying payment...', '');
+        try {
+          const vResp = await fetch('/api/verify-payment', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature
+            })
+          });
+          const data = await vResp.json();
+          if(vResp.ok && data.verified){
+            showToast('Payment verified! payment_id=' + data.payment_id, 'ok');
+          } else {
+            showToast('Verification failed: ' + (data.detail || 'unknown'), 'err');
+          }
+        } catch(e){
+          showToast('Verify error: ' + e.message, 'err');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+        }
+      },
+      modal: {
+        ondismiss: function(){
+          showToast('Payment cancelled.', '');
+          btn.disabled = false;
+          btn.textContent = originalLabel;
+        }
+      }
+    });
+
+    rzp.on('payment.failed', function(resp){
+      showToast('Payment failed: ' + (resp.error && resp.error.description), 'err');
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    });
+
+    rzp.open();
+  }
+
+  document.querySelectorAll('button.plan-btn[data-amount]').forEach(function(btn){
+    btn.addEventListener('click', function(){ startCheckout(btn); });
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Razorpay Test Checkout — Vachanam</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 480px;
+      margin: 60px auto;
+      padding: 20px;
+      color: #1a1a1a;
+    }
+    h1 { font-size: 24px; margin-bottom: 4px; }
+    .sub { color: #666; font-size: 14px; margin-bottom: 24px; }
+    label { display: block; font-size: 14px; font-weight: 500; margin-top: 12px; }
+    input {
+      width: 100%;
+      padding: 10px 12px;
+      margin-top: 6px;
+      font-size: 16px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+    }
+    button {
+      width: 100%;
+      background: #528ff0;
+      color: white;
+      border: 0;
+      padding: 14px 28px;
+      font-size: 16px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    button:hover:not(:disabled) { background: #3d77d6; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .result {
+      margin-top: 20px;
+      padding: 12px 14px;
+      border-radius: 6px;
+      font-size: 14px;
+      word-break: break-all;
+    }
+    .ok { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .err { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    .info { background: #e2e3e5; color: #383d41; border: 1px solid #d6d8db; }
+    .test-cards {
+      margin-top: 32px;
+      padding: 14px;
+      background: #f6f8fa;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #555;
+    }
+    .test-cards code { background: #eee; padding: 1px 6px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h1>Razorpay Test Checkout</h1>
+  <p class="sub">Vachanam — test mode, no real money charged.</p>
+
+  <label for="amount">Amount (₹)</label>
+  <input id="amount" type="number" value="100" min="1" />
+
+  <label for="receipt">Receipt (optional)</label>
+  <input id="receipt" type="text" placeholder="rcpt_001" maxlength="40" />
+
+  <button id="payBtn" onclick="pay()">Pay with Razorpay</button>
+
+  <div id="result"></div>
+
+  <div class="test-cards">
+    <b>Test cards:</b><br />
+    Card: <code>4111 1111 1111 1111</code> · Any future expiry · Any CVV<br />
+    UPI: <code>success@razorpay</code> (success) · <code>failure@razorpay</code> (fail)
+  </div>
+
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script>
+    const result = document.getElementById('result');
+    const payBtn = document.getElementById('payBtn');
+
+    function show(msg, kind) {
+      result.className = 'result ' + kind;
+      result.textContent = msg;
+    }
+
+    async function pay() {
+      payBtn.disabled = true;
+      result.className = '';
+      result.textContent = '';
+
+      const amountRupees = parseInt(document.getElementById('amount').value, 10);
+      if (!amountRupees || amountRupees < 1) {
+        show('Enter an amount of at least ₹1', 'err');
+        payBtn.disabled = false;
+        return;
+      }
+      const amountPaise = amountRupees * 100;
+      const receipt = document.getElementById('receipt').value.trim() || undefined;
+
+      let order;
+      try {
+        const resp = await fetch('/api/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: amountPaise, currency: 'INR', receipt }),
+        });
+        if (!resp.ok) {
+          const errBody = await resp.text();
+          throw new Error('Order creation failed (' + resp.status + '): ' + errBody);
+        }
+        order = await resp.json();
+      } catch (e) {
+        show(e.message, 'err');
+        payBtn.disabled = false;
+        return;
+      }
+
+      const rzp = new Razorpay({
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        order_id: order.order_id,
+        name: 'Vachanam',
+        description: 'Test Payment',
+        handler: async (response) => {
+          show('Verifying signature...', 'info');
+          try {
+            const vResp = await fetch('/api/verify-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature,
+              }),
+            });
+            const data = await vResp.json();
+            if (vResp.ok && data.verified) {
+              show('Payment verified successfully. payment_id=' + data.payment_id, 'ok');
+            } else {
+              show('Verification failed: ' + (data.detail || JSON.stringify(data)), 'err');
+            }
+          } catch (e) {
+            show('Verify error: ' + e.message, 'err');
+          } finally {
+            payBtn.disabled = false;
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            show('Payment cancelled by user.', 'info');
+            payBtn.disabled = false;
+          },
+        },
+        theme: { color: '#528ff0' },
+      });
+
+      rzp.on('payment.failed', (resp) => {
+        show('Payment failed: ' + (resp.error && resp.error.description), 'err');
+        payBtn.disabled = false;
+      });
+
+      rzp.open();
+    }
+  </script>
+</body>
+</html>
