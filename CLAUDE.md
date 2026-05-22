@@ -4,6 +4,16 @@
 
 ---
 
+## START EVERY SESSION HERE
+
+1. Read [`docs/STATUS.md`](docs/STATUS.md) — current state, what's done, what's broken, what's next
+2. Check [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase order and dependencies
+3. Open the active phase doc under `docs/phases/NN-name/CLAUDE.md` — that's your task list
+
+The old `PHASE_0_*.md ... PHASE_5_*.md` files at the repo root and `docs/vachanam-progress.md` are historical reference only. `docs/phases/` is the canonical plan as of 2026-05-22.
+
+---
+
 ## WHAT YOU ARE BUILDING
 
 **Vachanam** — AI-powered appointment booking for Indian clinics.
