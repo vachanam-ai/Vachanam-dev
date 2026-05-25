@@ -1,9 +1,11 @@
 # Vachanam — Status (single source of truth)
 
 **Last updated:** 2026-05-22
-**Active phase:** Phase 4 — Backend Core (about to start)
+**Active phase:** Phase 4 — Backend Core (about to start); Phase 4.5 security spec written & ready for plan
 
 Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc (`PHASE_N_*.md`, `docs/superpowers/plans/*`, `docs/vachanam-progress.md`), this file wins.
+
+Also check [`docs/CHANGELOG.md`](CHANGELOG.md) for session-by-session decision history.
 
 ---
 
@@ -59,16 +61,17 @@ Read this at the start of every session. It tells you what's real, what's broken
 ## Phase map (full detail in `docs/ROADMAP.md`)
 
 ```
-Phase 1  Foundation              ✅ DONE
-Phase 2  Voice agent core        ✅ DONE  (tests pass, manual call needs Phases 4 + 9 to dial-in)
-Phase 3  Razorpay checkout       ✅ DONE  (test mode, standalone)
-Phase 4  Backend core            🔨 NEXT  ← start here
-Phase 5  WhatsApp                ⬜
-Phase 6  Jobs + Calendar         ⬜
-Phase 7  Receptionist PWA        ⬜
-Phase 8  Owner + Admin dashboards ⬜
-Phase 9  Subscriptions + Onboarding ⬜
-Phase 10 Deployment              ⬜
+Phase 1   Foundation              ✅ DONE
+Phase 2   Voice agent core        ✅ DONE  (tests pass, manual call needs Phases 4 + 9 to dial-in)
+Phase 3   Razorpay checkout       ✅ DONE  (test mode, standalone)
+Phase 4   Backend core            🔨 NEXT  ← start here
+Phase 4.5 Security & compliance   📋 SPEC DONE  (docs/superpowers/specs/2026-05-22-security-hardening-design.md)
+Phase 5   WhatsApp                ⬜
+Phase 6   Jobs + Calendar         ⬜
+Phase 7   Receptionist PWA        ⬜
+Phase 8   Owner + Admin dashboards ⬜
+Phase 9   Subscriptions + Onboarding ⬜
+Phase 10  Deployment              ⬜
 ```
 
 ---

@@ -14,6 +14,9 @@ Phase 1  Foundation ─────┐
                                                      │
                               Phase 4  Backend core ◄┘ (needs 1,2,3)
                                        │
+                                       ▼
+                              Phase 4.5  Security & compliance
+                                       │     (middleware Phase 5+ inherits)
                 ┌──────────────────────┼────────────────┐
                 │                      │                │
                 ▼                      ▼                ▼
@@ -41,6 +44,7 @@ Phase 1  Foundation ─────┐
 | 2 | Voice agent (LiveKit + Sarvam + Gemini + 4 tools) | ✅ DONE | — | inbound calls (once telephony live) | [02-voice-agent/](phases/02-voice-agent/CLAUDE.md) |
 | 3 | Razorpay Standard Checkout (one-time) | ✅ DONE | — | paid signup flow | [03-razorpay-checkout/](phases/03-razorpay-checkout/CLAUDE.md) |
 | 4 | Backend core (main.py, JWT auth, queue API) | 🔨 NEXT | 1-2 | every backend route | [04-backend-core/](phases/04-backend-core/CLAUDE.md) |
+| 4.5 | Security & compliance (CSP, rate limit, audit log, privacy policy, DPDP) | 📋 SPEC DONE | 3-4 | safe Phase 5+ | [spec](superpowers/specs/2026-05-22-security-hardening-design.md) |
 | 5 | WhatsApp (Meta webhook, doctor cmds, patient FSM) | ⬜ | 3-4 | WA channel | [05-whatsapp/](phases/05-whatsapp/CLAUDE.md) |
 | 6 | Jobs + Calendar (3 APScheduler jobs, Google Cal) | ⬜ | 2 | EOD, follow-ups, calendar | [06-jobs-calendar/](phases/06-jobs-calendar/CLAUDE.md) |
 | 7 | Receptionist PWA (React + Vite, queue UI) | ⬜ | 3-4 | staff use clinic | [07-frontend-receptionist/](phases/07-frontend-receptionist/CLAUDE.md) |
