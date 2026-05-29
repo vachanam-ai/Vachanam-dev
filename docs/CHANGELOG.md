@@ -13,6 +13,49 @@ Format per session:
 
 ---
 
+## 2026-05-29 — Specialist Agent Roster
+
+**Topic:** Built 8 Claude Code subagents under `.claude/agents/` to enforce role separation, prevent cross-domain scope creep, and make the development workflow auditable specialist-by-specialist.
+
+### Decisions
+
+1. **Eight specialists** chosen (not 10+, not fewer): manager, backend-engineer, frontend-engineer, voice-agent-engineer, devops-engineer, security-engineer, privacy-legal, tester. Reasoning: each has clear domain ownership without overlap; smaller team = clearer routing.
+2. **Merged** privacy + legal into a single `privacy-legal` specialist. Same regulatory frame, same artifacts (markdown docs and runbooks).
+3. **Merged** DB work into `backend-engineer` (same async Python skillset, same Alembic discipline) and PM work into `manager` (founder-led project — no separate PM yet).
+4. **Added** `voice-agent-engineer` as a distinct specialist. LiveKit/Sarvam/SIP is a deep enough domain that a generalist backend engineer should not own it.
+5. **Manager NEVER implements code** — coordination only. Edits docs/STATUS.md, ROADMAP.md, CHANGELOG.md, phase docs. Dispatches via Task tool.
+6. **Privacy-legal NEVER writes code** — outputs are markdown legal docs and runbooks. When implementation needed, specs it and hands to the right engineer.
+7. **Tester NEVER writes the feature being tested** — adversarial QA stance preserved.
+8. **Specialists READ the spec** (`docs/superpowers/specs/2026-05-22-security-hardening-design.md` etc.) — never re-derive rules from memory.
+9. Each agent file includes: domain table, non-negotiable rules, stack, reference patterns, required reading, workflow, output format, anti-patterns.
+10. Root CLAUDE.md updated with Step 4 in "START EVERY SESSION HERE" pointing to the roster.
+
+### Files
+
+- Created: `.claude/agents/README.md` (roster + invocation patterns)
+- Created: `.claude/agents/manager.md`
+- Created: `.claude/agents/backend-engineer.md`
+- Created: `.claude/agents/frontend-engineer.md`
+- Created: `.claude/agents/voice-agent-engineer.md`
+- Created: `.claude/agents/devops-engineer.md`
+- Created: `.claude/agents/security-engineer.md`
+- Created: `.claude/agents/privacy-legal.md`
+- Created: `.claude/agents/tester.md`
+- Modified: `CLAUDE.md` (added roster pointer)
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending)*
+
+### Follow-ups
+
+- Test the roster on first real Phase 4 task — dispatch `manager` to plan, then `backend-engineer` for migration regeneration
+- Tune agent prompts if any specialist returns ambiguous results
+- If a domain emerges that doesn't fit any specialist (e.g. data analytics, ML), add a new one
+
+---
+
 ## 2026-05-22 — Security & Compliance Spec
 
 **Topic:** Brainstormed full security posture for MVP launch. Created design spec for Phase 4.5.

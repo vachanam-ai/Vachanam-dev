@@ -9,8 +9,11 @@
 1. Read [`docs/STATUS.md`](docs/STATUS.md) — current state, what's done, what's broken, what's next
 2. Check [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase order and dependencies
 3. Open the active phase doc under `docs/phases/NN-name/CLAUDE.md` — that's your task list
+4. Pick the right specialist from [`.claude/agents/README.md`](.claude/agents/README.md) — 8 subagents (manager, backend-engineer, frontend-engineer, voice-agent-engineer, devops-engineer, security-engineer, privacy-legal, tester). Dispatch via the Task tool with `subagent_type: <name>`.
 
 The old `PHASE_0_*.md ... PHASE_5_*.md` files at the repo root and `docs/vachanam-progress.md` are historical reference only. `docs/phases/` is the canonical plan as of 2026-05-22.
+
+For decision history across sessions, see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
 ---
 
