@@ -27,17 +27,17 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 
 **P1 (high):**
 - TD-001 — Stale Alembic migration → Phase 4 Task 1
-- TD-004 — Pricing tiers decision pending (Solo/Clinic/Multi vs Starter/Growth/Unlimited) — CLIENT DECISION before Phase 9
 - TD-015 — No CI / secret-scan job → Phase 4.5
 
 **P2 (medium):**
 - TD-002 — `backend/payments_test_app.py` → delete during Phase 4 Task 7
-- TD-003 — Starter price ₹99 on landing mirror → restore canonical in Phase 9
 - TD-006 — Test suite never executed end-to-end → Phase 4 acceptance check
 - TD-014 — Dockerfiles run as root → fix before Phase 10
 
 **P3 (low):**
 - TD-005 — Romanized `padipōyāḍu` vs Telugu script → verify in Phase 10 acceptance
+
+**Recently closed (2026-05-29):** TD-003 + TD-004 (pricing canonical Solo/Clinic/Multi confirmed; landing page updated)
 
 ---
 

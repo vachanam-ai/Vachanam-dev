@@ -13,7 +13,58 @@ Format per session:
 
 ---
 
-## 2026-05-29 (latest) — Fix sprint: closed 7 audit findings
+## 2026-05-29 (latest) — Pricing decision + landing page UI update (close TD-003 + TD-004)
+
+**Topic:** Client resolved the two pending decisions from the 2026-05-29 audit.
+
+### Decisions
+
+1. **Pricing tiers — canonical CLAUDE.md wins.** Client: "keep as per our docs not as per website."
+   - Solo: ₹1,999/month + ₹3/min (first 100 min free)
+   - Clinic: ₹7,999/month flat — 2,100 min included, ₹3/min overage. MOST POPULAR.
+   - Multi: ₹16,999/month flat — 4,200 min included / 2 branches, ₹2.50/min overage
+   - Additional branch: ₹7,999/month
+   - 14-day free trial, no credit card, 1,000 min
+   - Razorpay plan IDs (RAZORPAY_PLAN_SOLO_ID, _CLINIC_ID, _MULTI_ID) to be created against these tiers in Phase 9
+2. **Landing page mirror — UI stays, content updates.** Client: "core UI (color scheme, fonts) should be same. elements like pricing and new features should reflect."
+   - Kept: #006B6B teal palette, Outfit + Spectral + Pacifico fonts, layout structure, all CSS, hero copy, features 01-06, "How it works" section, contact section, footer
+   - Updated: pricing section (Starter/Growth/Unlimited → Solo/Clinic/Multi), data-amount attributes (199900/799900/1699900 paise), trial note (added "1,000 minutes")
+   - Reasoning: the live vachanam.in marketing site is well-designed (good restraint, clear typography, India-appropriate). Rebuilding from scratch would be wasteful vanity. Mirror it; swap content where reality diverges.
+
+### Files
+
+- Modified: `backend/static/index.html` — pricing section rewritten with Solo/Clinic/Multi cards, button data-amounts updated to canonical paise values, "Most popular" badge moved from Growth to Clinic, additional-branch note updated to ₹7,999, trial note updated to include 1,000-minute limit
+- Modified: `docs/TECH_DEBT.md` — TD-003 + TD-004 closed (rows struck through in Open section, added to Paid down section with full resolution notes)
+- Modified: `docs/STATUS.md` — TD-003 + TD-004 removed from Open debt list; "Recently closed" pointer added
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending — single client-decision commit)*
+
+### What was NOT changed
+
+- Test mode banner stays (still rzp_test_* keys). Will be removed in Phase 9 when going live.
+- Razorpay subscription plan IDs in `.env` (RAZORPAY_PLAN_*_ID) — still empty. Owner action in Phase 9 dashboard.
+- Production marketing site (vachanam.in) untouched. Independent host. Owner manages directly.
+
+### Open debts after this entry
+
+P1: TD-001 (stale migration, Phase 4) · TD-015 (CI, Phase 4.5)
+P2: TD-002 · TD-006 · TD-014
+P3: TD-005
+
+Down from 8 → 6 open. Phase 4 ready to start.
+
+### Retro
+
+- **Worked:** Two-sentence client decision + 15-min implementation = exact ratio of decision-cost to execution-cost we want.
+- **Worked:** Keeping the original CSS / layout / fonts means visual regression is zero — only content changed.
+- **Change next sprint:** When Phase 9 implements subscriptions, regenerate the Razorpay plan IDs to match these exact amounts in the dashboard.
+
+---
+
+## 2026-05-29 (earlier) — Fix sprint: closed 7 audit findings
 
 **Topic:** Client picked Option A from [2026-05-29 audit](audits/2026-05-29-full-project-audit.md). Brainstormer designed TD-007 fix. Executed all 7 fix items.
 

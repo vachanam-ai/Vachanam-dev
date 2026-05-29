@@ -23,8 +23,8 @@ A debt row stays until paid down. When paid down, move it to the "Paid down" sec
 |---|---|---|---|---|---|---|---|
 | TD-001 | P1 | 2026-05-22 | database-engineer | Alembic migration `2fe8f201bc31_initial_schema.py` (2026-05-15) predates the User table + 7 schema field additions on 2026-05-22 | Schema changed mid-stream; no migration was regenerated | Generate follow-up migration during Phase 4 Task 1; never edit the original | Phase 4 |
 | TD-002 | P2 | 2026-05-22 | backend-engineer | `backend/payments_test_app.py` standalone FastAPI exists only because `backend/main.py` doesn't yet | Razorpay integration shipped before backend core | Delete during Phase 4 Task 7 when main.py is built and includes payments router | Phase 4 |
-| TD-003 | P2 | 2026-05-22 | backend-engineer | Starter price on landing page mirror is ₹99 instead of canonical pricing (₹1,999 or ₹6,999 depending on the pricing decision) | Self-test convenience | Restore canonical price during Phase 9 onboarding work | Phase 9 |
-| TD-004 | P1 | 2026-05-22 | manager | Pricing decision unresolved: CLAUDE.md says Solo/Clinic/Multi ₹1,999/₹7,999/₹16,999 ; vachanam.in live shows Starter/Growth/Unlimited ₹6,999/₹9,999/₹14,999 | Two parallel marketing experiments before MVP scope locked | Client decision required before Phase 9; manager to escalate | Before Phase 9 |
+| ~~TD-003~~ | ~~P2~~ | ~~2026-05-22~~ | ~~backend-engineer~~ | **CLOSED 2026-05-29 — see Paid down section.** Resolved as part of TD-004 — pricing now canonical Solo ₹1,999 + ₹3/min. | | | |
+| ~~TD-004~~ | ~~P1~~ | ~~2026-05-22~~ | ~~manager~~ | **CLOSED 2026-05-29 — see Paid down section.** Client decided: canonical CLAUDE.md pricing (Solo/Clinic/Multi). Landing page UI mirror updated. | | | |
 | TD-005 | P3 | 2026-05-22 | voice-agent-engineer | Emergency keyword `padipōyāḍu` (romanized Telugu) may not match Sarvam STT output (could need Telugu script `పడిపోయాడు`) | Easier to read in code; STT output not yet verified with real call | Verify on first real call in Phase 10; add Telugu script alongside if needed | Phase 10 |
 | TD-006 | P2 | 2026-05-22 | tester | Integration + edge-case tests committed but not executed in last session (Docker not started) | Session ended before verification | Manager dispatches `tester` to spin up docker-compose + run full suite as first Phase 4 task | Phase 4 |
 | ~~TD-007~~ | ~~P0~~ | ~~2026-05-29~~ | ~~voice-agent-engineer~~ | **CLOSED 2026-05-29 — see Paid down section.** Replaced `_llm_with_fallback` with built-in `livekit.agents.llm.FallbackAdapter`. | | | |
@@ -50,6 +50,8 @@ A debt row stays until paid down. When paid down, move it to the "Paid down" sec
 | TD-011 | P3 | 2026-05-29 | *(pending)* | Replaced hardcoded `"redis://localhost:6379"` with `settings.redis_url` in `tests/conftest.py`. |
 | TD-012 | P2 | 2026-05-29 | *(pending)* | Added `await r.flushdb()` BEFORE the `yield` in conftest's redis fixture. Prevents previous-test pollution. |
 | TD-013 | P2 | 2026-05-29 | *(pending)* | Moved 8 obsolete docs to `docs/_legacy/`: PHASE_0..5_*.md (root), `docs/vachanam-progress.md`, `docs/superpowers/plans/2026-05-18-phase-2-backend.md`. Added `docs/_legacy/README.md` explaining archaeology-only purpose. |
+| TD-004 | P1 | 2026-05-29 | *(pending)* | Client decision: keep canonical pricing from CLAUDE.md (Solo ₹1,999 + ₹3/min, Clinic ₹7,999 flat / 2,100 min, Multi ₹16,999 flat / 4,200 min / 2 branches). Reject vachanam.in live Starter/Growth/Unlimited tier names + amounts. |
+| TD-003 | P2 | 2026-05-29 | *(pending)* | Resolved by TD-004 closure. Landing page mirror pricing section rewritten with canonical Solo/Clinic/Multi cards (₹1,999 / ₹7,999 / ₹16,999). data-amount attributes updated to 199900 / 799900 / 1699900 paise. Core UI (color #006B6B teal, Outfit/Spectral/Pacifico fonts, layout structure) unchanged per client instruction. |
 
 When closing a future row, append here with this format:
 ```
