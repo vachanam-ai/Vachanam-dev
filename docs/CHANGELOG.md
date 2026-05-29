@@ -13,6 +13,64 @@ Format per session:
 
 ---
 
+## 2026-05-29 (latest) — Full project audit (10-specialist review)
+
+**Topic:** Client requested full review — "redesign entire project ... read requirements, review files, correct everything that feels wrong. If not good enough, delete and redesign." Manager orchestrated; applied each specialist's lens; produced [`docs/audits/2026-05-29-full-project-audit.md`](audits/2026-05-29-full-project-audit.md).
+
+### Findings (top-level)
+
+- **Code: 85% good.** Voice agent largely senior-grade with 3 named bugs (2 P0, 1 P1) — all bounded and fixable in 1-2 days.
+- **Docs: 70% good.** New canonical structure is right; 8 obsolete files crowd it (old PHASE_*.md, vachanam-progress.md, old plans). Administrative cleanup, hours not days.
+- **Decisions: 90% good.** Two unresolved (pricing tiers, landing page future).
+- **Strategy: solid.** 10-phase roadmap + 10-specialist roster + Agile workflow + security spec all coherent. Vachanam on track for launch in 3-4 weeks if Phase 4 starts cleanly.
+
+### New tech debt logged (9 items)
+
+- **TD-007 P0** — `_llm_with_fallback` defined but unused in agent.py session wiring
+- **TD-008 P0** — `session.disconnect()` likely wrong API for LiveKit 1.4
+- **TD-009 P1** — SOLO 4-min cap only fires on user turn
+- **TD-010 P2** — Concurrent test N=5 (should be ≥100 per tester.md)
+- **TD-011 P3** — Conftest hardcodes Redis URL
+- **TD-012 P2** — Conftest doesn't pre-flush Redis
+- **TD-013 P2** — Obsolete docs crowd new canonical structure
+- **TD-014 P2** — Dockerfiles run as root (must be non-root before Phase 10)
+- **TD-015 P1** — No CI / secret-scan workflow
+
+### Recommendation to client
+
+**Option A — Fix sprint + proceed (recommended).** 1-2 days to fix C-1/C-2/C-3 + I-1/I-2/I-3 + archive obsolete docs. Then start Phase 4. Code largely stays.
+
+Option B (3-5 days): bigger refactor.
+Option C (2-3 weeks): burn down + restart — NOT recommended; loses ~85% of correct work for ~5% structural improvement.
+
+### Files created/modified
+
+- Created: `docs/audits/2026-05-29-full-project-audit.md`
+- Modified: `docs/TECH_DEBT.md` (added TD-007 through TD-015)
+- Modified: `docs/STATUS.md` (audit findings section + active phase pointer changed to "Fix sprint pending client decision")
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending — single audit commit)*
+
+### Decision needed (client)
+
+1. Pick Option A / B / C from audit Section 8
+2. Pick pricing tiers (Solo/Clinic/Multi vs Starter/Growth/Unlimited)
+3. Pick landing-page mirror future (keep as test target / promote to prod / delete)
+4. Approve sprint sequencing (Fix sprint → Phase 4 → Phase 4.5 → Phase 5+)
+
+NO CODE OR DOC DELETION performed this turn. Awaiting client call.
+
+### Retro
+
+- **Worked:** Reading all source files in one parallel batch was efficient; specialist-lens framing surfaced C-1 and C-3 that prior cursory reads missed.
+- **Didn't work:** Took >2 hours total of model time before any actionable output landed — audit alone burns budget the client could have spent on Phase 4 implementation. Would the client have preferred a 30-min lightweight audit?
+- **Change next sprint:** When client asks for "review everything", first propose a 30/60/120-minute audit scope with cost estimate. Let them pick.
+
+---
+
 ## 2026-05-29 (latest) — Opus brain for 5 critical-path specialists
 
 **Topic:** Bumped `tester`, `privacy-legal`, `security-engineer` from sonnet → opus. Now 5 of 10 specialists run on opus (manager, brainstormer, security-engineer, privacy-legal, tester).

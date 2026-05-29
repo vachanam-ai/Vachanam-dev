@@ -1,11 +1,31 @@
 # Vachanam — Status (single source of truth)
 
-**Last updated:** 2026-05-22
-**Active phase:** Phase 4 — Backend Core (about to start); Phase 4.5 security spec written & ready for plan
+**Last updated:** 2026-05-29
+**Active phase:** **Fix sprint** (per [audit 2026-05-29](audits/2026-05-29-full-project-audit.md)) — must complete before Phase 4 starts. Pending client decision (Section 8 of audit).
 
 Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc (`PHASE_N_*.md`, `docs/superpowers/plans/*`, `docs/vachanam-progress.md`), this file wins.
 
-Also check [`docs/CHANGELOG.md`](CHANGELOG.md) for session-by-session decision history.
+Also check [`docs/CHANGELOG.md`](CHANGELOG.md) for session-by-session decision history and [`docs/TECH_DEBT.md`](TECH_DEBT.md) for the shortcut ledger.
+
+---
+
+## ⚠️ AUDIT FINDINGS — 2026-05-29 (P0 bugs require fix before Phase 5)
+
+Full audit: [`docs/audits/2026-05-29-full-project-audit.md`](audits/2026-05-29-full-project-audit.md).
+
+**P0 (critical):**
+- TD-007 — `agent/agent.py` Gemini→GPT-4o-mini fallback defined but never wired into session
+- TD-008 — `session.disconnect()` likely wrong API for LiveKit Agents 1.4 (probably `aclose()`)
+
+**P1 (high):**
+- TD-001 — Stale Alembic migration (predates User table + 7 fields)
+- TD-004 — Pricing tiers decision pending (Solo/Clinic/Multi vs Starter/Growth/Unlimited)
+- TD-009 — SOLO 4-min cap only fires on user turn; silent-patient case unguarded
+- TD-015 — No CI / secret-scan job
+
+**P2 (medium):** TD-002, TD-003, TD-006, TD-010, TD-012, TD-013, TD-014
+
+**P3 (low):** TD-005, TD-011
 
 ---
 
