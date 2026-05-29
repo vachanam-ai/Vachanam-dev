@@ -15,9 +15,9 @@ Ten subagents, each scoped to one domain, working an Agile sprint cadence at sen
 | [`voice-agent-engineer`](voice-agent-engineer.md) | sonnet | LiveKit Agents SDK, Sarvam STT/TTS, Gemini→GPT-4o-mini wiring, SIP + Vobiz, session state, TTS sanitization, emergency keywords. |
 | [`database-engineer`](database-engineer.md) | sonnet | Schema design, Alembic migrations (zero-downtime), indexes, query plans, backup/restore drills. Owns `backend/models/schema.py` and `alembic/`. |
 | [`devops-engineer`](devops-engineer.md) | sonnet | Docker, Fly.io, Render, Cloudflare, GitHub Actions, secrets rotation, monitoring, deploy procedures. Owns `infra/` and `.github/`. |
-| [`security-engineer`](security-engineer.md) | sonnet | JWT middleware, rate limit (slowapi+Redis), CSP/HSTS, audit_log decorator, OWASP defenses. Reviews other agents' code for security. |
-| [`privacy-legal`](privacy-legal.md) | sonnet | DPDP Act 2023 mapping, privacy policy, ToS, breach response, DSAR runbook, retention policy. Outputs markdown only — NEVER writes code. |
-| [`tester`](tester.md) | sonnet | pytest fixtures, integration, edge_cases, security tests, CI test config. Stubborn QA — rejects "mostly tested" work. NEVER writes the feature being tested. |
+| [`security-engineer`](security-engineer.md) | **opus** | JWT middleware, rate limit (slowapi+Redis), CSP/HSTS, audit_log decorator, OWASP defenses. Reviews other agents' code for security. |
+| [`privacy-legal`](privacy-legal.md) | **opus** | DPDP Act 2023 mapping, privacy policy, ToS, breach response, DSAR runbook, retention policy. Outputs markdown only — NEVER writes code. |
+| [`tester`](tester.md) | **opus** | pytest fixtures, integration, edge_cases, security tests, CI test config. Stubborn QA — rejects "mostly tested" work. NEVER writes the feature being tested. |
 
 ---
 
@@ -131,11 +131,21 @@ Then `manager`:
 
 ## Model assignment rationale
 
-- `manager` + `brainstormer`: **opus** — highest reasoning load. Manager is accountable for every decision affecting client cost and quality. Brainstormer designs the approach the rest of the team executes. These two get the deepest model.
-- All engineering specialists: sonnet — strong code generation at reasonable cost. Their work is bounded by the brainstormer's recommendation and the manager's review.
-- For trivial mechanical tasks within a specialist's dispatch (e.g., rename, format), the specialist may delegate to a `haiku`-backed call internally — implementation detail.
+**Opus brain** (5 specialists — critical-path roles where a single mistake costs the client real money or breaks compliance):
+- `manager` — every decision is accountable to the client; cost + quality + DPDP all funnel through here
+- `brainstormer` — shapes the approach the rest of the team executes; bad design → wasted engineering hours
+- `security-engineer` — a single missed OWASP rule or unsigned webhook = data breach + DPDP fine
+- `privacy-legal` — DPDP wording precision matters in court; misclassifying a data processor = legal liability
+- `tester` — the last line of defense before bad code reaches a real clinic; "mostly tested" is what hurts patients
 
-If a specialist consistently produces poor output at sonnet, manager escalates to client with a request to bump that specialist to opus (cost vs quality decision).
+**Sonnet brain** (5 specialists — strong code generation, work bounded by opus oversight):
+- `backend-engineer`, `frontend-engineer`, `voice-agent-engineer`, `database-engineer`, `devops-engineer`
+
+The engineering specialists do the implementation work. The opus specialists set the bar, design the work, defend the bar, and review the output. This concentrates the reasoning budget where one mistake is most expensive.
+
+For trivial mechanical tasks within a specialist's dispatch (rename, format, simple Bash), the specialist may delegate to a `haiku`-backed call — implementation detail.
+
+If a sonnet specialist consistently produces sub-bar output, manager escalates to client with a request to bump to opus.
 
 ---
 

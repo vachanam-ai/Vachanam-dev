@@ -13,6 +13,33 @@ Format per session:
 
 ---
 
+## 2026-05-29 (latest) — Opus brain for 5 critical-path specialists
+
+**Topic:** Bumped `tester`, `privacy-legal`, `security-engineer` from sonnet → opus. Now 5 of 10 specialists run on opus (manager, brainstormer, security-engineer, privacy-legal, tester).
+
+### Decision
+
+These five roles are now opus because the cost of a single mistake is asymmetric:
+- `security-engineer`: a missed OWASP rule or unsigned webhook = data breach + DPDP fine
+- `privacy-legal`: DPDP wording precision matters in court; misclassifying a processor = liability
+- `tester`: last line of defense; "mostly tested" is what hurts patients
+- `manager` + `brainstormer`: already opus from prior session — set the bar and design the work
+
+Sonnet specialists do implementation under opus oversight. Reasoning budget concentrated where one mistake is most expensive.
+
+### Files
+
+- Modified: `.claude/agents/tester.md` (model sonnet → opus)
+- Modified: `.claude/agents/privacy-legal.md` (model sonnet → opus)
+- Modified: `.claude/agents/security-engineer.md` (model sonnet → opus)
+- Modified: `.claude/agents/README.md` (roster table + model rationale rewritten)
+
+### Commits
+
+- *(pending)*
+
+---
+
 ## 2026-05-29 (later) — Roster v2: +database-engineer +brainstormer, Agile + Quality Bar, manager as client-accountable opus
 
 **Topic:** Roster expanded from 8 → 10 specialists. Manager + brainstormer use opus brain. Added Agile workflow, senior-dev quality bar, technical debt ledger. Manager redefined as client-accountable PM who escalates plan deviations BEFORE acting.
