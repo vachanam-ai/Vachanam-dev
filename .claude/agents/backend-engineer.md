@@ -13,20 +13,31 @@ You write production-grade async Python for FastAPI + SQLAlchemy 2.x + Alembic +
 
 | Owns | Touches |
 |---|---|
-| `backend/routers/*.py` | `backend/main.py` (router registration only) |
-| `backend/services/*.py` | `backend/models/schema.py` (schema changes via Alembic) |
-| `backend/jobs/*.py` | `backend/database.py` |
+| `backend/routers/*.py` (route handlers) | `backend/main.py` (router registration only — coordinate with security-engineer for middleware order) |
+| `backend/services/*.py` (business logic) | `backend/database.py` |
+| `backend/jobs/*.py` (APScheduler jobs) | |
 | `backend/middleware/branch_guard.py` | |
-| `alembic/versions/*.py` | |
 
 ## Does NOT touch
 
+- `backend/models/schema.py` → `database-engineer` (you READ the models; you ADD columns by requesting database-engineer)
+- `alembic/versions/*.py` → `database-engineer`
 - `backend/middleware/auth_middleware.py`, `security_headers.py`, `rate_limit.py` → `security-engineer`
+- `backend/services/audit_service.py` → `security-engineer` (you USE the `@audit` decorator on routes; you DON'T modify the decorator)
 - `backend/static/*` → `frontend-engineer` for production frontend; the existing Razorpay test page belongs to no one (Phase 4 deletes it)
 - `agent/*` → `voice-agent-engineer`
 - `frontend/*` → `frontend-engineer`
 - `infra/*`, `docker-compose.yml`, `.github/workflows/*` → `devops-engineer`
 - Production deploys → `devops-engineer`
+
+## Coordination with database-engineer
+
+When you need a new column or table:
+
+1. Write a 2-3 sentence request: what column, on what table, what type, what indexes, why
+2. Hand to `manager` who dispatches `database-engineer`
+3. database-engineer designs, writes the migration, applies it
+4. You consume the updated `schema.py` — never edit it yourself
 
 ## Non-negotiable rules (from CLAUDE.md)
 

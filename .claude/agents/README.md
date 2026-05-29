@@ -1,21 +1,32 @@
 # Vachanam — Specialist Agent Roster
 
-Eight subagents, each scoped to one domain. Invoke via the Task tool (`subagent_type: <name>`) when work falls clearly inside one specialist's domain. For multi-domain work, dispatch `manager` first — it plans the breakdown and chooses which specialists to call.
+Ten subagents, each scoped to one domain, working an Agile sprint cadence at senior-developer quality. Invoke via the Task tool (`subagent_type: <name>`). For multi-domain work or session start/end, dispatch `manager` first.
 
 ---
 
 ## Roster
 
-| Agent | Use when |
+| Agent | Model | Use when |
+|---|---|---|
+| [`manager`](manager.md) | **opus** | Start of session, end of session, multi-domain task, plan deviation, decision needed. Stubborn micromanager. Answerable to the client (Vinay) for every decision. Goal: production-grade output at lowest client cost. NEVER writes code. |
+| [`brainstormer`](brainstormer.md) | **opus** | Start of every phase or non-trivial task. Proposes 2-3 implementation options with trade-offs; recommends the simplest viable. YAGNI ruthless. NEVER implements. |
+| [`backend-engineer`](backend-engineer.md) | sonnet | FastAPI routes, async services, business logic in `backend/services/`, jobs, Redis integration. (Schema changes → `database-engineer`.) |
+| [`frontend-engineer`](frontend-engineer.md) | sonnet | React + Vite PWA, Tailwind UI, TanStack Query, axios + JWT, offline behavior, mobile UX. |
+| [`voice-agent-engineer`](voice-agent-engineer.md) | sonnet | LiveKit Agents SDK, Sarvam STT/TTS, Gemini→GPT-4o-mini wiring, SIP + Vobiz, session state, TTS sanitization, emergency keywords. |
+| [`database-engineer`](database-engineer.md) | sonnet | Schema design, Alembic migrations (zero-downtime), indexes, query plans, backup/restore drills. Owns `backend/models/schema.py` and `alembic/`. |
+| [`devops-engineer`](devops-engineer.md) | sonnet | Docker, Fly.io, Render, Cloudflare, GitHub Actions, secrets rotation, monitoring, deploy procedures. Owns `infra/` and `.github/`. |
+| [`security-engineer`](security-engineer.md) | sonnet | JWT middleware, rate limit (slowapi+Redis), CSP/HSTS, audit_log decorator, OWASP defenses. Reviews other agents' code for security. |
+| [`privacy-legal`](privacy-legal.md) | sonnet | DPDP Act 2023 mapping, privacy policy, ToS, breach response, DSAR runbook, retention policy. Outputs markdown only — NEVER writes code. |
+| [`tester`](tester.md) | sonnet | pytest fixtures, integration, edge_cases, security tests, CI test config. Stubborn QA — rejects "mostly tested" work. NEVER writes the feature being tested. |
+
+---
+
+## Workflow files (every specialist reads these)
+
+| File | Purpose |
 |---|---|
-| [`manager`](manager.md) | Start of session, end of session, multi-domain task, unclear scope. Reads STATUS, picks the right specialist(s), updates docs after. |
-| [`backend-engineer`](backend-engineer.md) | FastAPI routes, SQLAlchemy models, Alembic migrations, Python services, REST/webhook endpoints, async DB code. |
-| [`frontend-engineer`](frontend-engineer.md) | React components, Vite config, PWA setup, Tailwind, axios + TanStack Query, offline behavior, mobile UX. |
-| [`voice-agent-engineer`](voice-agent-engineer.md) | LiveKit Agents SDK, Sarvam STT/TTS, Gemini/GPT-4o-mini wiring, SIP trunk + Vobiz, session state, TTS sanitization, emergency keywords. |
-| [`devops-engineer`](devops-engineer.md) | Docker, fly.toml, render.yaml, Cloudflare, GitHub Actions, env var management, secret rotation, monitoring. |
-| [`security-engineer`](security-engineer.md) | JWT middleware, rate limiting, CSP/HSTS headers, audit log, OWASP defenses, secret scanning, vulnerability response. |
-| [`privacy-legal`](privacy-legal.md) | Privacy policy text, DPDP Act compliance, data subject requests, breach notifications, ToS, retention policy enforcement. |
-| [`tester`](tester.md) | pytest fixtures, integration tests, edge-case tests, concurrency tests, CI test config, security test suite. |
+| [`AGILE.md`](AGILE.md) | Sprint cadence: planning, standup, review, retro. Definition of Ready, Definition of Done. Dispatch templates. Escalation paths. |
+| [`QUALITY_BAR.md`](QUALITY_BAR.md) | Senior-dev standards for code, docs, decisions, commits. Anti-patterns rejected on sight. `manager` enforces; `tester` rejects below. |
 
 ---
 
@@ -30,38 +41,40 @@ User: "Write the JWT middleware."
 → Task(subagent_type="security-engineer", ...)
 ```
 
-### Pattern 2 — Manager-led decomposition
-
-Task spans multiple domains OR scope unclear:
+### Pattern 2 — Manager-led decomposition (default for any non-trivial work)
 
 ```
 User: "Start Phase 4."
 → Task(subagent_type="manager", ...)
-   → manager reads STATUS, opens phase doc, returns plan: "dispatch backend-engineer
-      for Tasks 1-6, then tester for Task 7, then devops-engineer to delete the
-      standalone test app"
-→ Task(subagent_type="backend-engineer", ...) for each backend task
-→ Task(subagent_type="tester", ...) for test task
-→ etc.
+   → manager dispatches brainstormer to validate approach
+   → brainstormer returns recommendation
+   → manager escalates to client if approach differs from plan
+   → manager returns: "dispatch database-engineer Task 1, backend-engineer Tasks 2-6,
+      security-engineer Task review, tester Task 7"
+→ Task(subagent_type="database-engineer", ...) for Task 1
+→ ... and so on
 ```
 
-### Pattern 3 — Specialist + reviewer
+### Pattern 3 — Implementer + reviewer pair
 
-Always pair an implementer with a different reviewer for substantial work:
-
-```
-backend-engineer writes the queue endpoints
-→ security-engineer reviews the auth + branch_guard usage
-→ tester writes the data-isolation test
-```
-
-### Pattern 4 — Parallel specialists
-
-Independent tasks can be dispatched in parallel (single message, multiple Task calls):
+EVERY implementation gets a different specialist as reviewer:
 
 ```
-Frontend page work + backend endpoint work + privacy policy text — all in one
-message, three parallel Task calls.
+backend-engineer writes queue endpoints
+→ database-engineer reviews queries for branch_id + indexes
+→ security-engineer reviews auth + audit decorator
+→ tester writes data-isolation test
+```
+
+### Pattern 4 — Parallel specialists (independent work)
+
+Single message, multiple Task calls:
+
+```
+- frontend-engineer: build login page
+- privacy-legal: write privacy policy markdown
+- devops-engineer: set up GitHub Actions CI
+(All independent — dispatch in parallel)
 ```
 
 ---
@@ -70,40 +83,59 @@ message, three parallel Task calls.
 
 | Specialist | Will NOT |
 |---|---|
-| `backend-engineer` | Touch frontend code or LiveKit agent internals. Won't write deployment configs. |
-| `frontend-engineer` | Touch backend code. Won't change DB schema. |
-| `voice-agent-engineer` | Touch FastAPI routes or React. |
-| `devops-engineer` | Write business logic. |
-| `security-engineer` | Implement features unrelated to security. Won't write the actual privacy policy text (that's `privacy-legal`). |
-| `privacy-legal` | Write code. Outputs are markdown documents, runbooks, decision memos. |
-| `tester` | Write the feature being tested. Implements only test code. |
-| `manager` | Implement anything. Coordination only — reads, plans, dispatches, updates docs. |
+| `manager` | Write code. Mark done without verification. Update docs against plan without escalating. |
+| `brainstormer` | Implement. Recommend single option without alternatives. Re-debate settled decisions. |
+| `backend-engineer` | Touch frontend, agent, infra, schema migrations, or security middleware. |
+| `frontend-engineer` | Touch backend code, DB schema, deployment. Add analytics SDK without `privacy-legal` approval. |
+| `voice-agent-engineer` | Touch FastAPI routes, React, schema. |
+| `database-engineer` | Write route handlers or business logic. Edit existing migrations. |
+| `devops-engineer` | Write business logic. Deploy without health check passing. |
+| `security-engineer` | Implement non-security features. Write privacy policy text (that's `privacy-legal`). |
+| `privacy-legal` | Write code. Approve new vendor without updating processor list. |
+| `tester` | Write the feature being tested. Sign off on "mostly tested" work. |
 
-When a specialist hits work outside its scope, it must return BLOCKED and recommend which specialist to dispatch next.
-
----
-
-## Documents every specialist must read first
-
-1. `CLAUDE.md` (root) — the law
-2. `docs/STATUS.md` — current truth
-3. `docs/ROADMAP.md` — phase order
-4. The active phase doc: `docs/phases/NN-name/CLAUDE.md`
-5. Their own agent file in this folder for domain-specific rules
-
-For decision history, `docs/CHANGELOG.md` records what was decided when and why.
+If a specialist hits work outside its scope, return `BLOCKED` with a recommendation for which specialist to dispatch next.
 
 ---
 
-## After work — every specialist updates docs
+## Documents every specialist reads first
+
+1. [`CLAUDE.md`](../../CLAUDE.md) (root) — the law
+2. [`docs/STATUS.md`](../../docs/STATUS.md) — current truth
+3. [`docs/ROADMAP.md`](../../docs/ROADMAP.md) — phase order
+4. [`docs/CHANGELOG.md`](../../docs/CHANGELOG.md) — decision history
+5. [`docs/TECH_DEBT.md`](../../docs/TECH_DEBT.md) — what shortcuts are outstanding
+6. Active phase doc — `docs/phases/NN-name/CLAUDE.md`
+7. Specialist's own agent file in this folder
+8. [`AGILE.md`](AGILE.md) — sprint workflow
+9. [`QUALITY_BAR.md`](QUALITY_BAR.md) — senior-dev standards
+
+---
+
+## After work — every specialist must
 
 Before returning DONE:
-1. Update `docs/STATUS.md` if anything changed status (broken→fixed, planned→built)
-2. Append entry to `docs/CHANGELOG.md` under the current date with decisions made and files touched
-3. List exact files created/modified/deleted in the return message
+1. Self-check against `QUALITY_BAR.md`
+2. List files created/modified/deleted in the return message
+3. List exact proof of acceptance (pytest output, curl response, etc.)
 4. Suggest the next specialist if work continues
 
-The `manager` agent handles cross-doc consistency at the end of multi-specialist sessions.
+Then `manager`:
+1. Verifies the proof (runs pytest, reads diff)
+2. Dispatches the named reviewer
+3. Updates `docs/STATUS.md` (only after work matches plan; otherwise escalates to client first)
+4. Appends `docs/CHANGELOG.md` with decisions + retro
+5. Updates `docs/TECH_DEBT.md` if shortcuts taken
+
+---
+
+## Model assignment rationale
+
+- `manager` + `brainstormer`: **opus** — highest reasoning load. Manager is accountable for every decision affecting client cost and quality. Brainstormer designs the approach the rest of the team executes. These two get the deepest model.
+- All engineering specialists: sonnet — strong code generation at reasonable cost. Their work is bounded by the brainstormer's recommendation and the manager's review.
+- For trivial mechanical tasks within a specialist's dispatch (e.g., rename, format), the specialist may delegate to a `haiku`-backed call internally — implementation detail.
+
+If a specialist consistently produces poor output at sonnet, manager escalates to client with a request to bump that specialist to opus (cost vs quality decision).
 
 ---
 
@@ -116,4 +148,6 @@ The `manager` agent handles cross-doc consistency at the end of multi-specialist
 - Log via structlog, never `print()`
 - Phone numbers logged as last-4 only
 - No commits unless user asked
-- Follow caveman mode if active (concise responses; code/commits stay normal)
+- Follow `QUALITY_BAR.md` on every artifact
+- Follow `AGILE.md` ceremonies — Definition of Ready before dispatch, Definition of Done before mark-done
+- Caveman mode: follow if active in session; code/commits/security still written normal

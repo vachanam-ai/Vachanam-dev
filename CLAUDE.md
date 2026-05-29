@@ -9,7 +9,10 @@
 1. Read [`docs/STATUS.md`](docs/STATUS.md) — current state, what's done, what's broken, what's next
 2. Check [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase order and dependencies
 3. Open the active phase doc under `docs/phases/NN-name/CLAUDE.md` — that's your task list
-4. Pick the right specialist from [`.claude/agents/README.md`](.claude/agents/README.md) — 8 subagents (manager, backend-engineer, frontend-engineer, voice-agent-engineer, devops-engineer, security-engineer, privacy-legal, tester). Dispatch via the Task tool with `subagent_type: <name>`.
+4. Dispatch [`manager`](.claude/agents/manager.md) first for any non-trivial work. Manager runs Agile sprints, dispatches specialists, verifies output, updates docs, and is accountable to the client (Vinay) for every decision. Roster of 10 specialists at [`.claude/agents/README.md`](.claude/agents/README.md).
+5. Every artifact meets [`.claude/agents/QUALITY_BAR.md`](.claude/agents/QUALITY_BAR.md) — senior developer standards.
+6. Every sprint follows [`.claude/agents/AGILE.md`](.claude/agents/AGILE.md) — planning, standup, review, retro.
+7. Every shortcut is logged in [`docs/TECH_DEBT.md`](docs/TECH_DEBT.md) with severity + payback plan.
 
 The old `PHASE_0_*.md ... PHASE_5_*.md` files at the repo root and `docs/vachanam-progress.md` are historical reference only. `docs/phases/` is the canonical plan as of 2026-05-22.
 

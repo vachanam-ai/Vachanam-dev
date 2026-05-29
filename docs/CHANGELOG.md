@@ -13,6 +13,62 @@ Format per session:
 
 ---
 
+## 2026-05-29 (later) — Roster v2: +database-engineer +brainstormer, Agile + Quality Bar, manager as client-accountable opus
+
+**Topic:** Roster expanded from 8 → 10 specialists. Manager + brainstormer use opus brain. Added Agile workflow, senior-dev quality bar, technical debt ledger. Manager redefined as client-accountable PM who escalates plan deviations BEFORE acting.
+
+### Decisions
+
+1. **Added `database-engineer`** as a separate specialist. Previously rolled into `backend-engineer`. Split because schema design + Alembic migration discipline + zero-downtime patterns + index strategy is a deep enough domain to deserve its own owner. `backend-engineer` now ONLY consumes schema, requests changes from `database-engineer`.
+2. **Added `brainstormer`** as a tech-lead/architect specialist. Proposes 2-3 options for every fork, recommends the simplest viable (YAGNI ruthless), surfaces "is this needed?" challenges. Never implements. Dispatched at start of every phase or non-trivial task per AGILE.md.
+3. **Manager assigned opus brain** (was sonnet). Reasoning: highest-stakes role; every decision affects client cost + quality + DPDP compliance. Needs deepest reasoning.
+4. **Brainstormer assigned opus brain** (was sonnet). Reasoning: design judgment shapes downstream work; better recommendations save engineering hours.
+5. **Manager redefined as client-accountable.** New principles:
+   - Answerable to the client (Vinay) for every decision
+   - Goal: production-grade output at lowest client cost (without quality compromise)
+   - Lifecycle ownership from greenfield through production support
+   - Plan deviations MUST be escalated to client BEFORE updating any doc
+   - Vendor / cost additions require client approval
+   - Every CHANGELOG decision carries manager's reasoning as defense
+6. **Manager persona = stubborn micromanager.** 11 non-negotiable rules including: no DONE without proof; no test skipping; no scope creep; no plan deviation without escalation; no commit without the right reviewer. Standard reply when in doubt: "not yet."
+7. **Tester persona = stubborn QA who "shows hell to developers".** Rejects "mostly tested" work. TDD enforced. Rejects implementer modifications to tests. Concurrency tests must be N≥100. Data isolation tests must use 2+ orgs. Negative tests required for every endpoint.
+8. **Created `.claude/agents/AGILE.md`** — sprint workflow. Sprint = one phase. Ceremonies: planning (with brainstormer + client escalation if needed), standup (session start), review (verify acceptance + demo), retro (worked / didn't / change). Definition of Ready before dispatch. Definition of Done before mark-done.
+9. **Created `.claude/agents/QUALITY_BAR.md`** — senior-dev standards. Every line of code + every doc + every decision + every commit + every deploy meets the checklist. Anti-patterns rejected on sight ("it works on my machine" / "I'll add tests later" / "mostly done" etc.).
+10. **Created `docs/TECH_DEBT.md`** — ledger of every shortcut with severity (P0/P1/P2/P3) and payback plan. Backfilled with 6 existing debts (stale migration, standalone test app, ₹99 test price, pricing decision, romanized Telugu keyword, unverified tests).
+
+### Files
+
+- Created: `.claude/agents/database-engineer.md`
+- Created: `.claude/agents/brainstormer.md`
+- Created: `.claude/agents/AGILE.md`
+- Created: `.claude/agents/QUALITY_BAR.md`
+- Created: `docs/TECH_DEBT.md`
+- Modified: `.claude/agents/manager.md` — full rewrite; opus brain; client accountability; stubborn principles; lifecycle ownership; escalation protocol
+- Modified: `.claude/agents/tester.md` — full rewrite; stubborn QA persona; "shows hell" framing; rejection criteria explicit
+- Modified: `.claude/agents/brainstormer.md` — model bumped sonnet → opus
+- Modified: `.claude/agents/backend-engineer.md` — scope narrowed; schema work delegated to database-engineer; coordination protocol added
+- Modified: `.claude/agents/README.md` — 10-specialist roster, AGILE.md + QUALITY_BAR.md references, model rationale
+- Modified: `CLAUDE.md` (root) — START HERE updated with manager-first, QUALITY_BAR, AGILE, TECH_DEBT pointers
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending — single commit after this entry)*
+
+### Follow-ups
+
+- Test the new roster on a Phase 4 dispatch: manager → brainstormer → database-engineer → backend-engineer → tester → security-engineer review
+- If manager output is too verbose at opus, retro and consider sonnet for routine session-end updates (keeping opus for sprint planning + escalations)
+- TECH_DEBT TD-004 (pricing decision) is client-blocking — manager should escalate at the next sprint planning
+
+### Retro (for this restructure sprint)
+
+- **Worked:** Agreeing on roster up-front then writing each agent file in one pass kept consistency.
+- **Didn't work:** First README draft missed updating brainstormer to opus — required a redo. Could have been caught by reading user's full requirements list before writing.
+- **Change next sprint:** Before writing any multi-file output, re-state the requirements explicitly to confirm scope.
+
+---
+
 ## 2026-05-29 — Specialist Agent Roster
 
 **Topic:** Built 8 Claude Code subagents under `.claude/agents/` to enforce role separation, prevent cross-domain scope creep, and make the development workflow auditable specialist-by-specialist.
