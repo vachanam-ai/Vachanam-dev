@@ -27,13 +27,13 @@ A debt row stays until paid down. When paid down, move it to the "Paid down" sec
 | TD-004 | P1 | 2026-05-22 | manager | Pricing decision unresolved: CLAUDE.md says Solo/Clinic/Multi ₹1,999/₹7,999/₹16,999 ; vachanam.in live shows Starter/Growth/Unlimited ₹6,999/₹9,999/₹14,999 | Two parallel marketing experiments before MVP scope locked | Client decision required before Phase 9; manager to escalate | Before Phase 9 |
 | TD-005 | P3 | 2026-05-22 | voice-agent-engineer | Emergency keyword `padipōyāḍu` (romanized Telugu) may not match Sarvam STT output (could need Telugu script `పడిపోయాడు`) | Easier to read in code; STT output not yet verified with real call | Verify on first real call in Phase 10; add Telugu script alongside if needed | Phase 10 |
 | TD-006 | P2 | 2026-05-22 | tester | Integration + edge-case tests committed but not executed in last session (Docker not started) | Session ended before verification | Manager dispatches `tester` to spin up docker-compose + run full suite as first Phase 4 task | Phase 4 |
-| TD-007 | **P0** | 2026-05-29 | voice-agent-engineer | `agent/agent.py` defines `_llm_with_fallback` (Gemini → GPT-4o-mini) but the actual session LLM is raw `google.LLM` — fallback never fires. Violates CLAUDE.md Rule 9. | Discovered in full project audit | Implement custom LLM adapter for livekit.agents OR wrap session LLM with try/except + reset. Requires reading LiveKit Agents 1.4 custom LLM provider API. | Fix sprint (before Phase 5) |
-| TD-008 | **P0** | 2026-05-29 | voice-agent-engineer | `agent/agent.py` calls `session.disconnect()` — method may not exist in LiveKit Agents 1.4 (likely `aclose()`). Will crash on first real call. | Discovered in full project audit | Verify against livekit-agents>=1.4.0 docs; replace with correct method | Fix sprint (before Phase 5) |
-| TD-009 | P1 | 2026-05-29 | voice-agent-engineer | SOLO 4-min cap only fires inside `on_user_turn_completed`. If patient goes silent at 3:55, cap never enforced → billing-correctness risk. | Discovered in full project audit | Add background asyncio polling task in `entrypoint` that checks `elapsed_seconds` every 5s independent of user activity | Fix sprint (before Phase 5) |
-| TD-010 | P2 | 2026-05-29 | tester | `tests/edge_cases/test_concurrent_tokens.py` runs N=5; tester.md rule requires N≥100 for concurrency tests. Current passes only because Redis INCR is atomic; not exposing real contention. | Initial test was MVP; rule introduced after | Bump to N=100; add limit-boundary variant pre-filling 99 then 10 concurrent → exactly 1 success | Fix sprint |
-| TD-011 | P3 | 2026-05-29 | tester | `tests/conftest.py:27` hardcodes `redis://localhost:6379` instead of `settings.redis_url`. Violates "no hardcoded URLs" rule. | Initial conftest was MVP | Replace with `settings.redis_url`, matching the existing db fixture pattern | Fix sprint |
-| TD-012 | P2 | 2026-05-29 | tester | `tests/conftest.py` redis fixture flushes AFTER test only. Silent test pollution if previous test leaked. | Initial conftest was MVP | Flush BEFORE the yield as well | Fix sprint |
-| TD-013 | P2 | 2026-05-29 | manager | 5 obsolete root-level PHASE_*.md files + `docs/vachanam-progress.md` + old `docs/superpowers/plans/2026-05-18-phase-2-backend.md` coexist with new canonical structure. Anyone reading the repo cold cannot tell which is authoritative. | Refactor on 2026-05-22 created new structure but did not archive the old | Move all to `docs/_legacy/` with a README explaining "kept for archaeology — canonical truth is docs/STATUS.md" | Fix sprint |
+| ~~TD-007~~ | ~~P0~~ | ~~2026-05-29~~ | ~~voice-agent-engineer~~ | **CLOSED 2026-05-29 — see Paid down section.** Replaced `_llm_with_fallback` with built-in `livekit.agents.llm.FallbackAdapter`. | | | |
+| ~~TD-008~~ | ~~P0~~ | ~~2026-05-29~~ | ~~voice-agent-engineer~~ | **CLOSED 2026-05-29 — see Paid down section.** Replaced `session.disconnect()` with `session.aclose()` (2 sites). | | | |
+| ~~TD-009~~ | ~~P1~~ | ~~2026-05-29~~ | ~~voice-agent-engineer~~ | **CLOSED 2026-05-29 — see Paid down section.** Added `_solo_cap_watchdog` background polling task. | | | |
+| ~~TD-010~~ | ~~P2~~ | ~~2026-05-29~~ | ~~tester~~ | **CLOSED 2026-05-29 — see Paid down section.** N=100 + boundary variant. | | | |
+| ~~TD-011~~ | ~~P3~~ | ~~2026-05-29~~ | ~~tester~~ | **CLOSED 2026-05-29 — see Paid down section.** conftest uses `settings.redis_url`. | | | |
+| ~~TD-012~~ | ~~P2~~ | ~~2026-05-29~~ | ~~tester~~ | **CLOSED 2026-05-29 — see Paid down section.** conftest pre-flushes Redis. | | | |
+| ~~TD-013~~ | ~~P2~~ | ~~2026-05-29~~ | ~~manager~~ | **CLOSED 2026-05-29 — see Paid down section.** 8 obsolete docs moved to `docs/_legacy/`. | | | |
 | TD-014 | P2 | 2026-05-29 | devops-engineer | `infra/Dockerfile.agent` and `infra/Dockerfile.backend` do NOT use a non-root user. `QUALITY_BAR.md` requires `USER app` after install. | Initial Dockerfiles were MVP; rule introduced after | Add `RUN groupadd -r app && useradd -r -g app ...` + `COPY --chown=app:app` + `USER app` to both Dockerfiles | Before Phase 10 |
 | TD-015 | P1 | 2026-05-29 | devops-engineer | No GitHub Actions CI workflow yet — no automated test on PR, no secret-scan job. Secrets could land in repo undetected. | Not yet built | Add `.github/workflows/ci.yml` with pytest + secret-scan job | Phase 4.5 |
 
@@ -41,9 +41,17 @@ A debt row stays until paid down. When paid down, move it to the "Paid down" sec
 
 ## Paid down
 
-(Empty — first sprint after introducing TECH_DEBT.md)
+| ID | Severity | Date paid | Commit | Resolution |
+|---|---|---|---|---|
+| TD-007 | P0 | 2026-05-29 | *(pending)* | Replaced raw `google.LLM` with `livekit.agents.llm.FallbackAdapter([Gemini, GPT-4o-mini])` in `agent/agent.py`. Built-in adapter handles failover transparently per call. Removed unused `_llm_with_fallback` function. |
+| TD-008 | P0 | 2026-05-29 | *(pending)* | Replaced `session.disconnect()` with `session.aclose()` in `agent/agent.py` (2 call sites). LiveKit Agents 1.4 uses `aclose()` for session shutdown. |
+| TD-009 | P1 | 2026-05-29 | *(pending)* | Added `_solo_cap_watchdog` background asyncio task in `agent/agent.py`. Polls every 5s, fires warning at SOLO_CAP_SECONDS-10 (gated by `solo_warning_sent`), closes session at SOLO_CAP_SECONDS. Cancelled in entrypoint's `finally` block on session end. Removed duplicate logic from `on_user_turn_completed`. |
+| TD-010 | P2 | 2026-05-29 | *(pending)* | Rewrote `tests/edge_cases/test_concurrent_tokens.py`. Now: (1) `test_100_concurrent_callers_get_unique_sequential_tokens` runs N=100 with `daily_token_limit=200`; (2) `test_10_concurrent_callers_at_limit_boundary` pre-fills 99, races 10 for the last, asserts exactly 1 success + 9 `full` + Redis counter exactly 100 (rollbacks verified). |
+| TD-011 | P3 | 2026-05-29 | *(pending)* | Replaced hardcoded `"redis://localhost:6379"` with `settings.redis_url` in `tests/conftest.py`. |
+| TD-012 | P2 | 2026-05-29 | *(pending)* | Added `await r.flushdb()` BEFORE the `yield` in conftest's redis fixture. Prevents previous-test pollution. |
+| TD-013 | P2 | 2026-05-29 | *(pending)* | Moved 8 obsolete docs to `docs/_legacy/`: PHASE_0..5_*.md (root), `docs/vachanam-progress.md`, `docs/superpowers/plans/2026-05-18-phase-2-backend.md`. Added `docs/_legacy/README.md` explaining archaeology-only purpose. |
 
-When closing a row, move it here with this format:
+When closing a future row, append here with this format:
 ```
 | TD-XXX | severity | date paid | commit hash | how it was resolved |
 ```

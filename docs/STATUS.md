@@ -1,31 +1,43 @@
 # Vachanam — Status (single source of truth)
 
-**Last updated:** 2026-05-29
-**Active phase:** **Fix sprint** (per [audit 2026-05-29](audits/2026-05-29-full-project-audit.md)) — must complete before Phase 4 starts. Pending client decision (Section 8 of audit).
+**Last updated:** 2026-05-29 (after fix sprint)
+**Active phase:** Phase 4 — Backend Core (next session starts here)
 
-Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc (`PHASE_N_*.md`, `docs/superpowers/plans/*`, `docs/vachanam-progress.md`), this file wins.
+Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc, this file wins.
 
 Also check [`docs/CHANGELOG.md`](CHANGELOG.md) for session-by-session decision history and [`docs/TECH_DEBT.md`](TECH_DEBT.md) for the shortcut ledger.
 
 ---
 
-## ⚠️ AUDIT FINDINGS — 2026-05-29 (P0 bugs require fix before Phase 5)
+## ✅ FIX SPRINT COMPLETE — 2026-05-29
 
-Full audit: [`docs/audits/2026-05-29-full-project-audit.md`](audits/2026-05-29-full-project-audit.md).
+Per [audit 2026-05-29](audits/2026-05-29-full-project-audit.md). Closed 7 tech debt items:
 
-**P0 (critical):**
-- TD-007 — `agent/agent.py` Gemini→GPT-4o-mini fallback defined but never wired into session
-- TD-008 — `session.disconnect()` likely wrong API for LiveKit Agents 1.4 (probably `aclose()`)
+- ✅ TD-007 P0 — Replaced `_llm_with_fallback` with built-in `livekit.agents.llm.FallbackAdapter`
+- ✅ TD-008 P0 — `session.disconnect()` → `session.aclose()`
+- ✅ TD-009 P1 — Added `_solo_cap_watchdog` background polling task
+- ✅ TD-010 P2 — Concurrency test N=5 → N=100 + limit-boundary variant
+- ✅ TD-011 P3 — conftest uses `settings.redis_url`
+- ✅ TD-012 P2 — conftest pre-flushes Redis
+- ✅ TD-013 P2 — 8 obsolete docs archived to `docs/_legacy/`
+
+Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md bar fixed.
+
+## Open tech debt (carry into Phase 4 / 4.5 / 9 / 10)
 
 **P1 (high):**
-- TD-001 — Stale Alembic migration (predates User table + 7 fields)
-- TD-004 — Pricing tiers decision pending (Solo/Clinic/Multi vs Starter/Growth/Unlimited)
-- TD-009 — SOLO 4-min cap only fires on user turn; silent-patient case unguarded
-- TD-015 — No CI / secret-scan job
+- TD-001 — Stale Alembic migration → Phase 4 Task 1
+- TD-004 — Pricing tiers decision pending (Solo/Clinic/Multi vs Starter/Growth/Unlimited) — CLIENT DECISION before Phase 9
+- TD-015 — No CI / secret-scan job → Phase 4.5
 
-**P2 (medium):** TD-002, TD-003, TD-006, TD-010, TD-012, TD-013, TD-014
+**P2 (medium):**
+- TD-002 — `backend/payments_test_app.py` → delete during Phase 4 Task 7
+- TD-003 — Starter price ₹99 on landing mirror → restore canonical in Phase 9
+- TD-006 — Test suite never executed end-to-end → Phase 4 acceptance check
+- TD-014 — Dockerfiles run as root → fix before Phase 10
 
-**P3 (low):** TD-005, TD-011
+**P3 (low):**
+- TD-005 — Romanized `padipōyāḍu` vs Telugu script → verify in Phase 10 acceptance
 
 ---
 

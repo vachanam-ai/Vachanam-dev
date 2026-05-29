@@ -24,7 +24,10 @@ async def db():
 
 @pytest_asyncio.fixture(scope="function")
 async def redis():
-    r = aioredis.from_url("redis://localhost:6379", decode_responses=True)
+    # Use settings.redis_url — no hardcoded URLs (tester.md rule 5).
+    r = aioredis.from_url(settings.redis_url, decode_responses=True)
+    # Pre-flush so a leaky previous test cannot pollute this one (tester.md rule 7).
+    await r.flushdb()
     yield r
     await r.flushdb()
     await r.aclose()

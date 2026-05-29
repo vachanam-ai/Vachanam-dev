@@ -8,6 +8,7 @@ import redis.asyncio as aioredis
 import structlog
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions
+from livekit.agents.llm import FallbackAdapter
 from livekit.plugins import sarvam, google, openai as lk_openai
 
 from agent.session_state import SessionState
@@ -22,6 +23,8 @@ from sqlalchemy import select, and_
 logger = structlog.get_logger()
 
 SOLO_CAP_SECONDS = 240  # 4 minutes
+SOLO_WARNING_SECONDS = SOLO_CAP_SECONDS - 10
+WATCHDOG_INTERVAL_SECONDS = 5
 
 
 class VachananAgent(Agent):
@@ -41,7 +44,7 @@ class VachananAgent(Agent):
                 await self.session.say(
                     sanitize_for_tts("క్షమించండి, ఈ నంబర్ కు కనెక్ట్ కాలేదు. దయచేసి మళ్ళీ ప్రయత్నించండి.")
                 )
-                await self.session.disconnect()
+                await self.session.aclose()
                 return
 
             # Capture all needed values before session closes (avoid DetachedInstanceError)
@@ -83,8 +86,11 @@ class VachananAgent(Agent):
         logger.info("call_started", branch_id=str(self.state.branch_id), plan=self.state.plan)
 
     async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
-        """Check for emergency keywords in every user utterance."""
-        # Extract text safely — ChatMessage.content may be str or list of parts
+        """Emergency keyword check on every user utterance.
+
+        SOLO 4-min cap is enforced by `_solo_cap_watchdog`, not here — watchdog runs
+        even when the patient is silent, so the cap is real.
+        """
         content = new_message.content if new_message else None
         if not isinstance(content, str):
             content = " ".join(
@@ -100,48 +106,49 @@ class VachananAgent(Agent):
             await self.session.say(msg)
             # Continue booking — emergency contact given, do not disconnect
 
-        # Solo plan 4-minute cap
-        if self.state.plan == "solo" and self.state.call_start:
-            self.state.elapsed_seconds = int(
-                (datetime.now() - self.state.call_start).total_seconds()
-            )
-            if (
-                self.state.elapsed_seconds >= SOLO_CAP_SECONDS - 10
-                and not self.state.solo_warning_sent
-            ):
-                self.state.solo_warning_sent = True
-                await self.session.say(
-                    sanitize_for_tts("మేము ముగించబోతున్నాం. మీ బుకింగ్ confirm చేస్తున్నాను.")
-                )
-            if self.state.elapsed_seconds >= SOLO_CAP_SECONDS:
-                logger.info("solo_cap_reached", elapsed=self.state.elapsed_seconds)
-                await self.session.disconnect()
 
+async def _solo_cap_watchdog(state: SessionState, session: AgentSession) -> None:
+    """Enforce Solo plan 4-min cap independent of user activity.
 
-async def _llm_with_fallback(messages: list) -> str:
-    """Gemini 2.5 Flash primary, GPT-4o mini fallback."""
+    Polls every 5s. Fires the warning at SOLO_CAP_SECONDS - 10 (gated by
+    solo_warning_sent flag to fire only once). Closes the session at SOLO_CAP_SECONDS.
+    Bails out cleanly if the session has already closed.
+    """
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=settings.gemini_api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        # Run synchronous SDK call in thread to avoid blocking the event loop
-        combined = "\n".join(m["content"] for m in messages)
-        response = await asyncio.to_thread(model.generate_content, combined)
-        return response.text
+        while True:
+            await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
+
+            if state.plan != "solo" or not state.call_start:
+                continue
+
+            elapsed = int((datetime.now() - state.call_start).total_seconds())
+            state.elapsed_seconds = elapsed
+
+            if elapsed >= SOLO_WARNING_SECONDS and not state.solo_warning_sent:
+                state.solo_warning_sent = True
+                try:
+                    await session.say(
+                        sanitize_for_tts("మేము ముగించబోతున్నాం. మీ బుకింగ్ confirm చేస్తున్నాను.")
+                    )
+                except Exception as e:
+                    logger.warning("solo_warning_say_failed", error=str(e))
+
+            if elapsed >= SOLO_CAP_SECONDS:
+                logger.info(
+                    "solo_cap_reached",
+                    elapsed=elapsed,
+                    branch_id=str(state.branch_id) if state.branch_id else None,
+                )
+                try:
+                    await session.aclose()
+                except Exception as e:
+                    logger.warning("solo_cap_aclose_failed", error=str(e))
+                return
+    except asyncio.CancelledError:
+        # entrypoint cancelled us on normal session end
+        raise
     except Exception as e:
-        logger.error("gemini_failed_switching_to_openai", error=str(e))
-        try:
-            import openai
-            client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-            resp = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.1,
-            )
-            return resp.choices[0].message.content
-        except Exception as e2:
-            logger.critical("both_llms_failed", error=str(e2))
-            return '{"doctor_id": null, "confidence": "none"}'
+        logger.error("solo_cap_watchdog_crashed", error=str(e))
 
 
 async def entrypoint(ctx: agents.JobContext) -> None:
@@ -173,11 +180,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         model="bulbul:v3",
         language="te-IN",
     )
-    llm = google.LLM(
-        model="gemini-2.5-flash",
-        api_key=settings.gemini_api_key,
-        temperature=0.3,
-    )
+
+    # LLM with Gemini-primary + GPT-4o-mini-fallback per CLAUDE.md Rule 9.
+    # FallbackAdapter is built into livekit.agents.llm — handles failover transparently
+    # on any LLM error during the call.
+    llm = FallbackAdapter([
+        google.LLM(
+            model="gemini-2.5-flash",
+            api_key=settings.gemini_api_key,
+            temperature=0.3,
+        ),
+        lk_openai.LLM(
+            model="gpt-4o-mini",
+            api_key=settings.openai_api_key,
+            temperature=0.3,
+        ),
+    ])
 
     session = AgentSession(stt=stt, tts=tts, llm=llm)
     agent = VachananAgent(state=state)
@@ -196,11 +214,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             finally:
                 await r.aclose()
 
-    await session.start(
-        room=ctx.room,
-        agent=agent,
-        room_input_options=RoomInputOptions(),
-    )
+    # Start the Solo cap watchdog as a background task.
+    # It bails out on session close; we cancel it explicitly after session.start returns.
+    watchdog_task = asyncio.create_task(_solo_cap_watchdog(state, session))
+
+    try:
+        await session.start(
+            room=ctx.room,
+            agent=agent,
+            room_input_options=RoomInputOptions(),
+        )
+    finally:
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except asyncio.CancelledError:
+            pass
 
 
 if __name__ == "__main__":
