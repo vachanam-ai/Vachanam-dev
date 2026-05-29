@@ -13,7 +13,70 @@ Format per session:
 
 ---
 
-## 2026-05-29 (latest) — Option A approved: MVP-launch posture, Phase 11 deferred
+## 2026-05-29 (latest) — Phase 4 prep test run: found + fixed 2 P1 event-loop bugs; 29/29 baseline locked
+
+**Topic:** Per Phase 4 protocol, first dispatch = tester runs full suite end-to-end against Docker Postgres + Redis. First pass exposed 2 production bugs neither prior code review nor unit tests caught.
+
+### What happened
+
+1. `docker-compose up -d` produced Postgres 15 vs Postgres 16 image mismatch (old volume from earlier dev). Fixed: `docker-compose down -v` + `up -d`.
+2. First pytest run: 23/29 pass + 6 errors. Errors traced to `ConnectionRefusedError` (Postgres not listening — fixed by 1).
+3. Second pytest run: 26/29 pass + 3 fail. **All 3 failures = `RuntimeError: Event loop is closed`** on Windows asyncio.
+4. Root cause analysis: two module-level singletons binding to first event loop they touch.
+
+### Bugs found (both P1, both production-relevant — not test-only)
+
+**TD-016 P1** — `agent/tools/booking_tools.py:17` had:
+```python
+redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+```
+Module-level Redis client binds to first event loop at import. In tests: fails on second test (new loop). In production: fails on uvicorn worker restart, gunicorn fork-after-import, or any code path that resets the loop. Silent until traffic stress.
+
+**TD-017 P1** — `backend/database.py` had module-level `engine` with pool. SQLAlchemy connection pool binds connections to first loop. Same failure surface.
+
+### Fixes
+
+**TD-016 (production code change):** Replaced module-level `redis_client` with `_redis()` factory in `agent/tools/booking_tools.py`. All callers now use `async with _redis() as r:`. Cost: ~1-2 ms extra per Redis op on localhost (TCP connect + close). Negligible vs LLM/STT on call path. Senior-grade pattern — matches existing `agent.py` `on_disconnect` handler.
+
+**TD-017 (test-only change):** Added `await backend.database.engine.dispose()` before AND after each test in `tests/conftest.py` `db` fixture. Forces fresh pool per loop. Production keeps the pooled engine (no change there — production runs one persistent loop).
+
+### Why these were not caught earlier
+
+- Unit tests (`tts_sanitizer`, `emergency`) don't touch Redis or DB — pass under any loop topology
+- First integration test run in a session passes (first loop is fine)
+- Audit (2026-05-29) didn't catch because it was a code review, not a test execution
+- Tester rule "tests must be executed end-to-end" (TD-006) specifically existed to catch exactly this class of bug; protocol worked
+
+### Test result
+
+`pytest tests/ -v` → **29/29 pass** (23 unit + 4 integration + 2 edge-case) against Docker Postgres 16 + Redis 7-alpine + Python 3.14.0 on Windows. Baseline locked.
+
+### Files
+
+- Modified: `agent/tools/booking_tools.py` — `_redis()` factory + `async with` blocks in `check_availability` and `assign_token`
+- Modified: `tests/conftest.py` — `_db_module.engine.dispose()` before + after each test
+- Modified: `docs/TECH_DEBT.md` — TD-006 closed; TD-016 + TD-017 logged + closed in Paid down section
+- Modified: `docs/STATUS.md` — TD-006 removed from Open; added "Test baseline" section
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending — single commit)*
+
+### Follow-up next session
+
+Phase 4 actually starts now. First task per `docs/phases/04-backend-core/CLAUDE.md`: `database-engineer` regenerates Alembic migration (TD-001). Then `backend-engineer` builds `main.py` + JWT auth middleware + queue endpoints.
+
+### Retro
+
+- **Worked:** Caveman-mode terse diagnose path (`docker ps -a` + `docker logs` + port check) made root cause obvious in 2 turns. Stale Postgres volume identified immediately.
+- **Worked:** Reading the FULL stack trace (not just the top error) surfaced the event-loop binding issue. The bottom of the trace had the real cause.
+- **Worked:** Fixing in production code instead of test code (TD-016) — the bug was real, not a test artifact. Senior fix.
+- **Change next sprint:** Phase 4 Task 1 acceptance should explicitly include "no module-level connection pools" CI check. Add to `QUALITY_BAR.md` Python section.
+
+---
+
+## 2026-05-29 (earlier) — Option A approved: MVP-launch posture, Phase 11 deferred
 
 **Topic:** Client picked Option A from reliability scope discussion. Stick with MVP-launch posture (~99.4% uptime). Add Phase 11 — Reliability Hardening as deferred placeholder, NOT pre-built.
 

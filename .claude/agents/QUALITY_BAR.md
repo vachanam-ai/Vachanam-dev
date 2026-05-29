@@ -24,6 +24,7 @@ You are senior engineers writing software for medical clinics. A bug isn't a fai
 - [ ] `asyncio.to_thread` for any sync I/O call inside async context (Gemini SDK, Google APIs)
 - [ ] Capture SQLAlchemy attrs into local vars BEFORE exiting `async with`
 - [ ] Each `asyncio.gather` coroutine opens its own `async with AsyncSessionLocal()`
+- [ ] **No module-level Redis/DB/HTTP client singletons.** Module-level `redis_client = aioredis.from_url(...)` or similar binds to whatever event loop runs at import. Breaks on worker restart, fork-after-import, test loops. Use per-call factory + `async with`. (See TD-016, TD-017 in CHANGELOG 2026-05-29.)
 - [ ] `hmac.compare_digest` for signature comparison (never `==`)
 - [ ] Phone numbers logged as `phone[-4:]` only
 - [ ] No hardcoded URLs, phone numbers, keys, secrets — all from `settings`

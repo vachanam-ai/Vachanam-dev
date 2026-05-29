@@ -14,7 +14,17 @@ from backend.models.schema import Doctor, Token, Patient, Branch
 
 logger = structlog.get_logger()
 
-redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
+
+def _redis():
+    """Create a fresh Redis client. Use as `async with _redis() as r:`.
+
+    Per-call client (not module-level) avoids event-loop binding bugs:
+    a module-level client created at import time becomes invalid after
+    its loop closes (visible in tests with one loop per function, and
+    possible in production if uvicorn ever resets the loop). Cost is
+    ~1-2ms per call on localhost — negligible vs LLM/STT on the call path.
+    """
+    return aioredis.from_url(settings.redis_url, decode_responses=True)
 
 
 async def route_to_doctor(
@@ -92,7 +102,8 @@ async def check_availability(
 
     if doctor.booking_type == "token":
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
-        current = int(await redis_client.get(redis_key) or 0)
+        async with _redis() as r:
+            current = int(await r.get(redis_key) or 0)
         limit = doctor.daily_token_limit or 50
         if current >= limit:
             next_day = booking_date + timedelta(days=1)
@@ -115,11 +126,12 @@ async def check_availability(
         slots = [s for s in slots if query_start <= s < query_end]
 
     available = []
-    for slot in slots:
-        key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
-        booked = int(await redis_client.get(key) or 0)
-        if booked < (doctor.max_concurrent_per_slot or 1):
-            available.append(slot)
+    async with _redis() as r:
+        for slot in slots:
+            key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
+            booked = int(await r.get(key) or 0)
+            if booked < (doctor.max_concurrent_per_slot or 1):
+                available.append(slot)
 
     if not available:
         return f"Doctor is fully booked on {booking_date.strftime('%d %B')}."
@@ -156,13 +168,14 @@ async def assign_token(
         midnight = datetime.combine(booking_date + timedelta(days=1), time(0, 0))
         ttl_seconds = int((midnight - datetime.now()).total_seconds()) + 7200
 
-        token_number = await redis_client.incr(redis_key)
-        await redis_client.expire(redis_key, max(ttl_seconds, 7200))
+        async with _redis() as r:
+            token_number = await r.incr(redis_key)
+            await r.expire(redis_key, max(ttl_seconds, 7200))
 
-        limit = doctor.daily_token_limit or 50
-        if token_number > limit:
-            await redis_client.decr(redis_key)  # rollback
-            return {"success": False, "reason": "full"}
+            limit = doctor.daily_token_limit or 50
+            if token_number > limit:
+                await r.decr(redis_key)  # rollback
+                return {"success": False, "reason": "full"}
 
         logger.info("token_assigned", branch_id=str(branch_id), doctor_id=str(doctor_id), token=token_number, date=str(booking_date))
         return {"success": True, "token_number": token_number, "redis_key": redis_key}
@@ -175,13 +188,14 @@ async def assign_token(
         slot_dt = datetime.combine(booking_date, appointment_time)
         ttl_seconds = int((slot_dt - datetime.now()).total_seconds()) + 7200
 
-        slot_count = await redis_client.incr(slot_key)
-        await redis_client.expire(slot_key, max(ttl_seconds, 7200))
+        async with _redis() as r:
+            slot_count = await r.incr(slot_key)
+            await r.expire(slot_key, max(ttl_seconds, 7200))
 
-        max_per_slot = doctor.max_concurrent_per_slot or 1
-        if slot_count > max_per_slot:
-            await redis_client.decr(slot_key)  # rollback
-            return {"success": False, "reason": "full"}
+            max_per_slot = doctor.max_concurrent_per_slot or 1
+            if slot_count > max_per_slot:
+                await r.decr(slot_key)  # rollback
+                return {"success": False, "reason": "full"}
 
         logger.info("slot_assigned", branch_id=str(branch_id), doctor_id=str(doctor_id), time=str(appointment_time), date=str(booking_date))
         return {

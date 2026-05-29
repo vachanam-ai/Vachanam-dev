@@ -4,10 +4,18 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 
 from backend.models.schema import Base
 from backend.config import settings
+import backend.database as _db_module
 
 
 @pytest_asyncio.fixture(scope="function")
 async def db():
+    # Dispose the module-level engine in backend.database before AND after
+    # each test. Engine pools bind connections to the event loop they first
+    # ran in; pytest-asyncio (mode=auto) gives each test its own loop, so a
+    # pooled connection from a previous test fails with "Event loop is
+    # closed" if reused. Disposing forces a fresh pool per test.
+    await _db_module.engine.dispose()
+
     engine = create_async_engine(settings.database_url, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -20,6 +28,7 @@ async def db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
+    await _db_module.engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="function")

@@ -32,13 +32,16 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 
 **P2 (medium):**
 - TD-002 — `backend/payments_test_app.py` → delete during Phase 4 Task 7
-- TD-006 — Test suite never executed end-to-end → Phase 4 acceptance check
 - TD-014 — Dockerfiles run as root → fix before Phase 10
 
 **P3 (low):**
 - TD-005 — Romanized `padipōyāḍu` vs Telugu script → verify in Phase 10 acceptance
 
-**Recently closed (2026-05-29):** TD-003 + TD-004 (pricing canonical Solo/Clinic/Multi confirmed; landing page updated)
+**Recently closed (2026-05-29):** TD-003 + TD-004 (pricing canonical confirmed), TD-006 (test suite executed 29/29 green), TD-016 + TD-017 (event-loop binding bugs in booking_tools Redis + database engine, found & fixed in Phase 4 prep run)
+
+## Test baseline (verified 2026-05-29)
+
+`pytest tests/ -v` against Docker Postgres 16 + Redis 7 + Python 3.14 → **29/29 pass** (23 unit + 4 integration + 2 edge-case). Baseline locked for Phase 4 work.
 
 ---
 
