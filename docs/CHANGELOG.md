@@ -13,7 +13,57 @@ Format per session:
 
 ---
 
-## 2026-05-29 (latest) — Pricing decision + landing page UI update (close TD-003 + TD-004)
+## 2026-05-29 (latest) — Option A approved: MVP-launch posture, Phase 11 deferred
+
+**Topic:** Client picked Option A from reliability scope discussion. Stick with MVP-launch posture (~99.4% uptime). Add Phase 11 — Reliability Hardening as deferred placeholder, NOT pre-built.
+
+### Decisions
+
+1. **Reliability scope = MVP-launch.** Target: ~99.4% uptime (Cloudflare edge + LLM fallback + auto-restart on Fly/Render + UptimeRobot + 7-day Neon backups + manual Singapore failover runbook + Dependabot weekly + CI test gate + secret scan). Rejected Scale-ready (~50% more work + ₹25k/mo recurring) and Phase 11 pre-build (over-engineering before any real traffic).
+2. **Phase 11 created as deferred placeholder.** Has explicit "do NOT pre-build" header. Triggered by ANY of: volume > 100 calls/day OR first major outage OR enterprise customer asks for SLA. Backlog includes multi-region failover, automated rollback, Datadog APM, on-call rotation, chaos engineering, A/B testing — none built until trigger fires. Each item built ONE AT A TIME after trigger, not bundled.
+3. **What we already do for reliability (NOT deferred, ships in Phases 4.5 + 10):** LLM fallback (already shipped), external call retry, graceful degradation, auto-restart on crash, health-check gating, HTTPS/HSTS, DDoS via Cloudflare, daily backups, UptimeRobot + SMS, structured logs, Dependabot, CI test gate, secret-in-repo scan, manual failover runbook, quarterly backup-restore drill, quarterly self-audit.
+
+### Why deferred (per brainstormer + manager rationale, documented in Phase 11 doc)
+
+- **YAGNI** — engineering for hypothetical scale wastes today's budget on tomorrow's hypothetical problem
+- **Wrong baseline** — reliability infra built before real traffic optimizes for the wrong failure modes
+- **Cost compounds** — ₹15-50k/mo recurring drains runway before first paying clinic
+- **Complexity tax** — every reliability layer adds operational surface; MVP teams collapse under complexity they thought would protect them
+
+### Files
+
+- Created: `docs/phases/11-reliability-hardening/CLAUDE.md` — full deferred backlog, triggers to start, what NOT to do, anti-patterns ("smells" that mean you're slipping into Phase 11 too early)
+- Modified: `docs/ROADMAP.md` — added Phase 11 row with 🅿️ DEFERRED status; added note "Phase 11 is deferred until trigger fires. Do NOT pre-build."
+- Modified: `docs/STATUS.md` — added Reliability posture line pointing to Phase 11 doc
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending)*
+
+### Blockers for next session (Phase 4 start)
+
+**Must run before Phase 4 dispatch:**
+1. Start Docker Desktop
+2. `docker-compose up -d` (Postgres + Redis)
+3. `alembic upgrade head` (apply existing migration — will fail / show stale state, that's expected; database-engineer will regenerate as Phase 4 Task 1)
+4. `pytest tests/ -v` (verify 25 tests pass — fix-sprint work + existing)
+
+If pytest passes → Phase 4 unblocked. If it fails → STOP, report to manager, do not proceed.
+
+### Open client decisions: NONE
+
+Pricing resolved (TD-004 closed). Landing page approach resolved (TD-003 closed). Reliability scope resolved (this entry). Phase 4 fully unblocked on decisions; only Docker startup blocks.
+
+### Retro
+
+- **Worked:** Honest reality check on "never go down / self-correcting / self-improving" prevented user from approving expensive aspirations. Caveman directness + manager stubbornness = saved client cost.
+- **Worked:** Creating Phase 11 doc with explicit anti-patterns and "smells" makes the deferral durable. Future me (or any specialist) reading the doc will know not to over-build.
+- **Change next sprint:** Before Phase 4 dispatch, manager runs the "must run before dispatch" blocker list and confirms each step with the user.
+
+---
+
+## 2026-05-29 (earlier) — Pricing decision + landing page UI update (close TD-003 + TD-004)
 
 **Topic:** Client resolved the two pending decisions from the 2026-05-29 audit.
 

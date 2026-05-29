@@ -1,7 +1,8 @@
 # Vachanam — Status (single source of truth)
 
-**Last updated:** 2026-05-29 (after fix sprint)
+**Last updated:** 2026-05-29 (after fix sprint + reliability decision)
 **Active phase:** Phase 4 — Backend Core (next session starts here)
+**Reliability posture:** MVP-launch (~99.4% uptime target). Phase 11 deferred until volume / outage / customer trigger fires. See [`docs/phases/11-reliability-hardening/CLAUDE.md`](phases/11-reliability-hardening/CLAUDE.md).
 
 Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc, this file wins.
 

@@ -51,8 +51,11 @@ Phase 1  Foundation ─────┐
 | 8 | Owner + Admin dashboards | ⬜ | 3 | analytics + Vinay's P&L | [08-frontend-dashboards/](phases/08-frontend-dashboards/CLAUDE.md) |
 | 9 | Subscriptions + Onboarding (Razorpay subs + Vobiz DID) | ⬜ | 3-4 | sell to first paying clinic | [09-subscriptions-onboarding/](phases/09-subscriptions-onboarding/CLAUDE.md) |
 | 10 | Deployment (Fly + Render + Cloudflare + monitoring) | ⬜ | 2-3 | go live | [10-deployment/](phases/10-deployment/CLAUDE.md) |
+| 11 | Reliability hardening (post-launch placeholder) | 🅿️ DEFERRED | TBD | scale beyond 50 clinics | [11-reliability-hardening/](phases/11-reliability-hardening/CLAUDE.md) |
 
-**Total remaining:** ~18-23 working days for a one-person execution. Half if parallel work happens (e.g. Phase 5 + Phase 7 can be split between sessions).
+**Total remaining (Phases 4-10):** ~18-23 working days for a one-person execution. Half if parallel work happens (e.g. Phase 5 + Phase 7 can be split between sessions).
+
+**Phase 11 is deferred** until one of three triggers fires (see Phase 11 doc). Do NOT pre-build it.
 
 ---
 
