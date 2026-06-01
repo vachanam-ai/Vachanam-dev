@@ -13,7 +13,80 @@ Format per session:
 
 ---
 
-## 2026-05-29 (latest) — Phase 4 prep test run: found + fixed 2 P1 event-loop bugs; 29/29 baseline locked
+## 2026-06-01 — Phase 4 Task 1: Alembic migration regenerated (closes TD-001)
+
+**Topic:** First Phase 4 task per `docs/phases/04-backend-core/CLAUDE.md`. Database-engineer dispatched. Old migration deleted + new generated + applied + verified.
+
+### What happened
+
+1. Brought DB back up after fix-sprint left it down. Postgres + Redis containers green.
+2. Tried `alembic upgrade head` on existing `2fe8f201bc31_initial_schema.py` → **failed** with `DuplicateObjectError: type "plan_type" already exists`.
+3. Root cause: dual-create bug in old migration. Lines 82-87 explicitly created all 13 ENUM types via `enum_type.create(op.get_bind(), checkfirst=True)`. Then `op.create_table` with `sa.Column(..., sa.Enum(...))` tried to create them AGAIN (without checkfirst). Conflict.
+4. Old migration never successfully ran in any environment.
+5. Decision: delete + regenerate (acceptable because no prod migration history exists).
+
+### Steps taken
+
+- `git rm alembic/versions/2fe8f201bc31_initial_schema.py`
+- `alembic revision --autogenerate -m "initial_schema_with_user_table"`
+- Generated `alembic/versions/ffcf1134aa8f_initial_schema_with_user_table.py` (220 lines) detecting all 10 tables
+- Line-by-line review per database-engineer protocol:
+  - ✅ 10 tables (organizations, billing_cycles, branches, users, doctors, patients, whatsapp_sessions, followup_tasks, tokens, calls)
+  - ✅ UUID PKs everywhere
+  - ✅ All `server_default=now()` timestamps
+  - ✅ Named ENUMs (plan_type, org_status, branch_status, doctor_status, user_role, booking_type, booking_source, token_status, followup_channel, followup_status, billing_status, wa_session_state, call_direction, call_type, call_outcome)
+  - ✅ JSONB for `branch_ids`, `session_data`
+  - ✅ token_status enum = `confirmed/attended/no_show/cancelled_by_clinic` (correct — no leftover "waiting" from old)
+  - ✅ User table with `is_admin` + `google_sub` + UNIQUE constraints
+  - ✅ Branch has `meta_phone_number_id` with UNIQUE
+  - ✅ Token has `is_urgent`, `confirmed_at`, `attended_at`, `marked_by_user_id`
+  - ✅ FollowupTask has `what_to_ask`, `channel`, `scheduled_date`
+  - ✅ Single-create ENUM pattern (no dual-create bug)
+  - ❌ **ZERO non-unique indexes** — autogen didn't generate any. UNIQUE constraints provide indexes for 5 columns; everything else (FKs, common query columns) has no index. Logged as TD-018.
+  - ❌ **All FKs default to NO ACTION ondelete** — autogen doesn't infer from ORM. Logged as TD-019.
+- `alembic upgrade head` → success
+- `\dt` in psql → 11 tables (10 + alembic_version)
+- `\d users` → confirmed all columns + indexes + FK to organizations
+- `pytest tests/ -v --tb=line` → **29/29 pass in 6.19s**
+
+### Decisions
+
+1. **Delete + regenerate, not edit** — old migration was broken (dual-create bug), never deployed, no migration history to preserve. Senior choice.
+2. **Ship without indexes for now** — migration matches current schema and tests pass. Indexes are P2 performance issue, not correctness. TD-018 tracks adding them in a second migration this phase before Phase 5.
+3. **Ship without explicit ondelete** — defaults to NO ACTION which is functionally similar to RESTRICT. P3, fixed in Phase 4.5 during DPDP data-lifecycle review.
+
+### Files
+
+- Deleted: `alembic/versions/2fe8f201bc31_initial_schema.py` (broken; via `git rm`)
+- Created: `alembic/versions/ffcf1134aa8f_initial_schema_with_user_table.py` (220 lines, 10 tables, 15 ENUMs)
+- Modified: `docs/TECH_DEBT.md` — TD-001 closed in Paid down + Open list; TD-018 + TD-019 logged as new debts
+- Modified: `docs/STATUS.md` — TD-001 removed from Open; added to Recently closed
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending)*
+
+### Open debts now (down to 5: 1 P1, 2 P2, 2 P3)
+
+- P1: TD-015 (CI workflow, Phase 4.5)
+- P2: TD-002 (delete payments_test_app, Phase 4 Task 7) · TD-014 (Dockerfile non-root, Phase 10) · TD-018 (indexes, this phase before Phase 5)
+- P3: TD-005 (Telugu script keyword, Phase 10) · TD-019 (FK ondelete explicit, Phase 4.5)
+
+### Next dispatch
+
+Phase 4 Task 2: `database-engineer` (or stay with current dispatch) adds `init_db()` helper to `backend/database.py`. Trivial. Then Task 3-7: `security-engineer` builds JWT middleware + `backend-engineer` builds queue endpoints + auth router + main.py + retires payments_test_app.
+
+### Retro
+
+- **Worked:** Database-engineer review checklist caught the missing indexes + ondelete gaps that autogen silently dropped. Without the review protocol these would have shipped.
+- **Worked:** Delete-and-regenerate decision was the right call vs trying to patch the broken old migration. Saved an hour of edit-and-retest cycles.
+- **Didn't work:** Initial `alembic upgrade head` attempt failed without giving an obvious clue about the dual-create pattern. Took stack trace + recall of the migration code to diagnose.
+- **Change next sprint:** Add a CI lint step that flags dual-create ENUMs in new migrations.
+
+---
+
+## 2026-05-29 (earlier) — Phase 4 prep test run: found + fixed 2 P1 event-loop bugs; 29/29 baseline locked
 
 **Topic:** Per Phase 4 protocol, first dispatch = tester runs full suite end-to-end against Docker Postgres + Redis. First pass exposed 2 production bugs neither prior code review nor unit tests caught.
 

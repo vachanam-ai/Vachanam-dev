@@ -27,17 +27,18 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 ## Open tech debt (carry into Phase 4 / 4.5 / 9 / 10)
 
 **P1 (high):**
-- TD-001 — Stale Alembic migration → Phase 4 Task 1
 - TD-015 — No CI / secret-scan job → Phase 4.5
 
 **P2 (medium):**
 - TD-002 — `backend/payments_test_app.py` → delete during Phase 4 Task 7
 - TD-014 — Dockerfiles run as root → fix before Phase 10
+- TD-018 — Initial migration has zero non-unique indexes → second migration this phase
 
 **P3 (low):**
 - TD-005 — Romanized `padipōyāḍu` vs Telugu script → verify in Phase 10 acceptance
+- TD-019 — FKs default to NO ACTION ondelete (should be explicit RESTRICT/CASCADE) → Phase 4.5
 
-**Recently closed (2026-05-29):** TD-003 + TD-004 (pricing canonical confirmed), TD-006 (test suite executed 29/29 green), TD-016 + TD-017 (event-loop binding bugs in booking_tools Redis + database engine, found & fixed in Phase 4 prep run)
+**Recently closed (2026-05-29 + 2026-06-01):** TD-003 + TD-004 (pricing), TD-006 (test suite green), TD-016 + TD-017 (event-loop bugs), **TD-001 (broken migration deleted + regenerated as ffcf1134aa8f, 10 tables, applied, 29/29 still green)**
 
 ## Test baseline (verified 2026-05-29)
 
