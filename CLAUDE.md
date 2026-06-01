@@ -9,10 +9,14 @@
 1. Read [`docs/STATUS.md`](docs/STATUS.md) — current state, what's done, what's broken, what's next
 2. Check [`docs/ROADMAP.md`](docs/ROADMAP.md) — phase order and dependencies
 3. Open the active phase doc under `docs/phases/NN-name/CLAUDE.md` — that's your task list
-4. Dispatch [`manager`](.claude/agents/manager.md) first for any non-trivial work. Manager runs Agile sprints, dispatches specialists, verifies output, updates docs, and is accountable to the client (Vinay) for every decision. Roster of 10 specialists at [`.claude/agents/README.md`](.claude/agents/README.md).
-5. Every artifact meets [`.claude/agents/QUALITY_BAR.md`](.claude/agents/QUALITY_BAR.md) — senior developer standards.
-6. Every sprint follows [`.claude/agents/AGILE.md`](.claude/agents/AGILE.md) — planning, standup, review, retro.
-7. Every shortcut is logged in [`docs/TECH_DEBT.md`](docs/TECH_DEBT.md) with severity + payback plan.
+4. **MANDATORY:** dispatch via `Task(subagent_type=<name>, ...)` for ALL work — code, docs, tests, even minute fixes. Main thread = orchestrator only. Main thread NEVER writes code, NEVER edits files in `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`. Even one-line changes go through a specialist dispatch.
+5. Every dispatch is logged in [`docs/DISPATCHES.md`](docs/DISPATCHES.md) chronologically — for traceability.
+6. Every artifact meets [`.claude/agents/QUALITY_BAR.md`](.claude/agents/QUALITY_BAR.md) — senior developer standards.
+7. Every sprint follows [`.claude/agents/AGILE.md`](.claude/agents/AGILE.md) — planning, standup, review, retro.
+8. Every shortcut is logged in [`docs/TECH_DEBT.md`](docs/TECH_DEBT.md) with severity + payback plan.
+9. Roster of 10 specialists at [`.claude/agents/README.md`](.claude/agents/README.md). For non-trivial work: dispatch `manager` first; manager dispatches the right specialists.
+
+**No-inline-embody rule (mandatory):** the main thread (orchestrator) must NOT impersonate a specialist by writing code/tests/docs that the specialist owns. Even when faster to do inline, dispatch is required. Rationale: separation of concerns, reviewer enforcement, traceability, persona-specific quality bar. Logged in [`docs/CHANGELOG.md`](docs/CHANGELOG.md) entry 2026-06-01 as the standing rule.
 
 The old `PHASE_0_*.md ... PHASE_5_*.md` files at the repo root and `docs/vachanam-progress.md` are historical reference only. `docs/phases/` is the canonical plan as of 2026-05-22.
 

@@ -25,6 +25,13 @@ You are senior engineers writing software for medical clinics. A bug isn't a fai
 - [ ] Capture SQLAlchemy attrs into local vars BEFORE exiting `async with`
 - [ ] Each `asyncio.gather` coroutine opens its own `async with AsyncSessionLocal()`
 - [ ] **No module-level Redis/DB/HTTP client singletons.** Module-level `redis_client = aioredis.from_url(...)` or similar binds to whatever event loop runs at import. Breaks on worker restart, fork-after-import, test loops. Use per-call factory + `async with`. (See TD-016, TD-017 in CHANGELOG 2026-05-29.)
+
+## Process rules (apply to every contributor, including the orchestrator)
+
+- [ ] **MANDATORY Task dispatch — no inline embodying.** The main thread / orchestrator NEVER writes code, tests, or files outside `docs/`. Every change (even a one-line variable rename in a single file) goes through a `Task(subagent_type=...)` dispatch to the appropriate specialist. Embodying a specialist's persona in the main thread instead of dispatching = quality bar violation. Standing rule per CHANGELOG 2026-06-01.
+- [ ] **Every dispatch logged in `docs/DISPATCHES.md`.** Chronological. Format defined in `manager.md`. The dispatch log is the audit trail — anyone reading the repo cold can trace who did what when, and which reviewer signed off.
+- [ ] **Every implementation has a different reviewer specialist named upfront.** Implementer reports DONE; reviewer dispatch runs the QUALITY_BAR checklist relevant to its domain.
+- [ ] **No "I'll just do it quickly inline."** Faster doesn't beat traceable. The dispatch overhead is the cost of doing senior-grade work in a multi-specialist team.
 - [ ] `hmac.compare_digest` for signature comparison (never `==`)
 - [ ] Phone numbers logged as `phone[-4:]` only
 - [ ] No hardcoded URLs, phone numbers, keys, secrets — all from `settings`

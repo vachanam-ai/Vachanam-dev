@@ -13,7 +13,59 @@ Format per session:
 
 ---
 
-## 2026-06-01 (latest) — Voice call flow implementation (spec → code)
+## 2026-06-01 (latest) — MANDATORY Task dispatch rule + DISPATCHES.md audit trail
+
+**Topic:** Client identified that the orchestrator (main thread) has been embodying specialists inline instead of dispatching via `Task(subagent_type=...)`. Standing rule logged: **every change goes through a Task dispatch — no exceptions, even for one-line fixes.**
+
+### Decisions
+
+1. **No-inline-embody rule (mandatory, no exceptions).** Main thread = orchestrator only. Reads files, runs git/pytest for verification, dispatches via Task, asks user questions. Never edits files outside `docs/` (and even `docs/` edits should usually go via `manager` dispatch).
+2. **Every dispatch logged in `docs/DISPATCHES.md`** chronologically. Format defined in `manager.md`. Append-only. Anyone reading the repo cold can trace specialist → file → reviewer → commit.
+3. **Forbidden for orchestrator going forward:** `Edit`/`Write` on `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`. Manager dispatches the specialist instead.
+4. **Allowed for orchestrator:** `Read`, `Grep`, `Glob`, `Bash` for read-only git/pytest verification, `Task` dispatch, `AskUserQuestion` for clarifications.
+5. **Backfill (retrospective gap, no rework):** 22 commits from 2026-05-15 through 2026-06-01 mid-day were done inline before the rule was set. Listed in `docs/DISPATCHES.md` "Backfill" table with commit hashes for traceability. Not redoing the work — gap is logged, going forward enforces.
+
+### Why the rule
+
+- **Traceability** — every change has a dispatch entry; audit trail for clinic / compliance purposes
+- **Separation of concerns** — each specialist applies its domain's QUALITY_BAR section instead of one main-thread persona doing everything
+- **Reviewer mandate** — implementer ≠ reviewer; gates enforced
+- **Persona-specific quality bar** — tester thinks adversarially, security-engineer thinks attacker-mindset, privacy-legal thinks DPDP — these are different reasoning patterns that get diluted when one thread does everything
+- **Audit defense** — if a clinic asks "who changed X?", the dispatch log answers
+
+### Files
+
+Modified:
+- `CLAUDE.md` (root) — added mandatory Task dispatch rule + dispatches log pointer in START HERE
+- `.claude/agents/manager.md` — added rule 12 (mandatory dispatch, no embodying) + "Mandatory dispatch logging" section with format
+- `.claude/agents/QUALITY_BAR.md` — added "Process rules" section forbidding orchestrator embodying
+- `.claude/agents/AGILE.md` — added "MANDATORY DISPATCH RULE" section with allowed/forbidden list
+
+Created:
+- `docs/DISPATCHES.md` — chronological dispatch log with backfill table of 22 prior commits
+
+This entry in CHANGELOG.
+
+### Commits
+
+- *(pending)*
+
+### Going forward
+
+Phase 4.5 will be the first sprint executed under the new rule. First dispatch: `manager` reads STATUS + ROADMAP + active phase + TECH_DEBT, returns sprint plan, then dispatches specialists. Every dispatch logged in DISPATCHES.md.
+
+Cost note: ~30-50% more model time per task vs inline embodying. Trade-off: traceability + reviewer enforcement + audit trail. Accepted.
+
+### Retro on the gap
+
+- **Worked:** Roster built (10 specialists with personas), AGILE/QUALITY_BAR/TECH_DEBT structures in place
+- **Didn't work:** Spirit followed (brainstorm-spec-build-test cadence) but letter NOT (no real Task dispatches)
+- **Root cause:** Inline embodying felt faster + more coherent in real-time; rule wasn't called out as mandatory until 2026-06-01
+- **Change next sprint:** Manager + every specialist file already updated; first dispatch tests the protocol end-to-end
+
+---
+
+## 2026-06-01 (earlier) — Voice call flow implementation (spec → code)
 
 **Topic:** Implemented voice call flow spec from earlier today. 8 of 12 components shipped end-to-end. 2 components partially shipped (Layer B only, Layer A deferred as TD-021). 1 component fully deferred to Phase 10 (TD-020 — pre-cached greeting needs LiveKit track-publish API not exposed in 1.5.9). 77/77 tests pass.
 

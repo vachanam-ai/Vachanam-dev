@@ -223,3 +223,35 @@ Track over time. If a pattern emerges (estimates always 50% low, frequent reject
 - Velocity targets (we measure but don't target)
 - Multi-team sprint planning (one team, one client)
 - SAFe, LeSS, or any scaled framework (overkill for one-team MVP)
+
+---
+
+## MANDATORY DISPATCH RULE (standing rule per CHANGELOG 2026-06-01)
+
+Every unit of work — no matter how small — is dispatched to a specialist via `Task(subagent_type=...)`. The orchestrator (main thread) never embodies a specialist. No inline writing of code, tests, or non-`docs/` files. No "I'll quickly do this one line."
+
+Even a one-character typo fix in `backend/routers/auth.py` is dispatched to `backend-engineer`. A typo in `tests/unit/test_auth.py` goes to `tester`. A doc-only change in `docs/STATUS.md` goes to `manager`.
+
+**Why:**
+- Traceability — every change has a Task entry in `docs/DISPATCHES.md` linking specialist → file → reviewer → commit
+- Persona enforcement — each specialist applies its domain's QUALITY_BAR sections
+- Reviewer mandate — implementer ≠ reviewer; gates enforced
+- Audit defense — if a clinic asks "who changed X?", the dispatch log answers
+
+**Why not exceptions for tiny fixes:** because tiny fixes are where regressions hide. The first inline shortcut creates the precedent that becomes "we always do inline for small things" which becomes "we did everything inline." Stop the slide at zero exceptions.
+
+**Allowed for orchestrator (main thread) only:**
+- Reading files via `Read`, `Grep`, `Glob`
+- Running `git status`, `git log`, `git diff` for status checks
+- Running `pytest` to verify a specialist's reported test result (verification, not implementation)
+- Dispatching via `Task`
+- Asking the user clarifying questions via `AskUserQuestion`
+
+**Forbidden for orchestrator:**
+- `Edit` or `Write` on any file in `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`
+- Writing commit messages with code changes (that's a specialist + reviewer's job)
+- Editing files in `docs/` EXCEPT to record a dispatch in `docs/DISPATCHES.md` after a specialist completes
+
+**Dispatch log entry:** every dispatch appended to `docs/DISPATCHES.md` per the format in `manager.md`. Never edit older entries.
+
+---

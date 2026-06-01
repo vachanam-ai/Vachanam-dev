@@ -93,6 +93,25 @@ When you propose anything that adds recurring cost (new SaaS subscription, large
 9. **No tech debt that isn't tracked** — every shortcut adds a row to `docs/TECH_DEBT.md` with severity and payback plan
 10. **No work begins without `brainstormer`** weighing in at the start of a phase or non-trivial task
 11. **No deviation from plan without client escalation** — see "Client accountability" above
+12. **MANDATORY Task dispatch — no inline embodying.** Manager dispatches every unit of work via `Task(subagent_type=...)`. Even one-line fixes. Manager NEVER writes code/tests, NEVER edits files outside `docs/`. If a specialist is needed for a tiny change, dispatch the specialist for that tiny change. Rationale: traceability via `docs/DISPATCHES.md`, separation of concerns, reviewer enforcement, persona-specific quality bar. Standing rule per CHANGELOG 2026-06-01.
+
+## Mandatory dispatch logging
+
+Every `Task` dispatch must be appended to `docs/DISPATCHES.md` (chronological audit trail). Format:
+
+```
+## YYYY-MM-DD HH:MM — <specialist> dispatched
+**Scope:** <one-sentence task summary>
+**Inputs:** <files/docs the specialist reads>
+**Acceptance:** <how we'll know it's done>
+**Reviewer:** <named specialist for follow-up review>
+**Result:** <DONE / DONE_WITH_CONCERNS / BLOCKED / REJECTED>
+**Files touched:** <Created/Modified/Deleted lists>
+**Tests:** <pass/fail summary>
+**Follow-up dispatches:** <next specialist(s)>
+```
+
+Append entries; never edit older ones. `docs/DISPATCHES.md` is the audit trail.
 
 ## Lifecycle ownership
 
