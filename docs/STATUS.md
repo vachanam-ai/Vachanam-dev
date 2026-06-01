@@ -1,8 +1,24 @@
 # Vachanam — Status (single source of truth)
 
-**Last updated:** 2026-05-29 (after fix sprint + reliability decision)
-**Active phase:** Phase 4 — Backend Core (next session starts here)
+**Last updated:** 2026-06-01 (Phase 4 complete)
+**Active phase:** Phase 4.5 — Security & Compliance (next session starts here)
 **Reliability posture:** MVP-launch (~99.4% uptime target). Phase 11 deferred until volume / outage / customer trigger fires. See [`docs/phases/11-reliability-hardening/CLAUDE.md`](phases/11-reliability-hardening/CLAUDE.md).
+
+---
+
+## ✅ PHASE 4 COMPLETE — 2026-06-01
+
+All 7 tasks shipped. `backend/main.py` boots, `/health` → 200, `/queue/{branch}/today` requires JWT, `POST /api/create-order` creates real Razorpay orders.
+
+- ✅ Task 1: Alembic migration regenerated (`ffcf1134aa8f`) — 10 tables applied
+- ✅ Task 2: `init_db()` helper added to `backend/database.py`
+- ✅ Task 3: JWT auth middleware + branch_guard + admin guard
+- ✅ Task 4: `POST /auth/google`, `GET /auth/me`, `POST /auth/logout`
+- ✅ Task 5: `GET /queue/{branch_id}/today`, `PATCH .../attend`, `PATCH .../no-show` + 9 new tests (6 auth + 3 isolation)
+- ✅ Task 6: `backend/main.py` with CORS, routers, landing mount, /health, prod-disabled /docs
+- ✅ Task 7: Retired `backend/payments_test_app.py` (TD-002 closed)
+
+Closed debts: TD-001, TD-002. Still open: TD-005, TD-014, TD-015, TD-018, TD-019.
 
 Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc, this file wins.
 
@@ -30,15 +46,14 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 - TD-015 — No CI / secret-scan job → Phase 4.5
 
 **P2 (medium):**
-- TD-002 — `backend/payments_test_app.py` → delete during Phase 4 Task 7
 - TD-014 — Dockerfiles run as root → fix before Phase 10
-- TD-018 — Initial migration has zero non-unique indexes → second migration this phase
+- TD-018 — Initial migration has zero non-unique indexes → 2nd migration before Phase 5
 
 **P3 (low):**
 - TD-005 — Romanized `padipōyāḍu` vs Telugu script → verify in Phase 10 acceptance
 - TD-019 — FKs default to NO ACTION ondelete (should be explicit RESTRICT/CASCADE) → Phase 4.5
 
-**Recently closed (2026-05-29 + 2026-06-01):** TD-003 + TD-004 (pricing), TD-006 (test suite green), TD-016 + TD-017 (event-loop bugs), **TD-001 (broken migration deleted + regenerated as ffcf1134aa8f, 10 tables, applied, 29/29 still green)**
+**Recently closed (2026-05-29 + 2026-06-01):** TD-003 + TD-004 (pricing), TD-006 (test suite green), TD-016 + TD-017 (event-loop bugs), TD-001 (Alembic migration regenerated), **TD-002 (payments_test_app deleted; main.py mounts payments router)**
 
 ## Test baseline (verified 2026-05-29)
 

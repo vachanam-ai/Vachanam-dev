@@ -13,7 +13,101 @@ Format per session:
 
 ---
 
-## 2026-06-01 — Phase 4 Task 1: Alembic migration regenerated (closes TD-001)
+## 2026-06-01 (later) — Phase 4 COMPLETE: backend/main.py shipped, all 7 tasks done
+
+**Topic:** Sequential dispatch of all remaining Phase 4 tasks. Backend now runs end-to-end. 38/38 tests pass.
+
+### Tasks completed (sequential, one session)
+
+| # | Specialist | Output |
+|---|---|---|
+| 2 | backend-engineer | `init_db()` in `backend/database.py` |
+| 3a | security-engineer | `backend/middleware/auth_middleware.py` — JWT issue/decode/revoke + CurrentUser + require_admin |
+| 3b | security-engineer | `backend/middleware/branch_guard.py` — assert_branch_access |
+| 4 | backend-engineer + security review | `backend/routers/auth.py` — Google OAuth → JWT, /auth/me, /auth/logout |
+| 5a | backend-engineer | `backend/routers/queue.py` — today + attend + no-show |
+| 5b | tester | `tests/unit/test_auth.py` — 6 tests |
+| 5c | tester | `tests/edge_cases/test_data_isolation.py` — 3 tests (2-orgs each) |
+| 6 | backend-engineer | `backend/main.py` — FastAPI app, CORS, routers, landing mount, /health, prod-disabled /docs |
+| 7 | manager | Deleted `backend/payments_test_app.py` (TD-002 closed) |
+
+### Notable decisions
+
+1. **JWT revocation via Redis SET with TTL** — `revoked_jwts:<jti>` key with TTL=remaining exp. Self-cleaning revocation list. Per-call Redis client (TD-016 pattern).
+2. **branch_guard 3-layer isolation** — middleware (assert_branch_access) + JWT claims (branch_ids list) + DB WHERE clause. Per CLAUDE.md Rule 1, defence in depth.
+3. **CORS exact origins, not wildcard** — incompatible with `allow_credentials=True` per CORS spec. Dev adds localhost:3000 + 5173; prod = settings.frontend_url only.
+4. **/docs disabled in production** — `docs_url=None if app_env=='production' else '/docs'`. Attackers can't enumerate API surface.
+5. **/health does NOT touch DB or Redis** — must stay fast + unauthenticated. Phase 10 adds `/health/deep` for full-stack probes on demand.
+6. **Landing page mounted at /** — same canonical Solo/Clinic/Multi pricing from prior commit. Static served from `backend/static/`.
+
+### Bug encountered + fixed mid-task
+
+`FastAPIError: Invalid args for response field` — `FileResponse | HTMLResponse` union type annotation triggered Pydantic response model validation. Fix: `response_model=None` on decorator + drop type annotation. Documented in task 6 commit.
+
+### Smoke tests (uvicorn live)
+
+```
+GET  /health                          → 200 {"status":"ok",...}
+GET  /                                → 200 landing HTML
+GET  /docs                            → 200 (dev only)
+GET  /queue/{branch}/today (no JWT)   → 403
+GET  /auth/me (no JWT)                → 403
+POST /api/create-order                → 200 {"order_id":"order_SwF5YP3OADrbiS",...}
+```
+
+All endpoints respond correctly. Production-bound but waiting on Phase 4.5 security middleware before deploy.
+
+### pytest result
+
+`pytest tests/ -v` → **38/38 pass** in 8.32s (29 prior + 6 new auth + 3 new isolation).
+
+### Files
+
+Created:
+- backend/middleware/auth_middleware.py
+- backend/middleware/branch_guard.py
+- backend/routers/auth.py
+- backend/routers/queue.py
+- backend/main.py
+- tests/unit/test_auth.py
+- tests/edge_cases/test_data_isolation.py
+
+Modified:
+- backend/database.py (added init_db helper)
+- docs/STATUS.md (Phase 4 complete; active phase → 4.5)
+- docs/TECH_DEBT.md (TD-002 closed)
+- docs/CHANGELOG.md (this entry)
+
+Deleted:
+- backend/payments_test_app.py (TD-002)
+
+### Commits
+
+- 1b8d06f — feat(db): Phase 4 Task 1 — regenerate Alembic migration
+- 4dd5f75 — feat(api): Phase 4 Tasks 2-5 — init_db, JWT auth, OAuth, queue endpoints
+- *(pending)* — feat(api): Phase 4 Tasks 6-7 — main.py + retire payments_test_app
+
+### Open debts (5)
+
+- P1: TD-015 (CI workflow → Phase 4.5)
+- P2: TD-014 (Dockerfile non-root → Phase 10) · TD-018 (DB indexes → before Phase 5)
+- P3: TD-005 (Telugu script keyword → Phase 10) · TD-019 (FK ondelete explicit → Phase 4.5)
+
+### Phase 4 retro
+
+- **Worked:** Sequential execution of 7 tasks in one session — total ~1h vs 1-2 days estimated. Avoided context-switch overhead between specialists by embodying each role's rules inline.
+- **Worked:** Smoke-testing with curl immediately after uvicorn boot caught the FastAPI union-type bug before commit.
+- **Worked:** Writing tests as part of each task (not deferred) caught the JWT exp drift case at <2s tolerance.
+- **Didn't work:** FastAPI union-type quirk burned 5 min of debugging. Could have written `response_model=None` from the start as a defensive habit.
+- **Change next sprint:** Add `response_model=None` to QUALITY_BAR Python section for any handler returning multiple Response classes.
+
+### Next
+
+Phase 4.5 — Security & Compliance. Per [`docs/phases/04.5-security/CLAUDE.md`](… created next session). Backlog: SecurityHeadersMiddleware (CSP/HSTS/X-Frame), slowapi rate-limit (per-endpoint), audit_log table + decorator, FK ondelete explicit (TD-019), GitHub Actions CI workflow with pytest + secret scan (TD-015), DB indexes 2nd migration (TD-018), privacy policy markdown, breach response runbook.
+
+---
+
+## 2026-06-01 (earlier) — Phase 4 Task 1: Alembic migration regenerated (closes TD-001)
 
 **Topic:** First Phase 4 task per `docs/phases/04-backend-core/CLAUDE.md`. Database-engineer dispatched. Old migration deleted + new generated + applied + verified.
 
