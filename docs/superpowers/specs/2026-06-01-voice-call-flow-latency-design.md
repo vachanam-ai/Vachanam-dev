@@ -185,16 +185,21 @@ ENDED            — booking confirmed OR user hung up OR force-hangup fired
 
 ```
 T+0s   silence begins (AI finishes speaking OR user's last utterance ended)
-T+6s   System notifies LLM: "patient_silent_6s"
+T+5s   System notifies LLM: "patient_silent_5s"
        LLM responds with context-aware prompt (typically "Vintunaru?")
        AI response RESETS timer to 0
-T+12s  System notifies LLM again: "patient_silent_12s"
+T+7s   System notifies LLM again: "patient_silent_7s"
        LLM responds with second prompt (typically "Hello? Sound vinipistunda?")
        AI response RESETS timer to 0
-T+18s  System triggers HARD HANGUP
+T+10s  System triggers HARD HANGUP
        Canned final message: "Tarvath mali call cheyandi. Dhanyavadalu."
        → close session
 ```
+
+**Tighter than industry default (Bland AI / Retell: 8s/15s/25s). Justification: token cost
+matters for Solo plan margins; 10s is enough chances for an attentive patient; slow
+elderly patients are covered by per-clinic config in Phase 9 (branch.silence_profile
+enum: strict / standard / patient-respect).**
 
 **WAIT REQUESTED** (LLM identifies wait request from conversation context, sets flag via `extend_silence_timeout` tool call OR system prompt instruction):
 
@@ -208,29 +213,37 @@ T+45s  HARD HANGUP
 **COULDN'T UNDERSTAND** (STT confidence < 60% OR LLM marked input as garbled):
 
 ```
+Universal across ALL modes (default, wait, emergency) — no exceptions:
+
 Each failed turn:
   AI says: "Naaku sound saripoga vinipinchledu. Mali cheppagalara?"
   Increment counter
+
 Counter resets to 0 on first comprehensible turn.
 
-Counter = 3:
+Counter = 3 prompts emitted → on the 4th failed turn:
   HARD HANGUP: "Mee phone sound sariga ledu. Mali try cheyandi please. Dhanyavadalu."
 ```
+
+**Garbled handling is INTENTIONALLY uniform.** Even in emergency mode we hangup
+at 4 consecutive failures — at that point the patient cannot communicate at all,
+and continued attempts waste tokens with no chance of resolution. The emergency
+contact has already been spoken; that is the safety net.
 
 **EMERGENCY MODE** (emergency keyword detected earlier in this call):
 
 ```
-Default × 2:
-  prompt 1 at T+12s
-  prompt 2 at T+24s
-  hangup at T+36s
+Default silence × 2:
+  prompt 1 at T+10s
+  prompt 2 at T+14s
+  hangup at T+20s
 
-Wait × 2:
+Wait silence × 2:
   prompt 1 at T+30s
   prompt 2 at T+60s
   hangup at T+90s
 
-Couldn't-understand counter → 5 (not 3) before hangup
+Couldn't-understand counter: UNCHANGED at 3 (hangup at 4th failed turn).
 ```
 
 ### 8.3 Reset rules
@@ -366,10 +379,11 @@ Estimated 4-5 days for voice-agent-engineer.
 [ ] Active-turn latency P50 < 900ms, P90 < 1300ms (measured against 20 simulated calls)
 [ ] Smart end-of-turn detection correctly identifies utterance end on a 50-call test set
 [ ] Always-interruptible AI: patient speaks over AI → AI stops within 100ms
-[ ] Silence handling: AI prompts at 6s/12s, hangs up at 18s on test silent call
+[ ] Silence handling: AI prompts at 5s/7s, hangs up at 10s on test silent call
 [ ] Wait handling: when LLM says "wait chestha", next silence cycle uses 15s/30s/45s
-[ ] Couldn't-understand counter: 3 garbled turns → hangup; comprehensible turn resets counter
-[ ] Emergency mode: after keyword detected, silence timeouts × 2
+[ ] Couldn't-understand counter: 3 prompts then HANGUP on 4th failed turn; comprehensible turn resets counter
+[ ] Couldn't-understand behavior IDENTICAL in default / wait / emergency modes (no per-mode counter override)
+[ ] Emergency mode: silence timeouts × 2 (10s/14s/20s default; 30s/60s/90s wait); garbled counter UNCHANGED at 3
 [ ] Solo 4-min cap: warning at 3:50, hangup at 4:00 regardless of state
 [ ] STT confidence < 60% → AI says "mali cheppagalara" without forwarding to LLM
 [ ] LLM-side clarification: nonsensical input triggers "kshamincandi"
