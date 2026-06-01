@@ -13,7 +13,74 @@ Format per session:
 
 ---
 
-## 2026-06-01 (later) — Phase 4 COMPLETE: backend/main.py shipped, all 7 tasks done
+## 2026-06-01 (later) — Voice call flow + latency spec (brainstorm)
+
+**Topic:** Client raised that latency is a major problem in voice agents and wants <800ms turn latency + clean multi-language handling (Telugu+English+Hindi) + best quality at best price. Brainstormer + manager session. Two design corrections came out of client pushback during the brainstorm.
+
+### Decisions
+
+1. **Stack stays as Phase 2** — Sarvam Saaras STT + Gemini 2.5 Flash (FallbackAdapter to GPT-4o-mini) + Sarvam Bulbul TTS + LiveKit Agents 1.4 + Vobiz SIP. No vendor change. Telugu quality + Indian-market familiarity outweigh latency gains from switching to Deepgram/Groq/Cartesia.
+2. **Target latency: <800ms turn avg, <100ms first-greeting on call pickup.** Above is acceptable; below would require speculative TTS which has 15-30% audible glitch rate — wrong for clinic context.
+3. **Pipeline-level optimization (Option B-v3)** — full streaming + warmup + pre-cached greeting + smart end-of-turn detection + always-interruptible AI + silence handling state machine + STT confidence threshold + counter-based escalation.
+4. **NO keyword detection for "wait"** — client correctly identified this as dangerous (false positives, false negatives, context loss). LLM handles wait requests semantically via conversation. Industry best practice (Vapi, Retell, ElevenLabs, OpenAI Realtime all do this).
+5. **Industry-standard silence timeouts (Bland AI / Retell tier):** default 6s/12s/18s, wait-requested 15s/30s/45s, couldn't-understand counter=3 (resets on comprehensible turn), emergency mode 2x extend.
+6. **Smart end-of-turn detection via `livekit.agents.turn_detector.MultilingualModel()`** — replaces fixed VAD threshold. Faster for confident speakers, slower for hesitant. Fallback to 1000ms VAD when model confidence < 60%.
+7. **Pre-cached greeting per branch** — generated offline via Sarvam Bulbul batch synthesis during Phase 9 onboarding. Plays in <100ms on SIP pickup while backend warms.
+8. **Three-layer garbled audio defense** — STT confidence threshold (60%) + LLM-side clarification ("kshamincandi") + counter-based escalation (3 failed turns → hangup). Industry-standard for handling bad network audio.
+9. **Emergency mode silence override** — when emergency keyword detected earlier, all silence timeouts × 2; couldn't-understand counter = 5 not 3. Patient might be in distress; don't auto-hangup.
+10. **Per-clinic configurable timeouts deferred to Phase 9** — geriatric/ortho clinics may want gentler timeouts. Add `branch.silence_profile` enum at onboarding.
+
+### Brainstorm corrections (client pushback log)
+
+The brainstorm went through three iterations before landing on the right design:
+
+- **First proposal:** 300ms fixed VAD + "wait" keyword detection. Client correctly rejected:
+  - Garbage-in/garbage-out concern for streaming STT (I clarified this was a misframing — STT partials are internal, only complete utterances go to LLM)
+  - 300ms VAD too aggressive for Telugu phone speakers (real issue; fixed via smart turn detection)
+  - Keyword detection for "wait" is brittle (client correctly identified; researched + confirmed industry consensus; replaced with LLM-driven approach)
+- **Second proposal:** 2s/4s/6s/10s timeouts. Client requested industry-standard comparison. Researched 7 platforms (OpenAI Realtime, Vapi, Retell, ElevenLabs, Bland AI, Twilio+Dialogflow, Pipecat) plus healthcare-specific (Hyro, Notable). Client chose to align with industry standard.
+- **Final:** Bland AI / Retell tier defaults (6s/12s/18s default, 15s/30s/45s wait, counter=3 for garbled).
+
+Each pushback improved the design. This is exactly how brainstormer + manager protocol is supposed to work.
+
+### Files
+
+- Created: `docs/superpowers/specs/2026-06-01-voice-call-flow-latency-design.md` (~17 sections, ~600 lines, plain English with explicit drawbacks per component)
+- Modified: `docs/CHANGELOG.md` (this entry)
+
+### Implementation estimate
+
+4-5 days for voice-agent-engineer. 10 tasks. Implementation plan to be generated via writing-plans skill after user reviews this spec.
+
+### Commits
+
+- *(pending — spec commit)*
+
+### What this spec does NOT change
+
+- Vendor choices (Sarvam, Gemini, LiveKit, Vobiz) unchanged
+- Existing booking_tools 4 LLM function tools unchanged
+- Token assignment via Redis INCR unchanged
+- Calendar-first booking confirmation unchanged
+- Emergency keyword detection unchanged (already shipped, conservative)
+- Pricing tiers unchanged
+- DPDP / security implications: none new (no new PII handling)
+
+### Decision needed (client)
+
+Review the spec at `docs/superpowers/specs/2026-06-01-voice-call-flow-latency-design.md`. Approve to invoke `writing-plans` for implementation breakdown. Or request changes.
+
+### Retro
+
+- **Worked:** Multi-iteration brainstorm with explicit pushbacks from client → caught two design flaws (300ms VAD aggressive, keyword detection brittle) before any code was written.
+- **Worked:** Researching 7 industry platforms gave concrete defensible numbers instead of "let's pick something reasonable." Saved future debate.
+- **Worked:** Explicitly enumerating drawbacks per component (not buried in a footer) forced honesty about what we're trading off.
+- **Didn't work:** First proposal was too eager to ship. Took 3 iterations to land on industry-standard. Lesson: when proposing voice-agent design, research industry first, propose second.
+- **Change next sprint:** When brainstorming any voice/telephony feature, dispatch brainstormer with explicit "compare to Vapi, Retell, ElevenLabs, Bland defaults" instruction up front.
+
+---
+
+## 2026-06-01 (mid-day) — Phase 4 COMPLETE: backend/main.py shipped, all 7 tasks done
 
 **Topic:** Sequential dispatch of all remaining Phase 4 tasks. Backend now runs end-to-end. 38/38 tests pass.
 
