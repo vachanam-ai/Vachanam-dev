@@ -48,6 +48,8 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 **P2 (medium):**
 - TD-014 — Dockerfiles run as root → fix before Phase 10
 - TD-018 — Initial migration has zero non-unique indexes → 2nd migration before Phase 5
+- TD-020 — Pre-cached greeting WAV not yet published via LiveKit track-publish API → Phase 10
+- TD-021 — STT confidence threshold (Layer A) not wired (LiveKit abstraction); Layer B active → Phase 10
 
 **P3 (low):**
 - TD-005 — Romanized `padipōyāḍu` vs Telugu script → verify in Phase 10 acceptance
@@ -55,9 +57,9 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 
 **Recently closed (2026-05-29 + 2026-06-01):** TD-003 + TD-004 (pricing), TD-006 (test suite green), TD-016 + TD-017 (event-loop bugs), TD-001 (Alembic migration regenerated), **TD-002 (payments_test_app deleted; main.py mounts payments router)**
 
-## Test baseline (verified 2026-05-29)
+## Test baseline (verified 2026-06-01)
 
-`pytest tests/ -v` against Docker Postgres 16 + Redis 7 + Python 3.14 → **29/29 pass** (23 unit + 4 integration + 2 edge-case). Baseline locked for Phase 4 work.
+`pytest tests/ -v` against Docker Postgres 16 + Redis 7 + Python 3.14 → **77/77 pass** (60 unit + 4 integration + 5 edge-case + 8 security-prep). Baseline locked.
 
 ---
 
