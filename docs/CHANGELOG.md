@@ -13,7 +13,73 @@ Format per session:
 
 ---
 
-## 2026-06-01 (latest) — MANDATORY Task dispatch rule + DISPATCHES.md audit trail
+## 2026-06-02 (latest) — Phase 4.5 sprint planning + brainstormer gate
+
+**Topic:** First sprint executed end-to-end under the mandatory-dispatch rule. Manager produced the Phase 4.5 sprint plan (18 tasks); brainstormer validated it (Task 1 = mandatory gate); client decided on 3 escalations + 2 spec corrections applied. Docs updated to reflect deviations BEFORE any implementer dispatches. Task 2 (database-engineer) now unblocked.
+
+### Dispatches this session
+
+| # | Specialist | Scope | Result |
+|---|---|---|---|
+| 1 | manager | Read STATUS + ROADMAP + CHANGELOG + TECH_DEBT + security spec; produce Phase 4.5 sprint plan with brainstormer gate as Task 1 | DONE — 18 tasks over ~5 days, dependency order, reviewers named, 6 shortcuts rejected |
+| 2 | brainstormer | Validate the 18-task plan against cheapest-path principles; answer 4 questions (Cloudflare WAF tier, rate-limit library, DB index scope, privacy policy hosting); spec-staleness check | DONE — 4 picks + 4 staleness flags |
+| 3 | manager (this dispatch) | Apply client decisions: patch security spec, update TD-018, log CHANGELOG, append DISPATCHES | DONE (this entry) |
+
+Full dispatch records in `docs/DISPATCHES.md`.
+
+### Client decisions (3 escalations resolved 2026-06-02)
+
+1. **Rate-limit library: `fastapi-limiter` (DEVIATION from spec).** Client rejected the spec'd `slowapi`. Brainstormer's reasoning accepted: async-native (no thread bridging into FastAPI's event loop), single dependency vs `slowapi`+`limits`, Redis-native, integrates cleanly as a FastAPI `Depends(...)`. Spec §4 diagram + §6.2 library/example + §13 Day 2 plan all patched; per-endpoint table in §6.3 unchanged (only the library swaps).
+2. **DPDP Rules status: client will check `meity.gov.in` before Task 11 dispatches.** Privacy policy authoring (Task 11) is BLOCKED until client confirms whether the DPDP Rules (which set the 72-hour Data Protection Board breach-notification format and Significant Data Fiduciary threshold) have been gazetted. The spec was written 2026-05-22; rules may have changed status since. Task 11 cannot proceed without this — it directly affects the breach-notification section of `/privacy` and the runbook. Other Phase 4.5 tasks (middleware, rate-limit, audit log, indexes, FK ondelete, CI) proceed in parallel.
+3. **TD-018 scope reduction: FK-only indexes this sprint; compound indexes DEFERRED to Phase 5.** Brainstormer Pick 3 accepted by client. FK-only ships in Phase 4.5 as migration `phase45_fk_indexes`. Compound indexes — `(branch_id, date)` on tokens, `(branch_id, doctor_id, date)` for doctor schedule, `(phone)` on Patient, `(whatsapp_number)` on Doctor — wait for real `EXPLAIN ANALYZE` evidence from Phase 5 query volume. Reasoning: write-cost of indexes is non-zero; we don't add speculative indexes without measured query plans.
+
+### Spec corrections (no deviation; factual fixes, applied without escalation)
+
+1. **§6.6 Cloudflare WAF wording.** Original said "10,000 free WAF requests per month" — wrong. Cloudflare Managed Ruleset (what we enable) has **unlimited** monthly requests on the Free tier. The 10k figure belongs to Cloudflare's separate **Rate Limiting Rules** product, which we do not use (our application-layer `fastapi-limiter` covers that need). Wording corrected; parenthetical added pointing to the source of the confusion.
+2. **§7 A02 + §10.1 Render TLS nit.** Original said "Render uses Let's Encrypt for internal cert" — Render runs its own ACME provider, not Let's Encrypt directly. Wording corrected. No implementation impact.
+
+Both corrections logged in the spec's new **§16 REVISIONS** section (append-only patch log).
+
+### Blocker
+
+**Task 11 (privacy policy authoring) is BLOCKED until client confirms DPDP Rules status from `meity.gov.in`.** Manager will not dispatch `privacy-legal` for the privacy policy page until this is resolved. Other Phase 4.5 tasks (2-10, 12-18) are unblocked and proceed in the planned sequence. If DPDP Rules check shows "still not gazetted," Task 11 ships with the spec's current breach-notification wording (72-hour to Data Protection Board, format TBD per future rules). If gazetted, Task 11 wording follows the gazetted format.
+
+### Files
+
+Modified:
+- `docs/superpowers/specs/2026-05-22-security-hardening-design.md` — §4 layered arch diagram (slowapi → fastapi-limiter), §6.2 library + example code (rewritten for fastapi-limiter dependency pattern), §6.6 Cloudflare wording corrected, §7 A02 + §10.1 Render TLS wording corrected, **NEW §16 REVISIONS section appended** with 3 patch entries
+- `docs/TECH_DEBT.md` — TD-018 row: description + payback split into "Phase 4.5 FK-only" + "Phase 5 compound (evidence-gated)"; target sprint column updated
+- `docs/DISPATCHES.md` — appended this dispatch entry (manager doc-update dispatch)
+- `docs/CHANGELOG.md` (this entry)
+
+### Commits
+
+- *(pending — single doc-update commit by manager)*
+
+### Follow-ups
+
+- **Next dispatch:** `database-engineer` for Task 2 (audit_log table migration + FK ondelete explicit (TD-019) + FK-only indexes (TD-018 reduced scope)). Now unblocked.
+- **Other Tasks 3-10, 12-18:** proceed in manager's planned sequence.
+- **Task 11:** stays BLOCKED until client returns from `meity.gov.in` check. Manager will not dispatch privacy-legal for /privacy authoring until then.
+- Razorpay plan IDs still pending Phase 9.
+
+### Retro
+
+- **Worked:** The standing rule's first real-world use played out exactly as designed. Manager dispatched → brainstormer gated → 2 deviations + 1 scope change surfaced → manager escalated to client → client decided → docs patched BEFORE any implementer ran. Zero implementation rework risk. Audit trail is complete: every decision has a reasoning chain visible in DISPATCHES + CHANGELOG.
+- **Worked:** Brainstormer's spec-staleness check (read the spec critically, not just trust it) caught two factual errors that have been sitting in the spec for 11 days. Cheap to fix now (wording patch); would have been embarrassing to ship to Cloudflare-savvy customers.
+- **Worked:** Splitting TD-018 into FK-only (now) + compound (evidence-gated, Phase 5) is correct evidence-based engineering. We do not pay write-cost for indexes we cannot prove are needed.
+- **Didn't work:** Spec staleness should have been caught at spec-approval time (2026-05-22), not 11 days later when a downstream sprint needed it. Lesson: any spec referencing external vendor pricing/products needs a "verified-against-vendor-docs-on" date stamp.
+- **Change next sprint:** When manager writes/dispatches a spec, manager must include "verify all vendor-cited numbers/products against vendor docs and stamp the verification date" as an explicit acceptance criterion. Add to QUALITY_BAR for spec authoring.
+
+### Cost summary
+
+- Model time: 2 opus dispatches (manager planning + brainstormer gate) + this doc-update dispatch ~ within the 2-hour blocker investigation budget
+- $ spent on services: ₹0 new (no new vendor added; `fastapi-limiter` is OSS; `slowapi` is OSS — same cost)
+- Recurring cost change: none
+
+---
+
+## 2026-06-01 — MANDATORY Task dispatch rule + DISPATCHES.md audit trail
 
 **Topic:** Client identified that the orchestrator (main thread) has been embodying specialists inline instead of dispatching via `Task(subagent_type=...)`. Standing rule logged: **every change goes through a Task dispatch — no exceptions, even for one-line fixes.**
 

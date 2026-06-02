@@ -87,7 +87,8 @@ When a request enters the system, it passes through four layers. Each layer must
    (per request)  │   1. SecurityHeadersMiddleware      │
                   │      (CSP, HSTS, X-Frame, etc.)     │
                   │   2. CORSMiddleware (strict)        │
-                  │   3. RateLimitMiddleware (slowapi)  │
+                  │   3. RateLimitMiddleware            │
+                  │      (fastapi-limiter)              │
                   │   4. AuthMiddleware (JWT decode)    │
                   │   5. AuditMiddleware (log writes)   │
                   └──────────────┬──────────────────────┘
@@ -220,21 +221,32 @@ Without rate limits:
 
 ### 6.2 How it works
 
-Library: `slowapi` (FastAPI-compatible wrapper over `limits`). Storage: Redis (so rate counters are shared across all backend workers).
+Library: `fastapi-limiter` (async-native, Redis-backed, single dependency, integrates as a FastAPI dependency). Storage: Redis (so rate counters are shared across all backend workers).
 
 Key function — what makes one "user" for counting purposes:
 
 ```python
-def key_func(request):
+from fastapi import Request
+import jwt
+from backend.config import settings
+
+async def user_or_ip_key(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
         try:
-            payload = jwt.decode(auth[7:], settings.jwt_secret, algorithms=["HS256"], options={"verify_exp": False})
+            payload = jwt.decode(
+                auth[7:],
+                settings.jwt_secret,
+                algorithms=["HS256"],
+                options={"verify_exp": False},
+            )
             return f"user:{payload['sub']}"
         except Exception:
             pass
-    return f"ip:{get_remote_address(request)}"
+    return f"ip:{request.client.host}"
 ```
+
+`fastapi-limiter` is initialized once at app startup against the Redis URL, then applied per route as a dependency: `dependencies=[Depends(RateLimiter(times=5, seconds=60, identifier=user_or_ip_key))]`.
 
 If the request has a valid-looking JWT, count by `user_id`. Otherwise count by IP. This way one shared clinic IP doesn't get throttled because multiple staff are using the app at once.
 
@@ -265,7 +277,9 @@ Configurable list of trusted IPs (e.g., Vinay's office for testing) in env var `
 
 ### 6.6 Cloudflare-level rate limits (Layer 1)
 
-Cloudflare's free tier includes 10,000 free WAF requests per month plus unlimited DDoS protection. We use the managed OWASP Core Rule Set + Bot Fight Mode. These catch attacks before they reach our app — saves us bandwidth and Redis ops.
+Cloudflare's free tier includes **unlimited managed-ruleset WAF requests** (no monthly cap on the Cloudflare Managed Ruleset / OWASP Core Rule Set) plus unlimited DDoS protection. We use the managed OWASP Core Rule Set + Bot Fight Mode. These catch attacks before they reach our app — saves us bandwidth and Redis ops.
+
+(The "10,000 free WAF requests/month" figure that appears elsewhere on Cloudflare's pricing pages refers to their separate **Rate Limiting Rules** product, which we do not use — our application-layer rate limiting via `fastapi-limiter` covers that need. Correction logged in REVISIONS section.)
 
 ---
 
@@ -286,7 +300,7 @@ OWASP top 10 is the industry checklist of the 10 most common web vulnerabilities
 **What it is:** Sensitive data exposed because of weak encryption or missing TLS.
 
 **Our defenses:**
-1. TLS everywhere — Cloudflare handles TLS 1.2+ at the edge; Render uses Let's Encrypt for internal cert.
+1. TLS everywhere — Cloudflare handles TLS 1.2+ at the edge; Render terminates TLS using certificates provisioned via its own managed ACME provider (not Let's Encrypt directly).
 2. HSTS header tells browsers "never speak HTTP to this domain" for one year.
 3. JWTs signed with HS256 + 32-byte random secret.
 4. Database disk encryption (Neon default).
@@ -546,7 +560,7 @@ When request volume justifies it (probably >10/month), build a self-service port
 
 ### 10.1 TLS
 
-All traffic encrypted in transit. Cloudflare terminates TLS 1.2+ at the edge; Render uses Let's Encrypt for its internal TLS. HSTS header (`Strict-Transport-Security: max-age=31536000; includeSubDomains`) tells browsers to refuse HTTP for one year.
+All traffic encrypted in transit. Cloudflare terminates TLS 1.2+ at the edge; Render terminates its own TLS using certificates provisioned via its managed ACME provider. HSTS header (`Strict-Transport-Security: max-age=31536000; includeSubDomains`) tells browsers to refuse HTTP for one year.
 
 ### 10.2 Secrets management
 
@@ -752,7 +766,7 @@ This spec slots in as **Phase 4.5** between Phase 4 (Backend Core) and Phase 5 (
 | Day | Work |
 |---|---|
 | Day 1 | `SecurityHeadersMiddleware` + CORS hardening; `JWT_SECRET` rotation tested; idle timeout React hook; FastAPI prod-docs disable; container non-root user. Tests for headers + CORS. |
-| Day 2 | `slowapi` integration; per-endpoint rate limits; Redis-backed counters; failed-login IP block; tests for rate limit + login brute force. |
+| Day 2 | `fastapi-limiter` integration; per-endpoint rate limits; Redis-backed counters; failed-login IP block; tests for rate limit + login brute force. |
 | Day 3 | `audit_log` table + Alembic migration; `@audit` decorator; wire into existing routes (login, payments, queue); query interface for admin; tests for audit. |
 | Day 4 | Privacy policy page (`/privacy`); breach runbook document; Cloudflare account setup + DNS + WAF managed rules; Dependabot enable; CI checks for secrets in repo. Spec self-review + manual ZAP scan. |
 
@@ -804,3 +818,17 @@ These are deliberate trade-offs for MVP. Each has a documented path forward.
 ```
 
 When all 19 criteria check, Phase 4.5 is complete and we proceed to Phase 5 (WhatsApp).
+
+---
+
+## 16. REVISIONS
+
+Append-only log of patches applied to this spec after its 2026-05-22 approval. Each entry: date, scope (deviation = changes a decision; correction = fixes an error in original wording), reason, files / sections touched, who authored the patch.
+
+| Date | Type | Section(s) | Change | Reason | Authored by |
+|---|---|---|---|---|---|
+| 2026-06-02 | **Deviation** | §4 (layered arch diagram), §6.2 (rate-limit library + example code), §13 (Day 2 plan) | Rate-limit library changed from `slowapi` to **`fastapi-limiter`**. Library name updated in 4 places; example `key_func` rewritten as `async def user_or_ip_key(...)` using `fastapi-limiter`'s identifier contract. Per-endpoint table in §6.3 unchanged — only the library swaps. | Brainstormer (Phase 4.5 Task 1 gate) recommended `fastapi-limiter` over `slowapi`: async-native (fits FastAPI's event loop without thread bridging), single dependency (vs `slowapi` + `limits`), Redis-native, simpler integration as a FastAPI `Depends(...)`. Client accepted deviation on 2026-06-02 after manager escalation. | manager (Vinay's call, logged) |
+| 2026-06-02 | **Correction** | §6.6 (Cloudflare WAF wording) | "10,000 free WAF requests per month" replaced with "unlimited managed-ruleset WAF requests." Added parenthetical clarifying the 10k figure belongs to Cloudflare's separate **Rate Limiting Rules** product (which we do not use). | Original spec conflated two different Cloudflare Free-tier features. Cloudflare Managed Ruleset (which is what we enable) has no monthly request cap; the 10k/month limit only applies to Rate Limiting Rules. Caught by brainstormer during Phase 4.5 plan validation. No implementation impact — just wording. | manager (correction patch) |
+| 2026-06-02 | **Correction** | §7 A02 (defenses), §10.1 (TLS) | "Render uses Let's Encrypt for internal cert" replaced with "Render terminates TLS using certificates provisioned via its own managed ACME provider." | Render does not use Let's Encrypt directly; it operates its own ACME-protocol provider. Minor accuracy nit. No implementation impact. | manager (correction patch) |
+
+**Process note:** Deviations require client approval before the spec is patched. Corrections (fixing factual errors in original wording with no decision change) may be applied by manager and logged here without escalation.
