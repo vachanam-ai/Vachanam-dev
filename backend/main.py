@@ -2,13 +2,20 @@
 
 Wires together:
 - Routers: auth (Google OAuth + JWT), queue (receptionist), payments (Razorpay)
-- Middleware: CORS (locked to frontend_url + localhost dev ports)
+- Middleware stack (outermost-first):
+    1. SecurityHeadersMiddleware — CSP, HSTS, X-Frame, etc. on EVERY response
+    2. CORSMiddleware — exact-origin allowlist (no wildcard)
 - Static: mounts /static and serves landing page mirror at /
 - Lifespan: structlog config, scheduler/Calendar/jobs (Phase 6 will add)
 - Health: /health for UptimeRobot + Render + Fly probes
 
-Phase 4.5 adds: SecurityHeadersMiddleware, slowapi rate_limit, audit_log
+Phase 4.5 adds: SecurityHeadersMiddleware, fastapi-limiter rate_limit, audit_log
 decorator on sensitive routes. Phase 6 adds: APScheduler in lifespan.
+
+Middleware ordering note: Starlette wraps middleware in reverse registration
+order (last-added = outermost). We add SecurityHeadersMiddleware AFTER
+CORSMiddleware so it executes FIRST (outermost), ensuring every response —
+including CORS preflight 204s — carries the security headers.
 """
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -20,6 +27,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import settings
+from backend.middleware.security_headers import SecurityHeadersMiddleware
 
 logger = structlog.get_logger()
 
@@ -59,6 +67,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# SecurityHeadersMiddleware must be added AFTER CORSMiddleware.
+# Starlette wraps in reverse order: last-added = outermost = first to execute.
+# This guarantees security headers appear on ALL responses including CORS
+# preflight responses that CORSMiddleware short-circuits.
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Routers wired in dependency order:
 # - auth: no deps, issues JWTs the others need

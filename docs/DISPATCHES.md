@@ -143,3 +143,46 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - ondelete decision matrix: CASCADE only for whatsapp_sessions.branch_id (transient booking state, no DPDP concern); RESTRICT for all 14 other FKs (explicit deletion path enforced, aligns with DPDP data-lifecycle requirement).
 - 16 FK-column indexes created. 5 UNIQUE columns already indexed (organizations.owner_email, users.email, users.google_sub, branches.whatsapp_number, branches.meta_phone_number_id) — skipped to avoid duplicate indexes.
 - Compound indexes (branch_id+date, branch_id+doctor_id) deferred to Phase 5 per brainstormer pick 3 + client decision. Will be gated on EXPLAIN ANALYZE evidence from real Phase 5 query volume.
+
+---
+
+## 2026-06-02 — security-engineer dispatched (Phase 4.5 Task 2 review — audit_log + FK ondelete + FK indexes)
+**Scope:** Review database-engineer's commit `be6d76e` against three dimensions: (1) append-only intent of audit_log is architecturally sound for upcoming @audit decorator + Phase 10 GRANT/REVOKE, (2) FK ondelete RESTRICT matrix matches DPDP data-lifecycle expectations, (3) audit_log indexes don't expose data via SELECT performance side channels.
+**Inputs:** alembic/versions/8559268c0c44_phase45_audit_log_ondelete_fk_indexes.py, backend/models/schema.py (AuditLog + 15 FK declarations), docs/db/migration-log.md, docs/superpowers/specs/2026-05-22-security-hardening-design.md §8 + §9.3, tests/conftest.py
+**Acceptance:** REVIEW VERDICT returned with line-item verdicts on the 3 concerns + any new tech debt entries logged + 77/77 baseline confirmed still green.
+**Reviewer:** Orchestrator (manager) reads verdict; client receives summary.
+**Result:** APPROVE_WITH_FOLLOWUPS — schema design is sound; 3 doc/posture follow-ups logged (TD-022 PII-in-metadata_json convention enforcement; TD-023 Phase 10 GRANT/REVOKE script reminder; posture-note on calls.doctor_id/calls.token_id RESTRICT-vs-SET-NULL deferred until call-lifecycle is designed in Phase 9).
+**Files touched:** Modified: docs/DISPATCHES.md (this entry) | docs/TECH_DEBT.md (2 new TDs: TD-022, TD-023). No source files touched (reviewer doesn't fix).
+**Tests:** Baseline confirmed — `pytest tests/ -v --tb=line` → 77 passed, 6 warnings, 10.44s. Zero regression.
+**Commit:** (pending)
+**Follow-up dispatches:**
+  - **PROCEED IN PARALLEL:** backend-engineer for Task 3 (SecurityHeadersMiddleware). Audit_log schema is locked-in; Task 3 doesn't touch it.
+  - **TASK 6/7 PREREQ:** @audit decorator implementation (security-engineer, later this sprint) must explicitly reject PII keys in metadata_json (closes TD-022).
+  - **PHASE 10:** devops-engineer to add GRANT INSERT, SELECT ON audit_log TO vachanam_app; REVOKE UPDATE, DELETE ON audit_log FROM vachanam_app to prod-init script (TD-023).
+**Notes:**
+- Migration is forward-compatible with Phase 10 GRANT/REVOKE — no FK constraints + no ORM-level UPDATE means the GRANT change is purely role-permission level. No follow-up migration needed.
+- ip_address VARCHAR(45) correctly sized for IPv4-mapped IPv6 (e.g., "::ffff:255.255.255.255" = 45 chars). Posture-correct.
+- whatsapp_sessions CASCADE is acceptable for MVP: sessions contain patient_phone + JSONB session_data (booking state, NOT medical content). DPDP storage-limitation principle favors deletion of transient state. Recommendation: when a branch is deleted, the cascading session purge IS the data-lifecycle action (no separate audit_log row needed for each session because the parent branch deletion is itself a major event that must be audited at the application layer).
+- Index set on (timestamp, user_id, branch_id, org_id, action, success) is sufficient for spec §8.6 query patterns. "Who marked Token X as no-show" = filter by resource_id (already constant-time via index? no — resource_id is NOT indexed). Logged as note for spec §8.6: if resource_id lookups become frequent in admin tab, add a compound index (action, resource_id) in Phase 8. Not blocking.
+- success BOOLEAN low-cardinality index timing-attack concern: at MVP scale (single-digit clinics, <10k audit rows/month), index scan vs seq scan timing differential is negligible. Re-evaluate at 100k+ rows/month or when audit_log read endpoint is exposed to non-admin users (which is never planned).
+- Reviewer agent ID: pending capture from manager's spawn call.
+
+---
+
+## 2026-06-02 — backend-engineer dispatched (Phase 4.5 Task 3 — SecurityHeadersMiddleware + CORS verification)
+**Scope:** Create `backend/middleware/security_headers.py` with `SecurityHeadersMiddleware` per spec §10.5; wire into `backend/main.py` with correct middleware ordering; verify CORS exact-origin allowlist (no wildcard); verify prod-docs disable; smoke-test all 6 headers via curl; confirm 77/77 pytest baseline holds.
+**Inputs:** docs/superpowers/specs/2026-05-22-security-hardening-design.md §10.3-10.6, backend/main.py, backend/middleware/ (existing files), backend/config.py, docs/DISPATCHES.md
+**Acceptance:** `curl -X GET -I http://localhost:8000/health` shows all 6 headers; evil-origin request shows no `Access-Control-Allow-Origin`; pytest 77/77 pass; commit landed.
+**Reviewer:** security-engineer (verify CSP correctness, every allowed origin justified, HSTS preload-ready, no inline-script CSP hole)
+**Result:** DONE
+**Files touched:** Created: backend/middleware/security_headers.py | Modified: backend/main.py, docs/DISPATCHES.md
+**Tests:** 77/77 pass (pytest tests/ -v --tb=short in 10.59s). Zero regression.
+**Commit:** (pending — staged, not yet committed at time of this entry)
+**Follow-up dispatches:** security-engineer — review CSP directive correctness, confirm HSTS preload-readiness, check for CSP holes (inline-script, data: URIs in script-src, etc.)
+**Notes:**
+- Middleware ordering: Starlette wraps in reverse-registration order (last-added = outermost). SecurityHeadersMiddleware is registered AFTER CORSMiddleware so it executes first on every inbound request, ensuring security headers appear on CORS preflight 400/200 responses and all other responses.
+- Smoke test verified: GET /health → 200 with all 6 headers present. OPTIONS preflight from evil.com → 400 with no Access-Control-Allow-Origin (evil-origin correctly rejected) and all 6 security headers present. OPTIONS preflight from http://localhost:3000 → 200 with access-control-allow-origin: http://localhost:3000 and all 6 security headers.
+- CSP directive: verbatim from spec §10.5. No deviations. Includes Razorpay + Google OAuth allowlists. `object-src 'none'` and `base-uri 'self'` both present. No `unsafe-eval`. `unsafe-inline` restricted to `style-src` only (Google Fonts requires it; script-src has no unsafe-inline).
+- Docs disable: verified present in main.py from Phase 4 — `docs_url=None if _is_prod else "/docs"` etc. No changes required.
+- CORS: verified exact-origin allowlist with `allow_credentials=True` (spec §10.6 compliant — wildcard is incompatible with credentials). Dev origins `http://localhost:3000` and `http://localhost:5173` added only when `_is_prod=False`.
+- TECH_DEBT.md includes TD-022 and TD-023 from security-engineer Task 2 review (those were pending commit; included in this commit since security-engineer approved Task 2).
