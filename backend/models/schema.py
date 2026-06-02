@@ -38,7 +38,10 @@ class Branch(Base):
     __tablename__ = "branches"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    # RESTRICT: org must be explicitly cleared before a branch can be deleted (DPDP data-lifecycle)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     address: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str | None] = mapped_column(String(100))
@@ -70,7 +73,10 @@ class Doctor(Base):
     __tablename__ = "doctors"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    branch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("branches.id"), nullable=False)
+    # RESTRICT: patients/tokens must be deleted before a branch can be removed
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     specialization: Mapped[str | None] = mapped_column(String(100))
     routing_keywords: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
@@ -104,7 +110,10 @@ class Patient(Base):
     __tablename__ = "patients"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    branch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("branches.id"), nullable=False)
+    # RESTRICT: patient rows carry PII; must be explicitly deleted before branch removal (DPDP)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(20))
     followup_consent: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -119,9 +128,16 @@ class Token(Base):
     __tablename__ = "tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    branch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("branches.id"), nullable=False)
-    doctor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("doctors.id"), nullable=False)
-    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    # RESTRICT: explicit deletion path for booking records (audit trail)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     token_number: Mapped[int | None] = mapped_column(Integer)
     appointment_time: Mapped[time | None] = mapped_column(Time)
@@ -158,9 +174,18 @@ class Call(Base):
     __tablename__ = "calls"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    branch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("branches.id"), nullable=False)
-    doctor_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("doctors.id"))
-    token_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tokens.id"))
+    # RESTRICT: call records reference branches; explicit deletion required
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # RESTRICT (conservative): nullable FK — doctor may be deleted later but call record must be retained
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), index=True
+    )
+    # RESTRICT: token link; caller must explicitly handle before token deletion
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tokens.id", ondelete="RESTRICT"), index=True
+    )
     caller_phone: Mapped[str | None] = mapped_column(String(20))
     direction: Mapped[str] = mapped_column(
         Enum("inbound", "outbound", name="call_direction"),
@@ -190,9 +215,16 @@ class FollowupTask(Base):
     __tablename__ = "followup_tasks"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    branch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("branches.id"), nullable=False)
-    doctor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("doctors.id"), nullable=False)
-    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.id"), nullable=False)
+    # RESTRICT: followup tasks reference live patient + doctor data; explicit deletion
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     requested_by_doctor_whatsapp: Mapped[str | None] = mapped_column(String(20))
     topic: Mapped[str | None] = mapped_column(Text)
     # what_to_ask: the specific question/instruction to relay to the patient
@@ -228,7 +260,10 @@ class BillingCycle(Base):
     __tablename__ = "billing_cycles"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), nullable=False)
+    # RESTRICT: billing records must not be silently removed when org is deleted (financial audit trail)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     cycle_start: Mapped[date] = mapped_column(Date, nullable=False)
     cycle_end: Mapped[date] = mapped_column(Date, nullable=False)
     plan: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -254,7 +289,10 @@ class WhatsAppSession(Base):
     __tablename__ = "whatsapp_sessions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    branch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("branches.id"), nullable=False)
+    # CASCADE: session has no independent meaning without its branch; safe to cascade delete
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     patient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     state: Mapped[str] = mapped_column(
         Enum(
@@ -281,7 +319,10 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    org_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"))
+    # RESTRICT: user org membership must be explicitly unlinked before org deletion
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), index=True
+    )
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     name: Mapped[str | None] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(20))
@@ -298,3 +339,39 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization | None"] = relationship(back_populates="users")
+
+
+class AuditLog(Base):
+    """Append-only security audit trail. No FKs by design — rows survive user/branch deletion.
+
+    DPDP classification: pseudonymous (user_id + branch_id are UUIDs; action strings contain no PII).
+    PII note: ip_address is pseudonymous (links to a person only with ISP records); user_agent is
+    aggregate (browser metadata). metadata_json must NOT store patient name/phone — only IDs.
+
+    Append-only enforcement: vachanam_app DB role is granted only INSERT + SELECT on this table.
+    UPDATE and DELETE are withheld. Set up in Phase 10 prod DB init script (devops-engineer).
+    """
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # timestamp: indexed for chronological queries and retention scans
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    # user_id, branch_id, org_id: plain UUIDs — intentionally no FK constraints.
+    # Audit rows survive deletion of the referenced user/branch/org.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    branch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    # action: dot-notation event name e.g. "user.login.success", "token.attend"
+    action: Mapped[str] = mapped_column(String(100), index=True)
+    resource_type: Mapped[str | None] = mapped_column(String(50))
+    resource_id: Mapped[str | None] = mapped_column(String(100))
+    # ip_address: supports IPv4 (max 15 chars) and IPv6 (max 45 chars)
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    # metadata_json: structured context — branch_ids, error codes, etc. Never raw PII.
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB)
+    # success: false = failure events (login failures, access denials, signature mismatches)
+    # server_default="true" ensures DB-level default; default=True kept for ORM inserts
+    success: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True, index=True)

@@ -122,3 +122,24 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Spec patch was a coordination act (manager-authored doc correction, not a re-design); no escalation needed for the 2 factual corrections (Cloudflare wording + Render TLS) per manager.md "When you DON'T need to escalate" rule (doc updates that reflect decided reality)
 - TD-018 scope split is correct evidence-based engineering — Phase 5 compound indexes will be gated on EXPLAIN ANALYZE output, not speculation
 - First time the standing dispatch rule produced a clean escalation → decide → patch cycle with zero implementer rework risk. Audit trail complete in DISPATCHES + CHANGELOG.
+
+---
+
+## 2026-06-02 — database-engineer dispatched (Phase 4.5 Task 2 — audit_log + FK ondelete + FK indexes)
+**Scope:** Three schema changes in one Alembic migration: (1) create audit_log table per security spec §8.3, (2) add ondelete= to all FK constraints (TD-019), (3) add index on every FK column (TD-018 reduced scope — FK-only, compound deferred).
+**Inputs:** backend/models/schema.py, alembic/versions/ffcf1134aa8f_initial_schema_with_user_table.py, docs/superpowers/specs/2026-05-22-security-hardening-design.md §8 + §16, .claude/agents/database-engineer.md, tests/conftest.py, docs/CHANGELOG.md (sprint context)
+**Acceptance:** audit_log table visible in psql with 11 columns + 6 indexes; pg_constraint shows confdeltype=r for 14 FKs and confdeltype=c for whatsapp_sessions.branch_id only; FK indexes present on tokens/calls/etc; pytest 77/77 pass.
+**Reviewer:** security-engineer (verify append-only intent + FK ondelete matches DPDP data-lifecycle expectations + indexes don't expose data via SELECT performance side channels)
+**Result:** DONE
+**Files touched:**
+  Created: alembic/versions/8559268c0c44_phase45_audit_log_ondelete_fk_indexes.py | docs/db/migration-log.md
+  Modified: backend/models/schema.py (AuditLog model added, index=True + ondelete= on all FKs, success server_default added)
+**Tests:** 77/77 pass (pytest tests/ -v --tb=short in 11.23s). Zero regression.
+**Commit:** (pending)
+**Follow-up dispatches:** security-engineer to review FK ondelete matrix + audit_log append-only design
+**Notes:**
+- Autogen correctly treated this as full schema creation (DB was stamped at ffcf1134aa8f but no tables existed — conftest drops/recreates all tables per test, leaving DB empty between sessions). Migration creates all tables fresh with correct ondelete + indexes baked in.
+- Migration review caught: autogen omitted server_default on audit_log.success — fixed manually in both schema.py and the generated migration. Boolean NOT NULL without server_default would fail direct SQL inserts.
+- ondelete decision matrix: CASCADE only for whatsapp_sessions.branch_id (transient booking state, no DPDP concern); RESTRICT for all 14 other FKs (explicit deletion path enforced, aligns with DPDP data-lifecycle requirement).
+- 16 FK-column indexes created. 5 UNIQUE columns already indexed (organizations.owner_email, users.email, users.google_sub, branches.whatsapp_number, branches.meta_phone_number_id) — skipped to avoid duplicate indexes.
+- Compound indexes (branch_id+date, branch_id+doctor_id) deferred to Phase 5 per brainstormer pick 3 + client decision. Will be gated on EXPLAIN ANALYZE evidence from real Phase 5 query volume.
