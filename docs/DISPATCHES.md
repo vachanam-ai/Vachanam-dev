@@ -112,7 +112,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
 **Result:** DONE — all 4 doc updates landed.
 **Files touched:** Modified: docs/superpowers/specs/2026-05-22-security-hardening-design.md (5 patch sites + new §16) | docs/TECH_DEBT.md (TD-018 row) | docs/CHANGELOG.md (new top entry) | docs/DISPATCHES.md (this entry)
 **Tests:** N/A (doc-only dispatch). Pytest baseline untouched — no implementer work in this dispatch.
-**Commit:** *(pending — single doc-update commit by manager)*
+**Commit:** `f700c5b` — docs(phase-4.5): apply 3 client decisions + 2 spec corrections
 **Follow-up dispatches:**
   - **UNBLOCKED:** `database-engineer` for Task 2 (audit_log table + FK ondelete (TD-019) + FK-only indexes (TD-018 reduced scope))
   - **PROCEEDS:** Tasks 3-10, 12-18 per manager's planned sequence

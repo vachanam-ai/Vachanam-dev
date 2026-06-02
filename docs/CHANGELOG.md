@@ -54,7 +54,7 @@ Modified:
 
 ### Commits
 
-- *(pending — single doc-update commit by manager)*
+- `f700c5b` — docs(phase-4.5): apply 3 client decisions + 2 spec corrections
 
 ### Follow-ups
 
