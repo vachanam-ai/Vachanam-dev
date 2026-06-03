@@ -36,3 +36,10 @@ yarn-error.log
 
 # Claude Code internals (not project files)
 .superpowers/
+
+# Graphify artifacts — large/binary; GRAPH_REPORT.md is committed, JSON is not
+docs/_artifacts/graphify-output/ast-graph.json
+docs/_artifacts/graphify-output/.graphify_python
+docs/_artifacts/graphify-output/.graphify_root
+docs/_artifacts/graphify-output/.graphify_detect.json
+graphify-out/

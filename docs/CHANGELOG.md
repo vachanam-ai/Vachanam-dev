@@ -13,7 +13,40 @@ Format per session:
 
 ---
 
-## 2026-06-03 (latest) — Governance sprint: opus-pin + caveman-narrow + PROJECT_STRUCTURE.md live doc
+## 2026-06-03 (latest) — Graphify AST analysis + MAIN_AGENDA.md
+
+**Topic:** graphify 0.8.30 AST extraction on Vachanam codebase (46 files, 402 nodes, 1006 edges). No source/test/schema code changed.
+
+### Key decisions
+
+1. **AST-only mode.** `graphify extract` headless CLI requires an LLM key for the semantic pass even with `--no-cluster`. Ran pure AST via the Python API (`graphify.extract.extract()`) — fully local, no API call, no credentials.
+2. **Large JSON gitignored.** `ast-graph.json` (~200KB) excluded from git. `GRAPH_REPORT.md` (human-readable findings) committed.
+3. **Findings documented in `docs/MAIN_AGENDA.md`.** One-page project highlight with graphify-derived section. Supersedes no existing doc — fills a gap (no single-page orientation doc existed).
+
+### Files created / modified
+
+- Created: `docs/MAIN_AGENDA.md`, `docs/_artifacts/graphify-output/GRAPH_REPORT.md`
+- Modified: `docs/PROJECT_STRUCTURE.md`, `.gitignore`, `docs/DISPATCHES.md`, `docs/CHANGELOG.md`
+- Not committed (gitignored): `docs/_artifacts/graphify-output/ast-graph.json`
+
+### Key graphify findings
+
+- `agent/agent.py` directly imports `backend/config.py`, `backend/database.py`, `backend/models/schema.py` — two-container deployment has a monorepo Python import coupling that requires simultaneous redeployment on schema changes.
+- `SilenceState` enum (degree 41) is the highest-impact change surface in the voice path, outranking `agent.py` itself.
+- `booking_tools.py` has no isolated unit test file — only covered through full integration tests.
+- `test_rate_limit.py` is already structurally wired (imports `config.py`, `jose`) — Task 5 is additive only.
+
+### Follow-up
+
+Phase 4.5 Task 5 — backend-engineer wires `fastapi-limiter` to turn 13 RED security tests GREEN.
+
+### Commits
+
+`<hash>` — chore(graphify): run graphify on Vachanam codebase + MAIN_AGENDA.md highlight
+
+---
+
+## 2026-06-03 (earlier) — Governance sprint: opus-pin + caveman-narrow + PROJECT_STRUCTURE.md live doc
 
 **Topic:** Three client directives applied in one coordinated governance sprint. No source/test/schema code changed — only `.claude/agents/*` and `docs/*`. 77/77 test baseline holds; 13 RED security tests (Phase 4.5 Task 4 deliverable) remain intentionally RED as the spec for Task 5. Phase 4.5 active phase pointer unchanged.
 

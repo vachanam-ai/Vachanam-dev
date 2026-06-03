@@ -282,3 +282,32 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Manager agent: this dispatch.
 - Reviewer: client (process / governance changes).
 
+---
+
+## 2026-06-03 14:00 IST — devops-engineer dispatched
+
+**Scope:** Clone graphify (safishamsi/graphify), investigate, run AST extraction on Vachanam codebase, write MAIN_AGENDA.md and GRAPH_REPORT.md, update PROJECT_STRUCTURE.md and .gitignore, commit.
+
+**Inputs:** `CLAUDE.md`, `docs/STATUS.md`, `docs/ROADMAP.md`, `docs/PROJECT_STRUCTURE.md`, graphify README + pyproject.toml + security.py (safety review), live Vachanam repo (46 code files).
+
+**Acceptance:** `docs/MAIN_AGENDA.md` exists (1-page, 7 sections); `docs/_artifacts/graphify-output/GRAPH_REPORT.md` exists; `docs/_artifacts/graphify-output/ast-graph.json` present but gitignored; `docs/PROJECT_STRUCTURE.md` updated; `.gitignore` updated; single commit with correct message.
+
+**Reviewer:** Client (Vinay) — no source/test/schema code touched; devops-owned docs only.
+
+**Result:** DONE
+
+**Files touched:**
+  - Created: `docs/MAIN_AGENDA.md`, `docs/_artifacts/graphify-output/GRAPH_REPORT.md`, `docs/_artifacts/graphify-output/ast-graph.json` (gitignored — not committed)
+  - Modified: `docs/PROJECT_STRUCTURE.md` (added MAIN_AGENDA.md + 2 artifact entries), `.gitignore` (graphify artifact exclusions), `docs/DISPATCHES.md` (this entry), `docs/CHANGELOG.md` (session entry)
+
+**Tests:** No source/test code touched. pytest baseline 77/77 unchanged.
+
+**Commit:** `<backfill after commit>`
+
+**Follow-up dispatches:** backend-engineer — Phase 4.5 Task 5 (fastapi-limiter, turn 13 RED security tests GREEN).
+
+**Notes:**
+- Graphify is a Claude Code skill + headless CLI (PyPI: `graphifyy`, double-y). AST extraction (code files) is fully local via tree-sitter — no API key, no network calls. Semantic extraction (docs, PDFs, images) requires an LLM API key. The `graphify extract` headless command requires an LLM key even with `--no-cluster`; pure AST was achieved by calling the Python API directly (`graphify.extract.extract()`).
+- Key findings: 3 direct cross-service imports from `agent/agent.py` into `backend/` (config, database, models) are the primary architectural coupling — documented in MAIN_AGENDA.md and GRAPH_REPORT.md.
+- `ast-graph.json` (402 nodes, 1006 edges, ~200KB JSON) excluded from git per rule 4 (large artifacts). `GRAPH_REPORT.md` (human-readable summary) is committed.
+- No files were modified inside `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, or `alembic/` — constraint honored.

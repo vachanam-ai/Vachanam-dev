@@ -262,7 +262,10 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `docs/superpowers/plans/2026-05-15-phase-0-1-voice-agent.md` | archived (kept) | Phase 0+1 historical plan. |
 | `docs/db/migration-log.md` | working | Migration-by-migration narrative. |
 | `docs/audits/2026-05-29-full-project-audit.md` | working | Full 10-specialist audit; produced TD-007..TD-013. |
+| `docs/MAIN_AGENDA.md` | working | One-page project highlight — what Vachanam is, who it serves, runtime flow, stack, current state, graphify findings. Created 2026-06-03. |
 | `docs/_legacy/*` (8 files) | archived | Old PHASE_0..5 root docs + vachanam-progress.md + README. Historical reference only. |
+| `docs/_artifacts/graphify-output/ast-graph.json` | working | Graphify 0.8.30 AST-only graph — 402 nodes, 1006 edges across 46 code files. Not committed (see .gitignore). |
+| `docs/_artifacts/graphify-output/GRAPH_REPORT.md` | working | Human-readable graphify findings: god nodes, surprising connections, suggested queries. Created 2026-06-03. |
 | `.claude/agents/README.md` | working | Roster overview. |
 | `.claude/agents/AGILE.md` | working | Sprint cadence + DoR + DoD + caveman-narrow scope. |
 | `.claude/agents/QUALITY_BAR.md` | working | Senior-dev standards + process rules (mandatory dispatch + caveman-narrow + PROJECT_STRUCTURE live doc). |
