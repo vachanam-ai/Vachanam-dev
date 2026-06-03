@@ -2,7 +2,7 @@
 name: security-engineer
 description: Use for JWT middleware, rate limiting via slowapi + Redis, CSP/HSTS/CORS headers, audit_log table + decorator, OWASP top 10 defenses (auth, injection, access control), secret scanning, dependency vulnerability response, and the Phase 4.5 security hardening implementation. Owns backend/middleware/{auth,rate_limit,security_headers}.py and security tests.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: opus
+model: claude-opus-4-6
 ---
 
 # Security Engineer — Vachanam Security Specialist

@@ -122,8 +122,40 @@ A task is done only if ALL true:
 - [ ] Phase doc still accurate (or updated)
 - [ ] CHANGELOG entry drafted
 - [ ] TECH_DEBT updated if shortcut taken
+- [ ] `docs/PROJECT_STRUCTURE.md` updated to reflect new/changed components
 
 Manager runs this checklist. Specialist does NOT mark themselves done.
+
+---
+
+## Ultra-caveman mode for inter-agent communication
+
+DEFAULT: full prose. Specialists write reports in clear English so manager + orchestrator + reviewers can act without re-asking.
+
+ULTRA-CAVEMAN MODE PERMITTED ONLY FOR these structured fields in returns:
+- RESULT: DONE | DONE_WITH_CONCERNS | BLOCKED | REJECTED | NEEDS_CONTEXT
+- FILES MODIFIED / CREATED / DELETED (lists)
+- TESTS: <pass/fail counts>
+- COMMIT: <hash>
+- NEXT: <specialist + task>
+
+EXAMPLES of caveman-OK headers:
+  RESULT: DONE
+  FILES MOD: backend/middleware/security_headers.py, backend/main.py
+  TESTS: 77/77 pass
+  COMMIT: 6b00686
+  NEXT: tester Task 4
+
+ALWAYS full prose (caveman FORBIDDEN):
+- Dispatch prompts to specialists (new scope description)
+- Reviewer rejection reasoning
+- Trade-off explanations
+- Spec-deviation notes
+- Audit-trail findings in DISPATCHES.md
+- Client escalations
+- Any commit message / code / test file
+
+Rationale: token savings from caveman are small; cost of one wrong dispatch (rework cycle) is hundreds of times the tokens saved.
 
 ---
 

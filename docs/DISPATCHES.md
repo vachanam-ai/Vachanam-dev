@@ -186,3 +186,99 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Docs disable: verified present in main.py from Phase 4 — `docs_url=None if _is_prod else "/docs"` etc. No changes required.
 - CORS: verified exact-origin allowlist with `allow_credentials=True` (spec §10.6 compliant — wildcard is incompatible with credentials). Dev origins `http://localhost:3000` and `http://localhost:5173` added only when `_is_prod=False`.
 - TECH_DEBT.md includes TD-022 and TD-023 from security-engineer Task 2 review (those were pending commit; included in this commit since security-engineer approved Task 2).
+
+---
+
+## 2026-06-02 — security-engineer dispatched (Phase 4.5 Task 3 review — SecurityHeadersMiddleware + CORS)
+**Scope:** Review backend-engineer commit `6b00686` against spec §10.5 (security headers) + §10.6 (CORS). Verify CSP directives match spec verbatim, HSTS posture correct for current stage, middleware ordering correct (security headers on CORS preflight responses), prod docs disable intact, CORS exact-origin allowlist with `allow_credentials=True`, and check for inline-script CSP collision against existing static HTML pages.
+**Inputs:** backend/middleware/security_headers.py, backend/main.py, backend/static/index.html, backend/static/razorpay-test.html, docs/superpowers/specs/2026-05-22-security-hardening-design.md §10.5-10.6
+**Acceptance:** Line-item verdict on 6 review checks + live curl smoke confirmation (HTTP head from /health and / + CORS preflight from evil.com vs localhost:3000) + 77/77 pytest baseline + any new TDs logged.
+**Reviewer:** Orchestrator (manager) reads verdict; client receives summary.
+**Result:** APPROVE_WITH_FOLLOWUPS — implementation matches spec §10.5 verbatim; CORS correctly hardened; middleware order correct (security headers appear on ALL responses including CORS preflight 200/400). One follow-up logged (TD-024) for inline-script CSP collision on static HTML pages that pre-date this CSP.
+**Files touched:** Modified: docs/DISPATCHES.md (this entry) | docs/TECH_DEBT.md (1 new TD: TD-024). No source files touched (reviewer doesn't fix).
+**Tests:** Baseline confirmed — `pytest tests/ -q --tb=line` → 77 passed, 6 warnings, 9.34s. Zero regression. Live curl: GET /health, GET /, OPTIONS preflight from `Origin: https://evil.com` (400, no Access-Control-Allow-Origin echo), OPTIONS preflight from `Origin: http://localhost:3000` (200, allow-origin echoed) — all 6 security headers present on every response.
+**Commit:** (pending — review-only, no source changes)
+**Follow-up dispatches:**
+  - **NEXT (Task 4):** tester for failing rate-limit tests (Phase 4.5 Task 4 prerequisite for backend-engineer's slowapi wiring).
+  - **TD-024 owner (Task 9 or Phase 5):** backend-engineer to extract inline `<script>` blocks from `backend/static/index.html` + `backend/static/razorpay-test.html` into external files OR add `nonce=` per request OR add `'sha256-...'` hashes to CSP `script-src`. Cleanest path = external files (matches `'self'` already on the allowlist).
+**Notes:**
+- CSP directive: byte-for-byte match with spec §10.5. `unsafe-inline` correctly present ONLY in `style-src` (Google Fonts), absent from `script-src`. No `unsafe-eval` anywhere. `object-src 'none'`, `base-uri 'self'`, `form-action 'self'` all present.
+- HSTS: `max-age=31536000; includeSubDomains` correct — `preload` flag deliberately omitted (preload submission requires actual production HTTPS service; that's Phase 10).
+- Middleware ordering: confirmed correct. `SecurityHeadersMiddleware` registered AFTER `CORSMiddleware` (last-added = outermost in Starlette), so it runs first on every response, including the CORS preflight short-circuit. Comment in main.py:71-74 explains correctly.
+- Prod docs disable: `_is_prod = settings.app_env == "production"` gating `docs_url`/`redoc_url`/`openapi_url` still intact from Phase 4. No regression.
+- CORS: exact origin allowlist confirmed. Prod = `[settings.frontend_url]`. Dev appends `http://localhost:3000` and `http://localhost:5173` only when `_is_prod=False`. `allow_credentials=True` valid because origins are exact (never `*`).
+- **INLINE SCRIPT CSP COLLISION (TD-024):** `backend/static/index.html` line 852 has `<script>...</script>` (Razorpay button wiring). `backend/static/razorpay-test.html` lines 72 (`onclick="pay()"` inline handler) + 83 (`<script>...</script>`). The new CSP `script-src 'self' https://checkout.razorpay.com https://accounts.google.com` does NOT allow inline scripts or inline event handlers. In a real browser, **both pages will throw `Refused to execute inline script because it violates the following Content Security Policy directive: "script-src 'self' ..."`** in the console; the Razorpay checkout button will fail to wire up. This is a real defect that will hit the moment we test the landing page from a browser (the curl smoke test only confirmed headers ARE present — it doesn't test browser-side script execution). The CSP is correct per spec; the static HTML pre-dates this CSP and needs migration. Logged as TD-024, severity P1 (blocks landing-page Razorpay flow which is part of the trial-signup funnel).
+- Reviewer agent: security-engineer (this dispatch).
+
+---
+
+## 2026-06-02 — tester dispatched (Phase 4.5 Task 4 — RED rate-limit tests as Task 5 spec)
+**Scope:** TDD discipline — write FAILING rate-limit tests BEFORE backend-engineer's Task 5 implementation. Tests are the executable spec for the implementer. Covers spec §6 (per-endpoint limits, key function, 429 + Retry-After), §6.5 (RATE_LIMIT_BYPASS_IPS), §5.6 (failed-Google-ID IP blocklist + 403). Library choice locked at fastapi-limiter per `f700c5b` REVISIONS entry.
+**Inputs:** docs/superpowers/specs/2026-05-22-security-hardening-design.md §6 + §12.1 + §5.6, .claude/agents/tester.md, tests/conftest.py, tests/unit/test_auth.py, backend/main.py, backend/routers/auth.py, backend/routers/queue.py, backend/middleware/auth_middleware.py, backend/config.py
+**Acceptance:** `tests/security/test_rate_limit.py` exists with ≥10 distinct test cases covering all 6 spec scenarios; `pytest tests/security/test_rate_limit.py -v` returns ≥10 failures (RED is the goal); baseline `pytest tests/ --ignore=tests/security` returns 77/77 still; DISPATCHES.md entry appended.
+**Reviewer:** security-engineer (after Task 5 backend-engineer lands GREEN — review that no test was weakened to make it pass; per tester.md rule, any lowered assertion/skip/N reduction is REJECTED and re-dispatched)
+**Result:** DONE
+**Files touched:** Created: tests/security/__init__.py, tests/security/test_rate_limit.py | Modified: docs/DISPATCHES.md (this entry)
+**Tests:** 13 new tests written. `pytest tests/security/test_rate_limit.py -v` → 13 failed (RED as intended). Full suite `pytest tests/` → 77 passed (baseline) + 13 failed (new RED) = 90 collected. Zero regression on the 77 baseline.
+**Commit:** (pending)
+**Follow-up dispatches:**
+  - **NEXT (Task 5):** backend-engineer to install `fastapi-limiter`, create `backend/middleware/rate_limit.py` with the contract documented in the test file header docstring, add `rate_limit_bypass_ips` field to `backend/config.Settings`, wire RateLimiter dependencies onto routes per spec §6.3, and turn 12 of 13 RED tests GREEN. The 13th (the IP-blocklist 403) requires auth-handler changes too — implementer's call whether to land in same PR or split.
+  - **After Task 5 lands:** security-engineer reviews diff for test-weakening fouls (per tester.md — modifying a test to make it pass = REJECTED).
+**Notes:**
+- Test file header is the SPEC for the implementer — 7 specific contract points listed (limiter init in lifespan, key func name + signature, named RateLimiter exports, bypass field, blocklist Redis key shapes, etc.).
+- One ASGI-test-host quirk handled: `httpx.ASGITransport` defaults `request.client.host` to `"testclient"`. Tests use that literal in both 429-triggering paths and bypass-allowlist paths. Implementer must NOT special-case `"testclient"` to exempt it — that would break the 429 tests. The bypass test sets it via env var.
+- Concurrency test (Group 5, 10 distinct users) deliberately uses N=10 not N=100. Per tester.md the N≥100 rule applies to RACE conditions on ONE shared key; this test verifies ISOLATION across DIFFERENT keys, which N=10 proves adequately. Note explicit in the test docstring so security-engineer review doesn't flag it as a foul.
+- Module-import tests (Group 6) accept the implementer's freedom to choose Redis key shapes for blocked_ips (SET member OR `blocked_ips:<ip>` key) — tests check for either. Bypass shape is similarly flexible (CSV string OR list field on Settings). Implementer constraints are listed up-front in the test file header so the implementer doesn't have to reverse-engineer them.
+- Phase A precondition gate in `test_trusted_ip_bypasses_rate_limit`: the bypass test first asserts the limiter IS active when bypass is unset, so a false-pass (no limiter at all = no 429s = no bypass needed) is impossible.
+- No fakeredis used — tests use the existing `redis` fixture against the Docker Redis from docker-compose (tester.md rule 9).
+- The known asyncio "Event loop is closed" warnings in test teardown are pre-existing (asyncpg + Python 3.14 proactor) and don't affect test outcomes — same as before. Not introduced by this dispatch.
+- Tester agent: this dispatch.
+
+---
+
+## 2026-06-03 — manager dispatched (3 client directives: opus-pin + caveman-narrow + PROJECT_STRUCTURE.md live doc)
+
+**Scope:** Apply 3 client-mandated process changes in one coordinated sprint:
+  1. **Opus model pin** — replace `model: opus` with `model: claude-opus-4-6` on all 5 opus-tier agents (manager, brainstormer, security-engineer, privacy-legal, tester). Reason: lock to known-good Opus 4.6 build; protect against silent regressions when default `opus` alias rolls.
+  2. **Caveman-narrow inter-agent comms** — Manager initially landed full ultra-caveman in AGILE.md + manager Rule 13 + QUALITY_BAR. Manager then **escalated to orchestrator** flagging risk that broad caveman in prose fields (dispatch prompts, reviewer rejections, audit findings) costs more in rework cycles than it saves in tokens. Orchestrator decided **Option B (narrow the rule)** — caveman permitted ONLY in structured return fields (RESULT/FILES/TESTS/COMMIT/NEXT); prose fields stay full English.
+  3. **`docs/PROJECT_STRUCTURE.md` live doc** — new repo-map file enumerating every tracked file with status (placeholder/scaffolded/working/tested/deployed/archived), owner, and purpose. Auto-update rule added to QUALITY_BAR Process rules + AGILE DoD + manager merge checklist.
+
+**Inputs:** .claude/agents/{manager,brainstormer,security-engineer,privacy-legal,tester,AGILE,QUALITY_BAR}.md, docs/{STATUS,ROADMAP,CHANGELOG,TECH_DEBT,DISPATCHES}.md, full output of `git ls-files`, current repo state on disk.
+
+**Acceptance:**
+  - 5 agent files show `model: claude-opus-4-6` (verified via grep).
+  - AGILE.md ultra-caveman section uses the narrowed scope wording from orchestrator's directive verbatim.
+  - manager.md Rule 13 matches orchestrator's narrowed version verbatim.
+  - QUALITY_BAR.md Process rules section has 2 new bullets: caveman-narrow + PROJECT_STRUCTURE live doc.
+  - `docs/PROJECT_STRUCTURE.md` exists with all 9 sections populated from real repo state (no placeholders, no TBDs).
+  - manager.md merge checklist has the PROJECT_STRUCTURE line item.
+  - AGILE.md DoD has the PROJECT_STRUCTURE line item.
+  - Single commit covers all 5 opus-pin changes + AGILE narrow + manager Rule 13 narrow + QUALITY_BAR additions + PROJECT_STRUCTURE.md create + DISPATCHES + CHANGELOG.
+  - Append-only DISPATCHES + CHANGELOG entries.
+
+**Reviewer:** Client (Vinay) — these are governance/process changes, not code. Client sees the result via STATUS pointer + commit + this DISPATCHES entry. No specialist reviewer required (no source or schema or test code changed).
+
+**Result:** DONE
+
+**Files touched:**
+  - Modified: `.claude/agents/manager.md` (opus-pin + Rule 13 narrowed + merge-checklist line added), `.claude/agents/brainstormer.md` (opus-pin), `.claude/agents/security-engineer.md` (opus-pin), `.claude/agents/privacy-legal.md` (opus-pin), `.claude/agents/tester.md` (opus-pin), `.claude/agents/AGILE.md` (ultra-caveman section narrowed + DoD line added), `.claude/agents/QUALITY_BAR.md` (caveman-narrow rule + PROJECT_STRUCTURE rule added under Process rules), `docs/DISPATCHES.md` (this entry), `docs/CHANGELOG.md` (session entry), `docs/TECH_DEBT.md` (TD-024 added earlier in this sprint), `docs/STATUS.md` (pointer note added — Phase 4.5 still active, governance sprint complete).
+  - Created: `docs/PROJECT_STRUCTURE.md` (291 lines, 9 sections; baseline against current `git ls-files`).
+
+**Tests:** No code touched — `pytest tests/ -v` baseline 77/77 remains green (last verified 2026-06-02 after commit `6b00686`). 13 RED security tests in `tests/security/` (Task 4 deliverable) still RED — they are the spec for Task 5 and remain intentionally failing. No regression.
+
+**Commit:** (this dispatch's commit will cover all governance changes; hash backfilled in CHANGELOG after the commit lands)
+
+**Follow-up dispatches:**
+  - **NEXT (orchestrator continues current sprint):** graphify + resume Phase 4.5 Task 4 → Task 5 (backend-engineer turns 13 RED security tests GREEN by wiring fastapi-limiter, per the spec in `tests/security/test_rate_limit.py` header).
+  - **Documentation maintenance:** every future dispatch that adds/renames/deletes a tracked file under `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`, or `docs/` MUST update `docs/PROJECT_STRUCTURE.md` in the same commit. Manager rejects merge if stale.
+  - **All future specialist returns:** use caveman ONLY in structured status fields (RESULT/FILES/TESTS/COMMIT/NEXT). Dispatch prompts, reviewer verdicts, audit findings, client escalations, trade-off explanations stay full prose. Code/tests/commit messages: always normal.
+
+**Notes:**
+- **Escalation worked as designed.** Manager initially shipped the broad caveman wording per the original client directive (interpreted maximally). On review, manager recognised the risk that broad caveman in prose fields (dispatch prompts, reviewer rejections, audit-trail findings) trades small token savings for high rework risk (one ambiguous dispatch = ~100x the tokens it would save). Manager escalated to orchestrator instead of either (a) silently overriding the client directive or (b) shipping a known-risky pattern. Orchestrator confirmed manager's analysis and picked the narrow option. This is the escalation protocol functioning correctly — flag risk, present options, let orchestrator/client decide.
+- **Model pin rationale.** `model: opus` is a moving alias. When Anthropic releases a newer Opus or changes the default, the agent silently picks up the new build with potentially different behavior. Pinning to `claude-opus-4-6` locks us to the known-good revision until we explicitly choose to bump. Trade-off: we have to manually bump when Opus 4.7/5.0 ship; we accept that overhead in exchange for reproducible specialist behavior.
+- **PROJECT_STRUCTURE.md rationale.** Until today, "what exists in the repo and what state is it in" lived implicitly across STATUS.md + ROADMAP.md + per-phase CLAUDE.md docs + 22-row backfill table in DISPATCHES + commit history. A new specialist (or the client reading the repo cold) had to triangulate. Now there is one file that maps file → status → owner → purpose. Auto-update rule keeps it from going stale. Stale entry = merge blocker.
+- **Section enumeration in PROJECT_STRUCTURE.md** (the orchestrator directive said "all 9 sections"): (1) Purpose & rules, (2) Top-level layout, (3) Voice agent, (4) Backend (with 6 sub-sections), (5) Frontend (placeholder), (6) Infra, (7) Alembic, (8) Scripts, (9) Tests & Docs. Plus a cross-references trailer.
+- **STATUS.md not materially changed** because the substantive phase work hasn't moved — Phase 4.5 Tasks 1-3 done, Task 4 RED tests landed, Task 5 next. This dispatch is governance only.
+- Manager agent: this dispatch.
+- Reviewer: client (process / governance changes).
+

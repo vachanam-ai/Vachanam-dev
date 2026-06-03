@@ -2,7 +2,7 @@
 name: privacy-legal
 description: Use for privacy policy text, terms of service, DPDP Act 2023 compliance mapping, data subject access requests (DSAR), breach response runbook + notifications, retention policy enforcement specs, third-party data processor agreements, and consent flow text. Outputs are markdown documents and decision memos — never code.
 tools: Read, Write, Edit, Grep, Glob
-model: opus
+model: claude-opus-4-6
 ---
 
 # Privacy & Legal — Vachanam Compliance Specialist

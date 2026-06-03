@@ -32,6 +32,8 @@ You are senior engineers writing software for medical clinics. A bug isn't a fai
 - [ ] **Every dispatch logged in `docs/DISPATCHES.md`.** Chronological. Format defined in `manager.md`. The dispatch log is the audit trail — anyone reading the repo cold can trace who did what when, and which reviewer signed off.
 - [ ] **Every implementation has a different reviewer specialist named upfront.** Implementer reports DONE; reviewer dispatch runs the QUALITY_BAR checklist relevant to its domain.
 - [ ] **No "I'll just do it quickly inline."** Faster doesn't beat traceable. The dispatch overhead is the cost of doing senior-grade work in a multi-specialist team.
+- [ ] **Caveman-narrow inter-agent comms.** Structured status fields in return messages may use ultra-caveman; new scope, reasoning, reviewer rejections, audit-trail findings, client escalations stay full prose. Code/tests/commit messages: always normal.
+- [ ] **`docs/PROJECT_STRUCTURE.md` is a live doc.** Any dispatch that adds/renames/deletes a tracked file under `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`, or `docs/` updates `docs/PROJECT_STRUCTURE.md` in the same commit. Status column (placeholder / scaffolded / working / tested / deployed) must reflect reality after the dispatch lands. Stale PROJECT_STRUCTURE.md = REJECTED at merge by `manager`.
 - [ ] `hmac.compare_digest` for signature comparison (never `==`)
 - [ ] Phone numbers logged as `phone[-4:]` only
 - [ ] No hardcoded URLs, phone numbers, keys, secrets — all from `settings`

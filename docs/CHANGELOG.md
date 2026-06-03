@@ -13,7 +13,79 @@ Format per session:
 
 ---
 
-## 2026-06-02 (latest) — Phase 4.5 sprint planning + brainstormer gate
+## 2026-06-03 (latest) — Governance sprint: opus-pin + caveman-narrow + PROJECT_STRUCTURE.md live doc
+
+**Topic:** Three client directives applied in one coordinated governance sprint. No source/test/schema code changed — only `.claude/agents/*` and `docs/*`. 77/77 test baseline holds; 13 RED security tests (Phase 4.5 Task 4 deliverable) remain intentionally RED as the spec for Task 5. Phase 4.5 active phase pointer unchanged.
+
+### Three client directives
+
+1. **Opus model pin (5 agents).** All five opus-tier specialists — `manager`, `brainstormer`, `security-engineer`, `privacy-legal`, `tester` — switched from `model: opus` (moving alias) to `model: claude-opus-4-6` (immutable pin). Reason: protect against silent behavioral regressions when the `opus` alias rolls forward to a newer build. Trade-off accepted: manual bump required when we want Opus 4.7/5.0; reproducibility wins.
+
+2. **Caveman-narrow inter-agent comms.** Original directive read as "all inter-agent comms in ultra-caveman." Manager initially landed that broad version (`.claude/agents/AGILE.md` ultra-caveman section + `manager.md` Rule 13 + `QUALITY_BAR.md` process bullet). Manager then **escalated to orchestrator** flagging risk: broad caveman in prose fields (dispatch prompts, reviewer rejections, audit-trail findings, trade-off explanations, client escalations) trades small token savings for high rework risk — one ambiguous dispatch costs ~100x the tokens saved. Orchestrator decided **Option B (narrow the rule)**: caveman ONLY in structured return fields (RESULT / FILES MOD/CREATE/DEL / TESTS / COMMIT / NEXT). Everything else stays full English. Code/tests/commit messages: always normal.
+
+3. **`docs/PROJECT_STRUCTURE.md` — new live doc.** Single repo map showing every tracked file with status (placeholder / scaffolded / working / tested / deployed / archived), owner specialist, and purpose. 9 sections covering top-level layout, voice agent, backend (6 sub-sections), frontend (placeholder), infra, alembic, scripts, tests & docs, plus a cross-references trailer. **Auto-update rule** added to `QUALITY_BAR.md` Process rules + `AGILE.md` DoD + `manager.md` merge checklist — every dispatch that adds/renames/deletes a tracked file under `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`, or `docs/` updates `PROJECT_STRUCTURE.md` in the same commit. Stale entries = merge blocker. Manager rejects.
+
+### Manager escalation + orchestrator decision (directive 2)
+
+This is the second real test of the escalation protocol (first was 2026-06-02 client decision on rate-limit library). Sequence:
+
+| Step | Actor | Action |
+|---|---|---|
+| 1 | Client | Issued directive: "inter-agent comms in caveman" (broad reading). |
+| 2 | Manager | Applied broad version literally — AGILE + Rule 13 + QUALITY_BAR all said "default ultra-caveman with narrow exceptions." |
+| 3 | Manager (review pass) | Self-audited and recognised risk: broad caveman in prose fields likely produces ambiguous dispatch prompts → rework cycles cost more than caveman saves. |
+| 4 | Manager | **Escalated to orchestrator** with explicit options A (full caveman, original directive) vs B (narrow caveman, structured fields only) vs C (no caveman). Recommended B. |
+| 5 | Orchestrator | Picked B with reasoning: "user's intent was token savings; full caveman risks rework cycles; B honors intent + protects clarity where it matters; manager's analysis was right." |
+| 6 | Manager | Applied B — narrowed AGILE.md section, narrowed Rule 13, added narrowed bullet to QUALITY_BAR. |
+| 7 | Manager | Completed remaining directives (opus-pin already done in step 2; PROJECT_STRUCTURE.md created; auto-update rule wired into 3 governance files). |
+
+The escalation protocol functioned correctly — manager surfaced risk early instead of either silently overriding or shipping a known-risky pattern. Recorded for retrospective lesson.
+
+### Files
+
+Modified:
+- `.claude/agents/manager.md` — `model: opus` → `model: claude-opus-4-6`; Rule 13 narrowed to "caveman-narrow inter-agent comms" (structured fields only); merge checklist line added (`PROJECT_STRUCTURE.md updated with new components / status changes`).
+- `.claude/agents/brainstormer.md` — `model: opus` → `model: claude-opus-4-6`.
+- `.claude/agents/security-engineer.md` — `model: opus` → `model: claude-opus-4-6`.
+- `.claude/agents/privacy-legal.md` — `model: opus` → `model: claude-opus-4-6`.
+- `.claude/agents/tester.md` — `model: opus` → `model: claude-opus-4-6`.
+- `.claude/agents/AGILE.md` — Ultra-caveman section rewritten to narrowed scope (DEFAULT full prose; caveman ONLY in RESULT/FILES/TESTS/COMMIT/NEXT structured fields; full prose ALWAYS for dispatch prompts, reviewer reasoning, trade-offs, spec deviations, audit findings, client escalations, code/tests/commits). DoD line added (`docs/PROJECT_STRUCTURE.md` updated to reflect new/changed components).
+- `.claude/agents/QUALITY_BAR.md` — Process rules section gets 2 new bullets: caveman-narrow inter-agent comms (matches AGILE wording); `docs/PROJECT_STRUCTURE.md` is a live doc (with the same auto-update scope and stale-file-= REJECTED gate).
+- `docs/TECH_DEBT.md` — TD-024 added 2026-06-02 (inline-script CSP collision on landing + razorpay-test pages, P1).
+- `docs/DISPATCHES.md` — new entry for this manager dispatch.
+- `docs/CHANGELOG.md` — this entry.
+
+Created:
+- `docs/PROJECT_STRUCTURE.md` — 291 lines. Live repo map; 9 sections; baseline against current `git ls-files` (106 tracked files + the new PROJECT_STRUCTURE + 2 untracked tests/security files noted).
+
+### Commits
+
+- *(pending — single commit covering opus-pin × 5 + AGILE narrow + manager Rule 13 narrow + QUALITY_BAR additions + PROJECT_STRUCTURE.md create + DISPATCHES + CHANGELOG + TECH_DEBT TD-024 carryover)*
+
+### Follow-ups
+
+- **Next dispatch (resume Phase 4.5):** `backend-engineer` for Task 5 — install `fastapi-limiter`, create `backend/middleware/rate_limit.py` per the contract documented in `tests/security/test_rate_limit.py` header, wire `RateLimiter` dependencies onto routes per spec §6.3, turn 12 of 13 RED tests GREEN. The 13th (IP-blocklist 403 in auth handler) — implementer chooses to land in same PR or split.
+- **After Task 5 lands:** `security-engineer` reviews diff for test-weakening fouls (per tester.md — modifying a test to make it pass = REJECTED).
+- **Every future dispatch:** auto-update `docs/PROJECT_STRUCTURE.md` in the same commit. Manager rejects merge if stale.
+- **Every future return:** caveman only in structured status fields. Prose stays full English.
+
+### Retro
+
+- **Worked:** Escalation protocol functioned. Manager flagged risk on a directive interpretation, presented A/B/C options, accepted orchestrator's narrow call. Zero rework — the broad version never made it past one commit-pending state because the escalation happened before commit. Audit trail complete in CHANGELOG + DISPATCHES.
+- **Worked:** Three governance changes bundled into one commit (one logical scope = process-rule update). Cheaper than three separate commits, still atomic (all or nothing).
+- **Worked:** PROJECT_STRUCTURE.md baseline created against actual `git ls-files`, not against the "ideal" structure from CLAUDE.md (which lists files that don't exist yet). Reality-first; aspirational paths noted as "Not yet created."
+- **Didn't work:** Manager's first-pass interpretation of the original caveman directive was the maximal reading. Lesson: when a process directive could be read narrowly or broadly, manager presents both readings to client/orchestrator BEFORE applying. Saves the round-trip we just did.
+- **Change next sprint:** When dispatching a new process / governance rule, manager includes "narrowest viable interpretation" + "broadest viable interpretation" + recommendation, then implements after the picker confirms. Treat governance rules like spec deviations — escalate the scope question, don't assume.
+
+### Cost summary
+
+- Model time: 1 manager dispatch (this) for 3 directives + governance updates; ~ within the 2-hour blocker investigation budget. No specialist dispatches needed (no source/test/schema code touched).
+- $ spent on services: ₹0 new. No new vendor / library / subscription.
+- Recurring cost change: none. Opus model pin doesn't change billing; caveman-narrow doesn't change billing; PROJECT_STRUCTURE.md is internal doc.
+
+---
+
+## 2026-06-02 — Phase 4.5 sprint planning + brainstormer gate
 
 **Topic:** First sprint executed end-to-end under the mandatory-dispatch rule. Manager produced the Phase 4.5 sprint plan (18 tasks); brainstormer validated it (Task 1 = mandatory gate); client decided on 3 escalations + 2 spec corrections applied. Docs updated to reflect deviations BEFORE any implementer dispatches. Task 2 (database-engineer) now unblocked.
 
