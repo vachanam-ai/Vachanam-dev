@@ -107,7 +107,7 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 
 1. **Pricing tiers final answer.** Original SaaS pricing (Solo / Clinic / Multi) vs live-site pricing (Starter / Growth / Unlimited)? Whichever is canonical must be reflected in CLAUDE.md, the landing page button amounts, and the three `RAZORPAY_PLAN_*_ID` env vars.
 2. **Live Razorpay account activation.** Production needs `rzp_live_*` keys, KYC, and the 3 subscription plans created in dashboard. Owner action.
-3. **Meta WhatsApp Business account.** Needs verified business + phone number + permanent access token before Phase 5 can be wired live.
+3. ~~**Meta WhatsApp Business account.**~~ **DEFERRED to MVP2** (client decision 2026-06-03). Not needed for MVP1 launch. Will be required when Phase 5 WhatsApp work begins in MVP2.
 4. **Vobiz SIP trunk.** Need actual `VOBIZ_SIP_DOMAIN`, `VOBIZ_SIP_USERNAME`, `VOBIZ_SIP_PASSWORD`, `VOBIZ_DID_NUMBER` from the Vobiz console before the voice agent can answer real calls.
 
 ---
@@ -118,14 +118,14 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 Phase 1   Foundation              ✅ DONE
 Phase 2   Voice agent core        ✅ DONE  (tests pass, manual call needs Phases 4 + 9 to dial-in)
 Phase 3   Razorpay checkout       ✅ DONE  (test mode, standalone)
-Phase 4   Backend core            🔨 NEXT  ← start here
-Phase 4.5 Security & compliance   📋 SPEC DONE  (docs/superpowers/specs/2026-05-22-security-hardening-design.md)
-Phase 5   WhatsApp                ⬜
-Phase 6   Jobs + Calendar         ⬜
+Phase 4   Backend core            ✅ DONE
+Phase 4.5 Security & compliance   🔨 IN PROGRESS  ← active phase
+Phase 5   WhatsApp                🅿️ DEFERRED-MVP2 (client decision 2026-06-03)
+Phase 6   Jobs + Calendar         ⬜ (MVP1 REDUCED: Calendar + token expiry only; WA jobs → MVP2)
 Phase 7   Receptionist PWA        ⬜
 Phase 8   Owner + Admin dashboards ⬜
-Phase 9   Subscriptions + Onboarding ⬜
-Phase 10  Deployment              ⬜
+Phase 9   Subscriptions + Onboarding ⬜ (email reminders, not WA; WA → MVP2)
+Phase 10  Deployment              ⬜ (no Meta WA infra needed for MVP1)
 ```
 
 ---

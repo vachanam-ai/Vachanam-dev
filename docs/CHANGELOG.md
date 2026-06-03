@@ -13,7 +13,100 @@ Format per session:
 
 ---
 
-## 2026-06-03 (latest) — Graphify AST analysis + MAIN_AGENDA.md
+## 2026-06-03 (latest) — WhatsApp removed from MVP1, moved to MVP2 (client decision)
+
+**Topic:** Client-directed scope change. All WhatsApp functionality removed from MVP1 and deferred to MVP2. Voice booking remains verbal-on-call only; no patient WA confirmation, no doctor WA notification. Calendar events still created. Payment/trial reminders via email instead of WA.
+
+### Client direction (verbatim)
+
+> "for MVP1 lets remove whatsapp functionality. lets make it for MVP 2."
+
+This is a binding client decision. No escalation needed -- the client issued this directly.
+
+### Key decisions
+
+1. **Phase 5 (WhatsApp) -- entire phase deferred to MVP2.** The phase doc is retained in `docs/phases/05-whatsapp/` for MVP2 reference. Header added marking it as deferred. Reasoning: reduces MVP1 scope by ~4-5 engineering days; removes the Meta WhatsApp Business account setup as a launch blocker; voice booking + Calendar event + receptionist app covers the core value prop for first paying clinics.
+
+2. **Phase 6 (Jobs + Calendar) -- reduced to Calendar + token expiry only.** EOD summary (sends WA to doctors) and follow-up tasks (sends WA to patients) both depend on Phase 5's MetaService and are deferred to MVP2. What remains: Google Calendar create/delete for bookings + token expiry job every 2 minutes. Effort reduced from ~2 days to ~1 day.
+
+3. **Phase 9 (Subscriptions + Onboarding) -- payment reminders via email, not WA.** Trial-expiry notifications and onboarding welcome messages use email instead of WhatsApp for MVP1. WA notifications added in MVP2 after Phase 5 ships.
+
+4. **Phase 10 (Deployment) -- Meta WA infra dropped from MVP1 deploy checklist.** No `META_ACCESS_TOKEN` or `META_PHONE_NUMBER_ID` secrets needed on Fly/Render for MVP1. WhatsApp webhook setup deferred. Production acceptance test updated: replaces "WA confirmation arrives" with "Calendar event created."
+
+5. **Voice agent (Phases 1-2, already DONE) -- no changes needed.** Booking confirmation remains verbal-on-call only. The voice agent never had WA sends wired in (those were Phase 5 scope). Calendar event creation stays as-is.
+
+6. **TD-018 compound indexes -- target moved from Phase 5 to Phase 7/9.** Since Phase 5 is deferred, compound indexes (evidence-gated) move to whichever phase first produces meaningful query volume. No urgency change.
+
+7. **TD-025 broad except clause -- target moved from Phase 5 to Phase 7.** Originally planned for "when touching queue.py for WhatsApp integration." Now targets Phase 7 (receptionist PWA, which also touches queue endpoints).
+
+### What MVP1 loses (trade-offs documented)
+
+- Doctors cannot manage schedule via WhatsApp on-the-go -- must use receptionist app or owner dashboard
+- Patients do NOT receive WhatsApp confirmation after voice booking -- only verbal confirmation on the call + Google Calendar event for doctor's reference
+- No WhatsApp-based booking flow for patients (voice-only for MVP1)
+- Trial-end and payment reminders via email only (no WA)
+- Cancellation notifications: receptionist calls patient manually or uses the PWA
+- No EOD summary sent to doctors at 5:30 PM -- doctors check dashboard/app instead
+- No automated patient follow-ups via WA -- receptionist handles manually
+
+### What MVP1 still delivers
+
+- Telugu voice booking via AI (Phase 2, done)
+- Atomic token assignment via Redis INCR (Phase 2, done)
+- Razorpay subscription billing (Phase 3 + Phase 9)
+- Backend API with JWT auth + branch isolation (Phase 4, done)
+- Security and compliance middleware (Phase 4.5, in progress)
+- Google Calendar event creation for every booking (Phase 6, reduced)
+- Token expiry background job (Phase 6, reduced)
+- Receptionist PWA for queue management (Phase 7)
+- Owner + Vinay admin dashboards (Phase 8)
+- Vobiz DID provisioning + clinic onboarding (Phase 9)
+- Production deployment on Fly + Render + Cloudflare (Phase 10)
+
+### Files modified
+
+- `docs/phases/05-whatsapp/CLAUDE.md` -- added MVP2 deferral header with client direction, trade-offs, and "when to start" guidance
+- `docs/phases/06-jobs-calendar/CLAUDE.md` -- reduced scope: MVP1 = Calendar + token expiry only; WA jobs marked DEFERRED-MVP2; acceptance criteria split into MVP1 and MVP2 sections; file list split
+- `docs/phases/09-subscriptions-onboarding/CLAUDE.md` -- trial_expiry sends email (not WA); onboarding welcome via email; prerequisites updated (Phase 5 not required)
+- `docs/phases/10-deployment/CLAUDE.md` -- goal updated (no WA confirmation); Meta secrets removed from Fly deploy; WA webhook deferred; production checklist updated (Calendar event replaces WA confirmation); runbook updated
+- `docs/STATUS.md` -- Phase 5 marked DEFERRED-MVP2; Phase 4 marked DONE; Phase 4.5 marked IN PROGRESS; Phase 6/9/10 annotations added; Meta WA decision marked deferred in "Decisions needed"
+- `docs/ROADMAP.md` -- dependency graph updated (Phase 5 branch splits off to MVP2); Phase 5 row status 🅿️ DEFERRED-MVP2; Phase 6 description + effort reduced; Phase 9 description updated; total effort estimate reduced; "What each phase produces" sections updated
+- `docs/CHANGELOG.md` -- this entry
+- `docs/TECH_DEBT.md` -- TD-025 target moved Phase 5 → Phase 7; TD-018 compound indexes target moved Phase 5 → Phase 7/9; TD-025 uncommitted row included in this commit
+- `docs/DISPATCHES.md` -- dispatch entry for this scope change
+
+### Commits
+
+- *(pending -- single commit)*
+
+### Open TDs affected by this change
+
+- **TD-018** (compound indexes): target moved from "Phase 5 (evidence-gated)" to "Phase 7 or Phase 9 (evidence-gated)". No severity change.
+- **TD-025** (broad except): target moved from "Phase 5 (when touching queue.py for WA)" to "Phase 7 (when touching queue.py for receptionist PWA)". No severity change.
+- All other TDs: unaffected. None depend on WhatsApp functionality.
+
+### Follow-ups
+
+- Resume Phase 4.5 security work (unchanged -- this scope change does not affect the active sprint)
+- Phase 6 planning will need a brainstormer gate to confirm Calendar service + token expiry job scope is fully specified
+- Phase 9 needs email service selection (likely a simple SMTP/Resend/SendGrid integration for trial reminders + onboarding welcome) -- brainstormer will evaluate cheapest path when Phase 9 starts
+
+### Retro
+
+- **Worked:** Client made a clear scope-cut decision early (before any Phase 5 work started). Zero engineering time wasted. This is exactly how scope management should work -- cut before build, not after.
+- **Worked:** WhatsApp was a clean-cut boundary. No Phase 5 code had been written. No Phase 6 WA-dependent code existed. The deferral required only doc updates, not code rollbacks.
+- **Change consideration:** When Phase 9 starts, we need to pick an email service for payment reminders. This is net-new scope (original plan used WA for everything). However, email is simpler and cheaper than WA (no Meta Business verification, no BSP, free SMTP tiers available). Net effect is probably positive for MVP1 timeline.
+
+### Cost summary
+
+- Model time: 1 manager dispatch for doc updates across 8 files. No specialist dispatches needed (no source/test/schema code touched).
+- $ spent on services: negative -- removing Meta WA from MVP1 eliminates the Meta WhatsApp Business setup overhead (which was free in $ but ~2-3 hours of owner setup time).
+- Recurring cost change: none (Meta WA was free tier anyway). Main saving is ~4-5 days of engineering time.
+- New cost: eventual email service for Phase 9 reminders (likely free tier of SendGrid/Resend/SMTP).
+
+---
+
+## 2026-06-03 — Graphify AST analysis + MAIN_AGENDA.md
 
 **Topic:** graphify 0.8.30 AST extraction on Vachanam codebase (46 files, 402 nodes, 1006 edges). No source/test/schema code changed.
 

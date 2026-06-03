@@ -380,3 +380,45 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Added inline comments near the fixture and the IP string usage explaining the httpx vs Starlette TestClient difference so future tester does not repeat this mistake.
 - The `monkeypatch.setattr` on `settings.google_oauth_client_id` is the correct approach: it ensures the auth handler reaches the real Google verification code path, which is what the test is designed to exercise. Setting a fake client ID does not weaken security — it strengthens the test by ensuring the blocklist counter is actually triggered by real verification failures.
 
+---
+
+## 2026-06-03 — manager dispatched (client scope change: WhatsApp removed from MVP1, moved to MVP2)
+
+**Scope:** Apply client-directed scope change across all affected docs. WhatsApp functionality removed from MVP1, deferred to MVP2. Phase 5 marked DEFERRED-MVP2. Phase 6 reduced (Calendar + token expiry only). Phase 9 payment reminders switched to email. Phase 10 deploy checklist drops Meta WA infra. Tech debt targets updated where they referenced Phase 5.
+
+**Inputs:** Client verbatim direction: "for MVP1 lets remove whatsapp functionality. lets make it for MVP 2." Plus: docs/STATUS.md, docs/ROADMAP.md, docs/CHANGELOG.md, docs/TECH_DEBT.md, docs/phases/05-whatsapp/CLAUDE.md, docs/phases/06-jobs-calendar/CLAUDE.md, docs/phases/09-subscriptions-onboarding/CLAUDE.md, docs/phases/10-deployment/CLAUDE.md.
+
+**Acceptance:**
+  - Phase 5 doc has MVP2 deferral header with client direction quoted verbatim
+  - Phase 6 doc reduced to Calendar + token expiry; WA jobs marked DEFERRED-MVP2
+  - Phase 9 doc says email (not WA) for trial reminders and onboarding welcome
+  - Phase 10 doc drops Meta WA secrets + webhook from deploy; production checklist updated
+  - STATUS.md Phase 5 row shows 🅿️ DEFERRED-MVP2
+  - ROADMAP.md Phase 5 row shows 🅿️ DEFERRED-MVP2; dependency graph updated; effort estimates reduced
+  - CHANGELOG.md has full entry with client direction, trade-offs, what stays, what defers
+  - TECH_DEBT.md TD-018 and TD-025 target sprints updated (Phase 5 references removed)
+  - This entry appended to DISPATCHES.md
+  - Single commit with correct message
+
+**Reviewer:** Client (Vinay) -- this is a client-directed scope change, not a technical decision. No specialist reviewer required (no source/test/schema code touched).
+
+**Result:** DONE
+
+**Files touched:**
+  - Modified: docs/phases/05-whatsapp/CLAUDE.md, docs/phases/06-jobs-calendar/CLAUDE.md, docs/phases/09-subscriptions-onboarding/CLAUDE.md, docs/phases/10-deployment/CLAUDE.md, docs/STATUS.md, docs/ROADMAP.md, docs/CHANGELOG.md, docs/TECH_DEBT.md, docs/DISPATCHES.md
+
+**Tests:** No source/test code touched. Pytest baseline 90/90 unchanged.
+
+**Commit:** (pending -- hash backfilled after commit)
+
+**Follow-up dispatches:**
+  - Resume Phase 4.5 security sprint (unchanged by this scope change)
+  - When Phase 6 starts: brainstormer gate for Calendar + token expiry scope
+  - When Phase 9 starts: brainstormer gate for email service selection (replaces WA for reminders)
+
+**Notes:**
+- Zero engineering waste. No Phase 5 code had been written. No WA-dependent code existed in any shipped phase. This is a clean doc-only scope cut.
+- Client decision removes Meta WhatsApp Business account verification as an MVP1 blocker. One fewer external dependency for launch.
+- Email service for Phase 9 reminders is net-new scope but simpler than WA (free SMTP tiers, no business verification, no webhook complexity).
+- TD-018 compound indexes and TD-025 broad except were both targeted at Phase 5. Retargeted to Phase 7 and Phase 7/9 respectively since Phase 5 is now MVP2.
+

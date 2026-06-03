@@ -2,7 +2,7 @@
 
 **Goal:** Convert from one-time Razorpay checkout (Phase 3) to recurring SaaS subscriptions. Build the new-clinic onboarding wizard. Provision a Vobiz DID for each new clinic. First paying customer becomes possible.
 
-**Effort:** 3-4 days. **Prerequisites:** Phases 4, 5, 6, 7, 8 ✅. Razorpay live mode activated (KYC done). Vobiz partner account active.
+**Effort:** 3-4 days. **Prerequisites:** Phases 4, 4.5, 6, 7, 8 ✅ (Phase 5 WhatsApp deferred to MVP2). Razorpay live mode activated (KYC done). Vobiz partner account active.
 
 ---
 
@@ -24,7 +24,7 @@ Backend additions:
   - `POST /billing/subscribe` — body `{plan}` → creates Razorpay customer + subscription → returns `subscription_id` to frontend → frontend opens Razorpay checkout with `subscription_id` instead of `order_id`
   - `POST /webhook/razorpay` — verify `X-Razorpay-Signature` HMAC, dispatch by event type, update `BillingCycle` rows
 - `backend/jobs/billing_cycle.py` — daily midnight: close yesterday's cycle for Solo plans (compute overage from `calls.duration_seconds`, charge via `subscription.charge_addon` API)
-- `backend/jobs/trial_expiry.py` — daily 10 AM: orgs with `trial_ends_at < today AND status='trial'` → send WA payment link, on day 14 set `status='paused'`
+- `backend/jobs/trial_expiry.py` — daily 10 AM: orgs with `trial_ends_at < today AND status='trial'` → send **email** payment link (MVP1; WA notification deferred to MVP2), on day 14 set `status='paused'`
 
 ### B. Onboarding wizard
 
@@ -39,7 +39,7 @@ Backend additions:
      - Call `vobiz_partner.provision_did(branch_id, city)` → returns DID number + SIP credentials
      - Save DID + SIP details on `Branch` row
      - Create LiveKit dispatch rule mapping DID → agent room
-     - Send WA welcome with call-forwarding instructions
+     - Send **email** welcome with call-forwarding instructions (MVP1; WA welcome deferred to MVP2)
 6. **Add first doctor** — name, WA number, specialization, working hours, daily limit
 7. **Done** — redirect to `/dashboard`
 
@@ -62,7 +62,7 @@ Vobiz Partner API (per [docs.vobiz.ai/integrations/livekit](https://docs.vobiz.a
 [ ] Onboarding wizard completes end-to-end in test mode: org + user + branch + DID + first doctor in DB
 [ ] Vobiz DID returned, saved to branch.did_number, branch.vobiz_did_id
 [ ] LiveKit dispatch rule visible in LiveKit console for the new DID
-[ ] Trial org on day 14: WA payment link arrives at 10 AM IST, status flips to paused if unpaid
+[ ] Trial org on day 14: email payment link arrives at 10 AM IST, status flips to paused if unpaid
 [ ] Solo plan overage: simulate 110 min usage → BillingCycle.overage_amount > 0, addon charge invoiced via Razorpay
 ```
 

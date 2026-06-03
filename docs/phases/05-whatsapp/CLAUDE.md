@@ -1,4 +1,16 @@
-# Phase 5 — WhatsApp ⬜ TODO
+# Phase 5 — WhatsApp 🅿️ DEFERRED-MVP2
+
+> **MVP2 — deferred per client decision 2026-06-03.** NOT in MVP1 scope. Read this doc only when starting MVP2 work after first paying clinic ships.
+>
+> Client direction (verbatim): "for MVP1 lets remove whatsapp functionality. lets make it for MVP 2."
+>
+> **What MVP1 loses by deferring this phase:**
+> - Doctors cannot manage schedule via WhatsApp on-the-go (must use receptionist app or owner dashboard instead)
+> - Patients do NOT receive WhatsApp confirmation after voice booking (only verbal confirmation on the call + Google Calendar event for doctor's reference)
+> - No WhatsApp-based booking flow (voice-only for MVP1)
+> - EOD summary (Phase 6) and follow-up tasks (Phase 6) that depend on MetaService are also removed from MVP1
+>
+> **When to start this phase:** After MVP1 ships to first paying clinic AND Meta WhatsApp Business account is set up. Prerequisites remain the same as below.
 
 **Goal:** Meta Cloud API webhook running. Doctors text commands to the clinic's WhatsApp number and get responses. Patients can complete a full booking via WhatsApp without ever calling.
 

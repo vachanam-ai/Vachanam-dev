@@ -1,8 +1,8 @@
 # Phase 10 — Deployment ⬜ TODO
 
-**Goal:** Vachanam is live. A real patient calls a real DID, the AI answers in Telugu, books a real token, sends a real WhatsApp confirmation. A real receptionist marks them attended.
+**Goal:** Vachanam is live. A real patient calls a real DID, the AI answers in Telugu, books a real token, creates a Google Calendar event. A real receptionist marks them attended.
 
-**Effort:** 2-3 days. **Prerequisites:** Phases 4-9 ✅. All production accounts active (Razorpay live KYC, Meta WhatsApp Business verified, Vobiz partner agreement signed, Google Cloud Calendar API).
+**Effort:** 2-3 days. **Prerequisites:** Phases 4-9 ✅ (except Phase 5 WhatsApp, deferred to MVP2). All production accounts active (Razorpay live KYC, Vobiz partner agreement signed, Google Cloud Calendar API). Meta WhatsApp Business account NOT required for MVP1.
 
 ---
 
@@ -30,8 +30,8 @@ flyctl secrets set SARVAM_API_KEY=... OPENAI_API_KEY=... GEMINI_API_KEY=... \
                    LIVEKIT_URL=... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... \
                    VOBIZ_SIP_DOMAIN=... VOBIZ_SIP_USERNAME=... VOBIZ_SIP_PASSWORD=... \
                    VOBIZ_DID_NUMBER=... VOBIZ_PARTNER_AUTH_ID=... VOBIZ_PARTNER_AUTH_TOKEN=... \
-                   DATABASE_URL=... REDIS_URL=... \
-                   META_ACCESS_TOKEN=... META_PHONE_NUMBER_ID=...
+                   DATABASE_URL=... REDIS_URL=...
+# META_ACCESS_TOKEN and META_PHONE_NUMBER_ID — NOT needed for MVP1 (WhatsApp deferred to MVP2)
 flyctl deploy
 ```
 
@@ -56,9 +56,9 @@ npm run build
 - Cloudflare handles SSL on its end; Render auto-issues via Let's Encrypt
 
 ### 5. Webhooks pointed to production
-- Meta WhatsApp webhook → `https://api.vachanam.in/webhook/whatsapp`
 - Razorpay webhook → `https://api.vachanam.in/webhook/razorpay`
 - LiveKit dispatch rule → agent.vachanam.in (or Fly internal address)
+- ~~Meta WhatsApp webhook → `https://api.vachanam.in/webhook/whatsapp`~~ — MVP2 (after Phase 5 WhatsApp ships)
 
 ### 6. Run the migration in prod
 ```bash
@@ -80,9 +80,8 @@ Seed yourself as the first admin user via psql.
 [ ] curl https://api.vachanam.in/health → 200
 [ ] curl https://app.vachanam.in/ → loads receptionist app shell
 [ ] Real call from your phone → DID → agent answers in Telugu → "Token #1 confirmed" heard back
-[ ] Real WhatsApp confirmation arrives within 10s of call end
+[ ] Google Calendar event created for the booking (visible in doctor's calendar)
 [ ] Open app.vachanam.in on phone → login → see Token #1 in queue → tap Attended → server updates
-[ ] At 5:30 PM IST, test doctor receives EOD WA summary
 [ ] Razorpay live mode: complete a real ₹1 subscription with own card, see BillingCycle row
 [ ] UptimeRobot dashboard: all 3 monitors green
 [ ] Structlog JSON visible in Render + Fly log streams
@@ -96,7 +95,7 @@ Seed yourself as the first admin user via psql.
 | Symptom | First check | Mitigation |
 |---|---|---|
 | Patient says "AI didn't answer my call" | Fly agent VM status, LiveKit logs for room creation | If Fly down → flyctl machine restart; if LiveKit down → switch to Singapore standby |
-| EOD summary not arriving | scheduler logs in Render, Meta token validity (60-day expiry on temp tokens; permanent should never expire) | Refresh token, restart Render service |
+| EOD summary not arriving | MVP2 feature (requires Phase 5 WhatsApp). Not expected in MVP1. | N/A for MVP1 |
 | Token assignment failing | Upstash Redis status, check for INCR errors in agent logs | Failover: Upstash has 99.99% — if down, route to a fallback Redis or graceful "call back" message |
 | Payment webhook missed | Razorpay dashboard → Webhooks → Delivery attempts | Re-trigger delivery from dashboard |
 
