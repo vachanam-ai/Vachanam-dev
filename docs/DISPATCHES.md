@@ -422,3 +422,38 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Email service for Phase 9 reminders is net-new scope but simpler than WA (free SMTP tiers, no business verification, no webhook complexity).
 - TD-018 compound indexes and TD-025 broad except were both targeted at Phase 5. Retargeted to Phase 7 and Phase 7/9 respectively since Phase 5 is now MVP2.
 
+---
+
+## 2026-06-03 -- tester dispatched (Phase 4.5 Task 6 -- RED audit_log + @audit decorator tests)
+
+**Scope:** TDD discipline -- write FAILING tests BEFORE backend-engineer's Task 7 implementation. Tests are the executable spec for: (1) @audit decorator wired on sensitive routes (login success/failure, token attend/no-show, payment verify success/fail), (2) write_audit_row async helper, (3) PII denylist enforcement on metadata_json keys (closes TD-022), (4) background-task pattern ensuring audit failure never blocks user requests, (5) append-only enforcement at app code level, (6) structural module exports.
+
+**Inputs:** docs/superpowers/specs/2026-05-22-security-hardening-design.md section 8 (full), .claude/agents/tester.md, .claude/agents/security-engineer.md (audit_service reference pattern), tests/conftest.py, tests/security/test_rate_limit.py (established patterns), backend/routers/{auth,payments,queue}.py, backend/models/schema.py (AuditLog class), backend/config.py, backend/main.py, backend/middleware/auth_middleware.py, docs/TECH_DEBT.md (TD-022, TD-023)
+
+**Acceptance:** `tests/security/test_audit_log.py` exists with 22 distinct test cases; most fail with ModuleNotFoundError or assertion failure (RED is the goal); no regressions on prior unit tests (74/74 pass without Docker; 90/90 with Docker per baseline); DISPATCHES.md + PROJECT_STRUCTURE.md updated.
+
+**Reviewer:** security-engineer (after Task 7 backend-engineer lands GREEN -- review that no test was weakened to make it pass; per tester.md any lowered assertion/skip/N reduction is REJECTED)
+
+**Result:** DONE
+
+**Files touched:**
+  - Created: tests/security/test_audit_log.py (22 test cases)
+  - Modified: docs/PROJECT_STRUCTURE.md (test_audit_log.py entry added, baseline note updated)
+  - Modified: docs/DISPATCHES.md (this entry)
+
+**Tests:** 22 new tests: 13 FAILED (ModuleNotFoundError -- audit_service.py does not exist yet), 7 ERROR (DB/Redis fixtures fail without Docker -- same as all integration tests), 1 PASSED (test_no_update_or_delete_on_audit_log_in_backend_source -- static grep passes now), 1 SKIPPED (test_db_role_cannot_update_or_delete_audit_log -- deferred to Phase 10 per TD-023). Prior unit tests: 74/74 PASS (Docker not running). Zero regressions.
+
+**Commit:** (pending)
+
+**Follow-up dispatches:**
+  - **NEXT (Task 7):** backend-engineer creates `backend/services/audit_service.py` with `audit()` decorator, `write_audit_row()` async helper, `PII_DENYLIST` constant, then wires `@audit` onto POST /auth/google (login success/failure), PATCH /queue/.../attend (token.attend), PATCH /queue/.../no-show (token.no_show), POST /api/verify-payment (payment.verify.success / payment.verify.fail).
+  - **After Task 7 lands:** security-engineer reviews diff for test-weakening fouls. Tester re-runs all 22 tests to verify GREEN.
+
+**Notes:**
+- Test file header is the SPEC for the implementer -- full contract documented including decorator signature, write_audit_row signature, PII_DENYLIST words, background-task pattern, resource_id type.
+- Test coverage spans 6 groups: (1) successful login audit, (2) failed login audit, (3-4) queue attend/no-show audit, (5-6) payment verify success/fail audit, (7) audit failure resilience (monkeypatched write_audit_row raises, user still gets 200), (8) PII denylist -- 10 test cases covering all 6 denylist words + partial matches + login.failure email exception, (9) append-only static analysis via git grep, (10) DB permissions deferred skip, (11) structural module export checks.
+- The PII denylist tests (Group 8) directly close TD-022. The login.failure email exception test is per spec section 8.2 -- forensic value of attempted email outweighs PII concern for failed login events.
+- One test passes immediately (test_no_update_or_delete_on_audit_log_in_backend_source) because no backend code currently contains UPDATE/DELETE on audit_log. This will remain GREEN as a regression guard.
+- All integration-level tests (Groups 1-7) require Docker for DB + Redis. Without Docker they ERROR on fixture setup. This is expected and pre-existing behavior for all DB-dependent tests.
+- No fakeredis, no SQLite, no mocked DB used. Tests use real Postgres + real Redis via existing conftest fixtures (tester.md rule 9).
+

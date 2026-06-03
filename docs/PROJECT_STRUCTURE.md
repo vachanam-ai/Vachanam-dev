@@ -232,8 +232,9 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/edge_cases/test_data_isolation.py` | tested (3/3) | RULE 1 — cross-org `branch_id` leak attempts blocked. |
 | `tests/security/__init__.py` | working | Phase 4.5 Task 4 security tests package. |
 | `tests/security/test_rate_limit.py` | tested (13/13) | Phase 4.5 Task 5. All rate-limit tests GREEN. Fixed 2 tester bugs: (1) ASGITransport fixture now explicitly sets `client=("testclient", 123)` since httpx default is `("127.0.0.1", 123)` not `"testclient"`, (2) IP-blocklist test now sets fake `GOOGLE_OAUTH_CLIENT_ID` via monkeypatch so requests reach the real Google verification path (which triggers `record_failed_login`) instead of hitting the "OAuth not configured" early-return. |
+| `tests/security/test_audit_log.py` | RED (22 tests: 13 FAILED + 7 ERROR + 1 SKIP + 1 PASS) | Phase 4.5 Task 6. Failing tests for @audit decorator + write_audit_row + PII denylist. Awaiting Task 7 (backend-engineer creates `backend/services/audit_service.py` and wires `@audit` onto sensitive routes). Expected module: `backend/services/audit_service.py` (status: not yet created). |
 
-**Baseline (2026-06-03):** `pytest tests/ -v` -> 90/90 pass against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 13/13 security rate-limit tests.
+**Baseline (2026-06-03):** `pytest tests/ -v` -> 90/90 pass against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 13/13 security rate-limit tests. 22 new RED audit_log tests (Task 6) pending Task 7 implementation.
 
 ### 9.2 - Docs
 
