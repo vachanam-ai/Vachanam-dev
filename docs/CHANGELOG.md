@@ -77,7 +77,7 @@ This is a binding client decision. No escalation needed -- the client issued thi
 
 ### Commits
 
-- *(pending -- single commit)*
+- `3c84fc3` -- chore(scope): remove WhatsApp from MVP1 → MVP2 (client decision 2026-06-03)
 
 ### Open TDs affected by this change
 

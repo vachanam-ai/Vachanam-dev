@@ -409,7 +409,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
 
 **Tests:** No source/test code touched. Pytest baseline 90/90 unchanged.
 
-**Commit:** (pending -- hash backfilled after commit)
+**Commit:** `3c84fc3` -- chore(scope): remove WhatsApp from MVP1 → MVP2 (client decision 2026-06-03)
 
 **Follow-up dispatches:**
   - Resume Phase 4.5 security sprint (unchanged by this scope change)
