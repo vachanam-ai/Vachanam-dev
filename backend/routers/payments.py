@@ -15,6 +15,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+import backend.services.audit_service as _audit_svc
 from backend.config import settings
 from backend.middleware.rate_limit import create_order_limit, verify_payment_limit
 
@@ -97,7 +98,18 @@ async def create_order(request: Request, req: CreateOrderRequest) -> CreateOrder
     dependencies=[Depends(verify_payment_limit)],
 )
 async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyPaymentResponse:
-    """Verify HMAC-SHA256 signature: hex(HMAC(order_id|payment_id, KEY_SECRET))."""
+    """Verify HMAC-SHA256 signature: hex(HMAC(order_id|payment_id, KEY_SECRET)).
+
+    Audit:
+      - payment.verify.success on valid signature (resource_id=order_id)
+      - payment.verify.fail on signature mismatch (success=False, resource_id=order_id)
+
+    Even on 400 (signature mismatch), the audit row is written before raising.
+    Audit failure is caught and logged — never re-raised.
+    """
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
     if not settings.razorpay_key_secret:
         raise HTTPException(status_code=500, detail="Razorpay credentials not configured")
 
@@ -114,6 +126,19 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
             order_id=req.razorpay_order_id,
             payment_id=req.razorpay_payment_id,
         )
+        # Audit the failure BEFORE raising — metadata has order_id but no PII
+        try:
+            await _audit_svc.write_audit_row(
+                action="payment.verify.fail",
+                resource_type="payment",
+                resource_id=req.razorpay_order_id,
+                ip_address=client_ip,
+                user_agent=user_agent,
+                metadata={"error": "signature_mismatch"},
+                success=False,
+            )
+        except Exception as audit_err:
+            logger.error("audit_write_failed", action="payment.verify.fail", error=str(audit_err))
         raise HTTPException(status_code=400, detail="Signature verification failed")
 
     logger.info(
@@ -121,6 +146,23 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
         order_id=req.razorpay_order_id,
         payment_id=req.razorpay_payment_id,
     )
+
+    # Audit successful verification — payment_id is not PII
+    try:
+        await _audit_svc.write_audit_row(
+            action="payment.verify.success",
+            resource_type="payment",
+            resource_id=req.razorpay_order_id,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            metadata={"payment_id": req.razorpay_payment_id},
+            success=True,
+        )
+    except Exception as audit_err:
+        logger.error(
+            "audit_write_failed", action="payment.verify.success", error=str(audit_err)
+        )
+
     return VerifyPaymentResponse(
         verified=True,
         payment_id=req.razorpay_payment_id,

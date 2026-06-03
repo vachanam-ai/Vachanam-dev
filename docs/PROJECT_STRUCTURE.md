@@ -110,9 +110,9 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 | Path | Status | Purpose |
 |---|---|---|
 | `backend/routers/__init__.py` | placeholder | Package marker. |
-| `backend/routers/auth.py` | working | `POST /auth/google` (Google ID-token exchange -> JWT), `GET /auth/me`, `POST /auth/logout`. Rate-limited (5/min, 100/min). IP blocklist: `check_ip_blocklist` dependency + `record_failed_login` on real Google verification failures (spec §5.6). |
-| `backend/routers/payments.py` | working | Razorpay Standard Checkout — `POST /api/create-order`, `POST /api/verify-payment`, webhook handler. Live Razorpay test API verified. |
-| `backend/routers/queue.py` | working | `GET /queue/{branch_id}/today`, `PATCH /queue/{branch_id}/tokens/{token_id}/attend`, `PATCH /.../no-show`. JWT-protected + `branch_guard` enforced. 9 tests pass (6 auth + 3 isolation). |
+| `backend/routers/auth.py` | tested | `POST /auth/google` (Google ID-token exchange -> JWT), `GET /auth/me`, `POST /auth/logout`. Rate-limited (5/min, 100/min). IP blocklist. Audit: `user.login.success` + `user.login.failure` (direct `write_audit_row` calls; spec §8.2 email exception applied to failure). |
+| `backend/routers/payments.py` | tested | Razorpay Standard Checkout — `POST /api/create-order`, `POST /api/verify-payment`. Audit: `payment.verify.success` + `payment.verify.fail` (direct `write_audit_row` calls; fail fires BEFORE raising 400). |
+| `backend/routers/queue.py` | tested | `GET /queue/{branch_id}/today`, `PATCH .../attend`, `PATCH .../no-show`. JWT-protected + `branch_guard`. Audit: `@audit("token.attend", resource_type="token")` + `@audit("token.no_show", ...)` decorators; resource_id/user_id/branch_id set on request.state inside handler. |
 
 **Not yet created (Phase 5+):** `routers/whatsapp.py`, `routers/dashboard.py`, `routers/admin.py`, `routers/onboarding.py`.
 
@@ -132,6 +132,7 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 | Path | Status | Purpose |
 |---|---|---|
 | `backend/services/__init__.py` | placeholder | Package marker. |
+| `backend/services/audit_service.py` | tested (22/22) | Phase 4.5 Task 7. `PII_DENYLIST` constant, `write_audit_row()` async INSERT helper (PII-validates metadata before DB write; swallows DB errors per spec §8.5), `@audit` decorator factory (sets audit context from request.state; catches all audit errors; never blocks user response). TD-022 closed. |
 | `backend/jobs/__init__.py` | placeholder | Package marker. |
 
 **Not yet created (Phase 5+):** `services/token_service.py`, `services/calendar_service.py`, `services/meta_service.py`, `services/whatsapp_agent.py`, `services/doctor_commands.py`, `services/cancel_day_bookings.py`, `services/vobiz_partner.py`, `services/onboarding_service.py`. Jobs: `token_expiry.py`, `eod_summary.py`, `followup_calls.py`, `pre_appt_reminder.py`, `billing_cycle.py`, `trial_expiry.py`.
@@ -232,9 +233,9 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/edge_cases/test_data_isolation.py` | tested (3/3) | RULE 1 — cross-org `branch_id` leak attempts blocked. |
 | `tests/security/__init__.py` | working | Phase 4.5 Task 4 security tests package. |
 | `tests/security/test_rate_limit.py` | tested (13/13) | Phase 4.5 Task 5. All rate-limit tests GREEN. Fixed 2 tester bugs: (1) ASGITransport fixture now explicitly sets `client=("testclient", 123)` since httpx default is `("127.0.0.1", 123)` not `"testclient"`, (2) IP-blocklist test now sets fake `GOOGLE_OAUTH_CLIENT_ID` via monkeypatch so requests reach the real Google verification path (which triggers `record_failed_login`) instead of hitting the "OAuth not configured" early-return. |
-| `tests/security/test_audit_log.py` | RED (22 tests: 13 FAILED + 7 ERROR + 1 SKIP + 1 PASS) | Phase 4.5 Task 6. Failing tests for @audit decorator + write_audit_row + PII denylist. Awaiting Task 7 (backend-engineer creates `backend/services/audit_service.py` and wires `@audit` onto sensitive routes). Expected module: `backend/services/audit_service.py` (status: not yet created). |
+| `tests/security/test_audit_log.py` | tested (21/21 + 1 SKIP) | Phase 4.5 Task 7. All 21 runnable tests GREEN. 1 skip = `test_db_role_cannot_update_or_delete_audit_log` (deferred to Phase 10 prod-init per TD-023). TD-022 closed. |
 
-**Baseline (2026-06-03):** `pytest tests/ -v` -> 90/90 pass against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 13/13 security rate-limit tests. 22 new RED audit_log tests (Task 6) pending Task 7 implementation.
+**Baseline (2026-06-03, Task 7):** `pytest tests/ -v` -> 111/111 pass + 1 skip against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 22 audit_log tests (21 PASS + 1 SKIP) + 13/13 rate-limit tests.
 
 ### 9.2 - Docs
 

@@ -24,6 +24,7 @@ from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import queue_today_limit
 from backend.models.schema import Doctor, Patient, Token
+from backend.services.audit_service import audit
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -172,6 +173,7 @@ class StatusResponse(BaseModel):
     response_model=StatusResponse,
     dependencies=[Depends(queue_today_limit)],
 )
+@audit("token.attend", resource_type="token")
 async def mark_attended(
     branch_id: str,
     token_id: str,
@@ -179,9 +181,18 @@ async def mark_attended(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StatusResponse:
-    """Mark a patient as attended (showed up + seen by doctor)."""
+    """Mark a patient as attended (showed up + seen by doctor).
+
+    Sets audit context on request.state so the @audit decorator can capture
+    resource_id, user_id, and branch_id for the audit_log row.
+    """
     assert_branch_access(current_user, branch_id)
-    return await _update_status(db, token_id, branch_id, "attended", current_user.user_id)
+    result = await _update_status(db, token_id, branch_id, "attended", current_user.user_id)
+    # Set audit context AFTER success — decorator reads this in its finally block
+    request.state.audit_resource_id = token_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    return result
 
 
 @router.patch(
@@ -189,6 +200,7 @@ async def mark_attended(
     response_model=StatusResponse,
     dependencies=[Depends(queue_today_limit)],
 )
+@audit("token.no_show", resource_type="token")
 async def mark_no_show(
     branch_id: str,
     token_id: str,
@@ -196,9 +208,18 @@ async def mark_no_show(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StatusResponse:
-    """Mark a patient as no-show (slot missed)."""
+    """Mark a patient as no-show (slot missed).
+
+    Sets audit context on request.state so the @audit decorator can capture
+    resource_id, user_id, and branch_id for the audit_log row.
+    """
     assert_branch_access(current_user, branch_id)
-    return await _update_status(db, token_id, branch_id, "no_show", current_user.user_id)
+    result = await _update_status(db, token_id, branch_id, "no_show", current_user.user_id)
+    # Set audit context AFTER success — decorator reads this in its finally block
+    request.state.audit_resource_id = token_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    return result
 
 
 async def _update_status(

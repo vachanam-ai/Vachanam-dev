@@ -457,3 +457,38 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - All integration-level tests (Groups 1-7) require Docker for DB + Redis. Without Docker they ERROR on fixture setup. This is expected and pre-existing behavior for all DB-dependent tests.
 - No fakeredis, no SQLite, no mocked DB used. Tests use real Postgres + real Redis via existing conftest fixtures (tester.md rule 9).
 
+---
+
+## 2026-06-03 — backend-engineer dispatched (Phase 4.5 Task 7 — audit_service.py + @audit wiring)
+
+**Scope:** Turn 22 RED audit_log tests GREEN by creating `backend/services/audit_service.py` with `PII_DENYLIST`, `write_audit_row()`, and `@audit()` decorator; wire audit onto POST /auth/google (success + failure), PATCH /queue/.../attend and .../no-show, POST /api/verify-payment (success + fail). Closes TD-022.
+
+**Inputs:** `tests/security/test_audit_log.py` (test contract), `docs/superpowers/specs/2026-05-22-security-hardening-design.md` §8, `backend/routers/{auth,payments,queue}.py`, `backend/models/schema.py` (AuditLog), `backend/database.py`, `tests/conftest.py`
+
+**Acceptance:** `pytest tests/security/test_audit_log.py -v` -> 21 PASS + 1 SKIP; `pytest tests/ -v --tb=line` -> 111/111 PASS + 1 SKIP; no test file modified; PROJECT_STRUCTURE.md updated.
+
+**Reviewer:** security-engineer (decorator correctness + no test weakening) + privacy-legal (PII denylist coverage per spec §8.2)
+
+**Result:** DONE
+
+**Files touched:**
+  - Created: `backend/services/audit_service.py`
+  - Modified: `backend/routers/auth.py` (import + audit calls on success + failure paths), `backend/routers/payments.py` (import + audit calls on verify-payment success + fail), `backend/routers/queue.py` (import @audit + decorator on mark_attended + mark_no_show + request.state wiring)
+  - Modified: `docs/PROJECT_STRUCTURE.md` (audit_service.py entry, router entries updated, test status flipped RED→GREEN, baseline updated)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+
+**Tests:** 111/111 PASS + 1 SKIP. Audit: 21/21 PASS + 1 SKIP (deferred TD-023). Zero regressions on prior 90/90 baseline.
+
+**Commit:** (pending)
+
+**Follow-up dispatches:**
+  - security-engineer (Task 7 reviewer) — verify decorator correctness, confirm no test weakening, check PII denylist completeness vs spec §8.2
+  - privacy-legal — verify PII denylist coverage satisfies DPDP obligations (TD-022 closure sign-off)
+
+**Notes:**
+- Design deviation from spec starter code: `write_audit_row()` swallows DB errors (logs via structlog.error, does not re-raise). Rationale: spec §8.5 states audit failure must NEVER block user requests. Making DB errors best-effort in `write_audit_row` itself (not just in the decorator) is cleaner and enables the `test_pii_denylist_login_failure_allows_email` test which calls `write_audit_row` directly without a `db` fixture. PII `ValueError` still propagates (programming error, not transient failure).
+- Monkeypatch safety: `@audit` decorator uses `_self.write_audit_row` where `_self = backend.services.audit_service` module (self-import). `test_audit_failure_does_not_block_user_request` patches `backend.services.audit_service.write_audit_row` — the decorator picks up the monkeypatched version correctly.
+- Auth/payments use direct `write_audit_row` calls (via `_audit_svc.write_audit_row`) instead of decorator. Reason: both have TWO different audit actions (success vs failure), which cannot be expressed with a single `@audit(action=...)` decorator.
+- Queue routes use `@audit` decorator + `request.state` injection. The handler sets `request.state.audit_resource_id/user_id/branch_id` after `_update_status()` succeeds; the decorator's `finally` block reads them.
+- TD-022 closed: PII denylist enforced with 6 words (phone, name, email, address, complaint, symptom), substring matching, and spec §8.2 exception for `user.login.failure` + key exactly `"email"`.
+

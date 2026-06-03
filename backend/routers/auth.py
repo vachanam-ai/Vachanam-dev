@@ -19,6 +19,7 @@ from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel
 from sqlalchemy import select
 
+import backend.services.audit_service as _audit_svc
 from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.middleware.auth_middleware import (
@@ -61,8 +62,14 @@ async def google_login(request: Request, body: GoogleLoginRequest) -> TokenRespo
     Returns 429 if the IP exceeds 5 attempts/min (spec §6.3).
     Returns 401 if Google rejects the ID token.
     Returns 403 if email is not in the users table (admin must add first).
+
+    Audit:
+      - user.login.success on successful login (user_id set, no PII in metadata)
+      - user.login.failure on Google token rejection (success=False, email allowed
+        per spec §8.2 exception for forensics)
     """
     client_ip = request.client.host if request.client else "127.0.0.1"
+    user_agent = request.headers.get("user-agent")
 
     if not settings.google_oauth_client_id:
         # No OAuth client ID configured — this is a server misconfiguration,
@@ -84,6 +91,17 @@ async def google_login(request: Request, body: GoogleLoginRequest) -> TokenRespo
         # (spec §5.6).  Config errors (handled above) do not count.
         logger.warning("google_token_invalid", error=str(e))
         await record_failed_login(client_ip)
+        # Audit login failure — spec §8.2 allows "email" key for forensics
+        try:
+            await _audit_svc.write_audit_row(
+                action="user.login.failure",
+                ip_address=client_ip,
+                user_agent=user_agent,
+                metadata={"error": "google_token_invalid"},
+                success=False,
+            )
+        except Exception as audit_err:
+            logger.error("audit_write_failed", action="user.login.failure", error=str(audit_err))
         raise HTTPException(status_code=401, detail="Invalid Google token")
 
     google_sub = info.get("sub")
@@ -123,6 +141,19 @@ async def google_login(request: Request, body: GoogleLoginRequest) -> TokenRespo
         token = create_access_token(user)
 
     logger.info("user_login", user_id=str(user_id), email=user_email, role=user_role)
+
+    # Audit successful login — user_id sufficient, no email in metadata (not login.failure)
+    try:
+        await _audit_svc.write_audit_row(
+            action="user.login.success",
+            user_id=user_id,
+            ip_address=client_ip,
+            user_agent=user_agent,
+            success=True,
+        )
+    except Exception as audit_err:
+        logger.error("audit_write_failed", action="user.login.success", error=str(audit_err))
+
     return TokenResponse(
         access_token=token,
         token_type="bearer",
