@@ -302,7 +302,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
 
 **Tests:** No source/test code touched. pytest baseline 77/77 unchanged.
 
-**Commit:** `<backfill after commit>`
+**Commit:** `4dc7732`
 
 **Follow-up dispatches:** backend-engineer — Phase 4.5 Task 5 (fastapi-limiter, turn 13 RED security tests GREEN).
 

@@ -42,7 +42,7 @@ Phase 4.5 Task 5 — backend-engineer wires `fastapi-limiter` to turn 13 RED sec
 
 ### Commits
 
-`<hash>` — chore(graphify): run graphify on Vachanam codebase + MAIN_AGENDA.md highlight
+`4dc7732` — chore(graphify): run graphify on Vachanam codebase + MAIN_AGENDA.md highlight
 
 ---
 
