@@ -346,3 +346,37 @@ The work below was done inline by the orchestrator (main thread) before the mand
   - Modified: docs/PROJECT_STRUCTURE.md (rate_limit.py entry, test status updated, baseline updated)
   - Modified: docs/DISPATCHES.md (this entry)
 
+---
+
+## 2026-06-03 — tester dispatched (Phase 4.5 Task 5 follow-up — fix 2 rate-limit test bugs)
+
+**Scope:** Fix 2 failing tests in `tests/security/test_rate_limit.py` that were tester bugs, not implementation bugs. Both `test_five_failed_google_verifications_blocks_ip_in_redis` and `test_blocked_ip_returns_403_on_next_auth_attempt` failed due to wrong assumptions in the test code.
+
+**Inputs:** tests/security/test_rate_limit.py, backend/routers/auth.py (read-only), backend/middleware/rate_limit.py (read-only), docs/PROJECT_STRUCTURE.md
+
+**Acceptance:** `pytest tests/security/test_rate_limit.py -v` -> 13/13 GREEN; `pytest tests/ -v --tb=line` -> 90/90 GREEN; no implementation files modified; PROJECT_STRUCTURE.md updated.
+
+**Reviewer:** security-engineer (reviews Task 5 implementation + this test bug fix)
+
+**Result:** DONE
+
+**Root causes (2 bugs, both tester's fault):**
+1. **Wrong client IP string.** httpx `ASGITransport` defaults to `client=("127.0.0.1", 123)`, making `request.client.host == "127.0.0.1"`. Tester incorrectly assumed it would be `"testclient"` (that is the Starlette sync `TestClient` convention, not httpx). Fix: set `client=("testclient", 123)` explicitly on the transport so existing assertions are correct without weakening them.
+2. **Missing GOOGLE_OAUTH_CLIENT_ID in test env.** The IP-blocklist test sends junk tokens expecting 5 Google verification failures to trigger `record_failed_login`. But with `google_oauth_client_id` empty, the auth handler correctly returns 401 for "OAuth not configured" WITHOUT counting the failure (server misconfiguration is not a brute-force attempt). Fix: `monkeypatch.setattr(settings, "google_oauth_client_id", "fake-client-id...")` so requests reach `verify_oauth2_token` which raises `ValueError` for junk tokens, triggering the blocklist counter.
+
+**Files touched:**
+  - Modified: tests/security/test_rate_limit.py (fixture + 1 test + comments)
+  - Modified: docs/PROJECT_STRUCTURE.md (rate-limit test status 11/13 -> 13/13, baseline 88/90 -> 90/90)
+  - Modified: docs/DISPATCHES.md (this entry)
+
+**Tests:** 90/90 GREEN. Rate-limit: 13/13 GREEN. Zero regressions.
+
+**Commit:** (pending)
+
+**Follow-up dispatches:** security-engineer reviews Task 5 implementation + test bug fix.
+
+**Notes:**
+- Per tester.md: this is the tester's own bug, not the implementer's. Owning it cleanly. No assertion was weakened — the fix makes the test environment match what the test was already asserting. The security guarantee (IP blocked after 5 real Google verification failures) is preserved exactly.
+- Added inline comments near the fixture and the IP string usage explaining the httpx vs Starlette TestClient difference so future tester does not repeat this mistake.
+- The `monkeypatch.setattr` on `settings.google_oauth_client_id` is the correct approach: it ensures the auth handler reaches the real Google verification code path, which is what the test is designed to exercise. Setting a fake client ID does not weaken security — it strengthens the test by ensuring the blocklist counter is actually triggered by real verification failures.
+

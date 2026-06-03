@@ -51,7 +51,10 @@ from backend.config import settings
 # ──────────────────────────────────────────────────────────────────────
 
 # httpx.AsyncClient against the in-process ASGI app gives us a deterministic
-# request.client.host (defaults to "testclient" in starlette/httpx test mode).
+# request.client.host. IMPORTANT: httpx.ASGITransport defaults to ("127.0.0.1", 123),
+# NOT "testclient" (that was the old Starlette sync TestClient convention). We
+# explicitly set client=("testclient", 123) on the transport so all assertions
+# in this file that reference "testclient" as the IP string are correct.
 # Implementer note: rate-limit key for unauthenticated requests must NOT crash
 # when request.client is None or its .host is "testclient" — handle both.
 
@@ -97,7 +100,9 @@ async def client(redis):
     # Import inside the fixture so app construction sees the latest settings/env
     from backend.main import app
 
-    transport = httpx.ASGITransport(app=app)
+    # client=("testclient", 123) makes request.client.host == "testclient".
+    # httpx ASGITransport default is ("127.0.0.1", 123), NOT "testclient".
+    transport = httpx.ASGITransport(app=app, client=("testclient", 123))
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
 
@@ -171,7 +176,7 @@ async def test_429_response_includes_retry_after_header(client, redis):
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def test_five_failed_google_verifications_blocks_ip_in_redis(client, redis):
+async def test_five_failed_google_verifications_blocks_ip_in_redis(client, redis, monkeypatch):
     """5 failed Google ID-token verifications from same IP → IP entered into
     Redis blocklist for 1h (spec §5.6).
 
@@ -180,6 +185,12 @@ async def test_five_failed_google_verifications_blocks_ip_in_redis(client, redis
     Implementer may choose alternative shapes, but blocking behavior is
     the contract.
     """
+    # Set a fake GOOGLE_OAUTH_CLIENT_ID so the handler proceeds past the
+    # "OAuth not configured" early-return (which correctly does NOT count
+    # against the IP blocklist) and reaches google_id_token.verify_oauth2_token()
+    # which raises ValueError for junk tokens -> triggers record_failed_login().
+    monkeypatch.setattr(settings, "google_oauth_client_id", "fake-client-id-for-test.apps.googleusercontent.com")
+
     body = {"id_token": "junk.invalid.token"}
     # 5 failed attempts (each 401 from google verify). Limiter is 5/min so the
     # 5th still goes through to the handler; the 6th would be 429 (Group 1).

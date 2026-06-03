@@ -125,7 +125,7 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 | `backend/middleware/branch_guard.py` | working | RULE 1 enforcement — every request scoped to the user's branch_id. |
 | `backend/middleware/security_headers.py` | working | CSP (script-src self + Razorpay + Google; style-src self unsafe-inline for Google Fonts), HSTS `max-age=31536000; includeSubDomains` (no `preload` until Phase 10), X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy. Registered AFTER CORSMiddleware so it runs on preflights too. Reviewed by security-engineer 2026-06-02 (commit `6b00686`). |
 
-| `backend/middleware/rate_limit.py` | working | Phase 4.5 Task 5. pyrate-limiter Redis-backed sliding window. Named per-endpoint limiters (`auth_google_limit` 5/min, `queue_today_limit` 60/min, etc.). JWT-sub keyed when Bearer present, IP keyed otherwise. Trusted-IP bypass via `RATE_LIMIT_BYPASS_IPS` env. IP blocklist helpers (`record_failed_login`, `is_ip_blocked`, `check_ip_blocklist`). 11/13 tests GREEN (2 test bugs — tester used wrong IP string `"testclient"` for httpx.ASGITransport which actually uses `"127.0.0.1"`). |
+| `backend/middleware/rate_limit.py` | tested (13/13) | Phase 4.5 Task 5. pyrate-limiter Redis-backed sliding window. Named per-endpoint limiters (`auth_google_limit` 5/min, `queue_today_limit` 60/min, etc.). JWT-sub keyed when Bearer present, IP keyed otherwise. Trusted-IP bypass via `RATE_LIMIT_BYPASS_IPS` env. IP blocklist helpers (`record_failed_login`, `is_ip_blocked`, `check_ip_blocklist`). All 13 tests GREEN. |
 
 ### 4.5 - Services / Jobs
 
@@ -231,9 +231,9 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/edge_cases/test_concurrent_tokens.py` | tested (2/2) | RULE 2 — N=100 concurrent callers all get distinct tokens (TD-010 closed). |
 | `tests/edge_cases/test_data_isolation.py` | tested (3/3) | RULE 1 — cross-org `branch_id` leak attempts blocked. |
 | `tests/security/__init__.py` | working | Phase 4.5 Task 4 security tests package. |
-| `tests/security/test_rate_limit.py` | 11/13 GREEN | Phase 4.5 Task 5. 11 rate-limit tests pass. 2 tests have a tester error: `test_five_failed_google_verifications_blocks_ip_in_redis` and `test_blocked_ip_returns_403_on_next_auth_attempt` check for `"testclient"` as client IP but `httpx.ASGITransport` defaults to `"127.0.0.1"`. Escalated to security-engineer for test correction. |
+| `tests/security/test_rate_limit.py` | tested (13/13) | Phase 4.5 Task 5. All rate-limit tests GREEN. Fixed 2 tester bugs: (1) ASGITransport fixture now explicitly sets `client=("testclient", 123)` since httpx default is `("127.0.0.1", 123)` not `"testclient"`, (2) IP-blocklist test now sets fake `GOOGLE_OAUTH_CLIENT_ID` via monkeypatch so requests reach the real Google verification path (which triggers `record_failed_login`) instead of hitting the "OAuth not configured" early-return. |
 
-**Baseline (2026-06-03):** `pytest tests/ -v` -> 88/90 pass against Docker Postgres 16 + Redis 7 + Python 3.14. 2 rate-limit tests have tester errors (wrong IP string assumption) — not implementation bugs.
+**Baseline (2026-06-03):** `pytest tests/ -v` -> 90/90 pass against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 13/13 security rate-limit tests.
 
 ### 9.2 - Docs
 
