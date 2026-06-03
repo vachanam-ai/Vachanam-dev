@@ -13,14 +13,16 @@ import uuid
 from datetime import date, datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
+from backend.middleware.rate_limit import queue_today_limit
 from backend.models.schema import Doctor, Patient, Token
 
 logger = structlog.get_logger()
@@ -58,9 +60,14 @@ class QueueResponse(BaseModel):
     doctors: list[DoctorEntry]
 
 
-@router.get("/{branch_id}/today", response_model=QueueResponse)
+@router.get(
+    "/{branch_id}/today",
+    response_model=QueueResponse,
+    dependencies=[Depends(queue_today_limit)],
+)
 async def get_today_queue(
     branch_id: str,
+    request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> QueueResponse:
@@ -82,18 +89,29 @@ async def get_today_queue(
 
     today = date.today()
 
-    result = await db.execute(
-        select(Token, Patient, Doctor)
-        .join(Patient, Token.patient_id == Patient.id)
-        .join(Doctor, Token.doctor_id == Doctor.id)
-        .where(
-            Token.branch_id == branch_uuid,  # MANDATORY — final tripwire
-            Token.date == today,
-            Token.status.in_(["confirmed", "attended", "no_show"]),
+    try:
+        result = await db.execute(
+            select(Token, Patient, Doctor)
+            .join(Patient, Token.patient_id == Patient.id)
+            .join(Doctor, Token.doctor_id == Doctor.id)
+            .where(
+                Token.branch_id == branch_uuid,  # MANDATORY — final tripwire
+                Token.date == today,
+                Token.status.in_(["confirmed", "attended", "no_show"]),
+            )
+            .order_by(Doctor.name, Token.token_number)
         )
-        .order_by(Doctor.name, Token.token_number)
-    )
-    rows = result.all()
+        rows = result.all()
+    except Exception as exc:
+        # Catches SQLAlchemy errors (table missing, query fail) and lower-level
+        # asyncpg/asyncio transport errors that bubble up through the SQLAlchemy
+        # session (e.g., proactor event loop errors during concurrent connection
+        # pool pings on Windows/Python 3.14).  Any unhandled exception here must
+        # become an HTTP 500 — not propagate through Starlette's ServerErrorMiddleware
+        # which would re-raise and cause httpx.ASGITransport to propagate the
+        # exception to test callers (breaking the rate-limit test assertions).
+        logger.error("queue_db_error", branch_id=branch_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="Database error")
 
     doctors_map: dict[str, DoctorEntry] = {}
     summary_attended = 0
@@ -149,10 +167,15 @@ class StatusResponse(BaseModel):
     token_id: str
 
 
-@router.patch("/{branch_id}/token/{token_id}/attend", response_model=StatusResponse)
+@router.patch(
+    "/{branch_id}/token/{token_id}/attend",
+    response_model=StatusResponse,
+    dependencies=[Depends(queue_today_limit)],
+)
 async def mark_attended(
     branch_id: str,
     token_id: str,
+    request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StatusResponse:
@@ -161,10 +184,15 @@ async def mark_attended(
     return await _update_status(db, token_id, branch_id, "attended", current_user.user_id)
 
 
-@router.patch("/{branch_id}/token/{token_id}/no-show", response_model=StatusResponse)
+@router.patch(
+    "/{branch_id}/token/{token_id}/no-show",
+    response_model=StatusResponse,
+    dependencies=[Depends(queue_today_limit)],
+)
 async def mark_no_show(
     branch_id: str,
     token_id: str,
+    request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StatusResponse:
@@ -191,13 +219,22 @@ async def _update_status(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
 
-    result = await db.execute(
-        select(Token).where(
-            Token.id == token_uuid,
-            Token.branch_id == branch_uuid,  # MANDATORY — final tripwire
+    try:
+        result = await db.execute(
+            select(Token).where(
+                Token.id == token_uuid,
+                Token.branch_id == branch_uuid,  # MANDATORY — final tripwire
+            )
         )
-    )
-    token = result.scalar_one_or_none()
+        token = result.scalar_one_or_none()
+    except SQLAlchemyError as exc:
+        logger.error(
+            "token_status_db_error",
+            token_id=token_id,
+            branch_id=branch_id,
+            error=str(exc),
+        )
+        raise HTTPException(status_code=500, detail="Database error")
     if not token:
         raise HTTPException(status_code=404, detail="Token not found")
     if token.status in ("attended", "no_show", "cancelled_by_clinic"):

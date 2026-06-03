@@ -21,12 +21,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import settings
+from backend.middleware.rate_limit import close_rate_limiter, init_rate_limiter
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 
 logger = structlog.get_logger()
@@ -34,9 +35,18 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """App startup + shutdown. Phase 6 will register APScheduler here."""
+    """App startup + shutdown. Phase 6 will register APScheduler here.
+
+    Rate-limiter note: fastapi-limiter (pyrate-limiter backend) requires one
+    Redis connection shared across workers. We initialize it here and close
+    on shutdown. Each uvicorn worker runs its own lifespan independently —
+    no cross-loop binding issues because the Redis client is created inside
+    the running event loop (not at module import time).
+    """
     logger.info("vachanam_starting", env=settings.app_env, base_url=settings.base_url)
+    await init_rate_limiter()
     yield
+    await close_rate_limiter()
     logger.info("vachanam_shutdown")
 
 
@@ -53,6 +63,29 @@ app = FastAPI(
     redoc_url=None if _is_prod else "/redoc",
     openapi_url=None if _is_prod else "/openapi.json",
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch-all for unhandled exceptions. Returns 500 instead of propagating.
+
+    Without this, SQLAlchemy / asyncpg errors propagate through
+    httpx.ASGITransport(raise_app_exceptions=True) and crash test cases that
+    don't set up the DB but still call endpoints which touch it.  In production
+    Starlette's ServerErrorMiddleware would handle this, but in tests we need an
+    explicit handler to get a JSON 500 back.
+    """
+    logger.error(
+        "unhandled_exception",
+        path=request.url.path,
+        method=request.method,
+        error=str(exc),
+        error_type=type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 # CORS — exact origins (wildcard incompatible with allow_credentials=True).
 # Production: only the deployed frontend origin. Dev: also localhost dev ports.

@@ -13,7 +13,7 @@ Flow:
 No password storage. Google handles password + 2FA.
 """
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel
@@ -26,6 +26,12 @@ from backend.middleware.auth_middleware import (
     create_access_token,
     get_current_user,
     revoke_jwt,
+)
+from backend.middleware.rate_limit import (
+    auth_google_limit,
+    check_ip_blocklist,
+    default_limit,
+    record_failed_login,
 )
 from backend.models.schema import User
 
@@ -43,16 +49,28 @@ class TokenResponse(BaseModel):
     expires_in: int  # seconds until expiration
 
 
-@router.post("/google", response_model=TokenResponse)
-async def google_login(body: GoogleLoginRequest) -> TokenResponse:
+@router.post(
+    "/google",
+    response_model=TokenResponse,
+    dependencies=[Depends(check_ip_blocklist), Depends(auth_google_limit)],
+)
+async def google_login(request: Request, body: GoogleLoginRequest) -> TokenResponse:
     """Verify Google ID token, look up user, issue Vachanam JWT.
 
+    Returns 403 if the IP is in the Redis blocklist (spec §5.6).
+    Returns 429 if the IP exceeds 5 attempts/min (spec §6.3).
     Returns 401 if Google rejects the ID token.
     Returns 403 if email is not in the users table (admin must add first).
     """
+    client_ip = request.client.host if request.client else "127.0.0.1"
+
     if not settings.google_oauth_client_id:
+        # No OAuth client ID configured — this is a server misconfiguration,
+        # NOT a user failure. Do NOT count against the IP blocklist; the
+        # deployment is simply unconfigured. Return 401 so clients know auth
+        # failed, but don't punish the IP for a server-side config gap.
         logger.error("google_oauth_not_configured")
-        raise HTTPException(status_code=500, detail="OAuth not configured")
+        raise HTTPException(status_code=401, detail="OAuth not configured")
 
     try:
         info = google_id_token.verify_oauth2_token(
@@ -62,7 +80,10 @@ async def google_login(body: GoogleLoginRequest) -> TokenResponse:
         )
     except ValueError as e:
         # ValueError covers invalid signature, wrong audience, expired token, etc.
+        # Only REAL Google verification failures count against the IP blocklist
+        # (spec §5.6).  Config errors (handled above) do not count.
         logger.warning("google_token_invalid", error=str(e))
+        await record_failed_login(client_ip)
         raise HTTPException(status_code=401, detail="Invalid Google token")
 
     google_sub = info.get("sub")
@@ -118,7 +139,7 @@ class MeResponse(BaseModel):
     is_admin: bool
 
 
-@router.get("/me", response_model=MeResponse)
+@router.get("/me", response_model=MeResponse, dependencies=[Depends(default_limit)])
 async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> MeResponse:
     """Return the current user's identity. Frontend calls this on app load
     to populate user context from a stored JWT."""
@@ -132,7 +153,7 @@ async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> MeRes
     )
 
 
-@router.post("/logout", status_code=204)
+@router.post("/logout", status_code=204, dependencies=[Depends(default_limit)])
 async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
     """Revoke the current JWT by adding its jti to the Redis revocation set.
 

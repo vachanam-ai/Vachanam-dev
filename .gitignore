@@ -37,6 +37,9 @@ yarn-error.log
 # Claude Code internals (not project files)
 .superpowers/
 
+# Runtime artifacts — generated at dev time, never committed
+uvicorn.log
+
 # Graphify artifacts — large/binary; GRAPH_REPORT.md is committed, JSON is not
 docs/_artifacts/graphify-output/ast-graph.json
 docs/_artifacts/graphify-output/.graphify_python

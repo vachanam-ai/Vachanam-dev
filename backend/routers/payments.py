@@ -12,10 +12,11 @@ import hmac
 
 import razorpay
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from backend.config import settings
+from backend.middleware.rate_limit import create_order_limit, verify_payment_limit
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -53,8 +54,12 @@ class VerifyPaymentResponse(BaseModel):
     order_id: str
 
 
-@router.post("/create-order", response_model=CreateOrderResponse)
-async def create_order(req: CreateOrderRequest) -> CreateOrderResponse:
+@router.post(
+    "/create-order",
+    response_model=CreateOrderResponse,
+    dependencies=[Depends(create_order_limit)],
+)
+async def create_order(request: Request, req: CreateOrderRequest) -> CreateOrderResponse:
     """Create a Razorpay order. amount is in paise (₹1 = 100 paise)."""
     client = _get_client()
     payload = {
@@ -86,8 +91,12 @@ async def create_order(req: CreateOrderRequest) -> CreateOrderResponse:
     )
 
 
-@router.post("/verify-payment", response_model=VerifyPaymentResponse)
-async def verify_payment(req: VerifyPaymentRequest) -> VerifyPaymentResponse:
+@router.post(
+    "/verify-payment",
+    response_model=VerifyPaymentResponse,
+    dependencies=[Depends(verify_payment_limit)],
+)
+async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyPaymentResponse:
     """Verify HMAC-SHA256 signature: hex(HMAC(order_id|payment_id, KEY_SECRET))."""
     if not settings.razorpay_key_secret:
         raise HTTPException(status_code=500, detail="Razorpay credentials not configured")

@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     admin_phone: str = ""
     log_level: str = "debug"
 
+    # Rate limiting (spec §6.5)
+    # Comma-separated list of IP addresses that bypass per-endpoint rate limits.
+    # Example: RATE_LIMIT_BYPASS_IPS=127.0.0.1,10.0.0.1,testclient
+    # Used in backend/middleware/rate_limit.py _EndpointRateLimiter.
+    rate_limit_bypass_ips: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

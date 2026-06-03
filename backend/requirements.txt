@@ -17,3 +17,4 @@ openai>=1.30.0
 google-generativeai>=0.7.0
 razorpay>=1.4.0
 python-multipart>=0.0.9
+fastapi-limiter==0.2.0

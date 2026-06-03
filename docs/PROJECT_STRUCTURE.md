@@ -94,7 +94,7 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 |---|---|---|
 | `backend/__init__.py` | placeholder | Package marker. |
 | `backend/main.py` | working | FastAPI app factory. CORS allowlist (exact origins, `allow_credentials=True`), `SecurityHeadersMiddleware`, routers (auth, queue, payments), static landing mount, `/health`, prod-disabled `/docs` / `/redoc` / `/openapi.json` via `_is_prod`. |
-| `backend/config.py` | working | Pydantic `Settings` — all 26 env vars typed + `app_env`, `frontend_url`, `redis_url`, `database_url`. **Pending field:** `rate_limit_bypass_ips` (added by Phase 4.5 Task 5 backend-engineer for fastapi-limiter bypass list). |
+| `backend/config.py` | working | Pydantic `Settings` — all 26 env vars typed + `app_env`, `frontend_url`, `redis_url`, `database_url`. Added `rate_limit_bypass_ips` (Phase 4.5 Task 5). |
 | `backend/database.py` | working | Async SQLAlchemy engine + `AsyncSessionLocal` per-call factory + `init_db()` helper. **No module-level session singletons** (per QUALITY_BAR; see TD-016/TD-017 closed). |
 | `backend/requirements.txt` | working | Backend Python pins (fastapi, uvicorn, sqlalchemy, asyncpg, alembic, pydantic-settings, structlog, tenacity, redis, razorpay, google-auth, httpx, fastapi-limiter — added Phase 4.5). |
 
@@ -110,7 +110,7 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 | Path | Status | Purpose |
 |---|---|---|
 | `backend/routers/__init__.py` | placeholder | Package marker. |
-| `backend/routers/auth.py` | working | `POST /auth/google` (Google ID-token exchange -> JWT), `GET /auth/me`, `POST /auth/logout`. Tested (6 auth unit tests pass). **Pending Phase 4.5 section 5.6:** failed-Google-ID IP blocklist + 403 (RED test exists in `tests/security/test_rate_limit.py`). |
+| `backend/routers/auth.py` | working | `POST /auth/google` (Google ID-token exchange -> JWT), `GET /auth/me`, `POST /auth/logout`. Rate-limited (5/min, 100/min). IP blocklist: `check_ip_blocklist` dependency + `record_failed_login` on real Google verification failures (spec §5.6). |
 | `backend/routers/payments.py` | working | Razorpay Standard Checkout — `POST /api/create-order`, `POST /api/verify-payment`, webhook handler. Live Razorpay test API verified. |
 | `backend/routers/queue.py` | working | `GET /queue/{branch_id}/today`, `PATCH /queue/{branch_id}/tokens/{token_id}/attend`, `PATCH /.../no-show`. JWT-protected + `branch_guard` enforced. 9 tests pass (6 auth + 3 isolation). |
 
@@ -125,7 +125,7 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 | `backend/middleware/branch_guard.py` | working | RULE 1 enforcement — every request scoped to the user's branch_id. |
 | `backend/middleware/security_headers.py` | working | CSP (script-src self + Razorpay + Google; style-src self unsafe-inline for Google Fonts), HSTS `max-age=31536000; includeSubDomains` (no `preload` until Phase 10), X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy. Registered AFTER CORSMiddleware so it runs on preflights too. Reviewed by security-engineer 2026-06-02 (commit `6b00686`). |
 
-**Not yet created:** `backend/middleware/rate_limit.py` (Phase 4.5 Task 5 — fastapi-limiter wrapper; 13 RED tests already authored).
+| `backend/middleware/rate_limit.py` | working | Phase 4.5 Task 5. pyrate-limiter Redis-backed sliding window. Named per-endpoint limiters (`auth_google_limit` 5/min, `queue_today_limit` 60/min, etc.). JWT-sub keyed when Bearer present, IP keyed otherwise. Trusted-IP bypass via `RATE_LIMIT_BYPASS_IPS` env. IP blocklist helpers (`record_failed_login`, `is_ip_blocked`, `check_ip_blocklist`). 11/13 tests GREEN (2 test bugs — tester used wrong IP string `"testclient"` for httpx.ASGITransport which actually uses `"127.0.0.1"`). |
 
 ### 4.5 - Services / Jobs
 
@@ -230,10 +230,10 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/edge_cases/__init__.py` | placeholder | Package marker. |
 | `tests/edge_cases/test_concurrent_tokens.py` | tested (2/2) | RULE 2 — N=100 concurrent callers all get distinct tokens (TD-010 closed). |
 | `tests/edge_cases/test_data_isolation.py` | tested (3/3) | RULE 1 — cross-org `branch_id` leak attempts blocked. |
-| `tests/security/__init__.py` | scaffolded (untracked) | Phase 4.5 Task 4 RED tests package. Not yet committed. |
-| `tests/security/test_rate_limit.py` | scaffolded (RED, untracked) | 13 failing rate-limit tests authored as the spec for Phase 4.5 Task 5 backend-engineer impl. Will go GREEN once `fastapi-limiter` middleware lands. |
+| `tests/security/__init__.py` | working | Phase 4.5 Task 4 security tests package. |
+| `tests/security/test_rate_limit.py` | 11/13 GREEN | Phase 4.5 Task 5. 11 rate-limit tests pass. 2 tests have a tester error: `test_five_failed_google_verifications_blocks_ip_in_redis` and `test_blocked_ip_returns_403_on_next_auth_attempt` check for `"testclient"` as client IP but `httpx.ASGITransport` defaults to `"127.0.0.1"`. Escalated to security-engineer for test correction. |
 
-**Baseline (locked 2026-06-01):** `pytest tests/ -v` -> 77/77 pass against Docker Postgres 16 + Redis 7 + Python 3.14. The 13 RED security tests are intentionally failing — they are the executable spec for Task 5.
+**Baseline (2026-06-03):** `pytest tests/ -v` -> 88/90 pass against Docker Postgres 16 + Redis 7 + Python 3.14. 2 rate-limit tests have tester errors (wrong IP string assumption) — not implementation bugs.
 
 ### 9.2 - Docs
 
