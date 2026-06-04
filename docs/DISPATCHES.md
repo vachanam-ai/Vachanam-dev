@@ -519,7 +519,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
 
 **Tests:** No source/test code touched. Pytest baseline 111/111 + 1 skip unchanged.
 
-**Commit:** (pending — hash backfilled after commit lands)
+**Commit:** `21e1e36`
 
 **Follow-up dispatches:**
   - Orchestrator dispatches Phase 4.5 Task 8 (tester bundled tests) using the new curated-context template — first dispatch under new rules.

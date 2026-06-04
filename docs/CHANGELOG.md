@@ -33,7 +33,7 @@ Format per session:
 - docs/CHANGELOG.md — this entry
 - docs/DISPATCHES.md — dispatch entry for this manager dispatch
 
-**Commit:** *(pending — single dispatch commits AGILE + manager + CHANGELOG + DISPATCHES together)*
+**Commit:** `21e1e36` — chore(process): token optimization — curated context blocks + bundled dispatches
 
 **Impact:** Expected ~40% reduction in per-dispatch token cost. First dispatch under new rules: Phase 4.5 Task 8 (tester bundled headers + CORS + admin + JWT failing tests).
 
