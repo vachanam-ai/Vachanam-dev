@@ -1,0 +1,75 @@
+version: 2
+
+updates:
+  # ── Backend Python dependencies ────────────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    target-branch: "main"
+    labels:
+      - "dependencies"
+      - "python"
+      - "backend"
+    commit-message:
+      prefix: "chore(deps)"
+    # Dependabot reads backend/requirements.txt from the root directory scan.
+    # Both backend/requirements.txt and agent/requirements.txt are discovered
+    # automatically because they live under the root /.
+
+  # ── Agent Python dependencies ──────────────────────────────────────────────
+  # Separate entry scoped to agent/ so PRs are clearly labelled.
+  - package-ecosystem: "pip"
+    directory: "/agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    target-branch: "main"
+    labels:
+      - "dependencies"
+      - "python"
+      - "agent"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ── Frontend npm dependencies ──────────────────────────────────────────────
+  # frontend/ does not exist yet (Phase 7). Entry is future-proofed so
+  # Dependabot begins monitoring the moment package.json is committed.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    target-branch: "main"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "frontend"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # ── GitHub Actions ─────────────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    target-branch: "main"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore(deps)"

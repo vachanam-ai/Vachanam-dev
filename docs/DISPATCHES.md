@@ -574,3 +574,25 @@ The work below was done inline by the orchestrator (main thread) before the mand
 **TD-026 LOGGED:** yes
 **NEXT:** Task 10 (frontend useIdleTimeout hook) DEFERRED — frontend/ directory does not exist yet (Phase 7 work). Task 14 (devops CI workflow, TD-015) is unblocked. Manager to confirm new sequence.
 
+---
+
+## 2026-06-04 — devops-engineer dispatched (Phase 4.5 Tasks 14+15 bundled — CI + Cloudflare runbook)
+**Scope:** Two deliverables bundled per AGILE Rule 3 (same-domain, both unblocked): (14) GitHub Actions CI workflow + secret-scan (closes TD-015) + Dependabot config; (15) Cloudflare setup runbook for Phase 10 cutover (managed CRS + 5 custom rules + TLS Full Strict + Under Attack 1-pager).
+**Inputs:** docs/STATUS.md, docs/TECH_DEBT.md (TD-015), docker-compose.yml (service mirror for CI), pytest.ini, tests/conftest.py, backend/requirements.txt, agent/requirements.txt, docs/superpowers/specs/2026-05-22-security-hardening-design.md §4 (Cloudflare edge layer) + §10.1 (TLS) + §12.1 (CI + secret scan), docs/phases/10-deployment/CLAUDE.md, .gitignore, docs/_artifacts/graphify-output/GRAPH_REPORT.md (Layer-0 orientation).
+**Acceptance:** `.github/workflows/ci.yml` created; `.gitleaks.toml` created; `.github/dependabot.yml` created; `docs/runbooks/cloudflare-setup.md` created; PROJECT_STRUCTURE.md updated; TECH_DEBT.md TD-015 closed; pytest 132/132 pass (no source files touched); single commit; DISPATCHES.md appended.
+**Reviewer:** Client (Vinay) — no source/test/schema code touched; devops-owned CI + docs only. security-engineer should verify gitleaks allowlist completeness before first PR merge.
+**Result:** DONE
+**Files touched:**
+  - Created: `.github/workflows/ci.yml` (test job: Python 3.11 + PG16 + Redis7 + alembic + pytest; secret-scan job: gitleaks v2 full-history scan)
+  - Created: `.gitleaks.toml` (extends default OSS ruleset; allowlist for test fixture phones, ci.yml test JWT secret, test-prefixed API key stubs, .env.example empty values, docs/*.md example key patterns)
+  - Created: `.github/dependabot.yml` (weekly Monday 06:00 UTC; pip root + pip /agent + npm /frontend + github-actions; 5 PRs max per ecosystem)
+  - Created: `docs/runbooks/cloudflare-setup.md` (6 sections, ~80 lines: DNS records, TLS Full Strict + HSTS + Managed Rules + Bot Fight Mode, 5 custom firewall rules, Free-tier quota clarification, Phase 10 cutover sequence, Under Attack 1-pager)
+  - Modified: `docs/PROJECT_STRUCTURE.md` (top-level layout updated; Section 6 expanded to 6.1/6.2/6.3 with CI + Dependabot + gitleaks + runbook entries; last-verified date bumped to 2026-06-04)
+  - Modified: `docs/TECH_DEBT.md` (TD-015 row struck through as CLOSED; paid-down entry appended)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+**LOCAL PYTEST:** 132 passed | 1 skipped | 0 RED (no source files touched — baseline unchanged from Task 9)
+**CLOSED:** TD-015
+**Commit:** (pending — this dispatch)
+**CI VALIDATION:** Untested in actual GitHub Actions until first PR opens (no GitHub remote credentials in this context). CI workflow mirrors docker-compose.yml service definitions exactly (postgres:16 + redis:7-alpine) and uses Python 3.11 to match Render production runtime. Note logged here for retro.
+**NEXT:** tester Task 16 (acceptance matrix + secrets-in-repo test) — unblocked.
+

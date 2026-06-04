@@ -2,7 +2,7 @@
 
 **Source of truth for what exists in the repo, where it lives, and what state it is in.** Auto-updated by every dispatch that adds/renames/deletes a tracked file under `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`, or `docs/`. Stale entries are a merge blocker — `manager` rejects the merge checklist when this file does not match `git ls-files`.
 
-**Last verified against `git ls-files`:** 2026-06-03 (after caveman-narrow + opus-pin sprint, commit pending)
+**Last verified against `git ls-files`:** 2026-06-04 (after Phase 4.5 Tasks 14+15 — CI + Cloudflare runbook)
 
 ---
 
@@ -41,9 +41,15 @@ vachanam/
 |-- .env.example               all 26 required env vars (empty values)
 |-- .env                       NEVER COMMITTED (local secrets)
 |-- .gitignore
+|-- .gitleaks.toml             gitleaks config — default OSS ruleset + allowlist for test fixtures
 |-- docker-compose.yml         local Postgres 16 + Redis 7 for dev
 |-- alembic.ini                Alembic config (URL from settings)
 |-- pytest.ini                 pytest discovery config
+|
+|-- .github/
+|   |-- workflows/
+|   |   `-- ci.yml             CI: test job (PG16+Redis7+pytest, Python 3.11) + secret-scan (gitleaks)
+|   `-- dependabot.yml         weekly pip (backend+agent) + npm (frontend, future-proof) + github-actions updates
 |
 |-- .claude/agents/            10 specialist personas + AGILE + QUALITY_BAR + README
 |-- agent/                     voice agent (LiveKit + Sarvam + Gemini) — runs on Fly.io bom
@@ -172,9 +178,11 @@ frontend/
 
 ---
 
-## Section 6 — Infra (`infra/`)
+## Section 6 — Infra (`infra/`) and CI (`github/`)
 
 Owner: `devops-engineer`.
+
+### 6.1 - Infra configs
 
 | Path | Status | Purpose |
 |---|---|---|
@@ -183,7 +191,19 @@ Owner: `devops-engineer`.
 | `infra/fly.agent.toml` | scaffolded | Fly.io deploy config; not yet flown to production. |
 | `infra/render.yaml` | scaffolded | Render deploy config; not yet deployed. |
 
-**Not yet created:** `.github/workflows/ci.yml` (TD-015 — CI / secret-scan job; Phase 4.5 acceptance).
+### 6.2 - GitHub CI / secret-scan / Dependabot
+
+| Path | Status | Purpose |
+|---|---|---|
+| `.github/workflows/ci.yml` | working | Two-job workflow triggered on PR + push to main/master. Job 1 `test`: Python 3.11, Postgres 16 service, Redis 7 service, installs backend + agent deps, runs `alembic upgrade head`, runs `pytest tests/ -v --tb=short`. Job 2 `secret-scan`: full git history checkout + gitleaks OSS scan. **TD-015 closed.** |
+| `.github/dependabot.yml` | working | Weekly (Monday 06:00 UTC) security updates for: `pip` root scan (backend), `pip /agent` scan (agent), `npm /frontend` (future-proof for Phase 7), `github-actions`. Max 5 open PRs per ecosystem. Labels auto-applied. |
+| `.gitleaks.toml` | working | Gitleaks configuration. Extends default OSS ruleset. Allowlist: test fixture phone numbers (+919999999999 etc.), ci.yml test JWT secret, test-prefixed API key stubs, .env.example empty-value lines, docs/*.md example key patterns. |
+
+### 6.3 - Runbooks
+
+| Path | Status | Purpose |
+|---|---|---|
+| `docs/runbooks/cloudflare-setup.md` | working | Phase 10 cutover doc (~80 lines). DNS records for all subdomains, TLS Full Strict setup, HSTS config, Managed Rules (OWASP CRS unlimited on Free), Bot Fight Mode, 5 custom firewall rules (.env / .git / wp-admin / wp-login / .DS_Store blocks), Free-tier quota clarification (WAF RL 10k cap does NOT apply to managed CRS), Phase 10 cutover sequence, Under Attack 1-pager. |
 
 ---
 

@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+
+jobs:
+  # ── Job 1: Test suite ──────────────────────────────────────────────────────
+  test:
+    name: pytest (Python 3.11 + PG16 + Redis7)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: vachanam
+          POSTGRES_PASSWORD: localdev123
+          POSTGRES_DB: vachanam_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # ── Database ────────────────────────────────────────────────────────────
+      DATABASE_URL: postgresql+asyncpg://vachanam:localdev123@localhost:5432/vachanam_dev
+
+      # ── Redis ───────────────────────────────────────────────────────────────
+      REDIS_URL: redis://localhost:6379
+
+      # ── Auth ────────────────────────────────────────────────────────────────
+      # Deterministic test secret — NOT a real production value.
+      JWT_SECRET: ci-test-jwt-secret-not-real-do-not-use-in-prod
+      JWT_EXPIRE_HOURS: "24"
+
+      # ── Google OAuth (test stub — backend verifies against Google public keys;
+      #    tests that exercise /auth/google use monkeypatching to skip real
+      #    Google verification, so this value only needs to be non-empty) ──────
+      GOOGLE_OAUTH_CLIENT_ID: test-client-id.apps.googleusercontent.com
+      GOOGLE_OAUTH_CLIENT_SECRET: test-client-secret
+      GOOGLE_APPLICATION_CREDENTIALS: ""
+      GOOGLE_CALENDAR_SERVICE_EMAIL: test@test.iam.gserviceaccount.com
+
+      # ── App config ──────────────────────────────────────────────────────────
+      APP_ENV: development
+      BASE_URL: http://localhost:8000
+      FRONTEND_URL: http://localhost:3000
+      LOG_LEVEL: warning
+      ADMIN_PHONE: "+919999999999"
+
+      # ── AI (test stubs — agent tests use mocks; no real API calls in CI) ────
+      SARVAM_API_KEY: test-sarvam-key
+      OPENAI_API_KEY: test-openai-key
+      GEMINI_API_KEY: test-gemini-key
+
+      # ── LiveKit ─────────────────────────────────────────────────────────────
+      LIVEKIT_URL: wss://test.livekit.local
+      LIVEKIT_API_KEY: test-livekit-key
+      LIVEKIT_API_SECRET: test-livekit-secret
+
+      # ── Telephony ───────────────────────────────────────────────────────────
+      VOBIZ_SIP_DOMAIN: test.sip.vobiz.ai
+      VOBIZ_SIP_USERNAME: test-user
+      VOBIZ_SIP_PASSWORD: test-pass
+      VOBIZ_DID_NUMBER: "+914066000000"
+      VOBIZ_PARTNER_AUTH_ID: test-partner-id
+      VOBIZ_PARTNER_AUTH_TOKEN: test-partner-token
+
+      # ── WhatsApp ────────────────────────────────────────────────────────────
+      META_ACCESS_TOKEN: test-meta-token
+      META_PHONE_NUMBER_ID: "000000000000000"
+      META_WABA_ID: "000000000000000"
+      META_WEBHOOK_VERIFY_TOKEN: test-verify-token
+      META_APP_SECRET: test-app-secret
+
+      # ── Payments ────────────────────────────────────────────────────────────
+      RAZORPAY_KEY_ID: rzp_test_fakekeyforci
+      RAZORPAY_KEY_SECRET: test-razorpay-secret
+      RAZORPAY_WEBHOOK_SECRET: test-webhook-secret
+      RAZORPAY_PLAN_SOLO_ID: plan_solo_test
+      RAZORPAY_PLAN_CLINIC_ID: plan_clinic_test
+      RAZORPAY_PLAN_MULTI_ID: plan_multi_test
+
+      # ── Rate-limit bypass (CI runner IP) ────────────────────────────────────
+      RATE_LIMIT_BYPASS_IPS: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install backend dependencies
+        run: pip install --no-cache-dir -r backend/requirements.txt
+
+      - name: Install agent dependencies
+        run: pip install --no-cache-dir -r agent/requirements.txt
+
+      - name: Run Alembic migrations
+        run: alembic upgrade head
+
+      - name: Run pytest
+        run: pytest tests/ -v --tb=short
+
+  # ── Job 2: Secret scan (gitleaks) ─────────────────────────────────────────
+  secret-scan:
+    name: secret-scan (gitleaks)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history for scan)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

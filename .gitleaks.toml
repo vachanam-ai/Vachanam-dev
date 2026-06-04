@@ -1,0 +1,79 @@
+# .gitleaks.toml — Gitleaks configuration for Vachanam
+# OSS gitleaks default ruleset is enabled by inheriting without [extend].
+# This file only adds allowlist entries for known-safe test fixtures.
+# See: https://github.com/gitleaks/gitleaks#configuration
+
+title = "Vachanam gitleaks config"
+
+[extend]
+# Inherit all default rules from the built-in gitleaks ruleset.
+# Equivalent to running `gitleaks detect` with no custom config.
+useDefault = true
+
+# ── Allowlist: patterns that are safe to appear in the repo ──────────────────
+# Rules:
+#   1. Test fixture phone numbers  — Indian E.164 placeholders used in tests and .env.example
+#   2. Test JWT secrets             — hardcoded non-secret values in tests/ only
+#   3. .env.example empty values    — KEY= with empty RHS is not a secret
+#
+# Each [[allowlists]] entry whitelists a specific regex; gitleaks will still
+# fire on any match outside these patterns.
+
+[[allowlists]]
+description = "Test fixture phone numbers (Indian E.164 placeholders)"
+regexes = [
+  # Canonical Indian test numbers used across tests/ and docs/
+  '''\+919999999999''',
+  '''\+919XXXXXXXXX''',
+  '''\+914066000000''',
+  # Generic 10-digit mask patterns used in .env.example + docs
+  '''\+919[0-9]{9}''',
+]
+
+[[allowlists]]
+description = "CI test JWT secret (explicitly labelled non-prod in ci.yml)"
+regexes = [
+  '''ci-test-jwt-secret-not-real-do-not-use-in-prod''',
+]
+paths = [
+  '''.github/workflows/ci.yml''',
+]
+
+[[allowlists]]
+description = "Test stub API keys (explicitly prefixed test- or rzp_test_)"
+regexes = [
+  # Razorpay test-mode key prefix
+  '''rzp_test_''',
+  # Generic test- prefixed stubs in ci.yml env block
+  '''test-[a-z]+-key''',
+  '''test-[a-z]+-secret''',
+  '''test-[a-z]+-token''',
+  '''test-[a-z]+-id''',
+]
+paths = [
+  '''.github/workflows/ci.yml''',
+]
+
+[[allowlists]]
+description = ".env.example empty values (KEY= with no value is not a secret)"
+regexes = [
+  # Matches lines like: SARVAM_API_KEY=  (trailing whitespace or end of line)
+  '''[A-Z_]+=\s*$''',
+]
+paths = [
+  '''.env.example''',
+]
+
+[[allowlists]]
+description = "Docs and spec files containing example key patterns (teaching material)"
+regexes = [
+  # Example key shapes used in docs to illustrate patterns — no real values
+  '''AIza\[A-Za-z0-9_-\]\{35\}''',
+  '''rzp_live_''',
+  '''sk-proj-''',
+]
+paths = [
+  '''docs/.*\.md''',
+  '''\.claude/.*\.md''',
+  '''CLAUDE\.md''',
+]
