@@ -13,6 +13,34 @@ Format per session:
 
 ---
 
+## 2026-06-04 — Token optimization: curated context blocks + bundled dispatches
+
+**Client request:** "claude is drinking tokens like water. tokens getting exhausted very fastly. can you find a way to optimize this without compromising quality."
+
+**Diagnosis:** Per-subagent dispatch was burning 70k-170k tokens, mostly on file rediscovery (STATUS + ROADMAP + CHANGELOG + TECH_DEBT + spec + multiple source files before actual work).
+
+**Decision (Option A approved, 4 changes):**
+1. Curated context block in every dispatch prompt (baseline commit, what's done, what's open, only the 3-5 relevant files, exact spec section by line number) — saves 30-50% per dispatch
+2. Skip brainstormer when no real architectural fork exists — saves 1 opus dispatch per phase
+3. Bundle related small tasks (multiple test files of same domain → one tester dispatch; related sub-implementations → one engineer dispatch)
+4. Bundle reviewer follow-ups (P3 nits, minor gaps) into next planned implementer dispatch instead of separate "fix small thing" dispatches
+
+**Quality non-negotiables UNCHANGED:** mandatory Task dispatch, DISPATCHES.md logging, different specialist for review, TDD pattern, per-domain QUALITY_BAR, no test weakening, all CLAUDE.md rules intact.
+
+**Files modified:**
+- .claude/agents/AGILE.md — new "DISPATCH PROMPT EFFICIENCY" section with 4 rules + template
+- .claude/agents/manager.md — new stubborn rule 14 (dispatch prompt efficiency)
+- docs/CHANGELOG.md — this entry
+- docs/DISPATCHES.md — dispatch entry for this manager dispatch
+
+**Commit:** *(pending — single dispatch commits AGILE + manager + CHANGELOG + DISPATCHES together)*
+
+**Impact:** Expected ~40% reduction in per-dispatch token cost. First dispatch under new rules: Phase 4.5 Task 8 (tester bundled headers + CORS + admin + JWT failing tests).
+
+**Retro:** This optimization was an obvious win once asked for. Should have been baked into the original dispatch rule (CHANGELOG 2026-06-01) — orchestrator's initial implementation of the mandatory-dispatch rule defaulted to "specialist reads everything from scratch" because that was the safe default. The fix is curated context, not reading less. Lesson for next sprint: when introducing a process rule, also define the prompt template that uses it efficiently.
+
+---
+
 ## 2026-06-03 (latest) — WhatsApp removed from MVP1, moved to MVP2 (client decision)
 
 **Topic:** Client-directed scope change. All WhatsApp functionality removed from MVP1 and deferred to MVP2. Voice booking remains verbal-on-call only; no patient WA confirmation, no doctor WA notification. Calendar events still created. Payment/trial reminders via email instead of WA.

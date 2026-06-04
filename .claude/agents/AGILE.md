@@ -287,3 +287,74 @@ Even a one-character typo fix in `backend/routers/auth.py` is dispatched to `bac
 **Dispatch log entry:** every dispatch appended to `docs/DISPATCHES.md` per the format in `manager.md`. Never edit older entries.
 
 ---
+
+## DISPATCH PROMPT EFFICIENCY (per CHANGELOG 2026-06-04)
+
+To reduce per-dispatch token cost without compromising quality, every dispatch prompt MUST:
+
+### Rule 1 — Curated context block
+
+Include at the top of the prompt:
+- `BASELINE:` commit hash + test count (e.g., "commit fcc1507, 90/90 pass")
+- `WHAT'S DONE:` 1-2 sentences relevant to this task only
+- `WHAT'S OPEN:` 1-2 sentences on the immediate scope
+- `RELEVANT FILES:` only the 3-5 files this specialist actually edits/reads
+- `SPEC SECTION:` exact section + line number (e.g., "spec §8.5 lines 412-440")
+
+Specialist skips reading STATUS / ROADMAP / CHANGELOG / TECH_DEBT unless specifically needed for the decision (rare).
+
+### Rule 2 — Skip brainstormer when no real fork
+
+Brainstormer dispatches ONLY when:
+- ≥2 architecturally-different approaches exist (e.g., custom vs library)
+- New vendor / cost decision (any new SaaS subscription)
+- Library choice not in spec
+- Performance / scale trade-off with measurable cost
+
+Routine implementation that follows spec verbatim = NO brainstormer gate. Manager dispatches implementer directly.
+
+### Rule 3 — Bundle related small tasks
+
+Multiple test files in same domain → ONE tester dispatch (e.g., test_headers + test_cors + test_admin + test_jwt = one tester dispatch).
+
+Multiple related implementation sub-tasks → ONE implementer dispatch (e.g., require_admin + close 2 reviewer follow-ups in same router = one backend-engineer dispatch).
+
+DO NOT bundle across domains (still one dispatch per specialist domain).
+
+### Rule 4 — Reviewer follow-ups bundled into next dispatch
+
+If a reviewer flags small follow-ups (P3 nits, minor coverage gaps, missing test edge cases):
+- DO NOT dispatch a separate "fix small thing" task
+- DO fold the follow-ups into the next planned implementer dispatch in the same area
+- Reference the reviewer's commit hash + the specific findings in the prompt
+
+### Dispatch prompt template (use for every dispatch)
+
+```
+[TITLE — what specialist is doing]
+
+BASELINE: commit <hash>, <N>/<M> pass
+WHAT'S DONE: <1-2 sentences>
+WHAT'S OPEN: <1-2 sentences on this task scope>
+RELEVANT FILES: <list of 3-5 file paths>
+SPEC SECTION: <spec path + section + line range>
+[OPTIONAL] PRIOR REVIEWER FOLLOWUPS TO BUNDLE: <list>
+
+YOUR JOB
+1. ...
+2. ...
+
+CONSTRAINTS
+- ...
+
+REPORT BACK (narrow caveman)
+```
+RESULT: ...
+FILES: Created/Modified
+TESTS: ...
+COMMIT: <hash>
+NEXT: ...
+```
+```
+
+---

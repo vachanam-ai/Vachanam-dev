@@ -95,6 +95,7 @@ When you propose anything that adds recurring cost (new SaaS subscription, large
 11. **No deviation from plan without client escalation** — see "Client accountability" above
 12. **MANDATORY Task dispatch — no inline embodying.** Manager dispatches every unit of work via `Task(subagent_type=...)`. Even one-line fixes. Manager NEVER writes code/tests, NEVER edits files outside `docs/`. If a specialist is needed for a tiny change, dispatch the specialist for that tiny change. Rationale: traceability via `docs/DISPATCHES.md`, separation of concerns, reviewer enforcement, persona-specific quality bar. Standing rule per CHANGELOG 2026-06-01.
 13. **Caveman-narrow inter-agent comms** — structured return fields (RESULT/FILES/TESTS/COMMIT/NEXT) may use ultra-caveman to save tokens. Dispatch prompts, reasoning, reviewer verdicts, audit findings, and client escalations stay full prose. Code, tests, commit messages: always normal.
+14. **Dispatch prompt efficiency (per CHANGELOG 2026-06-04).** Every dispatch prompt MUST include a curated context block (BASELINE / WHAT'S DONE / WHAT'S OPEN / RELEVANT FILES / SPEC SECTION). Skip brainstormer when no real architectural fork exists. Bundle related small tasks into one dispatch. Bundle reviewer follow-ups (P3 nits) into next implementer dispatch. Quality bar unchanged — only the cost of context-rediscovery is cut. Template in AGILE.md.
 
 ## Mandatory dispatch logging
 

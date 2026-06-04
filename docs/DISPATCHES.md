@@ -492,3 +492,42 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Queue routes use `@audit` decorator + `request.state` injection. The handler sets `request.state.audit_resource_id/user_id/branch_id` after `_update_status()` succeeds; the decorator's `finally` block reads them.
 - TD-022 closed: PII denylist enforced with 6 words (phone, name, email, address, complaint, symptom), substring matching, and spec §8.2 exception for `user.login.failure` + key exactly `"email"`.
 
+---
+
+## 2026-06-04 — manager dispatched (token optimization: curated context blocks + bundled dispatches)
+
+**Scope:** Apply client-approved Option A (4 token-optimization changes to agent dispatch rules) across AGILE.md, manager.md, CHANGELOG.md, and DISPATCHES.md. Process/governance edits only — no source, test, or schema code touched.
+
+**Inputs:** Client approval of Option A (4 optimizations). Current state: .claude/agents/AGILE.md (MANDATORY DISPATCH RULE section), .claude/agents/manager.md (Stubborn principles rules 1-13), docs/CHANGELOG.md (newest-first entries), docs/DISPATCHES.md (chronological append).
+
+**Acceptance:**
+  - AGILE.md has new "DISPATCH PROMPT EFFICIENCY (per CHANGELOG 2026-06-04)" section after the MANDATORY DISPATCH RULE section, with 4 sub-rules + dispatch prompt template
+  - manager.md has new rule 14 in Stubborn principles (dispatch prompt efficiency)
+  - CHANGELOG.md has new top entry dated 2026-06-04 with diagnosis, 4 changes, quality non-negotiables, retro
+  - DISPATCHES.md has this entry appended
+  - Single commit with correct message covering all 4 files
+
+**Reviewer:** Client (Vinay) — these are process/governance changes, not code. No specialist reviewer required.
+
+**Result:** DONE
+
+**Files touched:**
+  - Modified: .claude/agents/AGILE.md (new DISPATCH PROMPT EFFICIENCY section with 4 rules + template)
+  - Modified: .claude/agents/manager.md (new stubborn rule 14)
+  - Modified: docs/CHANGELOG.md (new top entry)
+  - Modified: docs/DISPATCHES.md (this entry)
+
+**Tests:** No source/test code touched. Pytest baseline 111/111 + 1 skip unchanged.
+
+**Commit:** (pending — hash backfilled after commit lands)
+
+**Follow-up dispatches:**
+  - Orchestrator dispatches Phase 4.5 Task 8 (tester bundled tests) using the new curated-context template — first dispatch under new rules.
+
+**Notes:**
+- Client instruction said "add rule 13" but manager.md already has rule 13 (caveman-narrow inter-agent comms, added per CHANGELOG 2026-06-03). New rule added as rule 14 to avoid overwriting.
+- The curated context block template is intentionally minimal (5 fields). Specialists who need deeper context (e.g., security-engineer doing a design review) can still read additional files — the rule is "skip by default, read if needed."
+- Brainstormer skip rule has explicit gates (>=2 approaches, new vendor, library choice, performance trade-off). Any ambiguity = dispatch brainstormer. The skip is for routine spec-following implementation only.
+- Bundling rules explicitly forbid cross-domain bundling (still one dispatch per specialist domain). This preserves reviewer enforcement and persona-specific quality bar.
+- Expected impact: ~40% reduction in per-dispatch token cost. Actual impact measurable by comparing Task 8 token usage vs Task 4-7 average.
+
