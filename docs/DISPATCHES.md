@@ -531,3 +531,29 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Bundling rules explicitly forbid cross-domain bundling (still one dispatch per specialist domain). This preserves reviewer enforcement and persona-specific quality bar.
 - Expected impact: ~40% reduction in per-dispatch token cost. Actual impact measurable by comparing Task 8 token usage vs Task 4-7 average.
 
+## 2026-06-04 — tester dispatched (Phase 4.5 Task 8 — bundled failing tests)
+**Scope:** Write failing tests for 4 security areas: HTTP security headers (test_headers.py), CORS policy (test_cors.py), admin-only route protection (test_admin_only.py), and JWT edge cases (test_jwt.py). Bundled per AGILE.md Rule 3.
+**Inputs:** backend/middleware/security_headers.py, backend/main.py (CORS config), security-hardening-design spec sections 8.1-8.4, existing tests/security/ patterns.
+**Acceptance:** 4 new test files under tests/security/. 17 GREEN (headers/CORS/JWT tests pass against existing middleware). 4 RED (admin_only tests expected RED until Task 9 creates /admin/ping route). Total: 128 passed, 4 failed, 1 skipped.
+**Reviewer:** security-engineer (Task 9 review will cover these implicitly when turning RED to GREEN).
+**Result:** DONE
+**Files touched:**
+  - Created: tests/security/test_headers.py (7 tests), tests/security/test_cors.py (5 tests), tests/security/test_admin_only.py (4 tests), tests/security/test_jwt.py (5 tests)
+**Tests:** 128 passed | 4 failed (expected RED) | 1 skipped (TD-023)
+**Commit:** `a57ef04`
+**Follow-up dispatches:** backend-engineer Task 9 (bundled: /admin/ping route + 2 sec-review followups from Task 7).
+
+## 2026-06-04 — manager self-dispatch (commit Task 8 + stale-graph threshold + docs)
+**Scope:** Two bundled small jobs: (1) commit Task 8's 4 test files, (2) tighten stale-graph threshold from 7 days to 48 hours per client direction, (3) append CHANGELOG addendum and DISPATCHES entries.
+**Inputs:** Client direction on 48h threshold, AGILE.md Rule 1 section, CHANGELOG.md 2026-06-04 entry, DISPATCHES.md (append).
+**Acceptance:** Two commits land: (a) Task 8 test files committed, (b) AGILE.md updated with 48h threshold + CHANGELOG addendum + DISPATCHES entries. pytest baseline unchanged.
+**Reviewer:** Client (process/governance changes, not code).
+**Result:** DONE
+**Files touched:**
+  - Modified: .claude/agents/AGILE.md (Layer-0 orientation block added to Rule 1, 48h threshold)
+  - Modified: docs/CHANGELOG.md (addendum on 2026-06-04 entry)
+  - Modified: docs/DISPATCHES.md (this entry + Task 8 entry)
+**Tests:** No test changes. Baseline: 128 passed | 4 failed (expected RED) | 1 skipped.
+**Commit:** Task 8: `a57ef04` | This dispatch: see below.
+**Follow-up dispatches:** backend-engineer Task 9 (next planned dispatch).
+

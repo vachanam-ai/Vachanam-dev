@@ -303,6 +303,8 @@ Include at the top of the prompt:
 
 Specialist skips reading STATUS / ROADMAP / CHANGELOG / TECH_DEBT unless specifically needed for the decision (rare).
 
+**Layer-0 orientation:** prefer `docs/_artifacts/graphify-output/GRAPH_REPORT.md` (~50 lines, ~1500 tokens) for repo orientation instead of reading individual phase docs. If the report's `Generated:` timestamp is **>48 hours old**, dispatch graphify regen before relying on it. Default check: `head -3 docs/_artifacts/graphify-output/GRAPH_REPORT.md` to read the timestamp. Once Phase 4.5 Task 14 ships CI, graphify regen runs on every commit and this stale check becomes obsolete.
+
 ### Rule 2 — Skip brainstormer when no real fork
 
 Brainstormer dispatches ONLY when:

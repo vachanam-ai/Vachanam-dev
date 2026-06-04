@@ -39,6 +39,8 @@ Format per session:
 
 **Retro:** This optimization was an obvious win once asked for. Should have been baked into the original dispatch rule (CHANGELOG 2026-06-01) — orchestrator's initial implementation of the mandatory-dispatch rule defaulted to "specialist reads everything from scratch" because that was the safe default. The fix is curated context, not reading less. Lesson for next sprint: when introducing a process rule, also define the prompt template that uses it efficiently.
 
+**Addendum (2026-06-04 later):** Client tightened stale-graph threshold from 7 days to 48 hours after observing that end-to-end app changes ship in <7 days. Final rule: regen graphify if `GRAPH_REPORT.md` Generated timestamp is >48h old. Phase 4.5 Task 14 (CI workflow) will automate regen-on-commit, obviating this manual check.
+
 ---
 
 ## 2026-06-03 (latest) — WhatsApp removed from MVP1, moved to MVP2 (client decision)
