@@ -570,7 +570,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
   - Modified: `backend/main.py` (admin router import + include_router), `backend/services/audit_service.py` (removed unused `from typing import Any`), `docs/TECH_DEBT.md` (TD-026 row appended), `docs/PROJECT_STRUCTURE.md` (admin.py entry added; test_admin_only flipped RED→GREEN; Task 8 tests listed; baseline updated to 132/132 + 1 skip), `docs/DISPATCHES.md` (this entry)
 **ADMIN TESTS:** 4/4 GREEN
 **FULL PYTEST:** 132 passed | 1 skipped | 0 RED
-**Commit:** see below
+**Commit:** `5f04110`
 **TD-026 LOGGED:** yes
 **NEXT:** Task 10 (frontend useIdleTimeout hook) DEFERRED — frontend/ directory does not exist yet (Phase 7 work). Task 14 (devops CI workflow, TD-015) is unblocked. Manager to confirm new sequence.
 
