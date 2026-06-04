@@ -110,11 +110,12 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 | Path | Status | Purpose |
 |---|---|---|
 | `backend/routers/__init__.py` | placeholder | Package marker. |
-| `backend/routers/auth.py` | tested | `POST /auth/google` (Google ID-token exchange -> JWT), `GET /auth/me`, `POST /auth/logout`. Rate-limited (5/min, 100/min). IP blocklist. Audit: `user.login.success` + `user.login.failure` (direct `write_audit_row` calls; spec §8.2 email exception applied to failure). |
+| `backend/routers/auth.py` | tested | `POST /auth/google` (Google ID-token exchange -> JWT), `GET /auth/me`, `POST /auth/logout`. Rate-limited (5/min, 100/min). IP blocklist. Audit: `user.login.success` + `user.login.failure` (direct `write_audit_row` calls; spec §8.2 email exception applied to failure). **TD-026 open:** user-not-found path (valid Google token, email not in DB → 403) does not write audit row yet. |
 | `backend/routers/payments.py` | tested | Razorpay Standard Checkout — `POST /api/create-order`, `POST /api/verify-payment`. Audit: `payment.verify.success` + `payment.verify.fail` (direct `write_audit_row` calls; fail fires BEFORE raising 400). |
 | `backend/routers/queue.py` | tested | `GET /queue/{branch_id}/today`, `PATCH .../attend`, `PATCH .../no-show`. JWT-protected + `branch_guard`. Audit: `@audit("token.attend", resource_type="token")` + `@audit("token.no_show", ...)` decorators; resource_id/user_id/branch_id set on request.state inside handler. |
+| `backend/routers/admin.py` | tested | `GET /admin/ping` gated by `require_admin` (is_admin=True JWT claim) + `default_limit`. Placeholder skeleton for Phase 8 admin dashboard routes (spec §8.1 admin.view_* actions). Returns `{"status": "ok", "admin_user_id": ...}`. Non-admin → 403; no JWT → 401; expired JWT → 401. |
 
-**Not yet created (Phase 5+):** `routers/whatsapp.py`, `routers/dashboard.py`, `routers/admin.py`, `routers/onboarding.py`.
+**Not yet created (Phase 5+):** `routers/whatsapp.py`, `routers/dashboard.py`, `routers/onboarding.py`.
 
 ### 4.4 - Middleware
 
@@ -234,8 +235,12 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/security/__init__.py` | working | Phase 4.5 Task 4 security tests package. |
 | `tests/security/test_rate_limit.py` | tested (13/13) | Phase 4.5 Task 5. All rate-limit tests GREEN. Fixed 2 tester bugs: (1) ASGITransport fixture now explicitly sets `client=("testclient", 123)` since httpx default is `("127.0.0.1", 123)` not `"testclient"`, (2) IP-blocklist test now sets fake `GOOGLE_OAUTH_CLIENT_ID` via monkeypatch so requests reach the real Google verification path (which triggers `record_failed_login`) instead of hitting the "OAuth not configured" early-return. |
 | `tests/security/test_audit_log.py` | tested (21/21 + 1 SKIP) | Phase 4.5 Task 7. All 21 runnable tests GREEN. 1 skip = `test_db_role_cannot_update_or_delete_audit_log` (deferred to Phase 10 prod-init per TD-023). TD-022 closed. |
+| `tests/security/test_headers.py` | tested (7/7) | Phase 4.5 Task 8. HTTP security headers presence + value checks. |
+| `tests/security/test_cors.py` | tested (5/5) | Phase 4.5 Task 8. CORS policy exact-origin allowlist enforcement. |
+| `tests/security/test_admin_only.py` | tested (4/4) | Phase 4.5 Task 9. require_admin enforcement on GET /admin/ping: non-admin → 403, admin → 200, no JWT → 401, expired → 401. All 4 GREEN after admin.py created + registered. |
+| `tests/security/test_jwt.py` | tested (5/5) | Phase 4.5 Task 8. JWT edge cases (expiry, revocation, malformed). |
 
-**Baseline (2026-06-03, Task 7):** `pytest tests/ -v` -> 111/111 pass + 1 skip against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 22 audit_log tests (21 PASS + 1 SKIP) + 13/13 rate-limit tests.
+**Baseline (2026-06-04, Task 9):** `pytest tests/ -v` -> 132/132 pass + 1 skip against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 4/4 admin_only tests. Prior baseline (Task 7): 111/111 pass + 1 skip.
 
 ### 9.2 - Docs
 

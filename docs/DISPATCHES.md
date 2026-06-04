@@ -557,3 +557,20 @@ The work below was done inline by the orchestrator (main thread) before the mand
 **Commit:** Task 8: `a57ef04` | This dispatch: see below.
 **Follow-up dispatches:** backend-engineer Task 9 (next planned dispatch).
 
+---
+
+## 2026-06-04 — backend-engineer dispatched (Phase 4.5 Task 9 — /admin/ping route + cleanup)
+**Scope:** 3 bundled subtasks: (9a) create `backend/routers/admin.py` with `GET /admin/ping` gated by `require_admin` + `default_limit`, register in `main.py`; (9b) remove unused `from typing import Any` import in `audit_service.py` (sec-review followup Task 7 P3); (9c) log TD-026 in TECH_DEBT.md (user-not-found audit gap in auth.py, deferred per TDD rule). Update PROJECT_STRUCTURE.md and append DISPATCHES entry.
+**Inputs:** tests/security/test_admin_only.py (4 RED tests — acceptance contract), backend/middleware/auth_middleware.py (require_admin already exists), backend/main.py (router registration), backend/services/audit_service.py (unused import), docs/_artifacts/graphify-output/GRAPH_REPORT.md (Layer-0 orientation).
+**Acceptance:** `pytest tests/security/test_admin_only.py -v` → 4/4 GREEN; `pytest tests/ -v --tb=line` → 132/132 PASS + 1 SKIP, ZERO RED; no test files modified; TD-026 logged; PROJECT_STRUCTURE.md updated.
+**Reviewer:** security-engineer (Task 9 impl review — verify require_admin wired correctly; no test weakening).
+**Result:** DONE
+**Files touched:**
+  - Created: `backend/routers/admin.py`
+  - Modified: `backend/main.py` (admin router import + include_router), `backend/services/audit_service.py` (removed unused `from typing import Any`), `docs/TECH_DEBT.md` (TD-026 row appended), `docs/PROJECT_STRUCTURE.md` (admin.py entry added; test_admin_only flipped RED→GREEN; Task 8 tests listed; baseline updated to 132/132 + 1 skip), `docs/DISPATCHES.md` (this entry)
+**ADMIN TESTS:** 4/4 GREEN
+**FULL PYTEST:** 132 passed | 1 skipped | 0 RED
+**Commit:** see below
+**TD-026 LOGGED:** yes
+**NEXT:** Task 10 (frontend useIdleTimeout hook) DEFERRED — frontend/ directory does not exist yet (Phase 7 work). Task 14 (devops CI workflow, TD-015) is unblocked. Manager to confirm new sequence.
+

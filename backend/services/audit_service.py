@@ -12,7 +12,6 @@ TD-022 closed: PII denylist enforced on metadata_json keys.
 """
 import uuid
 from functools import wraps
-from typing import Any
 
 import structlog
 from sqlalchemy import insert

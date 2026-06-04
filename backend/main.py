@@ -111,6 +111,8 @@ app.add_middleware(SecurityHeadersMiddleware)
 # - auth: no deps, issues JWTs the others need
 # - queue: depends on auth middleware
 # - payments: independent (Razorpay flow doesn't need our JWT)
+# - admin: requires is_admin=True JWT claim (require_admin dependency)
+from backend.routers import admin as admin_router
 from backend.routers import auth as auth_router
 from backend.routers import payments as payments_router
 from backend.routers import queue as queue_router
@@ -118,6 +120,7 @@ from backend.routers import queue as queue_router
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(queue_router.router, prefix="/queue", tags=["queue"])
 app.include_router(payments_router.router, prefix="/api", tags=["payments"])
+app.include_router(admin_router.router, prefix="/admin", tags=["admin"])
 
 # Landing page (Vachanam marketing mirror + Razorpay test target).
 # Static files served from backend/static/ — landing index.html at /,
