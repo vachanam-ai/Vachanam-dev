@@ -592,7 +592,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
   - Modified: `docs/DISPATCHES.md` (this entry)
 **LOCAL PYTEST:** 132 passed | 1 skipped | 0 RED (no source files touched — baseline unchanged from Task 9)
 **CLOSED:** TD-015
-**Commit:** (pending — this dispatch)
+**Commit:** `76cd7c3`
 **CI VALIDATION:** Untested in actual GitHub Actions until first PR opens (no GitHub remote credentials in this context). CI workflow mirrors docker-compose.yml service definitions exactly (postgres:16 + redis:7-alpine) and uses Python 3.11 to match Render production runtime. Note logged here for retro.
 **NEXT:** tester Task 16 (acceptance matrix + secrets-in-repo test) — unblocked.
 
