@@ -2,7 +2,7 @@
 
 **Source of truth for what exists in the repo, where it lives, and what state it is in.** Auto-updated by every dispatch that adds/renames/deletes a tracked file under `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`, or `docs/`. Stale entries are a merge blocker — `manager` rejects the merge checklist when this file does not match `git ls-files`.
 
-**Last verified against `git ls-files`:** 2026-06-04 (after Phase 4.5 Tasks 14+15 — CI + Cloudflare runbook)
+**Last verified against `git ls-files`:** 2026-06-04 (after Phase 4.5 DPDP gap analysis — docs/compliance/ directory created)
 
 ---
 
@@ -259,8 +259,11 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/security/test_cors.py` | tested (5/5) | Phase 4.5 Task 8. CORS policy exact-origin allowlist enforcement. |
 | `tests/security/test_admin_only.py` | tested (4/4) | Phase 4.5 Task 9. require_admin enforcement on GET /admin/ping: non-admin → 403, admin → 200, no JWT → 401, expired → 401. All 4 GREEN after admin.py created + registered. |
 | `tests/security/test_jwt.py` | tested (5/5) | Phase 4.5 Task 8. JWT edge cases (expiry, revocation, malformed). |
+| `tests/security/test_secrets_not_in_repo.py` | tested (1/1) | Phase 4.5 Task 16. Scans `git log --all -p` for 6 secret patterns (rzp_live_, sk-proj-, AIza..., JWT_SECRET=, META_ACCESS_TOKEN=, RAZORPAY_KEY_SECRET=). Allowlist mirrors .gitleaks.toml. Asserts zero real matches. |
 
-**Baseline (2026-06-04, Task 9):** `pytest tests/ -v` -> 132/132 pass + 1 skip against Docker Postgres 16 + Redis 7 + Python 3.14. All tests GREEN including 4/4 admin_only tests. Prior baseline (Task 7): 111/111 pass + 1 skip.
+| `tests/_phase_4_5_acceptance.md` | working | Phase 4.5 Task 16b. Acceptance matrix mapping all 19 spec section 15 criteria to tests, manual verifications, or explicit deferrals. 2 BLOCKED on DPDP decisions (ref: `docs/compliance/dpdp-gap-analysis-2026-06-04.md`). |
+
+**Baseline (2026-06-04, Task 16):** `pytest tests/ -v` -> 133/133 pass + 1 skip against Docker Postgres 16 + Redis 7 + Python 3.14. Added 1/1 test_secrets_not_in_repo.py. Prior baseline (Task 9): 132/132 pass + 1 skip.
 
 ### 9.2 - Docs
 
@@ -290,6 +293,7 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `docs/db/migration-log.md` | working | Migration-by-migration narrative. |
 | `docs/audits/2026-05-29-full-project-audit.md` | working | Full 10-specialist audit; produced TD-007..TD-013. |
 | `docs/MAIN_AGENDA.md` | working | One-page project highlight — what Vachanam is, who it serves, runtime flow, stack, current state, graphify findings. Created 2026-06-03. |
+| `docs/compliance/dpdp-gap-analysis-2026-06-04.md` | working | DPDP gap analysis comparing GPT's 13-point framework against our security spec. 9 sections: coverage matrix, confirmed items, MVP1 gaps, MVP2 gaps, out-of-scope corrections, ranked next-actions, spec amendments, launch checklist, DPDP Rules status note. Created 2026-06-04. |
 | `docs/_legacy/*` (8 files) | archived | Old PHASE_0..5 root docs + vachanam-progress.md + README. Historical reference only. |
 | `docs/_artifacts/graphify-output/ast-graph.json` | working | Graphify 0.8.30 AST-only graph — 402 nodes, 1006 edges across 46 code files. Not committed (see .gitignore). |
 | `docs/_artifacts/graphify-output/GRAPH_REPORT.md` | working | Human-readable graphify findings: god nodes, surprising connections, suggested queries. Created 2026-06-03. |

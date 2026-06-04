@@ -596,3 +596,48 @@ The work below was done inline by the orchestrator (main thread) before the mand
 **CI VALIDATION:** Untested in actual GitHub Actions until first PR opens (no GitHub remote credentials in this context). CI workflow mirrors docker-compose.yml service definitions exactly (postgres:16 + redis:7-alpine) and uses Python 3.11 to match Render production runtime. Note logged here for retro.
 **NEXT:** tester Task 16 (acceptance matrix + secrets-in-repo test) — unblocked.
 
+---
+
+## 2026-06-04 -- privacy-legal dispatched (Phase 4.5 DPDP gap analysis)
+**Scope:** Compare GPT's 13-point DPDP Healthcare Voice Agent framework against our security spec (2026-05-22 + 3 REVISIONS). Produce 9-section gap analysis document identifying what is covered, what is missing for MVP1, what defers to MVP2, and what is out of scope. Ranked next-action recommendations. Spec amendment proposals.
+**Inputs:** docs/superpowers/specs/2026-05-22-security-hardening-design.md (sections 3, 8, 9, 11), CLAUDE.md (sensitive data rules), docs/STATUS.md, docs/TECH_DEBT.md, docs/CHANGELOG.md, backend/models/schema.py, agent/prompts/system_prompt.py, agent/agent.py, .claude/agents/privacy-legal.md, docs/_artifacts/graphify-output/GRAPH_REPORT.md.
+**Acceptance:** `docs/compliance/dpdp-gap-analysis-2026-06-04.md` created with all 9 sections; coverage matrix for 13 GPT items + 13 launch-checklist items; docs/PROJECT_STRUCTURE.md updated; docs/DISPATCHES.md appended; no source/test/infra files touched.
+**Reviewer:** Client (Vinay) -- compliance gap analysis is a client-facing decision document, not a code change. Manager reads to prioritize which gaps fold into remaining Phase 4.5 tasks.
+**Result:** DONE
+**Files touched:**
+  - Created: `docs/compliance/dpdp-gap-analysis-2026-06-04.md`
+  - Modified: `docs/PROJECT_STRUCTURE.md` (compliance directory + file entry added; last-verified date updated)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+**Tests:** No source/test code touched. Pytest baseline 132/132 + 1 skip unchanged.
+**Commit:** (pending)
+**Follow-up dispatches:**
+  - Client decides recording question (Gap 3.3 Option A vs B -- recommendation: Option A, no recording for MVP1)
+  - Client confirms DPDP Rules gazette status from meity.gov.in
+  - After client decisions: privacy-legal for Task 11 (privacy policy + ToS + DPA authoring, unblocked)
+  - privacy-legal for breach response runbook extraction (standalone file from spec section 11)
+  - privacy-legal for DSAR runbook + vendor compliance register
+**Notes:**
+- Coverage summary: 5 fully covered, 11 partial, 7 missing for MVP1, 1 deferred MVP2, 1 out-of-scope adjustment.
+- Top 3 blocking gaps: (1) privacy policy + ToS + DPA not authored, (2) call-start consent disclosure missing from system prompt, (3) recording policy contradicts between spec and code.
+- Critical finding: system_prompt.py (agent/prompts/system_prompt.py line 59) instructs "Greet the patient warmly" without any data-processing or recording disclosure. This is a DPDP Act s.5 violation if the first live call processes patient data without notice.
+- AI decision audit logging (GPT Item 12) recommended to fold into existing audit_log table with action prefix "ai." rather than new table. PII denylist (TD-022 closed) already protects metadata_json.
+- Vendor list correction: GPT references Twilio/AWS/OpenAI which are NOT in our stack. Our actual vendors (Sarvam, Vobiz, LiveKit, Neon, Upstash, Fly.io, Render) have BETTER data residency posture for DPDP compliance (Sarvam + Vobiz = India-based).
+
+## 2026-06-04 -- tester dispatched (Phase 4.5 Task 16 -- secrets-in-repo test + acceptance matrix)
+**Scope:** (a) Verify `tests/security/test_secrets_not_in_repo.py` scans `git log --all -p` for 6 secret patterns with allowlist; assert zero real matches. (b) Verify and update `tests/_phase_4_5_acceptance.md` mapping all 19 spec section 15 criteria to tests / manual / TD deferrals. Reference `docs/compliance/dpdp-gap-analysis-2026-06-04.md` for 2 BLOCKED criteria.
+**Inputs:** `docs/superpowers/specs/2026-05-22-security-hardening-design.md` sections 12.1 + 15, `.gitleaks.toml`, `tests/conftest.py`, `docs/compliance/dpdp-gap-analysis-2026-06-04.md`, existing `tests/security/test_secrets_not_in_repo.py`, existing `tests/_phase_4_5_acceptance.md`.
+**Acceptance:** `pytest tests/security/test_secrets_not_in_repo.py -v` -> 1/1 GREEN. `pytest tests/ -v --tb=line` -> 133 passed, 1 skipped, 0 failed. Acceptance matrix complete: 19/19 criteria mapped, 0 unmapped.
+**Reviewer:** manager (merge checklist).
+**Result:** DONE
+**Files touched:**
+  - Verified (no changes needed): `tests/security/test_secrets_not_in_repo.py`
+  - Modified: `tests/_phase_4_5_acceptance.md` (added DPDP gap analysis references to BLOCKED criteria 12, 13)
+  - Modified: `docs/PROJECT_STRUCTURE.md` (added test_secrets_not_in_repo.py + _phase_4_5_acceptance.md entries; updated baseline to 133/133)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+**Tests:** Full pytest: 133 passed | 1 skipped | 0 failed. Secrets scan: PASS (zero leaks).
+**Commit:** (pending)
+**Notes:**
+- test_secrets_not_in_repo.py already existed from a prior session attempt; verified it passes against current git history with zero false positives.
+- Acceptance matrix already existed; updated BLOCKED criteria 12+13 to reference `docs/compliance/dpdp-gap-analysis-2026-06-04.md` per dispatch instructions.
+- Coverage: 12/19 automated tests, 3/19 manual/doc, 2/19 BLOCKED (DPDP), 2/19 DEFERRED (Phase 7 frontend + Phase 10 containers).
+
