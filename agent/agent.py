@@ -481,4 +481,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
 
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    # agent_name MUST match the dispatch rule's RoomAgentDispatch.agent_name.
+    # The LiveKit dispatch rule created by scripts/provision_vobiz_trunk.py
+    # uses "voice-assistant". Changing this here without updating the dispatch
+    # rule (or vice-versa) will break inbound call routing.
+    agents.cli.run_app(
+        agents.WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            agent_name="voice-assistant",
+        )
+    )
