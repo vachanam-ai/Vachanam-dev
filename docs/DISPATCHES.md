@@ -839,3 +839,26 @@ The work below was done inline by the orchestrator (main thread) before the mand
   - Gap 2 load_dotenv() uses _ENV_PATH = project_root/.env with an existence guard (if _ENV_PATH.exists()) so CI environments without a .env file do not fail.
   - `python -c "import agent.agent"` confirmed clean on Windows (Python 3.14, platform win32).
 
+---
+
+## 2026-06-05 — database-engineer dispatched (Phase 1 D2 — alembic verified + seed_phase1.py)
+**Scope:** Gap 11 (confirm alembic migrations applied to local Postgres, all tables present) + Gap 5 (seed script for Phase 1 first call: 1 Org, 1 Branch, 1 Doctor).
+**Inputs:** backend/models/schema.py, alembic/versions/*.py (both), alembic.ini, alembic/env.py, tests/conftest.py, backend/database.py, backend/config.py, .env (env var presence only — no values logged).
+**Acceptance:** alembic current = 8559268c0c44 (head); all 11 tables + alembic_version present in pg_tables; seed runs clean on first call, says "already seeded" on second; 3/3 tests GREEN; full suite 178 passed + 1 skip.
+**Reviewer:** tester (3-test suite verified as part of this dispatch).
+**Result:** DONE
+**Files touched:**
+  Created: scripts/seed_phase1.py | tests/integration/test_seed_phase1.py
+  Modified: docs/DISPATCHES.md (this entry)
+**Tests:** 3/3 seed tests GREEN. Full suite 178 passed, 1 skipped, 0 failed. Zero regressions.
+**Commit:** (pending — see hash after commit)
+**Follow-up dispatches:** Phase 1 voice agent telephony wiring (per ROADMAP.md next steps).
+**Notes:**
+  - Gap 11 diagnosis: alembic_version stamp was orphaned at 8559268c0c44 but tables were absent (test conftest drop_all wipes tables without resetting the stamp). Recovery: stamp base, stamp ffcf1134aa8f (first migration), upgrade head to run only the second migration — tables created correctly.
+  - Root cause of orphaned stamp: conftest.py uses Base.metadata.drop_all/create_all (bypasses Alembic). This is intentional for test isolation (known pattern per Phase 4.5 dispatch note). The real DB state requires `stamp ffcf1134aa8f && upgrade head` after any test run that wipes tables.
+  - seed_phase1.py uses keyword-only overrides (did_number, admin_phone, owner_email) so tests can inject fake values without patching module globals.
+  - Doctor schema: dispatch asked for working_hours JSONB column — that column does not exist. Schema uses working_hours_start/end (Time). Script uses the actual columns. Discrepancy noted in seed script comments.
+  - Branch.whatsapp_number set to ADMIN_PHONE as placeholder (unique constraint requires a value; real Meta phone_number_id wired in MVP2).
+  - All DID and phone values masked to last 4 digits in all print output (CLAUDE.md Rule 10).
+  - test_seed_phase1_missing_did_exits_cleanly uses shutil.copytree to a tmp_path with a minimal .env lacking VOBIZ_DID_NUMBER, ensuring load_dotenv reads the fake file not the real .env. Belt-and-suspenders: also pops the var from subprocess env.
+
