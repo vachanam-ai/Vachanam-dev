@@ -13,6 +13,80 @@ Format per session:
 
 ---
 
+## 2026-06-05 — Phase 4.5 Security & Compliance: CLOSED
+
+Sprint outcome: 14/18 acceptance criteria GREEN, 3 manual-verification, 1 deferred (Shannon → Phase 3 gate).
+
+### Shipped
+- JWT auth + jti revocation, fastapi-limiter rate limits, SecurityHeadersMiddleware,
+  CORS exact-origin, audit_log table + decorator with PII denylist, secrets-in-repo
+  test, GitHub Actions CI + Dependabot, Cloudflare deploy runbook (Tasks 1-10, 14-16).
+- Privacy policy + ToS + DPA + breach runbook + DSAR runbook (Tasks 11+13).
+- /privacy /terms /dpa public HTML routes (Task 12).
+- Voice agent Step 0 disclosure on call start (DPDP s.5 — closed before any live call).
+- ZAP baseline CI workflow (PR + nightly @23:30 IST) + secrets test self-reference fix
+  + 4 legal-routes coverage tests (Task 17a).
+
+### Decisions (locked, override CLAUDE.md if conflict)
+- No voice recording, ever.
+- AI logging scoped to booking actions only via audit_log.
+- Clinic = Data Fiduciary, Vachanam = Data Processor.
+- WhatsApp deferred to MVP2.
+- Task 17b Shannon scan deferred to end-of-Phase-3 gate (single comprehensive scan).
+- Vobiz LiveKit provisioning script written + agent_name fixed (would have silently
+  broken every inbound call had it not been caught — agent registered with no name,
+  dispatch rule expected "voice-assistant").
+
+### Retro
+- WHAT WORKED: Bundled dispatches under AGILE rule 3 (tester gate + commit batched).
+  Curated context blocks reduced subagent re-derivation. Manager-led commit traceability
+  via DISPATCHES.md kept audit trail tight.
+- WHAT BROKE: Two manager dispatches died at session-limit boundaries (recovered cleanly
+  on retry). Background subagent permissions inconsistent (Bash denied for pip-install
+  in backend dispatch — required tester gate as workaround). Conversation context grew
+  past 300k tokens forcing /compact mid-sprint.
+- TECH DEBT OPENED: TD-027 (data_retention.py P2 Phase 6), TD-028 (scripts/dsar.py CLI
+  P2 Phase 9). Shannon scan tracked as Phase 3 exit gate, not TD.
+- NEXT: Phase 1 voice agent core (PHASE_1_VOICE_AGENT.md). Vobiz wiring ready to test.
+
+### Sprint commits (2026-05-22 through 2026-06-05)
+- `f700c5b` — docs(phase-4.5): apply 3 client decisions + 2 spec corrections
+- `be6d76e` — feat(db): Phase 4.5 Task 2 — audit_log + FK ondelete + FK indexes
+- `6b00686` — feat(security): Phase 4.5 Task 3 — SecurityHeadersMiddleware + CORS
+- `a57ef04` — test(security): Phase 4.5 Task 8 — 21 bundled security tests
+- `5f04110` — feat(admin): Phase 4.5 Task 9 — /admin/ping + TD-026 logged
+- `76cd7c3` — feat(ci): Phase 4.5 Tasks 14+15 — CI + Cloudflare runbook (closes TD-015)
+- `21e1e36` — chore(process): token optimization — curated context blocks
+- `d1e23f2` — feat(security): Phase 4.5 Task 5 — fastapi-limiter integration
+- `fcc1507` — test(security): fix 2 rate-limit test bugs
+- `8dede68` — docs(legal): Phase 4.5 Tasks 11+13 — privacy policy, ToS, DPA, runbooks
+- `1c93c18` — docs(spec): amend security spec for no-recording decision
+- `6433124` — feat(backend): Phase 4.5 Task 12 — /privacy /terms /dpa HTML routes
+- `4984368` — feat(agent): Step 0 DPDP s.5 disclosure on call start
+- `27cc1db` — feat(ci): Phase 4.5 Task 17a — ZAP baseline GitHub Action
+- `b31ac40` — fix(security): allowlist secrets test self-reference + legal coverage
+- `178a0d1` — feat(agent): scripts/provision_vobiz_trunk.py — Vobiz+LiveKit wiring
+
+### Files created (Phase 4.5)
+- backend/middleware/security_headers.py, backend/middleware/rate_limit.py
+- backend/routers/admin.py, backend/routers/legal.py
+- backend/services/audit_service.py
+- tests/security/ (test_rate_limit.py, test_audit_log.py, test_headers.py, test_cors.py, test_admin_only.py, test_jwt.py, test_secrets_not_in_repo.py)
+- tests/integration/test_legal_routes.py, tests/unit/test_system_prompt.py
+- .github/workflows/ci.yml, .github/workflows/zap-baseline.yml, .github/dependabot.yml, .gitleaks.toml
+- docs/legal/ (privacy-policy.md, terms-of-service.md, data-processing-agreement.md)
+- docs/runbooks/ (breach-response.md, dsar.md, cloudflare-setup.md)
+- docs/compliance/dpdp-gap-analysis-2026-06-04.md
+- scripts/provision_vobiz_trunk.py
+
+### Cost summary
+- Sprint span: 2026-05-22 (spec authored) through 2026-06-05 (close-out).
+- Model time: ~15 opus dispatches + ~10 sonnet dispatches across the sprint.
+- $ spent on services: zero new recurring. fastapi-limiter, gitleaks, ZAP are all OSS/free.
+- New recurring cost: none.
+
+---
+
 ## 2026-06-05 — Phase 4.5 close-out: compliance docs committed + spec amended for no-recording decision
 
 Tasks 11+13 closed: 5 legal/compliance docs committed (`8dede68`), security spec amended with 5 changes reflecting client's no-recording decision (Option A, 2026-06-04). 2 acceptance matrix items previously BLOCKED (criteria 12+13: /privacy page, breach runbook) now unblocked. Spec §15 expanded from 19 to 22 acceptance criteria. REVISIONS §16 entry appended. DISPATCHES updated. Remaining for Phase 4.5 close-out: Task 12 (backend-engineer: /privacy + /terms routes), Task 17 (ZAP scan), Task 18 (manager final sign-off + STATUS/ROADMAP update).

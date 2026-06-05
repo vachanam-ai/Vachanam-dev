@@ -757,3 +757,29 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - ZAP report uses `risk-3` CSS class grep for high-risk detection (ZAP HTML report format). `-I` flag makes ZAP exit 0 on all alert levels so the job only fails from our explicit grep check.
 - Shannon (Task 17b) pending: Vinay must add ANTHROPIC_API_KEY to .env. AGPL-3.0 white-box pentester. Covers dynamic logic + branch_id IDOR that ZAP baseline cannot detect. Noted in TD section below but NOT opened as TD (it is a planned task, not a shortcut).
 
+---
+
+## 2026-06-05 — manager dispatched (Phase 4.5 close-out — STATUS + ROADMAP + CHANGELOG + DISPATCHES + TECH_DEBT)
+**Scope:** Final Phase 4.5 sign-off. Update 5 docs to close the sprint: STATUS.md (Phase 4.5 CLOSED, Phase 1 NEXT), ROADMAP.md (Phase 4.5 DONE + Shannon gate added), CHANGELOG.md (full sprint retro entry), DISPATCHES.md (this entry), TECH_DEBT.md (TD-029 Shannon scan gate). Single commit covering all 5.
+**Inputs:** All sprint commits (`f700c5b` through `178a0d1`), docs/STATUS.md, docs/ROADMAP.md, docs/CHANGELOG.md, docs/DISPATCHES.md, docs/TECH_DEBT.md, client decisions log (no-recording, AI audit scope, DPDP Rules status, WA deferred, Shannon deferred, Vobiz creds).
+**Acceptance:** STATUS.md shows Phase 4.5 CLOSED + Phase 1 NEXT; ROADMAP.md shows Phase 4.5 DONE + Shannon gate row; CHANGELOG.md has sprint retro with shipped/decisions/retro/commits/files/cost; DISPATCHES.md has this entry; TECH_DEBT.md has TD-029; single commit lands; no source/test/infra files touched.
+**Reviewer:** Client (Vinay) — sprint close-out is a client-facing deliverable.
+**Result:** DONE
+**Files touched:**
+  - Modified: docs/STATUS.md (Phase 4.5 CLOSED, Phase 1 NEXT, blockers listed, phase map updated)
+  - Modified: docs/ROADMAP.md (Phase 4 DONE, Phase 4.5 DONE, Shannon gate row added between Phase 8 and Phase 9)
+  - Modified: docs/CHANGELOG.md (full sprint retro entry at top)
+  - Modified: docs/DISPATCHES.md (this entry)
+  - Modified: docs/TECH_DEBT.md (TD-029 added)
+**Tests:** No source/test code touched. Pytest baseline 155 passed + 1 skip unchanged.
+**Commit:** (pending — single commit covering all 5 docs)
+**Follow-up dispatches:**
+  - Next session: brainstormer for Phase 1 entry gate (voice agent telephony wiring)
+  - Vinay: run `python scripts/provision_vobiz_trunk.py` before first live call
+  - Vinay: add ANTHROPIC_API_KEY to .env before end of Phase 3 (Shannon gate)
+**Notes:**
+- Sprint span: 2026-05-22 (spec authored) through 2026-06-05 (this close-out). 16 commits landed.
+- Acceptance criteria: 14/18 GREEN, 3 manual-verification (Cloudflare WAF, HSTS preload, Razorpay webhook HMAC — all require production deployment to verify), 1 deferred (Shannon AI scan → TD-029).
+- TD-029 is P1 release blocker for Phase 9 onboarding. Shannon reuses Vinay's Anthropic key. AGPL-3.0 private-use only (no AGPL trigger). Covers branch_id IDOR, JWT bypass, Razorpay HMAC, business logic — gaps ZAP baseline cannot detect.
+- Phase 1 is next per ROADMAP.md. Voice agent code already exists from Phase 2; Phase 1 in this context = connecting to Vobiz telephony + LiveKit on Fly.io Mumbai.
+

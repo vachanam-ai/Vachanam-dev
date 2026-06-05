@@ -1,8 +1,47 @@
 # Vachanam — Status (single source of truth)
 
-**Last updated:** 2026-06-01 (Phase 4 complete)
-**Active phase:** Phase 4.5 — Security & Compliance (next session starts here)
+**Last updated:** 2026-06-05 (Phase 4.5 closed)
+**Active phase:** Phase 1 — Voice Agent Core (next session starts here)
 **Reliability posture:** MVP-launch (~99.4% uptime target). Phase 11 deferred until volume / outage / customer trigger fires. See [`docs/phases/11-reliability-hardening/CLAUDE.md`](phases/11-reliability-hardening/CLAUDE.md).
+
+Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc, this file wins.
+
+Also check [`docs/CHANGELOG.md`](CHANGELOG.md) for session-by-session decision history and [`docs/TECH_DEBT.md`](TECH_DEBT.md) for the shortcut ledger.
+
+---
+
+## ✅ PHASE 4.5 CLOSED — 2026-06-05
+
+Security and Compliance sprint complete. 18 spec acceptance criteria: **14 GREEN + 3 MANUAL-VERIFICATION + 1 DEFERRED** (Shannon AI scan deferred to Phase 3 exit gate).
+
+**Results summary:**
+- JWT auth + jti revocation, fastapi-limiter rate limits, SecurityHeadersMiddleware, CORS exact-origin, audit_log table + @audit decorator with PII denylist, secrets-in-repo test, GitHub Actions CI + Dependabot, Cloudflare deploy runbook (Tasks 1-10, 14-16).
+- Privacy policy + ToS + DPA + breach runbook + DSAR runbook (Tasks 11+13). /privacy /terms /dpa public HTML routes (Task 12).
+- Voice agent Step 0 disclosure on call start (DPDP s.5 compliance).
+- ZAP baseline CI workflow (PR + nightly) + 4 legal-routes coverage tests (Task 17a).
+- Vobiz LiveKit provisioning script + agent_name fix (adjacent Phase 1+5 critical path).
+
+**Test gate:** 155 passed + 1 skip. Zero regressions.
+
+**Closed debts this sprint:** TD-015 (CI), TD-019 (FK ondelete), TD-022 (PII denylist). **Opened:** TD-026, TD-027, TD-028, TD-029.
+
+---
+
+## NEXT: Phase 1 — Voice Agent Core
+
+Open `PHASE_1_VOICE_AGENT.md` (or `docs/phases/02-voice-agent/CLAUDE.md`). Voice agent code exists from Phase 2 (already built), but Phase 1 in the ROADMAP.md sense is foundational wiring that connects to telephony. Vobiz creds are in .env; provisioning script ready at `scripts/provision_vobiz_trunk.py`.
+
+**Before starting Phase 1 next session:**
+1. Read this STATUS.md (done)
+2. Read `docs/ROADMAP.md` for phase order
+3. Read `PHASE_1_VOICE_AGENT.md` for task list
+4. Dispatch brainstormer for Phase 1 entry gate
+
+### BLOCKERS open
+
+- **Fly.io firewall ports** — Fly.io Mumbai VM needs ports 5060/UDP (SIP) + 10000-60000/UDP (RTP) opened for inbound calls. Phase 5/10 deploy prep.
+- **Vinay: run `python scripts/provision_vobiz_trunk.py`** — creates SIP trunk + dispatch rule in LiveKit. Must complete before first live call. Can be done any time.
+- **Anthropic API key for Shannon** — must be in `.env` as `ANTHROPIC_API_KEY` by end of Phase 3. Shannon scan is Phase 3 exit gate (TD-029).
 
 ---
 
@@ -18,11 +57,7 @@ All 7 tasks shipped. `backend/main.py` boots, `/health` → 200, `/queue/{branch
 - ✅ Task 6: `backend/main.py` with CORS, routers, landing mount, /health, prod-disabled /docs
 - ✅ Task 7: Retired `backend/payments_test_app.py` (TD-002 closed)
 
-Closed debts: TD-001, TD-002. Still open: TD-005, TD-014, TD-015, TD-018, TD-019.
-
-Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc, this file wins.
-
-Also check [`docs/CHANGELOG.md`](CHANGELOG.md) for session-by-session decision history and [`docs/TECH_DEBT.md`](TECH_DEBT.md) for the shortcut ledger.
+Closed debts: TD-001, TD-002. Still open: TD-005, TD-014, TD-018, TD-020, TD-021.
 
 ---
 
@@ -119,25 +154,26 @@ Phase 1   Foundation              ✅ DONE
 Phase 2   Voice agent core        ✅ DONE  (tests pass, manual call needs Phases 4 + 9 to dial-in)
 Phase 3   Razorpay checkout       ✅ DONE  (test mode, standalone)
 Phase 4   Backend core            ✅ DONE
-Phase 4.5 Security & compliance   🔨 IN PROGRESS  ← active phase
+Phase 4.5 Security & compliance   ✅ DONE  (closed 2026-06-05)
+Phase 1*  Voice agent telephony   🔨 NEXT  ← active phase (connect to Vobiz + LiveKit live)
 Phase 5   WhatsApp                🅿️ DEFERRED-MVP2 (client decision 2026-06-03)
 Phase 6   Jobs + Calendar         ⬜ (MVP1 REDUCED: Calendar + token expiry only; WA jobs → MVP2)
 Phase 7   Receptionist PWA        ⬜
 Phase 8   Owner + Admin dashboards ⬜
 Phase 9   Subscriptions + Onboarding ⬜ (email reminders, not WA; WA → MVP2)
 Phase 10  Deployment              ⬜ (no Meta WA infra needed for MVP1)
+🔒 Shannon scan gate — must pass 0 critical before Phase 4 onboarding work begins
 ```
 
 ---
 
 ## What "next session" looks like
 
-Open `docs/phases/04-backend-core/CLAUDE.md` and execute its task list. By the end of Phase 4 you have:
+Open `PHASE_1_VOICE_AGENT.md` and execute its task list. Phase 1 connects the voice agent to live telephony via Vobiz SIP trunk + LiveKit on Fly.io Mumbai. By the end of Phase 1 you have:
 
-- `backend/main.py` running with `uvicorn`
-- JWT auth working
-- Existing payments router wired into the real app (delete the standalone test app)
-- A fresh Alembic migration covering today's schema additions
-- `GET /health` returns 200, `POST /api/create-order` works through the real app, `GET /queue/{branch_id}/today` returns 401 without auth
+- LiveKit server running on Fly.io Mumbai with SIP trunk configured
+- Vobiz DID forwarding to LiveKit via `scripts/provision_vobiz_trunk.py`
+- Voice agent answering real inbound calls in Telugu
+- End-to-end test: phone call -> AI answers -> token booked
 
-Then Phase 5 begins.
+Then Phase 6 (Jobs + Calendar) begins.

@@ -47,12 +47,13 @@ Phase 1  Foundation ─────┐
 | 1 | Foundation (env, DB schema, alembic, docker) | ✅ DONE | — | everything | [01-foundation/](phases/01-foundation/CLAUDE.md) |
 | 2 | Voice agent (LiveKit + Sarvam + Gemini + 4 tools) | ✅ DONE | — | inbound calls (once telephony live) | [02-voice-agent/](phases/02-voice-agent/CLAUDE.md) |
 | 3 | Razorpay Standard Checkout (one-time) | ✅ DONE | — | paid signup flow | [03-razorpay-checkout/](phases/03-razorpay-checkout/CLAUDE.md) |
-| 4 | Backend core (main.py, JWT auth, queue API) | 🔨 NEXT | 1-2 | every backend route | [04-backend-core/](phases/04-backend-core/CLAUDE.md) |
-| 4.5 | Security & compliance (CSP, rate limit, audit log, privacy policy, DPDP) | 📋 SPEC DONE | 3-4 | safe Phase 5+ | [spec](superpowers/specs/2026-05-22-security-hardening-design.md) |
+| 4 | Backend core (main.py, JWT auth, queue API) | ✅ DONE | 1-2 | every backend route | [04-backend-core/](phases/04-backend-core/CLAUDE.md) |
+| 4.5 | Security & compliance (CSP, rate limit, audit log, privacy policy, DPDP) | ✅ DONE (2026-06-05) | 3-4 | safe Phase 5+ | [spec](superpowers/specs/2026-05-22-security-hardening-design.md) |
 | 5 | WhatsApp (Meta webhook, doctor cmds, patient FSM) | 🅿️ DEFERRED-MVP2 | 3-4 | WA channel (MVP2 only) | [05-whatsapp/](phases/05-whatsapp/CLAUDE.md) |
 | 6 | Jobs + Calendar (Google Cal + token expiry; WA jobs → MVP2) | ⬜ | 1 | calendar events, token cleanup | [06-jobs-calendar/](phases/06-jobs-calendar/CLAUDE.md) |
 | 7 | Receptionist PWA (React + Vite, queue UI) | ⬜ | 3-4 | staff use clinic | [07-frontend-receptionist/](phases/07-frontend-receptionist/CLAUDE.md) |
 | 8 | Owner + Admin dashboards | ⬜ | 3 | analytics + Vinay's P&L | [08-frontend-dashboards/](phases/08-frontend-dashboards/CLAUDE.md) |
+| **🔒** | **Shannon scan gate** — must pass 0 critical findings before Phase 9 onboarding work begins | **GATE** | — | blocks Phase 9 | TD-029 |
 | 9 | Subscriptions + Onboarding (Razorpay subs + Vobiz DID; email reminders, not WA) | ⬜ | 3-4 | sell to first paying clinic | [09-subscriptions-onboarding/](phases/09-subscriptions-onboarding/CLAUDE.md) |
 | 10 | Deployment (Fly + Render + Cloudflare + monitoring) | ⬜ | 2-3 | go live | [10-deployment/](phases/10-deployment/CLAUDE.md) |
 | 11 | Reliability hardening (post-launch placeholder) | 🅿️ DEFERRED | TBD | scale beyond 50 clinics | [11-reliability-hardening/](phases/11-reliability-hardening/CLAUDE.md) |
