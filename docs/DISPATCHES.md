@@ -731,3 +731,29 @@ The work below was done inline by the orchestrator (main thread) before the mand
 
 **Test fix applied:** `test_privacy_returns_html` line 50: changed `assert "<h1>" in r.text` to `assert "<h1" in r.text`. Reason: markdown `toc` extension renders `<h1 id="vachanam-privacy-policy">`, not bare `<h1>`. Not a weakened assertion — same semantic check, correct tag detection. Production code is correct; implementer test was overly literal.
 
+---
+
+## 2026-06-05 — security-engineer dispatched (Phase 4.5 Task 17a — ZAP baseline CI + secrets fix + legal coverage)
+**Scope:** Three bundled jobs: (1) Create ZAP baseline GitHub Action (`.github/workflows/zap-baseline.yml`) for PR + nightly scans; (2) Fix `test_no_real_secrets_in_git_history` false positive from self-referencing pattern names; (3) Add 4 legal routes coverage tests (Cache-Control header assertions + 503 path).
+**Inputs:** docker-compose.yml, .github/workflows/ci.yml, tests/security/test_secrets_not_in_repo.py, tests/integration/test_legal_routes.py, backend/routers/legal.py, docs/superpowers/specs/2026-05-22-security-hardening-design.md (ZAP requirements).
+**Acceptance:** ZAP workflow file created; secrets test GREEN; legal routes 8/8 GREEN; security suite 56/56 + 1 skip GREEN; full non-Docker suite 150 passed + 1 skip.
+**Reviewer:** Client (Vinay) — CI workflow + test fixes, no production code changed.
+**Result:** DONE
+**Files touched:**
+  - Created: `.github/workflows/zap-baseline.yml` (155 lines — PR + nightly ZAP scan with GH Actions service containers)
+  - Modified: `tests/security/test_secrets_not_in_repo.py` (pathspec exclusion for own source + commit message allowlist)
+  - Modified: `tests/integration/test_legal_routes.py` (4 new tests: 3 Cache-Control header + 1 503-when-missing)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+**Tests:** Security suite: 56 passed, 1 skipped. Legal integration: 8/8 passed. Full non-Docker: 150 passed, 1 skipped. Zero regressions.
+**Commit A:** `27cc1db` — feat(ci): Phase 4.5 Task 17a — ZAP baseline GitHub Action (PR + nightly)
+**Commit B:** `b31ac40` — fix(security): allowlist secrets test self-reference + add legal routes coverage
+**Follow-up dispatches:**
+  - Task 17b (Shannon AI pentester) — requires Vinay adding ANTHROPIC_API_KEY to .env. AGPL-3.0 license. Not this dispatch's scope.
+  - Task 18 (manager close-out) — Phase 4.5 final sign-off.
+**Notes:**
+- docker-compose.yml exposes only postgres:16 + redis:7-alpine (no backend container). ZAP workflow starts backend via `pip install + alembic upgrade head + uvicorn` directly, with GH Actions service containers for PG + Redis. Port is 8000 (matches main.py default).
+- Secrets test fix uses approach B (pathspec exclusion): `git log --all -p -- . ':!tests/security/test_secrets_not_in_repo.py'` excludes diffs from the test file itself. Additionally, commit messages that list pattern names as summaries are allowlisted via `r"secret patterns \("` in `_DOC_CONTEXT_ALLOWLIST`.
+- Cache-Control header (`public, max-age=3600`) was already present in implementer commit `6433124` (legal.py line 130). No production code fix needed — only test coverage was missing.
+- ZAP report uses `risk-3` CSS class grep for high-risk detection (ZAP HTML report format). `-I` flag makes ZAP exit 0 on all alert levels so the job only fails from our explicit grep check.
+- Shannon (Task 17b) pending: Vinay must add ANTHROPIC_API_KEY to .env. AGPL-3.0 white-box pentester. Covers dynamic logic + branch_id IDOR that ZAP baseline cannot detect. Noted in TD section below but NOT opened as TD (it is a planned task, not a shortcut).
+
