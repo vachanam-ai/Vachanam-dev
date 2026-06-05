@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     vobiz_did_number: str = ""
     vobiz_partner_auth_id: str = ""
     vobiz_partner_auth_token: str = ""
+    vobiz_trunk_id: str | None = None  # Vobiz internal trunk ID from console Step 1
 
     # WhatsApp
     meta_access_token: str = ""
