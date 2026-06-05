@@ -367,8 +367,10 @@ async def patch_vobiz_inbound_destination(
     """
     base_url = f"https://api.vobiz.ai/api/v1/Account/{auth_id}/trunks/{vobiz_trunk_id}/"
     headers = {
-        "Authorization": f"Bearer {auth_token}",
+        "X-Auth-ID": auth_id,
+        "X-Auth-Token": auth_token,
         "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
     async with httpx.AsyncClient(timeout=30) as client:

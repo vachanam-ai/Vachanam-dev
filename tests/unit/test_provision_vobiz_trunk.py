@@ -16,6 +16,7 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 from scripts.provision_vobiz_trunk import (
     _validate_env,
     derive_livekit_sip_uri,
+    patch_vobiz_inbound_destination,
     provision_outbound_trunk,
 )
 
@@ -142,3 +143,98 @@ def test_livekit_sip_uri_no_sip_prefix():
     assert not result.startswith("sip:")
     assert not result.startswith("wss:")
     assert not result.startswith("ws:")
+
+
+# ── Test 4: Vobiz auth scheme uses X-Auth-ID + X-Auth-Token (not Bearer) ────
+
+
+@pytest.mark.asyncio
+async def test_patch_vobiz_uses_x_auth_headers_on_skip():
+    """GET call must use X-Auth-ID / X-Auth-Token, never Authorization: Bearer.
+
+    When inbound_destination already matches, PATCH is skipped — this test
+    captures the headers sent on the GET request.
+    """
+    get_json = {"inbound_destination": "vachanam-agent.fly.dev"}
+
+    mock_get_response = MagicMock()
+    mock_get_response.raise_for_status = MagicMock()
+    mock_get_response.json = MagicMock(return_value=get_json)
+    mock_get_response.status_code = 200
+
+    captured_headers: list[dict] = []
+
+    async def fake_get(url, headers=None, **kwargs):
+        captured_headers.append(dict(headers or {}))
+        return mock_get_response
+
+    mock_client = AsyncMock()
+    mock_client.get = fake_get
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("scripts.provision_vobiz_trunk.httpx.AsyncClient", return_value=mock_client):
+        await patch_vobiz_inbound_destination(
+            auth_id="test_auth_id",
+            auth_token="test_auth_token",
+            vobiz_trunk_id="trunk_001",
+            livekit_sip_uri="vachanam-agent.fly.dev",
+        )
+
+    assert len(captured_headers) == 1, "Expected exactly one GET request"
+    sent = captured_headers[0]
+    # Must use X-Auth-* headers
+    assert sent.get("X-Auth-ID") == "test_auth_id"
+    assert sent.get("X-Auth-Token") == "test_auth_token"
+    # Must NOT fall back to Bearer scheme
+    assert "Authorization" not in sent
+
+
+@pytest.mark.asyncio
+async def test_patch_vobiz_uses_x_auth_headers_on_patch():
+    """Both GET and PATCH calls must use X-Auth-ID / X-Auth-Token, not Bearer.
+
+    When inbound_destination differs, the PATCH is issued — this test
+    captures the headers sent on both the GET and the PATCH request.
+    """
+    get_json = {"inbound_destination": "old-destination.example.com"}
+
+    mock_get_response = MagicMock()
+    mock_get_response.raise_for_status = MagicMock()
+    mock_get_response.json = MagicMock(return_value=get_json)
+
+    mock_patch_response = MagicMock()
+    mock_patch_response.raise_for_status = MagicMock()
+
+    get_headers: list[dict] = []
+    patch_headers: list[dict] = []
+
+    async def fake_get(url, headers=None, **kwargs):
+        get_headers.append(dict(headers or {}))
+        return mock_get_response
+
+    async def fake_patch(url, headers=None, json=None, **kwargs):
+        patch_headers.append(dict(headers or {}))
+        return mock_patch_response
+
+    mock_client = AsyncMock()
+    mock_client.get = fake_get
+    mock_client.patch = fake_patch
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("scripts.provision_vobiz_trunk.httpx.AsyncClient", return_value=mock_client):
+        await patch_vobiz_inbound_destination(
+            auth_id="test_auth_id",
+            auth_token="test_auth_token",
+            vobiz_trunk_id="trunk_001",
+            livekit_sip_uri="vachanam-agent.fly.dev",
+        )
+
+    assert len(get_headers) == 1, "Expected exactly one GET request"
+    assert len(patch_headers) == 1, "Expected exactly one PATCH request"
+
+    for label, sent in [("GET", get_headers[0]), ("PATCH", patch_headers[0])]:
+        assert sent.get("X-Auth-ID") == "test_auth_id", f"{label}: missing X-Auth-ID"
+        assert sent.get("X-Auth-Token") == "test_auth_token", f"{label}: missing X-Auth-Token"
+        assert "Authorization" not in sent, f"{label}: must not use Authorization: Bearer"
