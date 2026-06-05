@@ -177,7 +177,7 @@ async def provision_outbound_trunk(
 
     # Idempotency check: list existing outbound trunks
     try:
-        list_resp = await lk.sip.list_sip_outbound_trunk(ListSIPOutboundTrunkRequest())
+        list_resp = await lk.sip.list_outbound_trunk(ListSIPOutboundTrunkRequest())
         for trunk in list_resp.items:
             if trunk.name == _OUTBOUND_TRUNK_NAME:
                 # Check if config matches what we'd create
@@ -220,7 +220,7 @@ async def provision_outbound_trunk(
             auth_password=sip_password,
             numbers=[did_number],
         )
-        resp = await lk.sip.create_sip_outbound_trunk(
+        resp = await lk.sip.create_outbound_trunk(
             CreateSIPOutboundTrunkRequest(trunk=trunk_info)
         )
         trunk_id = resp.sip_trunk_id
@@ -253,7 +253,7 @@ async def provision_inbound_trunk(lk: object, did_number: str) -> str:
 
     # Idempotency check
     try:
-        list_resp = await lk.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
+        list_resp = await lk.sip.list_inbound_trunk(ListSIPInboundTrunkRequest())
         for trunk in list_resp.items:
             if trunk.name == _INBOUND_TRUNK_NAME:
                 logger.info(
@@ -276,7 +276,7 @@ async def provision_inbound_trunk(lk: object, did_number: str) -> str:
             numbers=[did_number],
             allowed_addresses=["0.0.0.0/0"],
         )
-        resp = await lk.sip.create_sip_inbound_trunk(
+        resp = await lk.sip.create_inbound_trunk(
             CreateSIPInboundTrunkRequest(trunk=trunk_info)
         )
         trunk_id = resp.sip_trunk_id
@@ -302,14 +302,12 @@ async def provision_dispatch_rule(lk: object, inbound_trunk_id: str) -> str:
         SIPDispatchRule,
         SIPDispatchRuleIndividual,
     )
-    from livekit.protocol.room import (  # type: ignore[import]
-        RoomConfiguration,
-        RoomAgentDispatch,
-    )
+    from livekit.protocol.room import RoomConfiguration  # type: ignore[import]
+    from livekit.protocol.agent_dispatch import RoomAgentDispatch  # type: ignore[import]
 
     # Idempotency check: skip if any dispatch rule already targets our inbound trunk
     try:
-        list_resp = await lk.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
+        list_resp = await lk.sip.list_dispatch_rule(ListSIPDispatchRuleRequest())
         for rule in list_resp.items:
             if inbound_trunk_id in list(rule.trunk_ids):
                 logger.info(
@@ -338,7 +336,7 @@ async def provision_dispatch_rule(lk: object, inbound_trunk_id: str) -> str:
             trunk_ids=[inbound_trunk_id],
             room_config=room_config,
         )
-        resp = await lk.sip.create_sip_dispatch_rule(req)
+        resp = await lk.sip.create_dispatch_rule(req)
         rule_id = resp.sip_dispatch_rule_id
         logger.info(
             "dispatch_rule_created",

@@ -89,8 +89,8 @@ async def test_idempotent_skips_existing_outbound_trunk():
     list_response.items = [existing_trunk]
 
     mock_sip = MagicMock()
-    mock_sip.list_sip_outbound_trunk = AsyncMock(return_value=list_response)
-    mock_sip.create_sip_outbound_trunk = AsyncMock()
+    mock_sip.list_outbound_trunk = AsyncMock(return_value=list_response)
+    mock_sip.create_outbound_trunk = AsyncMock()
 
     mock_lk = MagicMock()
     mock_lk.sip = mock_sip
@@ -106,7 +106,7 @@ async def test_idempotent_skips_existing_outbound_trunk():
     # Must return the existing trunk ID
     assert trunk_id == "TR_existing_abc123"
     # Must NOT have called create
-    mock_sip.create_sip_outbound_trunk.assert_not_called()
+    mock_sip.create_outbound_trunk.assert_not_called()
 
 
 # ── Test 3: LiveKit SIP URI derivation ──────────────────────────────────────
