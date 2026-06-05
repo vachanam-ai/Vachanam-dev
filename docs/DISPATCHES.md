@@ -676,3 +676,37 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - TD-027 and TD-028 are P2 because the privacy policy and DSAR runbook now commit to specific enforcement and SLA. These are not just nice-to-haves -- they are published obligations. Both must ship before first clinic goes live (Phase 6 target).
 - No consents table or consent JSON storage was created (that is backend-engineer/database-engineer work per gap analysis Gap 3.2, Phase 6 scope). The privacy policy documents the consent architecture; implementation is tracked separately.
 
+---
+
+## 2026-06-05 — manager dispatched (Phase 4.5 close-out bundle: commit 1 + spec amendments + commit 2)
+
+**Scope:** Bundle 4 jobs that prior dispatches failed to land due to session limits: (1) .gitignore + first commit of 5 legal/runbook docs + 3 modified docs; (2) 5 spec amendments to security-hardening-design.md reflecting no-recording decision; (3) CHANGELOG entry; (4) second commit with spec + CHANGELOG + DISPATCHES.
+
+**Inputs:** .gitignore, docs/legal/ (3 files), docs/runbooks/ (2 files), docs/DISPATCHES.md, docs/PROJECT_STRUCTURE.md, docs/TECH_DEBT.md, docs/superpowers/specs/2026-05-22-security-hardening-design.md (§9.2, §9.3, §11.2, §15, §16), docs/CHANGELOG.md.
+
+**Acceptance:** Two commits land. Commit 1: 9 files (5 new legal/runbook + .gitignore + 3 modified docs). Commit 2: spec + CHANGELOG + DISPATCHES. No source/test/schema files touched.
+
+**Reviewer:** Client (Vinay) — compliance docs + spec amendments per client decisions, not code.
+
+**Result:** DONE
+
+**Files touched:**
+  - Commit 1 (`8dede68`): Created: docs/legal/privacy-policy.md, docs/legal/terms-of-service.md, docs/legal/data-processing-agreement.md, docs/runbooks/breach-response.md, docs/runbooks/dsar.md | Modified: .gitignore, docs/DISPATCHES.md, docs/PROJECT_STRUCTURE.md, docs/TECH_DEBT.md
+  - Commit 2 (pending): Modified: docs/superpowers/specs/2026-05-22-security-hardening-design.md, docs/CHANGELOG.md, docs/DISPATCHES.md
+
+**Tests:** No source/test code touched. Pytest baseline 133 passed | 1 skipped unchanged.
+
+**Commit 1:** `8dede68`
+**Commit 2:** (pending)
+
+**Follow-up dispatches:**
+  - Task 12: backend-engineer serves /privacy and /terms routes (now unblocked)
+  - Task 17: security-engineer ZAP scan
+  - Task 18: manager final Phase 4.5 sign-off
+
+**Notes:**
+- Spec amendments: 5 changes across 4 sections. §9.2 lost 2 voice-recording lines + gained 1 no-recording note. §9.3 consent text updated from recording disclosure to AI + data-processing disclosure in Telugu/English. §9.3 gained canonical docs/legal/ reference. §11.2 lost 1 breach scenario row. §15 gained 3 acceptance criteria (total 19→22). §16 REVISIONS gained 1 deviation entry.
+- Acceptance matrix criteria 12+13 (previously BLOCKED on privacy-legal docs) are now unblocked by commit 1.
+- .gitignore: kindly-web-search-mcp-server/ added to exclude user-cloned MCP directory.
+- GRAPH_REPORT.md deliberately NOT staged (stale-graph noise, per dispatch instructions).
+

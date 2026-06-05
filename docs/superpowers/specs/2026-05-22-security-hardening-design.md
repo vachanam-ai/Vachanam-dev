@@ -499,7 +499,6 @@ Self-hosted at `app.vachanam.in/privacy` (also linked from `vachanam.in`). Cover
    - Patient: name, phone, complaint summary (one-line), appointment timestamps
    - Doctor: name, WhatsApp number, specialization, working hours
    - Staff (receptionist, owner): email, name, role
-   - Voice call recordings (90-day retention only)
 3. **Why we collect** — book appointments, send confirmations, route callers to the right doctor, generate analytics for the clinic owner, send invoices, comply with law
 4. **Legal basis** — DPDP Act 2023: legitimate business interest for core booking functions; consent required for marketing
 5. **Who sees the data**
@@ -518,9 +517,10 @@ Self-hosted at `app.vachanam.in/privacy` (also linked from `vachanam.in`). Cover
    - Render (backend API hosting)
 7. **Retention periods**
    - Active bookings: 2 years from last activity
-   - Voice call recordings: 90 days
    - Audit log: 7 years
    - Deleted account: PII purged within 30 days; audit log retained
+
+> **Note (2026-06-04):** No voice call recordings — per client decision, AI-only audit via audit_log table.
 8. **Your rights under DPDP** — access (request a copy), correction, erasure (right to be forgotten with exceptions), grievance (email `privacy@vachanam.in`, 7-day SLA)
 9. **Children** — patients under 18 may only book via parent/guardian; we don't separately collect minor data
 10. **Cookies** — only essential cookies (auth JWT). No analytics, no advertising, no third-party tracking
@@ -531,7 +531,7 @@ Self-hosted at `app.vachanam.in/privacy` (also linked from `vachanam.in`). Cover
 
 | DPDP obligation | How we comply |
 |---|---|
-| Notice + free consent | Privacy policy linked from signup; clinic owner must accept before subscribing; call recording starts with "this call is recorded for booking purposes" |
+| Notice + free consent | Privacy policy linked from signup; clinic owner must accept before subscribing; call-start AI disclosure: _"idi AI assistant. mee appointment kosam mee peru mariyu phone number vadatamu."_ (Telugu) / _"This is an AI assistant. We collect your name and phone for your appointment."_ (English gloss) |
 | Purpose limitation | Data used only for booking + analytics shown to the owning clinic; never sold; never used to train AI models on patient data |
 | Data minimization | Calendar event stores first-name only + last-4-digits of phone; logs strip full phone; no medical-record-level data stored |
 | Accuracy | Owner/receptionist can edit patient records via PWA |
@@ -542,6 +542,8 @@ Self-hosted at `app.vachanam.in/privacy` (also linked from `vachanam.in`). Cover
 | DPO contact | In privacy policy; Vinay's name + email + admin phone |
 
 **No formal DPO appointment** in MVP. DPDP requires DPO only for "Significant Data Fiduciary" status — threshold not yet officially set by central government but expected around 50,000 users. Vinay acts as de facto DPO until SDF threshold triggers.
+
+Canonical legal docs live in `docs/legal/` (privacy-policy, terms-of-service, data-processing-agreement). System prompt disclosure (`agent/prompts/system_prompt.py` Step 0) must echo this consent text verbatim.
 
 ### 9.4 Data subject rights — how a patient exercises them
 
@@ -708,7 +710,6 @@ Stored at `docs/runbooks/breach-response.md`. Drilled twice a year as a tabletop
 | One receptionist's account compromised (phishing) | Disable that user, force their JWT revoke | No (not a data breach; one account) |
 | Database read-only access leak (e.g. sandboxed analytics user) | Rotate that role's password, audit query log | Likely yes; assess query log scope |
 | Webhook secret leaked | Rotate at vendor, redeploy with new env var | No (no PII access via webhook signing) |
-| Voice call recording accidentally exposed via misconfigured Sarvam storage | Delete exposed recordings, contact Sarvam, audit access log | Yes if any patient PII in recordings was downloaded |
 | Cross-tenant data leak (Branch A sees Branch B data) | Disable affected endpoint, deploy patch, query affected logs | Yes — file with DPB, notify both branches' owners |
 
 ---
@@ -815,9 +816,12 @@ These are deliberate trade-offs for MVP. Each has a documented path forward.
 [ ] CI check: secrets-in-repo scan passes
 [ ] OWASP ZAP baseline scan run locally; no high/critical findings
 [ ] STATUS.md and ROADMAP.md updated to reflect Phase 4.5 complete
+[ ] GET /privacy returns docs/legal/privacy-policy.md rendered as HTML (status 200, content-type text/html)
+[ ] GET /terms returns docs/legal/terms-of-service.md rendered as HTML (status 200, content-type text/html)
+[ ] Breach drill rehearsable from docs/runbooks/breach-response.md by ops without dev assistance (timed walkthrough every 6 months)
 ```
 
-When all 19 criteria check, Phase 4.5 is complete and we proceed to Phase 5 (WhatsApp).
+When all 22 criteria check, Phase 4.5 is complete and we proceed to Phase 6 (Jobs + Calendar).
 
 ---
 
@@ -830,5 +834,6 @@ Append-only log of patches applied to this spec after its 2026-05-22 approval. E
 | 2026-06-02 | **Deviation** | §4 (layered arch diagram), §6.2 (rate-limit library + example code), §13 (Day 2 plan) | Rate-limit library changed from `slowapi` to **`fastapi-limiter`**. Library name updated in 4 places; example `key_func` rewritten as `async def user_or_ip_key(...)` using `fastapi-limiter`'s identifier contract. Per-endpoint table in §6.3 unchanged — only the library swaps. | Brainstormer (Phase 4.5 Task 1 gate) recommended `fastapi-limiter` over `slowapi`: async-native (fits FastAPI's event loop without thread bridging), single dependency (vs `slowapi` + `limits`), Redis-native, simpler integration as a FastAPI `Depends(...)`. Client accepted deviation on 2026-06-02 after manager escalation. | manager (Vinay's call, logged) |
 | 2026-06-02 | **Correction** | §6.6 (Cloudflare WAF wording) | "10,000 free WAF requests per month" replaced with "unlimited managed-ruleset WAF requests." Added parenthetical clarifying the 10k figure belongs to Cloudflare's separate **Rate Limiting Rules** product (which we do not use). | Original spec conflated two different Cloudflare Free-tier features. Cloudflare Managed Ruleset (which is what we enable) has no monthly request cap; the 10k/month limit only applies to Rate Limiting Rules. Caught by brainstormer during Phase 4.5 plan validation. No implementation impact — just wording. | manager (correction patch) |
 | 2026-06-02 | **Correction** | §7 A02 (defenses), §10.1 (TLS) | "Render uses Let's Encrypt for internal cert" replaced with "Render terminates TLS using certificates provisioned via its own managed ACME provider." | Render does not use Let's Encrypt directly; it operates its own ACME-protocol provider. Minor accuracy nit. No implementation impact. | manager (correction patch) |
+| 2026-06-05 | **Deviation** | §9.2, §9.3, §11.2, §15 | 5 amendments per client decision (no voice recording, Option A 2026-06-04): (1) §9.2 remove "Voice call recordings (90-day retention only)" from data-we-collect list + remove "Voice call recordings: 90 days" from retention periods + add no-recording note; (2) §9.3 replace recording consent text with AI disclosure in Telugu/English; (3) §9.3 add reference to canonical `docs/legal/` and system_prompt.py Step 0; (4) §11.2 remove "Voice call recording accidentally exposed" breach scenario; (5) §15 add 3 acceptance criteria (/privacy, /terms, breach drill). Total criteria 19→22; closing sentence updated from "Phase 5 (WhatsApp)" to "Phase 6 (Jobs + Calendar)" per MVP1 scope change. | Client decided NO voice recording (Option A) on 2026-06-04; privacy-legal authored canonical legal docs; spec must reflect same decisions. Breach scenario for voice recordings is no longer applicable. New acceptance criteria cover the published legal docs and rehearsable runbook. | manager (client's call, logged in DISPATCHES + CHANGELOG) |
 
 **Process note:** Deviations require client approval before the spec is patched. Corrections (fixing factual errors in original wording with no decision change) may be applied by manager and logged here without escalation.

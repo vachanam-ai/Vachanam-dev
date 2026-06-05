@@ -13,6 +13,12 @@ Format per session:
 
 ---
 
+## 2026-06-05 — Phase 4.5 close-out: compliance docs committed + spec amended for no-recording decision
+
+Tasks 11+13 closed: 5 legal/compliance docs committed (`8dede68`), security spec amended with 5 changes reflecting client's no-recording decision (Option A, 2026-06-04). 2 acceptance matrix items previously BLOCKED (criteria 12+13: /privacy page, breach runbook) now unblocked. Spec §15 expanded from 19 to 22 acceptance criteria. REVISIONS §16 entry appended. DISPATCHES updated. Remaining for Phase 4.5 close-out: Task 12 (backend-engineer: /privacy + /terms routes), Task 17 (ZAP scan), Task 18 (manager final sign-off + STATUS/ROADMAP update).
+
+---
+
 ## 2026-06-04 — Token optimization: curated context blocks + bundled dispatches
 
 **Client request:** "claude is drinking tokens like water. tokens getting exhausted very fastly. can you find a way to optimize this without compromising quality."
