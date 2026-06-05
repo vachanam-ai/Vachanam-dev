@@ -783,3 +783,20 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - TD-029 is P1 release blocker for Phase 9 onboarding. Shannon reuses Vinay's Anthropic key. AGPL-3.0 private-use only (no AGPL trigger). Covers branch_id IDOR, JWT bypass, Razorpay HMAC, business logic — gaps ZAP baseline cannot detect.
 - Phase 1 is next per ROADMAP.md. Voice agent code already exists from Phase 2; Phase 1 in this context = connecting to Vobiz telephony + LiveKit on Fly.io Mumbai.
 
+---
+
+## 2026-06-05 — backend-engineer dispatched (+ tester gate)
+**Scope:** Add `vobiz_trunk_id: str | None = None` to `backend/config.py` Settings model. Pydantic was rejecting the env var with "Extra inputs are not permitted" after Vinay added VOBIZ_TRUNK_ID to .env.
+**Inputs:** backend/config.py, .env (local), provision_vobiz_trunk.py (context for the new var)
+**Acceptance:** `pytest tests/ -q` full green; conftest loads without Pydantic validation error
+**Reviewer:** tester (this dispatch)
+**Result:** DONE
+**Files touched:** Modified: backend/config.py (1 line added)
+**Tests:** 167 passed, 1 skipped, 0 failed. Suites verified: test_legal_routes 8/8, test_provision_vobiz_trunk 8/8, full suite 167/167.
+**Commit:** `08ea6db`
+**Follow-up dispatches:** None — unblocks conftest for all future test runs.
+**Notes:**
+- Audit confirmed all 6 other Vobiz vars (sip_domain, sip_username, sip_password, did_number, partner_auth_id, partner_auth_token) were already in Settings.
+- The 1 skip is test_secrets_not_committed (conditional skip on CI, not a flake).
+- Test baseline has grown from 155 to 167 since last recorded count (security tests added in Phase 4.5 close-out).
+
