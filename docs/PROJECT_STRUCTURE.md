@@ -2,7 +2,7 @@
 
 **Source of truth for what exists in the repo, where it lives, and what state it is in.** Auto-updated by every dispatch that adds/renames/deletes a tracked file under `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`, or `docs/`. Stale entries are a merge blocker — `manager` rejects the merge checklist when this file does not match `git ls-files`.
 
-**Last verified against `git ls-files`:** 2026-06-04 (after Phase 4.5 DPDP gap analysis — docs/compliance/ directory created)
+**Last verified against `git ls-files`:** 2026-06-04 (after Phase 4.5 Tasks 11+13 — docs/legal/ + docs/runbooks/ expanded)
 
 ---
 
@@ -204,6 +204,18 @@ Owner: `devops-engineer`.
 | Path | Status | Purpose |
 |---|---|---|
 | `docs/runbooks/cloudflare-setup.md` | working | Phase 10 cutover doc (~80 lines). DNS records for all subdomains, TLS Full Strict setup, HSTS config, Managed Rules (OWASP CRS unlimited on Free), Bot Fight Mode, 5 custom firewall rules (.env / .git / wp-admin / wp-login / .DS_Store blocks), Free-tier quota clarification (WAF RL 10k cap does NOT apply to managed CRS), Phase 10 cutover sequence, Under Attack 1-pager. |
+| `docs/runbooks/breach-response.md` | working | Phase 4.5 Task 13a. 5-step breach response (detect, contain, assess, notify, remediate) + 6 pre-rehearsed scenarios (JWT leak, account compromise, DB access leak, webhook secret leak, audit tamper, cross-tenant leak). Concrete containment commands per scenario. 72h DPB notification + 24h clinic notification. Drill schedule. Notification email templates. |
+| `docs/runbooks/dsar.md` | working | Phase 4.5 Task 13b. 7-step DSAR flow: receive, verify identity, acknowledge (48h), execute (4 request types: access/correct/delete/withdraw), respond (7-day SLA), audit log entry, retain record (3 years). Manual SQL fallback for MVP1; automated script placeholder for Phase 6+. |
+
+### 6.4 - Legal documents
+
+Owner: `privacy-legal`. Hosted at `app.vachanam.in/privacy` and `/terms` (backend Task 12 serves rendered versions).
+
+| Path | Status | Purpose |
+|---|---|---|
+| `docs/legal/privacy-policy.md` | working | Phase 4.5 Task 11a. 12 sections per spec section 9.2. Plain English, DPDP-defensible. Reflects no-recording decision (Option A). Lists 11 third-party processors with data locations. 7 retention periods with enforcement commitment. Contact: privacy@vachanam.in. |
+| `docs/legal/terms-of-service.md` | working | Phase 4.5 Task 11b. Clinic-facing SaaS terms (10 sections). Service description, clinic obligations as Data Fiduciary, Vachanam obligations as Data Processor, subscription plans (Solo/Clinic/Multi), acceptable use, limitation of liability, governing law (Hyderabad). |
+| `docs/legal/data-processing-agreement.md` | working | Phase 4.5 Task 11c. DPA template (12 sections). Vachanam = Data Processor, Clinic = Data Fiduciary. Sub-processor list (12 vendors). Security measures table. 24h breach notification to Clinic. Audit rights (once/year). Data return + deletion on termination (30 days). Signature block. |
 
 ---
 
@@ -272,7 +284,7 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `docs/STATUS.md` | working | Single source of truth — current phase, what is done, what is broken, what is next. |
 | `docs/ROADMAP.md` | working | 11 phases + dependency graph. |
 | `docs/CHANGELOG.md` | working | Session-by-session decision log (append-only). |
-| `docs/TECH_DEBT.md` | working | Shortcut ledger — TD-005, 014, 015, 018, 019, 020, 021, 022, 023, 024 open. |
+| `docs/TECH_DEBT.md` | working | Shortcut ledger — TD-005, 014, 018, 020, 021, 023, 024, 025, 026, 027, 028 open; TD-015, 019, 022 closed. |
 | `docs/DISPATCHES.md` | working | Chronological dispatch audit trail (append-only). |
 | `docs/PROJECT_STRUCTURE.md` | working | **This file.** Live repo map. |
 | `docs/phases/01-foundation/CLAUDE.md` | working | DONE. |

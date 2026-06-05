@@ -46,3 +46,6 @@ docs/_artifacts/graphify-output/.graphify_python
 docs/_artifacts/graphify-output/.graphify_root
 docs/_artifacts/graphify-output/.graphify_detect.json
 graphify-out/
+
+# User-cloned MCP servers (not project code)
+kindly-web-search-mcp-server/

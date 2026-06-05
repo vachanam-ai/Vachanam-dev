@@ -641,3 +641,38 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - Acceptance matrix already existed; updated BLOCKED criteria 12+13 to reference `docs/compliance/dpdp-gap-analysis-2026-06-04.md` per dispatch instructions.
 - Coverage: 12/19 automated tests, 3/19 manual/doc, 2/19 BLOCKED (DPDP), 2/19 DEFERRED (Phase 7 frontend + Phase 10 containers).
 
+---
+
+## 2026-06-04 -- privacy-legal dispatched (Phase 4.5 Tasks 11+13 bundled -- privacy policy, ToS, DPA, breach runbook, DSAR runbook)
+**Scope:** Author 5 legal/compliance documents per client decisions (no recording Option A, AI decision logging = booking actions only via audit_log, DPDP Rules confirmed FINAL notified 14 Nov 2025). Bundled per AGILE Rule 3 (same specialist, related compliance work). Closes Tasks 11a/11b/11c/13a/13b.
+**Inputs:** docs/compliance/dpdp-gap-analysis-2026-06-04.md (own prior gap analysis), docs/superpowers/specs/2026-05-22-security-hardening-design.md sections 9+11, CLAUDE.md (vendor list, sensitive data rules, pricing), .claude/agents/privacy-legal.md (scope + obligations), client decisions on recording/AI-logging/DPDP-Rules-status.
+**Acceptance:** 5 files created under docs/legal/ and docs/runbooks/; PROJECT_STRUCTURE.md updated with 6.4 Legal documents subsection + runbook entries; TECH_DEBT.md updated with TD-027 (retention job) + TD-028 (DSAR script); DISPATCHES.md appended; no source/test/infra files touched.
+**Reviewer:** Client (Vinay) -- legal/policy documents require client approval before serving to users. security-engineer should review breach-response.md containment commands for accuracy.
+**Result:** DONE
+**Files touched:**
+  - Created: `docs/legal/privacy-policy.md` (12 sections, ~2400 words, plain English, DPDP-defensible)
+  - Created: `docs/legal/terms-of-service.md` (10 sections, ~1800 words)
+  - Created: `docs/legal/data-processing-agreement.md` (12 sections, ~2200 words, signature block present)
+  - Created: `docs/runbooks/breach-response.md` (5 steps + 6 scenarios + appendices, ~2500 words)
+  - Created: `docs/runbooks/dsar.md` (7-step flow + 4 request types + templates, ~2200 words)
+  - Modified: `docs/PROJECT_STRUCTURE.md` (Section 6.3 runbooks expanded + Section 6.4 legal documents added + last-verified date + TECH_DEBT summary)
+  - Modified: `docs/TECH_DEBT.md` (TD-027 retention job + TD-028 DSAR script added)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+**TESTS:** No source/test code touched. Pytest baseline 133 passed | 1 skipped | 0 RED unchanged.
+**NEW TDs:** TD-027 (P2, data_retention.py job, Phase 6), TD-028 (P2, scripts/dsar.py CLI, Phase 6)
+**DPDP SECTIONS ADDRESSED:** s.5 (notice -- privacy policy published), s.6 (consent architecture documented), s.7 (purpose limitation + data minimization stated), s.8 (storage limitation -- retention periods specified, enforcement tracked as TD-027), s.9 (grievance officer named), s.11 (breach notification -- 72h runbook created), s.11-13 (data subject rights -- DSAR runbook created with 7-day SLA)
+**Commit:** (pending)
+**Follow-up dispatches:**
+  - **CRITICAL (immediate):** voice-agent-engineer adds call-start data-processing disclosure to agent/prompts/system_prompt.py Step 0 (closes DPDP s.5 risk from gap analysis Gap 3.5). Text: "idi AI assistant. mee appointment kosam mee peru mariyu phone number vadatamu." / "This is an AI assistant. We will use your name and phone number for your appointment."
+  - **Task 12 (next):** backend-engineer serves /privacy and /terms routes from these markdown files (rendered HTML)
+  - **Task 17 (after Task 12):** security-engineer ZAP scan + sign-off (acceptance criteria 12+13 now unblocked)
+  - **Task 18 (final):** manager close-out
+**Notes:**
+- Privacy policy reflects client decision: NO voice recording (Option A). "Voice call recordings" removed from retention table. Policy states "We do not record calls" explicitly in Section 2 and Section 7. This eliminates the recording infrastructure burden (LiveKit Egress, storage bucket, signed URLs, 90-day deletion job) documented in gap analysis Gap 3.3.
+- WhatsApp (Meta) listed as "planned for upcoming release" rather than active processor, per client decision 2026-06-03 (WA deferred to MVP2).
+- DPA lists 12 sub-processors (Sarvam, Google Calendar, Google OAuth, Gemini, OpenAI, Razorpay, Neon, Upstash, LiveKit, Fly.io, Render, Cloudflare). Clinic consents to sub-processors by signing the DPA.
+- DPDP Rules status baked in: "notified 14 November 2025, full compliance deadline 13 May 2027" appears in privacy policy footer and DPA section 11.
+- Breach runbook scenario 5 from spec (voice recording exposure) removed because we do not record. Replaced with audit log tamper scenario which is more relevant to MVP1.
+- TD-027 and TD-028 are P2 because the privacy policy and DSAR runbook now commit to specific enforcement and SLA. These are not just nice-to-haves -- they are published obligations. Both must ship before first clinic goes live (Phase 6 target).
+- No consents table or consent JSON storage was created (that is backend-engineer/database-engineer work per gap analysis Gap 3.2, Phase 6 scope). The privacy policy documents the consent architecture; implementation is tracked separately.
+
