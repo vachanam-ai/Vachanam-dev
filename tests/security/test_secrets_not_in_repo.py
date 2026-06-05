@@ -52,6 +52,8 @@ _DOC_CONTEXT_ALLOWLIST = [
     r"grep.*AIza",
     # Doc lines discussing what patterns to check (this test file itself)
     r"test_secrets_not_in_repo",
+    # Commit messages that list pattern names as a summary of what was scanned
+    r"secret patterns \(",
     # CI yml line that runs gitleaks or mentions pattern in a grep
     r"gitleaks",
     # Markdown / spec discussion lines about live keys
@@ -99,10 +101,20 @@ def _get_git_log_diff() -> str:
 
     Uses the repo root (two levels up from this file) as cwd so the test
     works regardless of the pytest invocation directory.
+
+    IMPORTANT: excludes diffs from this test file's own source path.
+    The test file necessarily contains pattern names like ``rzp_live_`` and
+    ``sk-proj-`` as detection signatures.  When those strings appear in the
+    git history diff of *this file*, they are not real secrets — they are
+    the scanning infrastructure itself.  Approach B from Task 17a: scan
+    everything EXCEPT the test file's own diff.
     """
     repo_root = Path(__file__).resolve().parents[2]
     result = subprocess.run(
-        ["git", "log", "--all", "-p"],
+        [
+            "git", "log", "--all", "-p",
+            "--", ".", ":!tests/security/test_secrets_not_in_repo.py",
+        ],
         cwd=str(repo_root),
         capture_output=True,
         timeout=120,

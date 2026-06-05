@@ -112,3 +112,87 @@ async def test_legal_no_auth_required(client):
             f"GET {path} without Authorization header must return 200, "
             f"got {r.status_code}. Legal pages must be publicly accessible."
         )
+
+
+# ── Test 5: Cache-Control header on /privacy ────────────────────────────────
+
+
+async def test_privacy_cache_control_header(client):
+    """GET /privacy must include Cache-Control: public, max-age=3600.
+
+    Legal documents are static and cache-friendly. The header reduces
+    origin load and lets CDN / browser cache serve repeat requests.
+    """
+    r = await client.get("/privacy")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "")
+    assert "public" in cc, (
+        f"Expected 'public' in Cache-Control header, got: {cc!r}"
+    )
+    assert "max-age=3600" in cc, (
+        f"Expected 'max-age=3600' in Cache-Control header, got: {cc!r}"
+    )
+
+
+# ── Test 6: Cache-Control header on /terms ───────────────────────────────────
+
+
+async def test_terms_cache_control_header(client):
+    """GET /terms must include Cache-Control: public, max-age=3600."""
+    r = await client.get("/terms")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "")
+    assert "public" in cc, (
+        f"Expected 'public' in Cache-Control header for /terms, got: {cc!r}"
+    )
+    assert "max-age=3600" in cc, (
+        f"Expected 'max-age=3600' in Cache-Control header for /terms, got: {cc!r}"
+    )
+
+
+# ── Test 7: Cache-Control header on /dpa ─────────────────────────────────────
+
+
+async def test_dpa_cache_control_header(client):
+    """GET /dpa must include Cache-Control: public, max-age=3600."""
+    r = await client.get("/dpa")
+    assert r.status_code == 200
+    cc = r.headers.get("cache-control", "")
+    assert "public" in cc, (
+        f"Expected 'public' in Cache-Control header for /dpa, got: {cc!r}"
+    )
+    assert "max-age=3600" in cc, (
+        f"Expected 'max-age=3600' in Cache-Control header for /dpa, got: {cc!r}"
+    )
+
+
+# ── Test 8: /privacy returns 503 when markdown file is missing ───────────────
+
+
+async def test_privacy_returns_503_when_md_missing(redis, monkeypatch):
+    """When the privacy policy markdown is absent at startup, GET /privacy
+    must return 503 Service Unavailable.
+
+    Simulates the file-missing case by monkeypatching the module-level
+    cached HTML to None (as _load_doc returns None when the file is missing).
+    Uses a fresh client to pick up the patched state.
+    """
+    import backend.routers.legal as legal_mod
+
+    # Patch the cached HTML to None — simulates _load_doc returning None
+    monkeypatch.setattr(legal_mod, "_PRIVACY_HTML", None)
+
+    transport = httpx.ASGITransport(app=legal_mod.router.app, client=("testclient", 123))
+
+    # Re-import the full app to get a client that uses the patched module
+    from backend.main import app
+
+    transport = httpx.ASGITransport(app=app, client=("testclient", 123))
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as ac:
+        r = await ac.get("/privacy")
+        assert r.status_code == 503, (
+            f"Expected 503 when privacy markdown is missing, got {r.status_code}. "
+            f"Body: {r.text[:200]}"
+        )
