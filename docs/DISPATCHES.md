@@ -851,7 +851,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
   Created: scripts/seed_phase1.py | tests/integration/test_seed_phase1.py
   Modified: docs/DISPATCHES.md (this entry)
 **Tests:** 3/3 seed tests GREEN. Full suite 178 passed, 1 skipped, 0 failed. Zero regressions.
-**Commit:** (pending — see hash after commit)
+**Commit:** `e7745d3`
 **Follow-up dispatches:** Phase 1 voice agent telephony wiring (per ROADMAP.md next steps).
 **Notes:**
   - Gap 11 diagnosis: alembic_version stamp was orphaned at 8559268c0c44 but tables were absent (test conftest drop_all wipes tables without resetting the stamp). Recovery: stamp base, stamp ffcf1134aa8f (first migration), upgrade head to run only the second migration — tables created correctly.
