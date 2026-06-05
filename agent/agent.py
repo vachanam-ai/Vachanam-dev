@@ -27,7 +27,35 @@ CLAUDE.md rules respected:
   - Structlog with branch_id + last-4 phone on all significant events
   - phone[-4:] only in logs
 """
+# ── Bootstrap: must be at the very top, before any async-related import ──────
+# Gap 1: asyncpg requires SelectorEventLoop on Windows; Python 3.10+ defaults
+# to ProactorEventLoop. Fix before LiveKit Agents (which may set its own policy
+# at import time).
+import sys
 import asyncio
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# Gap 2: Load .env from project root regardless of CWD. pydantic-settings resolves
+# env_file relative to CWD which breaks when agent is launched from a different
+# directory. python-dotenv is in agent/requirements.txt.
+from pathlib import Path
+from dotenv import load_dotenv
+
+_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+if _ENV_PATH.exists():
+    load_dotenv(_ENV_PATH)
+
+# Gap 3: Configure structlog JSON output before any logger use. Must happen
+# before `from backend.config import settings` to avoid chicken-egg (settings
+# import may already call logger). log_level hardcoded INFO here; reading
+# settings.log_level would require settings to already be initialised.
+from agent.logging_config import configure_structlog
+
+configure_structlog(log_level="INFO")
+# ─────────────────────────────────────────────────────────────────────────────
+
 import json
 from datetime import datetime
 from pathlib import Path

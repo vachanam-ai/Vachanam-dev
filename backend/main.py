@@ -26,9 +26,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from agent.logging_config import configure_structlog
 from backend.config import settings
 from backend.middleware.rate_limit import close_rate_limiter, init_rate_limiter
 from backend.middleware.security_headers import SecurityHeadersMiddleware
+
+# Gap 3: configure structlog JSON output before any logger.info() call.
+# Must be at module level (not inside lifespan) so the very first logger
+# reference — including any that fire during FastAPI app construction —
+# already uses JSON. log_level read from settings here (no chicken-egg:
+# pydantic-settings loads env vars synchronously before this line runs).
+configure_structlog(log_level=settings.log_level)
 
 logger = structlog.get_logger()
 

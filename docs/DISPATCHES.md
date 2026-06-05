@@ -800,3 +800,42 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - The 1 skip is test_secrets_not_committed (conditional skip on CI, not a flake).
 - Test baseline has grown from 155 to 167 since last recorded count (security tests added in Phase 4.5 close-out).
 
+---
+
+## 2026-06-05 — voice-agent-engineer dispatched (Phase 1 D1 — Win asyncio + dotenv + structlog JSON bootstrap)
+
+**Scope:** Three bootstrap gaps fixed in one bundle: (Gap 1) Windows asyncio SelectorEventLoop policy fix so asyncpg does not raise NotImplementedError on ProactorEventLoop; (Gap 2) explicit load_dotenv() in agent entrypoint so .env resolves from project root regardless of CWD; (Gap 3) configure_structlog() call at process start so all logs emit JSON per CLAUDE.md Rule 10.
+
+**Inputs:** agent/agent.py, agent/requirements.txt, backend/main.py, backend/config.py, docs/DISPATCHES.md (append), CLAUDE.md (Rules 6, 10), .claude/agents/voice-agent-engineer.md
+
+**Acceptance:**
+  - `python -c "import agent.agent"` runs without ImportError or asyncio policy warning
+  - `pytest tests/unit/test_logging_config.py -v` -> 3/3 GREEN
+  - `pytest tests/unit/test_tts_sanitizer.py tests/unit/test_emergency.py -v` -> 23/23 GREEN (regression)
+  - Commit landed with correct message
+
+**Reviewer:** tester (verify 3 new tests + 23/23 regression; no test weakening)
+
+**Result:** DONE
+
+**Files touched:**
+  - Created: `agent/logging_config.py` (configure_structlog() with JSON renderer, ISO timestamps, filename/lineno callsite)
+  - Created: `tests/unit/test_logging_config.py` (3 tests: idempotent, JSON output, filename+lineno keys)
+  - Modified: `agent/agent.py` (Gap 1 Win32 asyncio policy + Gap 2 load_dotenv() + Gap 3 configure_structlog() — all at module top, before LiveKit imports)
+  - Modified: `backend/main.py` (Gap 3 — import configure_structlog + call at module level before logger = get_logger(), log_level from settings.log_level)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+
+**Tests:** 3/3 GREEN (test_logging_config.py). 23/23 GREEN (test_tts_sanitizer + test_emergency — zero regression).
+
+**Commit:** (pending — see commit SHA below after git commit)
+
+**Follow-up dispatches:** None from this dispatch. Phase 1 D2 is next per roadmap.
+
+**Notes:**
+  - configure_structlog() in agent/agent.py uses hardcoded "INFO" (not settings.log_level) to avoid chicken-egg: the structlog call must precede the settings import because pydantic-settings itself may log during validation.
+  - configure_structlog() in backend/main.py uses settings.log_level because it runs AFTER settings import (pydantic-settings loads env vars synchronously before module-level code runs).
+  - structlog.configure() is idempotent by design: structlog's cache_logger_on_first_use=True means subsequent calls reset the cache and reapply config, but do not raise. Tests confirm this.
+  - Gap 1 policy fix is placed before `from livekit.agents...` to ensure it fires before LiveKit Agents 1.5.x sets its own event loop policy at import time.
+  - Gap 2 load_dotenv() uses _ENV_PATH = project_root/.env with an existence guard (if _ENV_PATH.exists()) so CI environments without a .env file do not fail.
+  - `python -c "import agent.agent"` confirmed clean on Windows (Python 3.14, platform win32).
+
