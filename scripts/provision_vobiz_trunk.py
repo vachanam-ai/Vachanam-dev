@@ -11,12 +11,12 @@ Required .env vars (7 Vobiz + 3 LiveKit):
     VOBIZ_SIP_USERNAME      SIP trunk auth username from Vobiz console
     VOBIZ_SIP_PASSWORD      SIP trunk auth password from Vobiz console
     VOBIZ_DID_NUMBER        E.164 DID, e.g. +914066XXXXXX
-    VOBIZ_PARTNER_AUTH_ID   Your Vobiz master partner account ID
+    VOBIZ_PARTNER_AUTH_ID   Your Vobiz master partner account ID (format: MA_XXXXXX)
     VOBIZ_PARTNER_AUTH_TOKEN Your Vobiz master partner token
-    VOBIZ_TRUNK_ID          Vobiz internal trunk ID from Step 1 of Vobiz
+    VOBIZ_TRUNK_ID          Vobiz internal trunk UUID from Step 1 of Vobiz
                             console setup (Telephony -> SIP Trunks -> your
-                            trunk -> copy the numeric/UUID ID from the URL
-                            or trunk detail page)
+                            trunk -> copy the UUID from the URL or trunk detail
+                            page, e.g. bfab10fb-cb97-488b-9c63-989c32980b0f)
 
     LIVEKIT_URL             e.g. wss://vachanam-agent.fly.dev
     LIVEKIT_API_KEY         from LiveKit server setup
@@ -26,12 +26,12 @@ What this script does (in order):
     Step 1: Create LiveKit outbound SIP trunk (Vachanam-Vobiz)
     Step 2: Create LiveKit inbound SIP trunk (Vachanam-Vobiz-Inbound)
     Step 3: Create LiveKit dispatch rule (room_prefix=call-, agent=voice-assistant)
-    Step 4: PATCH Vobiz trunk inbound_destination to LiveKit SIP URI
+    Step 4: PUT Vobiz trunk inbound_destination to LiveKit SIP URI
     Step 5: Print verification summary + first-call test command
 
 What is idempotent (safe to re-run):
     - Steps 1-3: if the resource already exists by name/trunk_id, it is skipped
-    - Step 4: if Vobiz inbound_destination already matches, PATCH is skipped
+    - Step 4: if Vobiz inbound_destination already matches, PUT is skipped
 
 What is NOT idempotent (one-time manual actions in Vobiz console):
     - Creating the SIP trunk in Vobiz console (Part 1 in the Vobiz doc)
@@ -45,7 +45,10 @@ Teardown:
     Then re-run this script to re-provision.
 
 Ref: https://docs.vobiz.ai/integrations/livekit
+     https://docs.vobiz.ai/trunks/update-trunk
+     https://docs.vobiz.ai/trunks/retrieve-trunk
 """
+import re
 import sys
 from pathlib import Path
 
@@ -350,7 +353,13 @@ async def provision_dispatch_rule(lk: object, inbound_trunk_id: str) -> str:
         raise RuntimeError(f"Failed to create dispatch rule: {e}") from e
 
 
-# ── Step 4: Vobiz inbound_destination PATCH ─────────────────────────────────
+# ── Step 4: Vobiz inbound_destination PUT ───────────────────────────────────
+
+# Vobiz trunk IDs are UUIDs per API docs.
+# Ref: https://docs.vobiz.ai/trunks/update-trunk (bfab10fb-cb97-488b-9c63-989c32980b0f)
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
+)
 
 
 async def patch_vobiz_inbound_destination(
@@ -359,19 +368,32 @@ async def patch_vobiz_inbound_destination(
     vobiz_trunk_id: str,
     livekit_sip_uri: str,
 ) -> None:
-    """PATCH Vobiz trunk to point inbound calls at the LiveKit SIP URI (idempotent).
+    """PUT Vobiz trunk to point inbound calls at the LiveKit SIP URI (idempotent).
 
     Idempotency: GETs the trunk first; if inbound_destination already matches,
-    skips the PATCH.
+    skips the PUT.
     Raises RuntimeError on HTTP error or unexpected response.
+
+    Per https://docs.vobiz.ai/trunks/update-trunk — Vobiz uses PUT (not PATCH)
+    and the URL must have NO trailing slash.
     """
-    base_url = f"https://api.vobiz.ai/api/v1/Account/{auth_id}/trunks/{vobiz_trunk_id}/"
+    # No trailing slash — Vobiz router returns 400 "account ID required in path" otherwise.
+    base_url = f"https://api.vobiz.ai/api/v1/Account/{auth_id}/trunks/{vobiz_trunk_id}"
     headers = {
         "X-Auth-ID": auth_id,
         "X-Auth-Token": auth_token,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+
+    # Soft UUID format warning — Vobiz trunk IDs are UUIDs; non-UUID IDs may 404.
+    if not _UUID_RE.match(vobiz_trunk_id):
+        print(
+            f"[WARN] VOBIZ_TRUNK_ID does not look like a UUID "
+            f"(got: '...{vobiz_trunk_id[-4:]}'). "
+            f"Vobiz trunk IDs are UUIDs like 'bfab10fb-cb97-488b-9c63-989c32980b0f'. "
+            f"If Vobiz returns 404 on Step 4, check the trunk ID in Vobiz console."
+        )
 
     async with httpx.AsyncClient(timeout=30) as client:
         # Idempotency GET
@@ -395,23 +417,23 @@ async def patch_vobiz_inbound_destination(
             print(f"[SKIP] Vobiz inbound_destination already set to: {livekit_sip_uri}")
             return
 
-        # PATCH with new destination
+        # PUT with new destination (Vobiz uses PUT, not PATCH)
         try:
-            patch_resp = await client.patch(
+            put_resp = await client.put(
                 base_url,
                 headers=headers,
                 json={"inbound_destination": livekit_sip_uri},
             )
-            patch_resp.raise_for_status()
+            put_resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             raise RuntimeError(
-                f"Vobiz PATCH trunk failed (HTTP {e.response.status_code}): {e.response.text}"
+                f"Vobiz PUT trunk failed (HTTP {e.response.status_code}): {e.response.text}"
             ) from e
         except Exception as e:
-            raise RuntimeError(f"Vobiz PATCH trunk failed: {e}") from e
+            raise RuntimeError(f"Vobiz PUT trunk failed: {e}") from e
 
         logger.info(
-            "vobiz_inbound_destination_patched",
+            "vobiz_inbound_destination_updated",
             inbound_destination=livekit_sip_uri,
             previous=current_destination or "(empty)",
         )
@@ -471,6 +493,33 @@ async def main() -> None:
     livekit_api_key = env["LIVEKIT_API_KEY"]
     livekit_api_secret = env["LIVEKIT_API_SECRET"]
 
+    # MA_ prefix guard — fail fast before any network call.
+    # Vobiz Partner auth IDs always start with "MA_" (format: MA_XXXXXX).
+    # If the wrong field was pasted from the Vobiz console, reject immediately.
+    if not partner_auth_id.startswith("MA_"):
+        logger.error(
+            "invalid_vobiz_auth_id_format",
+            first_three_chars=partner_auth_id[:3] if partner_auth_id else "",
+        )
+        print(
+            f"[FATAL] VOBIZ_PARTNER_AUTH_ID must start with 'MA_' "
+            f"(format: MA_XXXXXX from Vobiz console credentials page).\n"
+            f"Got value starting with: '{partner_auth_id[:3] if partner_auth_id else '<empty>'}...'\n"
+            f"Check .env — likely you pasted the wrong field from Vobiz console.\n"
+            f"See https://docs.vobiz.ai/quick-start for credentials location."
+        )
+        sys.exit(1)
+
+    # Soft UUID format warning for VOBIZ_TRUNK_ID — warn here too (before any
+    # network call) so the operator sees it prominently alongside other config.
+    if not _UUID_RE.match(vobiz_trunk_id):
+        print(
+            f"[WARN] VOBIZ_TRUNK_ID does not look like a UUID "
+            f"(got: '...{vobiz_trunk_id[-4:]}'). "
+            f"Vobiz trunk IDs are UUIDs like 'bfab10fb-cb97-488b-9c63-989c32980b0f'. "
+            f"If Vobiz returns 404 on Step 4, check the trunk ID in Vobiz console."
+        )
+
     # Derive LiveKit SIP hostname (no scheme, no sip: prefix) for Vobiz
     livekit_sip_uri = derive_livekit_sip_uri(livekit_url)
 
@@ -520,8 +569,8 @@ async def main() -> None:
             lk=lk, inbound_trunk_id=inbound_trunk_id
         )
 
-        # ── Step 4: Vobiz inbound_destination PATCH ─────────────────────────
-        print("Step 4: Patching Vobiz trunk inbound_destination...")
+        # ── Step 4: Vobiz inbound_destination PUT ──────────────────────────
+        print("Step 4: Updating Vobiz trunk inbound_destination (PUT)...")
         await patch_vobiz_inbound_destination(
             auth_id=partner_auth_id,
             auth_token=partner_auth_token,
