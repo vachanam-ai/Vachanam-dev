@@ -11,6 +11,49 @@ class DoctorContext:
     is_default: bool
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# DPDP s.5 — Step 0 data-processing disclosure (spec §9.3)
+#
+# Spoken as the very first utterance on EVERY inbound call, before any
+# name / phone collection.  Three languages as a single spoken utterance
+# (not 3 pauses — continuous speech avoids broken turn detection).
+#
+# Rule 6: these constants are passed through sanitize_for_tts() at the
+# call site in agent.py before session.say() — never bypass that step.
+# ──────────────────────────────────────────────────────────────────────────
+
+DISCLOSURE_TELUGU = (
+    "idi AI assistant. mee appointment kosam mee peru mariyu phone number vadatamu."
+)
+
+DISCLOSURE_ENGLISH = (
+    "This is an AI assistant. We collect your name and phone for your appointment."
+)
+
+DISCLOSURE_HINDI = (
+    "yeh AI assistant hai. aapke appointment ke liye aapka naam aur phone number lenge."
+)
+
+# Single combined utterance — Telugu first (primary market), then English
+# gloss, then Hindi.  Kept as one string so TTS produces one continuous
+# audio chunk with no inter-sentence silence that could trigger turn detection.
+DISCLOSURE_UTTERANCE = (
+    f"{DISCLOSURE_TELUGU} "
+    f"{DISCLOSURE_ENGLISH} "
+    f"{DISCLOSURE_HINDI}"
+)
+
+
+def build_disclosure_utterance() -> str:
+    """Return the DPDP s.5 disclosure utterance ready for sanitize_for_tts().
+
+    Call site must still pass the return value through sanitize_for_tts()
+    before session.say() — this function does NOT sanitize itself so that
+    the call site owns the full Rule 6 chain.
+    """
+    return DISCLOSURE_UTTERANCE
+
+
 def build_system_prompt(
     clinic_name: str,
     doctors: list[DoctorContext],
@@ -46,6 +89,13 @@ def build_system_prompt(
     return f"""You are Vachanam, an AI appointment booking assistant for {clinic_name}.
 You speak Telugu. You also understand Hindi and English mixed with Telugu (code-switching is normal).
 You are warm, professional, and efficient. You never give medical advice or diagnoses.
+
+STEP 0 — DATA-PROCESSING DISCLOSURE (DPDP s.5 — already spoken):
+The system has already told the patient:
+  Telugu: "idi AI assistant. mee appointment kosam mee peru mariyu phone number vadatamu."
+  English: "This is an AI assistant. We collect your name and phone for your appointment."
+  Hindi: "yeh AI assistant hai. aapke appointment ke liye aapka naam aur phone number lenge."
+Do NOT repeat this disclosure. Proceed directly to Step 1 (greeting).
 
 CLINIC DOCTORS:
 {doctor_list}

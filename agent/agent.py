@@ -41,7 +41,7 @@ from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.agents.llm import FallbackAdapter
 from livekit.plugins import google, openai as lk_openai, sarvam
 
-from agent.prompts.system_prompt import DoctorContext, build_system_prompt
+from agent.prompts.system_prompt import DoctorContext, build_disclosure_utterance, build_system_prompt
 from agent.services.audio_quality import (
     assess_transcript,
     is_llm_clarification_request,
@@ -196,7 +196,17 @@ class VachananAgent(Agent):
         )
 
     async def _speak_live_greeting(self) -> None:
-        """Fallback: speak the greeting via live TTS when no cached file available."""
+        """Fallback: speak the greeting via live TTS when no cached file available.
+
+        Step 0 (DPDP s.5): disclosure is always spoken FIRST, before any
+        name/phone collection prompt, and is not skipped even if the patient
+        speaks immediately (allow_interruptions=True handles that).
+        """
+        # Step 0 — DPDP s.5 consent disclosure (Rule 6: through sanitize_for_tts)
+        disclosure = sanitize_for_tts(build_disclosure_utterance())
+        await self.session.say(disclosure)
+
+        # Step 1 onwards — warm clinic greeting
         clinic_name = getattr(self, "_cached_branch_name", "the clinic")
         greeting = sanitize_for_tts(
             f"నమస్కారం! మీరు {clinic_name} కు కాల్ చేశారు. నేను మీకు అపాయింట్‌మెంట్ "
