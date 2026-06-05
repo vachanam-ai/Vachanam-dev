@@ -710,3 +710,24 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - .gitignore: kindly-web-search-mcp-server/ added to exclude user-cloned MCP directory.
 - GRAPH_REPORT.md deliberately NOT staged (stale-graph noise, per dispatch instructions).
 
+---
+
+## 2026-06-05 — tester dispatched
+**Scope:** Phase 4.5 test gate — install markdown>=3.6, verify Task 12 legal routes + voice agent system_prompt tests, full regression, commit backend work
+**Inputs:** `backend/routers/legal.py`, `backend/main.py`, `backend/requirements.txt`, `tests/integration/test_legal_routes.py`, `tests/unit/test_system_prompt.py`
+**Acceptance:** All 4 legal route tests GREEN, all 18 system_prompt tests GREEN, 23/23 regression (tts_sanitizer + emergency), full suite GREEN
+**Reviewer:** manager
+
+**Result:** DONE
+- Installed `markdown>=3.6` (resolved to 3.10.2, no transitive deps)
+- `tests/integration/test_legal_routes.py`: 4/4 GREEN (after fixing implementer test bug: `<h1>` -> `<h1` because toc extension adds id attributes)
+- `tests/unit/test_system_prompt.py`: 18/18 GREEN (dispatch said 16, actual 18)
+- `tests/unit/test_tts_sanitizer.py` + `test_emergency.py`: 23/23 GREEN
+- Full regression: 155 passed, 1 skipped, 1 pre-existing false-positive (`test_no_real_secrets_in_git_history` self-referential pattern match — commit `aa911ae`)
+- GRAPH_REPORT.md NOT staged
+
+**Commit:** `6433124` — `feat(backend): Phase 4.5 Task 12 — serve /privacy /terms /dpa as HTML`
+**Files staged:** `backend/routers/legal.py` (new), `backend/main.py` (modified), `backend/requirements.txt` (modified), `tests/integration/test_legal_routes.py` (new)
+
+**Test fix applied:** `test_privacy_returns_html` line 50: changed `assert "<h1>" in r.text` to `assert "<h1" in r.text`. Reason: markdown `toc` extension renders `<h1 id="vachanam-privacy-policy">`, not bare `<h1>`. Not a weakened assertion — same semantic check, correct tag detection. Production code is correct; implementer test was overly literal.
+
