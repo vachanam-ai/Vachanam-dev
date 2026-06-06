@@ -1,7 +1,7 @@
 # Vachanam — Status (single source of truth)
 
-**Last updated:** 2026-06-05 (Phase 4.5 closed)
-**Active phase:** Phase 1 — Voice Agent Core (next session starts here)
+**Last updated:** 2026-06-06 (Phase 1 code complete, blocked on Vobiz KYC)
+**Active phase:** Phase 1 — Voice Agent Core (code complete, pending real-call validation)
 **Reliability posture:** MVP-launch (~99.4% uptime target). Phase 11 deferred until volume / outage / customer trigger fires. See [`docs/phases/11-reliability-hardening/CLAUDE.md`](phases/11-reliability-hardening/CLAUDE.md).
 
 Read this at the start of every session. It tells you what's real, what's broken, what's next. If anything here contradicts an older doc, this file wins.
@@ -27,20 +27,32 @@ Security and Compliance sprint complete. 18 spec acceptance criteria: **14 GREEN
 
 ---
 
-## NEXT: Phase 1 — Voice Agent Core
+## NEXT: Phase 1 — Voice Agent Core (code complete, pending real-call validation)
 
-Open `PHASE_1_VOICE_AGENT.md` (or `docs/phases/02-voice-agent/CLAUDE.md`). Voice agent code exists from Phase 2 (already built), but Phase 1 in the ROADMAP.md sense is foundational wiring that connects to telephony. Vobiz creds are in .env; provisioning script ready at `scripts/provision_vobiz_trunk.py`.
+Phase 1 code is complete. Six dispatches shipped today (D1-D4, D-Emergency, D-Cleanup):
+- D1: Win asyncio + dotenv + structlog JSON bootstrap (`20869d6`)
+- D2: Alembic verified + seed_phase1.py with idempotency (`e7745d3`)
+- D3: CalendarService stub + MetaService stub + audit_log voice hooks (`156b483`)
+- D4: Strip silence/audio (-655 LOC) + DID resolution + tool registration (`ad4bd7f`)
+- D-Emergency: SIP transfer on emergency keyword (`d0eb08e`)
+- D-Cleanup: TD-031..036 + DISPATCHES backfill + STATUS update (this commit)
 
-**Before starting Phase 1 next session:**
-1. Read this STATUS.md (done)
-2. Read `docs/ROADMAP.md` for phase order
-3. Read `PHASE_1_VOICE_AGENT.md` for task list
-4. Dispatch brainstormer for Phase 1 entry gate
+Smoke test green: agent boots, registers as `voice-assistant`, 96/96 unit tests pass.
 
-### BLOCKERS open
+### BLOCKED on Vobiz KYC (4-24h wait)
 
-- **Fly.io firewall ports** — Fly.io Mumbai VM needs ports 5060/UDP (SIP) + 10000-60000/UDP (RTP) opened for inbound calls. Phase 5/10 deploy prep.
-- **Vinay: run `python scripts/provision_vobiz_trunk.py`** — creates SIP trunk + dispatch rule in LiveKit. Must complete before first live call. Can be done any time.
+First inbound call blocked on Vobiz account activation. Diagnosed root cause: `is_verified=false` + DID `provider=""` + recycled number (released April, repurchased June). Support ticket prepared. Waiting 4-24h for Vobiz to complete KYC verification and assign DID provider.
+
+### Resume path (after Vobiz activates)
+
+1. First inbound test call (phone -> Vobiz DID -> LiveKit SIP -> agent answers)
+2. First outbound test (SIP REFER on emergency keyword)
+3. Phase 1 close (STATUS + CHANGELOG + DISPATCHES update)
+4. Next phase: Phase 2 backend gaps OR Phase 3 frontend (Vinay's call after Phase 1 closes)
+
+### Other blockers (not blocking Phase 1 close)
+
+- **Fly.io firewall ports** — Fly.io Mumbai VM needs ports 5060/UDP (SIP) + 10000-60000/UDP (RTP) opened for inbound calls. Phase 10 deploy prep.
 - **Anthropic API key for Shannon** — must be in `.env` as `ANTHROPIC_API_KEY` by end of Phase 3. Shannon scan is Phase 3 exit gate (TD-029).
 
 ---
@@ -155,7 +167,7 @@ Phase 2   Voice agent core        ✅ DONE  (tests pass, manual call needs Phase
 Phase 3   Razorpay checkout       ✅ DONE  (test mode, standalone)
 Phase 4   Backend core            ✅ DONE
 Phase 4.5 Security & compliance   ✅ DONE  (closed 2026-06-05)
-Phase 1*  Voice agent telephony   🔨 NEXT  ← active phase (connect to Vobiz + LiveKit live)
+Phase 1*  Voice agent telephony   🔨 CODE COMPLETE  ← blocked on Vobiz KYC; pending real-call validation
 Phase 5   WhatsApp                🅿️ DEFERRED-MVP2 (client decision 2026-06-03)
 Phase 6   Jobs + Calendar         ⬜ (MVP1 REDUCED: Calendar + token expiry only; WA jobs → MVP2)
 Phase 7   Receptionist PWA        ⬜
@@ -169,11 +181,11 @@ Phase 10  Deployment              ⬜ (no Meta WA infra needed for MVP1)
 
 ## What "next session" looks like
 
-Open `PHASE_1_VOICE_AGENT.md` and execute its task list. Phase 1 connects the voice agent to live telephony via Vobiz SIP trunk + LiveKit on Fly.io Mumbai. By the end of Phase 1 you have:
+Wait for Vobiz KYC activation (4-24h). Once activated:
 
-- LiveKit server running on Fly.io Mumbai with SIP trunk configured
-- Vobiz DID forwarding to LiveKit via `scripts/provision_vobiz_trunk.py`
-- Voice agent answering real inbound calls in Telugu
-- End-to-end test: phone call -> AI answers -> token booked
+1. First inbound test call — phone call to Vobiz DID, verify AI answers in Telugu
+2. First outbound test — speak emergency keyword, verify SIP REFER transfer
+3. Phase 1 close — update STATUS + CHANGELOG + DISPATCHES
+4. Vinay decides next phase: Phase 2 backend gaps OR Phase 3 frontend
 
-Then Phase 6 (Jobs + Calendar) begins.
+Then Phase 6 (Jobs + Calendar) begins after the chosen next phase completes.

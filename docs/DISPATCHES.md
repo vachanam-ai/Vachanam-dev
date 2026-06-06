@@ -983,3 +983,42 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - **ctx stored as `self._ctx`:** avoids session.userdata indirection (unreliable in test contexts). Both `transfer_sip_participant` and `shutdown` called directly on `self._ctx`.
 - Agent-engineer: this dispatch.
 
+---
+
+## 2026-06-06 — manager dispatched (D-Cleanup — TD-031..036 + DISPATCHES backfill + STATUS update)
+
+**Scope:** Housekeeping bundle while blocked on Vobiz KYC activation (4-24h wait). Three doc-only tasks: (1) append 6 new tech debt entries TD-031 through TD-036 to TECH_DEBT.md; (2) append D-Cleanup entry to DISPATCHES.md (D1-D-Emergency entries already present from prior dispatches); (3) update STATUS.md NEXT section to reflect Phase 1 code complete, pending real-call validation, blocked on Vobiz KYC.
+
+**Inputs:** docs/TECH_DEBT.md (existing entries TD-029/TD-030 for format reference), docs/DISPATCHES.md (verify D1-D-Emergency already logged), docs/STATUS.md (current NEXT section), git log (commits `20869d6` through `d0eb08e` for today's session).
+
+**Acceptance:**
+  - TECH_DEBT.md has 6 new rows: TD-031 (P3, LiveKit→Pipecat conditional), TD-032 (P2, alembic conftest stamp), TD-033 (P3, CLAUDE.md RULE 7 amendment), TD-034 (P2, local DID per clinic), TD-035 (P2, provision script cred rotation), TD-036 (P1, Vobiz DID pre-flight checker)
+  - DISPATCHES.md has D-Cleanup entry + diagnostic ops note appended
+  - STATUS.md NEXT section updated: Phase 1 code complete, blocked on Vobiz KYC, resume path documented
+  - Single commit: `docs: D-Cleanup — TD-031..036 + DISPATCHES backfill + STATUS update`
+  - Only 3 doc files changed in `git diff --stat HEAD`
+
+**Reviewer:** Client (Vinay) — doc-only housekeeping, no source/test/schema code touched.
+
+**Result:** DONE
+
+**Files touched:**
+  - Modified: `docs/TECH_DEBT.md` (6 new TD rows appended: TD-031 through TD-036)
+  - Modified: `docs/DISPATCHES.md` (D-Cleanup entry + diagnostic ops note appended)
+  - Modified: `docs/STATUS.md` (NEXT section updated — Phase 1 code complete, blocked on Vobiz KYC)
+
+**Tests:** No source/test code touched. Pytest baseline 96/96 unit tests unchanged.
+
+**Commit:** (pending — single commit)
+
+**Follow-up dispatches:**
+  - On Vobiz KYC activation: first inbound test call, then first outbound test, then Phase 1 close
+  - After Phase 1 close: Phase 2 backend gaps OR Phase 3 frontend (client decision)
+
+**Notes:**
+- D1 through D-Emergency entries verified already present in DISPATCHES.md (commits `20869d6`, `e7745d3`, `156b483`, `ad4bd7f`, `d0eb08e`). No duplication needed.
+- Diagnostic ops (Vobiz trunk direction flip outbound→inbound, old LiveKit trunks deleted, fresh provision with new DID, Vobiz API diagnostic uncovering is_verified=false + DID provider empty + recycled number) were orchestrator-inline ops, not specialist dispatches. Noted here for audit trail completeness.
+- TD-036 is the highest-severity new entry (P1) because it is a release blocker for clinic onboarding — without the pre-flight checker, every new clinic DID activation could hit the same opaque Vobiz failure mode.
+- TD-031 (Pipecat migration) is conditional and may never fire if LiveKit performs well in production.
+- TD-033 overlaps with TD-030 (both track CLAUDE.md RULE 7 drift) but from different angles: TD-030 is the voice-agent-engineer's implementation note, TD-033 is the manager's doc-amendment task.
+
