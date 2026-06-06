@@ -34,9 +34,17 @@ async def route_to_doctor(
     db: AsyncSession,
     llm_call,  # callable: async (messages: list) -> str
 ) -> dict:
-    """
-    Route patient complaint to the correct doctor.
-    Returns: {"doctor_id": str | None, "confidence": "high" | "low" | "none"}
+    """Match a patient complaint to the best-fit active doctor for this branch.
+
+    Call this once the patient has stated their health issue. Pass the complaint
+    exactly as spoken — do not translate or paraphrase. Uses an LLM to match
+    keywords and specializations. Returns the doctor to use for subsequent tools.
+
+    Args:
+        complaint: Patient's health complaint in Telugu, Hindi, or English.
+
+    Returns:
+        {"doctor_id": str, "confidence": "high"|"low"|"none"}
     """
     result = await db.execute(
         select(Doctor).where(
@@ -91,10 +99,18 @@ async def check_availability(
     query_start: time | None = None,
     query_end: time | None = None,
 ) -> str:
-    """
-    Returns a human-readable string of available slots/token status.
-    For token-type: "Doctor has 5 tokens booked today. You will be token number 6."
-    For appointment-type: "Doctor is available from 2 PM to 4 PM and 5 PM to 6 PM."
+    """Check whether the selected doctor has capacity on the given date.
+
+    Call this after route_to_doctor to confirm availability before taking the
+    patient's date preference. For token-type doctors, returns current queue
+    size and the patient's expected token number. For appointment-type, returns
+    available time ranges. Always call before assign_token.
+
+    Args:
+        booking_date: The date the patient wants to book (date object).
+
+    Returns:
+        Human-readable availability string in the patient's language.
     """
     result = await db.execute(select(Doctor).where(Doctor.id == doctor_id))
     doctor = result.scalar_one_or_none()
@@ -152,11 +168,20 @@ async def assign_token(
     db: AsyncSession,
     appointment_time: time | None = None,
 ) -> dict:
-    """
-    Atomically assign a token or slot using Redis INCR.
-    Returns: {"success": True, "token_number": int, "redis_key": str}
-          or {"success": False, "reason": "full"}
-    RULE: DECR is the ONLY rollback. Never use it as a primary operation.
+    """Atomically reserve the next available token for this doctor+date using Redis INCR.
+
+    Call this after check_availability confirms capacity AND the patient has agreed
+    to the date. Do NOT call if check_availability returned fully booked. Redis INCR
+    guarantees no double-booking even with concurrent callers. On full queue, rolls
+    back atomically via DECR (DECR is rollback only — never used as primary op).
+
+    Args:
+        booking_date: Confirmed booking date (date object).
+        appointment_time: Required only for appointment-type doctors.
+
+    Returns:
+        {"success": True, "token_number": int, "redis_key": str} or
+        {"success": False, "reason": "full"|"doctor_not_found"|"appointment_time_required"}
     """
     result = await db.execute(select(Doctor).where(Doctor.id == doctor_id))
     doctor = result.scalar_one_or_none()
@@ -175,10 +200,16 @@ async def assign_token(
 
             limit = doctor.daily_token_limit or 50
             if token_number > limit:
-                await r.decr(redis_key)  # rollback
+                await r.decr(redis_key)  # rollback — only valid rollback use
                 return {"success": False, "reason": "full"}
 
-        logger.info("token_assigned", branch_id=str(branch_id), doctor_id=str(doctor_id), token=token_number, date=str(booking_date))
+        logger.info(
+            "token_assigned",
+            branch_id=str(branch_id),
+            doctor_id=str(doctor_id),
+            token=token_number,
+            date=str(booking_date),
+        )
         return {"success": True, "token_number": token_number, "redis_key": redis_key}
 
     else:  # appointment type
@@ -198,7 +229,13 @@ async def assign_token(
                 await r.decr(slot_key)  # rollback
                 return {"success": False, "reason": "full"}
 
-        logger.info("slot_assigned", branch_id=str(branch_id), doctor_id=str(doctor_id), time=str(appointment_time), date=str(booking_date))
+        logger.info(
+            "slot_assigned",
+            branch_id=str(branch_id),
+            doctor_id=str(doctor_id),
+            time=str(appointment_time),
+            date=str(booking_date),
+        )
         return {
             "success": True,
             "token_number": slot_count,
@@ -223,10 +260,20 @@ async def confirm_booking(
     calendar_service,   # CalendarService instance (injected)
     meta_service,       # MetaService instance (injected)
 ) -> dict:
-    """
-    Persist booking to DB, create Calendar event (must succeed), send WhatsApp (fire-and-forget).
-    Returns: {"success": True, "token_id": str} or {"success": False, "reason": str}
-    RULE 4: Calendar first, WhatsApp second — never reverse.
+    """Persist the booking: write DB record, create Calendar event, send WhatsApp.
+
+    Call ONLY after assign_token succeeded and the patient has verbally confirmed
+    their name, phone number, and date. Calendar creation MUST succeed — raises on
+    failure (no silent skip). WhatsApp send is fire-and-forget — failure logged but
+    booking is still confirmed. Rule 4: Calendar before WhatsApp, never reversed.
+
+    Args:
+        patient_name: Full name as spoken by the patient.
+        patient_phone: E.164 format. None if patient declined to share.
+        followup_consent: Whether patient agreed to follow-up calls.
+
+    Returns:
+        {"success": True, "token_id": str} or {"success": False, "reason": str}
     """
     # 1. Find or create patient
     result = await db.execute(
@@ -262,20 +309,26 @@ async def confirm_booking(
     db.add(token)
     await db.flush()
 
-    # 3. Google Calendar (MUST succeed — raises if fails)
+    # 3. Google Calendar (MUST succeed — raises if fails; booking aborts)
     result = await db.execute(select(Doctor).where(Doctor.id == doctor_id))
     doctor = result.scalar_one()
     result = await db.execute(select(Branch).where(Branch.id == branch_id))
     branch = result.scalar_one()
 
+    # Capture SQLAlchemy values NOW before session closes
+    doctor_name = doctor.name
+    doctor_calendar_id = doctor.google_calendar_id
+    branch_calendar_id = branch.google_calendar_id
+    branch_name = branch.name
+
     event_id = await calendar_service.create_booking_event(
-        calendar_id=doctor.google_calendar_id or branch.google_calendar_id,
+        calendar_id=doctor_calendar_id or branch_calendar_id,
         patient_name=patient_name,
         patient_phone=patient_phone[-4:] if patient_phone else "unknown",
         token_number=token_number,
         booking_date=booking_date,
         appointment_time=appointment_time,
-        doctor_name=doctor.name,
+        doctor_name=doctor_name,
     )
     token.google_calendar_event_id = event_id
 
@@ -290,8 +343,7 @@ async def confirm_booking(
         via=source,
     )
 
-    # Audit log — voice path (Gap 10). Fire-and-forget; failure never blocks booking.
-    # PII_DENYLIST enforced by write_audit_row itself. Only safe keys included.
+    # Audit log — voice path. Fire-and-forget; failure never blocks booking.
     try:
         await write_audit_row(
             action="booking.confirmed",
@@ -316,8 +368,8 @@ async def confirm_booking(
             await meta_service.send_booking_confirmation(
                 to=patient_phone,
                 patient_name=patient_name,
-                doctor_name=doctor.name,
-                clinic_name=branch.name,
+                doctor_name=doctor_name,
+                clinic_name=branch_name,
                 booking_date=booking_date,
                 token_number=token_number,
                 appointment_time=appointment_time,

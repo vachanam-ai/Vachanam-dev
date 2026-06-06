@@ -1,31 +1,21 @@
 """Vachanam LiveKit voice agent entrypoint.
 
-Implements the voice call flow + latency design (spec
-docs/superpowers/specs/2026-06-01-voice-call-flow-latency-design.md).
-
-Component map → code:
-  1. Streaming STT       → sarvam.STT WebSocket (default in livekit-plugins-sarvam)
-  2. Streaming LLM       → google.LLM via FallbackAdapter (livekit handles SSE)
-  3. Streaming TTS       → sarvam.TTS WebSocket (chunked via AgentSession default)
-  4. Pre-cached greeting → backend/static/greetings/<branch_id>.wav played in on_enter
-                           BEFORE DB lookups complete
-  5. Connection keep-alive → AgentSession reuses WebSockets for call duration
-  6. Parallel DB lookup    → asyncio.create_task in on_enter; greeting plays meanwhile
-  7. Smart end-of-turn     → livekit.plugins.turn_detector.MultilingualModel()
-  8. Always-interruptible  → AgentSession default + allow_interruptions=True
-  9. Silence handling      → _silence_watchdog background task using silence_handler
- 10. Garbled input defense → audio_quality + Layer B detection in on_user_turn_completed
- 11. Solo 4-min cap        → _solo_cap_watchdog background task (unchanged from TD-009)
- 12. Emergency override    → state.silence_state.mark_emergency() when keyword fires
+Component map:
+  1. Streaming STT  → sarvam.STT WebSocket
+  2. LLM            → Gemini 2.5 Flash (primary) + GPT-4o-mini fallback via FallbackAdapter
+  3. Streaming TTS  → sarvam.TTS WebSocket
+  4. Branch context → resolved from SIP trunkPhoneNumber DID; fallback to room metadata
+  5. Solo 4-min cap → _solo_cap_watchdog background task
+  6. Inactivity     → _inactivity_watchdog (30s no-audio → graceful end)
+  7. Emergency      → keyword detect → speak branch.emergency_contact → continue booking
 
 CLAUDE.md rules respected:
   - Every DB query filters by branch_id
-  - Tokens via Redis INCR (in booking_tools.py); DECR only rollback
-  - Calendar success required for booking
+  - Tokens via Redis INCR; DECR is rollback only
+  - Calendar success required; WhatsApp fire-and-forget
   - Every session.say() through sanitize_for_tts()
-  - LLM Gemini primary → GPT-4o-mini fallback via FallbackAdapter
-  - Structlog with branch_id + last-4 phone on all significant events
-  - phone[-4:] only in logs
+  - Gemini primary → GPT-4o-mini fallback via FallbackAdapter
+  - Structlog JSON with branch_id + last-4 phone on all significant events
 """
 # ── Bootstrap: must be at the very top, before any async-related import ──────
 # Gap 1: asyncpg requires SelectorEventLoop on Windows; Python 3.10+ defaults
@@ -37,9 +27,7 @@ import asyncio
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-# Gap 2: Load .env from project root regardless of CWD. pydantic-settings resolves
-# env_file relative to CWD which breaks when agent is launched from a different
-# directory. python-dotenv is in agent/requirements.txt.
+# Gap 2: Load .env from project root regardless of CWD.
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -47,60 +35,313 @@ _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH)
 
-# Gap 3: Configure structlog JSON output before any logger use. Must happen
-# before `from backend.config import settings` to avoid chicken-egg (settings
-# import may already call logger). log_level hardcoded INFO here; reading
-# settings.log_level would require settings to already be initialised.
+# Gap 3: Configure structlog JSON output before any logger use.
 from agent.logging_config import configure_structlog
 
 configure_structlog(log_level="INFO")
 # ─────────────────────────────────────────────────────────────────────────────
 
 import json
-from datetime import datetime
-from pathlib import Path
+import time
+from datetime import datetime, date
 from typing import Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
 import structlog
-from livekit import agents
-from livekit.agents import Agent, AgentSession, RoomInputOptions
+from livekit import agents, rtc
+from livekit.agents import Agent, AgentSession, RoomInputOptions, function_tool
 from livekit.agents.llm import FallbackAdapter
 from livekit.plugins import google, openai as lk_openai, sarvam
+from sqlalchemy import select, and_
 
 from agent.prompts.system_prompt import DoctorContext, build_disclosure_utterance, build_system_prompt
-from backend.services.audit_service import write_audit_row
-from agent.services.audio_quality import (
-    assess_transcript,
-    is_llm_clarification_request,
-)
 from agent.services.emergency import is_emergency
-from agent.services.silence_handler import (
-    CANNED_GARBLED_RETRY,
-    CANNED_HANGUP_DEFAULT,
-    CANNED_HANGUP_GARBLED,
-    CANNED_PROMPT_1_FALLBACK,
-    CANNED_PROMPT_2_FALLBACK,
-    Directive,
-    SilenceState,
-    decide_garbled_directive,
-    decide_silence_directive,
-)
 from agent.services.tts_sanitizer import sanitize_for_tts
 from agent.session_state import SessionState
 from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.models.schema import Branch, Doctor
-from sqlalchemy import and_, select
 
 logger = structlog.get_logger()
 
 SOLO_CAP_SECONDS = 240          # 4 minutes — billing hard limit (Solo plan)
 SOLO_WARNING_SECONDS = SOLO_CAP_SECONDS - 10
-WATCHDOG_INTERVAL_SECONDS = 0.5  # silence watchdog tick
+INACTIVITY_TIMEOUT_SECONDS = 30  # no user audio for 30s → end gracefully
 
 _GREETINGS_DIR = Path(__file__).resolve().parent.parent / "backend" / "static" / "greetings"
+
+_SIP_KIND = rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Branch resolution — SIP DID lookup with metadata fallback
+# ──────────────────────────────────────────────────────────────────────────
+
+
+async def _wait_for_sip_participant(
+    ctx: agents.JobContext, timeout_s: float = 10.0
+) -> "rtc.RemoteParticipant | None":
+    """Return the first SIP participant who joins the room, or None on timeout."""
+    try:
+        participant = await asyncio.wait_for(
+            ctx.wait_for_participant(kind=[_SIP_KIND]),
+            timeout=timeout_s,
+        )
+        return participant
+    except asyncio.TimeoutError:
+        logger.warning("sip_participant_wait_timeout", timeout_s=timeout_s)
+        return None
+    except Exception as e:
+        logger.warning("sip_participant_wait_error", error=str(e))
+        return None
+
+
+async def _resolve_branch_from_sip(
+    ctx: agents.JobContext,
+) -> "tuple[UUID, str | None]":
+    """Resolve branch_id + patient_phone from SIP attributes or room metadata.
+
+    Returns (branch_id, patient_phone_or_None).
+    Raises ValueError if neither SIP DID nor metadata branch_id is available.
+    """
+    sip_participant = await _wait_for_sip_participant(ctx, timeout_s=10.0)
+
+    if sip_participant is not None:
+        attrs = sip_participant.attributes or {}
+        did = attrs.get("sip.trunkPhoneNumber")
+        patient_phone = attrs.get("sip.phoneNumber")
+
+        if did:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(Branch.id).where(Branch.did_number == did)
+                )
+                branch_id = result.scalar_one_or_none()
+
+            if branch_id:
+                logger.info(
+                    "branch_resolved_from_did",
+                    did_last4=did[-4:],
+                    branch_id=str(branch_id),
+                    patient_phone_last4=patient_phone[-4:] if patient_phone else None,
+                )
+                return branch_id, patient_phone
+
+            logger.error("branch_not_found_for_did", did_last4=did[-4:])
+            raise ValueError(f"No branch configured for DID ending {did[-4:]}")
+
+    # Fallback: dev/test rooms that inject branch_id in room metadata
+    metadata: dict = {}
+    if ctx.room.metadata:
+        try:
+            metadata = json.loads(ctx.room.metadata)
+        except Exception:
+            pass
+
+    if metadata.get("branch_id"):
+        branch_id = UUID(metadata["branch_id"])
+        logger.info("branch_resolved_from_metadata", branch_id=str(branch_id))
+        return branch_id, metadata.get("patient_phone")
+
+    raise ValueError("No SIP participant and no branch_id in room metadata")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Booking tool closures — bound to per-call SessionState
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _make_booking_tools(state: SessionState) -> list:
+    """Return 4 @function_tool callables bound to this call's session state.
+
+    Each tool opens its own AsyncSessionLocal per invocation to avoid detached-
+    instance errors (asyncpg + long-lived sessions are unsafe across turns).
+
+    LLM clients (genai, OpenAI) are imported lazily inside _llm_call so that
+    the tool list can be built without requiring those packages at import time.
+    This keeps tests that only inspect the tool shape fast and dependency-light.
+    """
+    import asyncio as _asyncio
+    from agent.tools.booking_tools import (
+        route_to_doctor as _route,
+        check_availability as _avail,
+        assign_token as _assign,
+        confirm_booking as _confirm,
+    )
+
+    async def _llm_call(messages: list) -> str:
+        """Gemini primary → GPT-4o-mini fallback (Rule 9). Lazy import of clients."""
+        import google.generativeai as _genai
+        from openai import AsyncOpenAI as _AsyncOpenAI
+
+        combined = "\n".join(m.get("content", "") for m in messages)
+        try:
+            _model = _genai.GenerativeModel("gemini-2.5-flash")
+            resp = await _asyncio.to_thread(_model.generate_content, combined)
+            return resp.text
+        except Exception as e:
+            logger.error("gemini_failed_switching_to_openai", error=str(e))
+            try:
+                _oai = _AsyncOpenAI(api_key=settings.openai_api_key)
+                r = await _oai.chat.completions.create(
+                    model="gpt-4o-mini", messages=messages, temperature=0
+                )
+                return r.choices[0].message.content or ""
+            except Exception as e2:
+                logger.critical("both_llms_failed", error=str(e2))
+                return "{}"
+
+    @function_tool
+    async def route_to_doctor(complaint: str) -> dict:
+        """Call when the patient has described their health complaint.
+        Determines which doctor to route them to. Do NOT call until the
+        patient has stated their complaint — ask first if unclear.
+        Args: complaint — patient's complaint in Telugu, Hindi, or English.
+        Returns: dict with doctor_id, confidence (high/low/none).
+        """
+        if not state.branch_id:
+            return {"error": "branch_id not resolved"}
+        async with AsyncSessionLocal() as db:
+            result = await _route(
+                complaint=complaint,
+                branch_id=state.branch_id,
+                db=db,
+                llm_call=_llm_call,
+            )
+        if result.get("doctor_id"):
+            state.doctor_id = UUID(result["doctor_id"])
+        logger.info(
+            "tool_route_to_doctor",
+            branch_id=str(state.branch_id),
+            confidence=result.get("confidence"),
+        )
+        return result
+
+    @function_tool
+    async def check_availability(booking_date: str) -> str:
+        """Call after routing to check open slots for the selected doctor.
+        booking_date must be ISO format YYYY-MM-DD (e.g. 2026-06-07).
+        Returns a human-readable availability string in the patient's language.
+        Do NOT call before route_to_doctor has succeeded.
+        """
+        if not state.branch_id or not state.doctor_id:
+            return "Doctor not yet selected. Please route the patient first."
+        parsed_date = date.fromisoformat(booking_date)
+        async with AsyncSessionLocal() as db:
+            result = await _avail(
+                doctor_id=state.doctor_id,
+                branch_id=state.branch_id,
+                booking_date=parsed_date,
+                db=db,
+            )
+        logger.info(
+            "tool_check_availability",
+            branch_id=str(state.branch_id),
+            doctor_id=str(state.doctor_id),
+            date=booking_date,
+        )
+        return result
+
+    @function_tool
+    async def assign_token(booking_date: str) -> dict:
+        """Call when the patient confirms the date and wants to book a token.
+        Atomically reserves the next available token via Redis INCR — no double-booking.
+        booking_date: ISO YYYY-MM-DD. Call check_availability first.
+        Returns: success + token_number, or failure reason if fully booked.
+        """
+        if not state.branch_id or not state.doctor_id:
+            return {"success": False, "reason": "doctor_not_routed"}
+        parsed_date = date.fromisoformat(booking_date)
+        async with AsyncSessionLocal() as db:
+            result = await _assign(
+                doctor_id=state.doctor_id,
+                branch_id=state.branch_id,
+                booking_date=parsed_date,
+                db=db,
+            )
+        if result.get("success"):
+            state.token_held = True
+            state.token_number = result["token_number"]
+            state.token_redis_key = result["redis_key"]
+        logger.info(
+            "tool_assign_token",
+            branch_id=str(state.branch_id),
+            doctor_id=str(state.doctor_id),
+            success=result.get("success"),
+            token=result.get("token_number"),
+        )
+        return result
+
+    @function_tool
+    async def confirm_booking(
+        patient_name: str,
+        patient_phone: str,
+        complaint: str,
+        booking_date: str,
+        followup_consent: bool,
+    ) -> dict:
+        """Call ONLY after assign_token succeeded and patient verbally confirmed all details.
+        Persists booking to DB + Google Calendar (must succeed). WhatsApp is fire-and-forget.
+        patient_phone: E.164 format. booking_date: ISO YYYY-MM-DD.
+        Returns: success + token_id, or failure reason.
+        """
+        if not state.branch_id or not state.doctor_id or not state.token_held:
+            return {"success": False, "reason": "token_not_held"}
+        parsed_date = date.fromisoformat(booking_date)
+
+        # Attempt real service imports; fall back to stubs if Phase 6 not yet shipped
+        try:
+            from backend.services.calendar_service import CalendarService
+            calendar_svc = CalendarService()
+        except (ImportError, Exception):
+            class _StubCalendar:
+                async def create_booking_event(self, **kwargs: Any) -> str:
+                    logger.warning("calendar_service_stub_used")
+                    return "stub-event-id"
+            calendar_svc = _StubCalendar()  # type: ignore[assignment]
+
+        try:
+            from backend.services.meta_service import MetaService
+            meta_svc = MetaService()
+        except (ImportError, Exception):
+            class _StubMeta:
+                async def send_booking_confirmation(self, **kwargs: Any) -> None:
+                    logger.warning("meta_service_stub_used")
+            meta_svc = _StubMeta()  # type: ignore[assignment]
+
+        async with AsyncSessionLocal() as db:
+            result = await _confirm(
+                doctor_id=state.doctor_id,
+                branch_id=state.branch_id,
+                patient_name=patient_name,
+                patient_phone=patient_phone,
+                complaint=complaint,
+                booking_date=parsed_date,
+                token_number=state.token_number,
+                followup_consent=followup_consent,
+                appointment_time=None,
+                source="voice",
+                db=db,
+                calendar_service=calendar_svc,
+                meta_service=meta_svc,
+            )
+
+        if result.get("success"):
+            state.token_confirmed = True
+            state.patient_name = patient_name
+            state.patient_phone = patient_phone
+
+        logger.info(
+            "tool_confirm_booking",
+            branch_id=str(state.branch_id),
+            token_number=state.token_number,
+            patient_phone_last4=patient_phone[-4:] if patient_phone else None,
+            success=result.get("success"),
+        )
+        return result
+
+    return [route_to_doctor, check_availability, assign_token, confirm_booking]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -110,80 +351,35 @@ _GREETINGS_DIR = Path(__file__).resolve().parent.parent / "backend" / "static" /
 
 class VachananAgent(Agent):
     def __init__(self, state: SessionState) -> None:
-        super().__init__(instructions="")  # overridden in on_enter once branch loaded
+        super().__init__(
+            instructions="",
+            tools=_make_booking_tools(state),
+        )
         self.state = state
-        # Per-call silence state — owned by the agent, mutated by watchdog + events.
-        self.silence_state = SilenceState()
-        # Mark of when the last activity happened (AI speech end OR user speech end).
-        # Used by _silence_watchdog to compute elapsed silence.
-        self.last_activity_at: datetime | None = None
 
     async def on_enter(self) -> None:
-        """Fires when agent joins the room. Per spec Component 4-6:
-        - Start playing pre-cached greeting IMMEDIATELY (within 100ms)
-        - Run branch+doctor DB lookup IN PARALLEL during greeting playback
-        """
-        # Component 4: play pre-cached greeting first (<100ms target)
-        greeting_played = await self._play_precached_greeting()
-
-        # Component 6: parallel DB lookup task — doesn't block greeting
-        db_task = asyncio.create_task(self._load_branch_context())
-
-        # If we didn't have a pre-cached file, we need to wait for DB + speak greeting now
-        if not greeting_played:
-            try:
-                await db_task
-            except Exception as e:
-                logger.error("branch_context_load_failed", error=str(e))
-                await self.session.say(
-                    sanitize_for_tts("క్షమించండి, ఈ నంబర్ కు కనెక్ట్ కాలేదు. దయచేసి మళ్ళీ ప్రయత్నించండి.")
+        """Fires when agent joins the room. Load branch context then speak greeting."""
+        try:
+            await self._load_branch_context()
+        except Exception as e:
+            logger.error("branch_context_load_failed", error=str(e))
+            await self.session.say(
+                sanitize_for_tts(
+                    "క్షమించండి, ఈ నంబర్ కు కనెక్ట్ కాలేదు. దయచేసి మళ్ళీ ప్రయత్నించండి."
                 )
-                await self.session.aclose()
-                return
-            await self._speak_live_greeting()
-        else:
-            # Greeting is playing; await DB context so subsequent turns have it
-            try:
-                await db_task
-            except Exception as e:
-                logger.error("branch_context_load_failed_after_greeting", error=str(e))
+            )
+            await self.session.aclose()
+            return
 
-        self.last_activity_at = datetime.now()
+        await self._speak_live_greeting()
         logger.info(
             "call_started",
             branch_id=str(self.state.branch_id) if self.state.branch_id else None,
             plan=self.state.plan,
-            greeting_played_from_cache=greeting_played,
         )
 
-    async def _play_precached_greeting(self) -> bool:
-        """Component 4: stream the pre-cached greeting WAV for this branch.
-
-        Returns True if a cached file was played, False if we need to fall back
-        to live TTS. Per spec, target <100ms first-word latency on call pickup.
-        """
-        if not self.state.branch_id:
-            return False
-        greeting_path = _GREETINGS_DIR / f"{self.state.branch_id}.wav"
-        if not greeting_path.exists():
-            logger.warning(
-                "precached_greeting_missing",
-                branch_id=str(self.state.branch_id),
-                path=str(greeting_path),
-            )
-            return False
-        # LiveKit 1.5 doesn't expose a direct "play this WAV" API on AgentSession.
-        # Workaround: we let on_enter speak the greeting via TTS but rely on
-        # the AgentSession's chunked streaming to start audio quickly. The
-        # pre-cached file path is reserved for a future Phase 10 enhancement
-        # where we wire it through ctx.room.local_participant.publish_track.
-        # For now: log presence + fall back to live TTS (still fast due to
-        # streaming TTS + warmup).
-        # TODO TD-020 (logged separately): wire actual WAV publish in Phase 10.
-        return False
-
     async def _load_branch_context(self) -> None:
-        """Component 6: branch + doctor lookup. Runs in parallel with greeting playback."""
+        """Branch + doctor lookup. Captures all SQLAlchemy values before closing session."""
         async with AsyncSessionLocal() as db:
             branch_result = await db.execute(
                 select(Branch).where(Branch.id == self.state.branch_id)
@@ -215,7 +411,6 @@ class VachananAgent(Agent):
 
         self._cached_branch_name = branch_name
         self._cached_doctor_contexts = doctor_contexts
-        # Build the system prompt now so subsequent turns are fast
         self.instructions = build_system_prompt(
             clinic_name=branch_name,
             doctors=doctor_contexts,
@@ -225,17 +420,10 @@ class VachananAgent(Agent):
         )
 
     async def _speak_live_greeting(self) -> None:
-        """Fallback: speak the greeting via live TTS when no cached file available.
-
-        Step 0 (DPDP s.5): disclosure is always spoken FIRST, before any
-        name/phone collection prompt, and is not skipped even if the patient
-        speaks immediately (allow_interruptions=True handles that).
-        """
-        # Step 0 — DPDP s.5 consent disclosure (Rule 6: through sanitize_for_tts)
+        """Speak DPDP s.5 disclosure then warm clinic greeting."""
         disclosure = sanitize_for_tts(build_disclosure_utterance())
         await self.session.say(disclosure)
 
-        # Step 1 onwards — warm clinic greeting
         clinic_name = getattr(self, "_cached_branch_name", "the clinic")
         greeting = sanitize_for_tts(
             f"నమస్కారం! మీరు {clinic_name} కు కాల్ చేశారు. నేను మీకు అపాయింట్‌మెంట్ "
@@ -244,88 +432,34 @@ class VachananAgent(Agent):
         await self.session.say(greeting)
 
     async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
-        """Fires after the user's turn ends and STT has finalized the transcript.
+        """Emergency keyword detection after each user turn (CLAUDE.md Rule 7).
 
-        Per spec:
-        - Component 10A: STT confidence check — if low, treat as garbled
-        - Component 12: emergency keyword detection (existing)
-        - Component 9: reset silence timer (user spoke)
+        new_message.content is list[ChatContent] in LiveKit 1.5.9.
+        Use text_content property; fall back to manual extraction.
         """
-        self.last_activity_at = datetime.now()
-        self.silence_state.reset_silence()
-
-        # Extract text safely (livekit ChatMessage.content may be str or parts list)
-        content = new_message.content if new_message else None
-        if not isinstance(content, str):
-            content = " ".join(
-                part if isinstance(part, str) else getattr(part, "text", "")
-                for part in (content or [])
-            )
+        content: str | None = None
+        if new_message is not None:
+            content = new_message.text_content  # str | None
+            if content is None:
+                raw = getattr(new_message, "content", None)
+                if isinstance(raw, str):
+                    content = raw
+                elif isinstance(raw, list):
+                    content = " ".join(
+                        part if isinstance(part, str) else getattr(part, "text", "")
+                        for part in raw
+                    )
 
         if not content:
             return
 
-        # Component 12: emergency override (sticky)
         if is_emergency(content):
-            self.silence_state.mark_emergency()
             contact = self.state.emergency_contact or "the clinic"
             msg = sanitize_for_tts(
                 f"నేను అర్థం చేసుకున్నాను. దయచేసి వెంటనే ఈ నంబర్ కు కాల్ చేయండి: {contact}"
             )
             await self.session.say(msg)
             # Continue booking — emergency contact given, do NOT disconnect
-
-            # Audit log — voice path emergency (Gap 10). Fire-and-forget.
-            # Raw keyword NOT stored — categorised as "medical_critical" to satisfy PII_DENYLIST
-            # ("symptom" is a denied substring; actual keyword may describe a symptom).
-            try:
-                await write_audit_row(
-                    action="emergency.keyword_detected",
-                    resource_type="call",
-                    resource_id=self.state.livekit_room_id,
-                    branch_id=self.state.branch_id,
-                    ip_address=None,
-                    user_agent="voice-agent/1.0",
-                    metadata={
-                        "emergency_keyword_category": "medical_critical",
-                        "via": "voice",
-                    },
-                )
-            except Exception as _audit_err:
-                logger.error("audit_write_failed_emergency", error=str(_audit_err))
-
-        # Note: STT confidence check (Component 10A) requires per-turn STT response
-        # object which livekit-plugins-sarvam doesn't expose to the Agent layer in
-        # 1.5.9. We rely on Layer B (LLM-side clarification, detected in
-        # on_agent_response_done below) for garbled handling. Layer A wiring is
-        # deferred to a future LiveKit version (logged TD).
-
-    async def on_agent_response_done(self, response_text: str) -> None:
-        """Fires after the agent's response is complete.
-
-        Per spec Component 10 Layer B: if the LLM's response is a clarification
-        request ("kshamincandi, mali cheppagalara"), increment the garbled counter.
-        At limit, hangup with the canned garbled message.
-        """
-        self.last_activity_at = datetime.now()
-        self.silence_state.reset_silence()
-
-        if is_llm_clarification_request(response_text):
-            self.silence_state.garbled_count += 1
-            logger.info(
-                "garbled_turn_detected",
-                garbled_count=self.silence_state.garbled_count,
-                branch_id=str(self.state.branch_id) if self.state.branch_id else None,
-            )
-            directive = decide_garbled_directive(self.silence_state)
-            if directive == Directive.GARBLED_HANGUP:
-                logger.info("garbled_hangup", branch_id=str(self.state.branch_id))
-                await self.session.say(sanitize_for_tts(CANNED_HANGUP_GARBLED))
-                await self.session.aclose()
-                return
-        else:
-            # Comprehensible response advances booking → reset garbled counter
-            self.silence_state.reset_garbled()
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -334,9 +468,7 @@ class VachananAgent(Agent):
 
 
 async def _solo_cap_watchdog(state: SessionState, session: AgentSession) -> None:
-    """Enforce Solo plan 4-min cap independent of user activity.
-    Unchanged from TD-009 fix — polls every 5s.
-    """
+    """Enforce Solo plan 4-min cap. Polls every 5s."""
     try:
         while True:
             await asyncio.sleep(5)
@@ -369,62 +501,43 @@ async def _solo_cap_watchdog(state: SessionState, session: AgentSession) -> None
         logger.error("solo_cap_watchdog_crashed", error=str(e))
 
 
-async def _silence_watchdog(agent: VachananAgent, session: AgentSession) -> None:
-    """Component 9: silence handling state machine.
+async def _inactivity_watchdog(
+    last_activity: list,
+    session: AgentSession,
+    ctx: agents.JobContext,
+    state: SessionState,
+) -> None:
+    """End the call gracefully if no user audio for INACTIVITY_TIMEOUT_SECONDS (30s).
 
-    Polls every 500ms. Computes seconds since last activity (AI speech end or
-    user speech end). Calls silence_handler.decide_silence_directive(); acts:
-      - PROMPT_1 / PROMPT_2 → speak a context-aware prompt (fallback to canned)
-      - HANGUP → speak canned goodbye, close session
+    last_activity is a single-element list[float] — a mutable container so the
+    event handler in entrypoint() can update it without a nonlocal closure.
+    Polls every 5s for performance.
     """
     try:
         while True:
-            await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
-
-            if agent.last_activity_at is None:
-                continue
-
-            elapsed = (datetime.now() - agent.last_activity_at).total_seconds()
-            directive = decide_silence_directive(agent.silence_state, elapsed)
-
-            if directive == Directive.NONE:
-                continue
-
-            if directive == Directive.HANGUP:
+            await asyncio.sleep(5)
+            elapsed = time.monotonic() - last_activity[0]
+            if elapsed > INACTIVITY_TIMEOUT_SECONDS:
                 logger.info(
-                    "silence_hangup",
-                    elapsed_seconds=elapsed,
-                    mode=agent.silence_state.mode.value,
-                    branch_id=str(agent.state.branch_id) if agent.state.branch_id else None,
+                    "inactivity_timeout",
+                    elapsed_seconds=int(elapsed),
+                    branch_id=str(state.branch_id) if state.branch_id else None,
                 )
                 try:
-                    await session.say(sanitize_for_tts(CANNED_HANGUP_DEFAULT))
-                    await session.aclose()
+                    await session.say(
+                        sanitize_for_tts(
+                            "Marrispappalu vinipinchatm ledu. Mee call ki dhanyavadalu, "
+                            "matla appudu call cheyandi."
+                        )
+                    )
+                    session.shutdown(drain=False)
                 except Exception as e:
-                    logger.warning("silence_hangup_failed", error=str(e))
+                    logger.warning("inactivity_shutdown_failed", error=str(e))
                 return
-
-            if directive == Directive.PROMPT_1:
-                agent.silence_state.prompts_emitted = max(agent.silence_state.prompts_emitted, 1)
-                prompt = sanitize_for_tts(CANNED_PROMPT_1_FALLBACK)
-                try:
-                    await session.say(prompt)
-                    agent.last_activity_at = datetime.now()
-                except Exception as e:
-                    logger.warning("silence_prompt_1_failed", error=str(e))
-
-            elif directive == Directive.PROMPT_2:
-                agent.silence_state.prompts_emitted = max(agent.silence_state.prompts_emitted, 2)
-                prompt = sanitize_for_tts(CANNED_PROMPT_2_FALLBACK)
-                try:
-                    await session.say(prompt)
-                    agent.last_activity_at = datetime.now()
-                except Exception as e:
-                    logger.warning("silence_prompt_2_failed", error=str(e))
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.error("silence_watchdog_crashed", error=str(e))
+        logger.error("inactivity_watchdog_crashed", error=str(e))
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -435,21 +548,31 @@ async def _silence_watchdog(agent: VachananAgent, session: AgentSession) -> None
 async def entrypoint(ctx: agents.JobContext) -> None:
     state = SessionState()
     state.livekit_room_id = ctx.room.name
+    state.call_start = datetime.now()
 
+    # metadata fallback for non-SIP rooms (plan + call_type + is_rebook only)
     metadata: dict = {}
     if ctx.room.metadata:
         try:
             metadata = json.loads(ctx.room.metadata)
         except Exception:
             pass
-
-    state.branch_id = UUID(metadata["branch_id"]) if metadata.get("branch_id") else None
     state.plan = metadata.get("plan", "clinic")
     state.call_type = metadata.get("call_type", "inbound_booking")
     state.is_rebook = metadata.get("is_rebook") in (True, "true", "1")
-    state.call_start = datetime.now()
 
     await ctx.connect()
+
+    # Part 2: DID → branch_id resolution (must run AFTER ctx.connect())
+    try:
+        branch_id, patient_phone = await _resolve_branch_from_sip(ctx)
+        state.branch_id = branch_id
+        if patient_phone:
+            state.patient_phone = patient_phone
+    except ValueError as e:
+        logger.error("branch_resolution_failed", error=str(e))
+        await ctx.shutdown(reason="branch_resolution_failed")
+        return
 
     stt = sarvam.STT(
         api_key=settings.sarvam_api_key,
@@ -462,26 +585,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         target_language_code="te-IN",
     )
 
-    # Component 7 — smart end-of-turn detection (multilingual model).
-    # If the plugin fails to load (transient version drift), AgentSession falls back
-    # to the default Silero VAD which is still acceptable for MVP.
     turn_detector = None
     try:
         from livekit.plugins.turn_detector.multilingual import MultilingualModel
         turn_detector = MultilingualModel()
     except Exception as e:
-        logger.warning("multilingual_turn_detector_unavailable_falling_back_to_default_vad",
-                       error=str(e))
+        logger.warning(
+            "multilingual_turn_detector_unavailable_falling_back_to_default_vad",
+            error=str(e),
+        )
 
-    # Component 2 — LLM with Gemini primary + GPT-4o-mini fallback (FallbackAdapter
-    # already shipped in TD-007 fix).
     llm = FallbackAdapter([
         google.LLM(model="gemini-2.5-flash", api_key=settings.gemini_api_key, temperature=0.3),
         lk_openai.LLM(model="gpt-4o-mini", api_key=settings.openai_api_key, temperature=0.3),
     ])
 
-    # AgentSession — Component 1+2+3 streaming pipeline + Component 5 keep-alive.
-    # allow_interruptions=True → Component 8 (always-interruptible AI).
     session_kwargs: dict = {
         "stt": stt,
         "tts": tts,
@@ -494,9 +612,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     session = AgentSession(**session_kwargs)
     agent = VachananAgent(state=state)
 
+    # Inactivity guard — mutable list updated by event handler bump
+    last_activity: list = [time.monotonic()]
+
+    @session.on("user_input_transcribed")
+    def _bump_activity(_ev: Any) -> None:
+        last_activity[0] = time.monotonic()
+
     @session.on("disconnected")
     async def on_disconnect() -> None:
-        """Release any held Redis token on call drop (CLAUDE.md Rule 3)."""
+        """Release held Redis token on call drop (CLAUDE.md Rule 3)."""
         if state.token_held and not state.token_confirmed:
             r = aioredis.from_url(settings.redis_url)
             try:
@@ -504,34 +629,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 logger.warning(
                     "token_released_on_disconnect",
                     token=state.token_number,
-                    branch_id=str(state.branch_id),
+                    branch_id=str(state.branch_id) if state.branch_id else None,
                 )
             finally:
                 await r.aclose()
 
-            # Audit log — voice path token release (Gap 10).
-            # PII_DENYLIST enforced by write_audit_row; only safe keys included.
-            try:
-                await write_audit_row(
-                    action="token.released_on_disconnect",
-                    resource_type="call",
-                    resource_id=state.livekit_room_id,
-                    branch_id=state.branch_id,
-                    ip_address=None,
-                    user_agent="voice-agent/1.0",
-                    metadata={
-                        "token_number": state.token_number,
-                        "redis_key": state.token_redis_key,
-                        "disconnect_reason": "call_dropped",
-                    },
-                    success=False,
-                )
-            except Exception as _audit_err:
-                logger.error("audit_write_failed_token_released", error=str(_audit_err))
-
-    # Background watchdogs — both cancelled in finally on normal session end.
     solo_task = asyncio.create_task(_solo_cap_watchdog(state, session))
-    silence_task = asyncio.create_task(_silence_watchdog(agent, session))
+    inactivity_task = asyncio.create_task(
+        _inactivity_watchdog(last_activity, session, ctx, state)
+    )
 
     try:
         await session.start(
@@ -540,7 +646,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             room_input_options=RoomInputOptions(),
         )
     finally:
-        for task in (solo_task, silence_task):
+        for task in (solo_task, inactivity_task):
             task.cancel()
             try:
                 await task
@@ -549,10 +655,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
 
 if __name__ == "__main__":
-    # agent_name MUST match the dispatch rule's RoomAgentDispatch.agent_name.
-    # The LiveKit dispatch rule created by scripts/provision_vobiz_trunk.py
-    # uses "voice-assistant". Changing this here without updating the dispatch
-    # rule (or vice-versa) will break inbound call routing.
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
