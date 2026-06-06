@@ -862,3 +862,41 @@ The work below was done inline by the orchestrator (main thread) before the mand
   - All DID and phone values masked to last 4 digits in all print output (CLAUDE.md Rule 10).
   - test_seed_phase1_missing_did_exits_cleanly uses shutil.copytree to a tmp_path with a minimal .env lacking VOBIZ_DID_NUMBER, ensuring load_dotenv reads the fake file not the real .env. Belt-and-suspenders: also pops the var from subprocess env.
 
+---
+
+## 2026-06-06 — backend-engineer dispatched (Phase 1 D3 — CalendarService+MetaService stubs + voice audit_log)
+
+**Scope:** Gap 6 (CalendarService stub), Gap 7 (MetaService stub), Gap 10 (audit_log rows from voice path). All three shipped in a single commit.
+
+**Inputs:** agent/tools/booking_tools.py (confirm_booking signature + existing WhatsApp call signature), agent/agent.py (on_disconnect + on_user_turn_completed), agent/services/emergency.py (keyword list for category denylist reasoning), backend/services/audit_service.py (write_audit_row signature + PII_DENYLIST), backend/models/schema.py (AuditLog columns), agent/session_state.py (SessionState fields), tests/conftest.py (test patterns).
+
+**Acceptance:** python imports for CalendarService and MetaService both clean; 16 new unit tests 16/16 GREEN; full suite 118/118 GREEN (pre-Docker baseline); single commit `156b483`; DISPATCHES.md appended.
+
+**Reviewer:** tester (verify no assertion weakening; confirm PII_DENYLIST test group is exhaustive).
+
+**Result:** DONE
+
+**Files touched:**
+  - Created: `backend/services/calendar_service.py` (CalendarService stub — 56 LOC, returns `stub-<uuid4>`, masks phone to last-4 in logs)
+  - Created: `backend/services/meta_service.py` (MetaService stub — 60 LOC, send_booking_confirmation + send_doctor_notification, no-op + structlog warning, matches exact `to=` kwarg signature in confirm_booking)
+  - Created: `tests/unit/test_calendar_service_stub.py` (5 tests)
+  - Created: `tests/unit/test_meta_service_stub.py` (5 tests)
+  - Created: `tests/unit/test_audit_voice.py` (6 tests)
+  - Modified: `agent/tools/booking_tools.py` (import write_audit_row + audit row after db.commit() in confirm_booking — action="booking.confirmed", resource_type="token", safe metadata only)
+  - Modified: `agent/agent.py` (import write_audit_row + audit row in on_disconnect after decr — action="token.released_on_disconnect"; audit row in on_user_turn_completed when is_emergency fires — action="emergency.keyword_detected", category="medical_critical" NOT raw keyword)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+
+**Tests:** 16/16 new unit tests GREEN. Full unit suite 118/118 GREEN. No Docker required (pure unit tests — all DB calls mocked or not needed).
+
+**Commit:** `156b483`
+
+**Follow-up dispatches:** D4 (voice-agent-engineer — function_tool registration + DID-to-branch_id resolution).
+
+**Notes:**
+- Gap 6 (CalendarService): `confirm_booking` passes `appointment_time` not `appointment_time_str` — stub receives a `time | None`. Calendar ID fallback (`doctor.google_calendar_id or branch.google_calendar_id`) is handled in confirm_booking before passing to stub; stub accepts `str | None`.
+- Gap 7 (MetaService): the existing `confirm_booking` call uses `to=patient_phone` (not `patient_phone=`). Stub's `send_booking_confirmation` signature matches with `to: str` as first param.
+- Gap 10 (audit rows): PII_DENYLIST enforced by `write_audit_row` itself (raises ValueError on denylisted key names). Voice path metadata uses only: `token_number`, `doctor_id`, `via`, `calendar_event_id`, `redis_key`, `disconnect_reason`, `emergency_keyword_category`. None of these match PII_DENYLIST substrings (phone, name, email, address, complaint, symptom).
+- Emergency audit: raw keyword (e.g. "chest pain") is NOT stored in metadata — would match "symptom" denylist substring indirectly and violates privacy intent. Stored instead as category string `"medical_critical"`.
+- All audit writes are wrapped in try/except with structlog.error — audit failure never blocks the booking (CLAUDE.md Rule 4 + spec §8.5).
+- No schema changes required (AuditLog table from Phase 4.5 already has all needed columns).
+
