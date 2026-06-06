@@ -1022,3 +1022,49 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - TD-031 (Pipecat migration) is conditional and may never fire if LiveKit performs well in production.
 - TD-033 overlaps with TD-030 (both track CLAUDE.md RULE 7 drift) but from different angles: TD-030 is the voice-agent-engineer's implementation note, TD-033 is the manager's doc-amendment task.
 
+---
+
+## 2026-06-06 -- manager dispatched (multi-clinic architecture spec + onboarding plan)
+
+**Scope:** Write comprehensive architecture spec and 10-task implementation plan for scaling Vachanam from 1 clinic to 10 clinics across 10 Indian cities. Brainstormer findings (delivered earlier this session) used as source material. Three deliverables in one commit: architecture spec, implementation plan, DISPATCHES entry.
+
+**Inputs:** Brainstormer analysis (multi-clinic architecture, Vobiz account model, LiveKit tier comparison, pricing math), docs/STATUS.md, docs/ROADMAP.md, docs/TECH_DEBT.md (TD-034/TD-035/TD-036 relevant to onboarding), agent/agent.py:103-150 (_resolve_branch_from_sip code references), backend/database.py (pool config gap), docs/superpowers/specs/2026-05-22-security-hardening-design.md (format reference), CLAUDE.md (pricing table, cost table, rules).
+
+**Acceptance:**
+  - docs/superpowers/specs/2026-06-06-multi-clinic-architecture.md exists (12 sections + 2 appendices, ~3800 words)
+  - docs/superpowers/plans/2026-06-06-multi-clinic-onboarding.md exists (10 tasks, ~2200 words)
+  - Spec has 7 open questions for client, each with action + timeline
+  - Plan has exactly 10 tasks, each with file paths + acceptance criteria + dispatch type + reviewer
+  - Both cite source URLs for non-obvious claims (LiveKit pricing, Sarvam pricing, Fly.io pricing)
+  - Single commit with message: docs(arch): multi-clinic architecture spec + onboarding plan for 10-clinic scale
+
+**Reviewer:** Client (Vinay) -- architecture and planning documents, no source/test/schema code touched.
+
+**Result:** DONE
+
+**Files touched:**
+  - Created: docs/superpowers/specs/2026-06-06-multi-clinic-architecture.md (~3800 words, 12 sections + 2 appendices)
+  - Created: docs/superpowers/plans/2026-06-06-multi-clinic-onboarding.md (~2200 words, 10 tasks with dependency graph)
+  - Modified: docs/DISPATCHES.md (this entry)
+  - Modified: docs/TECH_DEBT.md (unstaged changes preserved)
+
+**Tests:** No source/test code touched. Pytest baseline unchanged (96/96 unit).
+
+**Commit:** (pending -- single commit)
+
+**Follow-up dispatches:**
+  - Vinay: send Vobiz support ticket with 4 questions (Task 1, blocking)
+  - Vinay: decide target city list for DID pre-purchase (open question 6)
+  - Vinay: decide Google Calendar approach (shared service account vs per-clinic OAuth, open question 5)
+  - After Vobiz answers: backend-engineer for Task 2 (pool tuning) + tester for Task 9 (isolation tests) -- both unblocked now
+  - After Vobiz answers + Phase 9 starts: devops-engineer for Task 3, backend-engineer for Task 4
+
+**Notes:**
+- Spec is self-contained -- a reader can understand the full multi-clinic architecture without prior context beyond CLAUDE.md.
+- Key architectural decision locked: 1 shared Vobiz trunk for 10 clinics (simpler ops, acceptable blast radius at MVP scale, split trigger defined at 70% of concurrent limit).
+- DID-to-branch routing already works for multi-clinic (agent/agent.py:103-150, _resolve_branch_from_sip). Adding clinics = adding rows to branches table + DIDs to trunk numbers list. No agent code changes needed.
+- Margin analysis shows 26.5% at 300 calls/day (conservative), improving to 46.1% at 200 calls/day. Negative margin risk at 500+ calls/day without overage billing -- Phase 9 billing_cycle.py must detect and upsell.
+- Task 9 (multi-tenant isolation tests) and Task 2 (pool tuning) are unblocked NOW -- can be dispatched in parallel before Vobiz answers arrive.
+- TD-036 (Vobiz DID pre-flight checker) is covered by Task 3 in the plan (will be closed when Task 3 ships).
+- Client granted full autonomy + commit authority for this session. No escalation needed for doc-only deliverables.
+
