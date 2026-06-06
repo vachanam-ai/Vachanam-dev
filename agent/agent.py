@@ -70,6 +70,7 @@ from livekit.agents.llm import FallbackAdapter
 from livekit.plugins import google, openai as lk_openai, sarvam
 
 from agent.prompts.system_prompt import DoctorContext, build_disclosure_utterance, build_system_prompt
+from backend.services.audit_service import write_audit_row
 from agent.services.audio_quality import (
     assess_transcript,
     is_llm_clarification_request,
@@ -273,6 +274,25 @@ class VachananAgent(Agent):
             )
             await self.session.say(msg)
             # Continue booking — emergency contact given, do NOT disconnect
+
+            # Audit log — voice path emergency (Gap 10). Fire-and-forget.
+            # Raw keyword NOT stored — categorised as "medical_critical" to satisfy PII_DENYLIST
+            # ("symptom" is a denied substring; actual keyword may describe a symptom).
+            try:
+                await write_audit_row(
+                    action="emergency.keyword_detected",
+                    resource_type="call",
+                    resource_id=self.state.livekit_room_id,
+                    branch_id=self.state.branch_id,
+                    ip_address=None,
+                    user_agent="voice-agent/1.0",
+                    metadata={
+                        "emergency_keyword_category": "medical_critical",
+                        "via": "voice",
+                    },
+                )
+            except Exception as _audit_err:
+                logger.error("audit_write_failed_emergency", error=str(_audit_err))
 
         # Note: STT confidence check (Component 10A) requires per-turn STT response
         # object which livekit-plugins-sarvam doesn't expose to the Agent layer in
@@ -488,6 +508,26 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
             finally:
                 await r.aclose()
+
+            # Audit log — voice path token release (Gap 10).
+            # PII_DENYLIST enforced by write_audit_row; only safe keys included.
+            try:
+                await write_audit_row(
+                    action="token.released_on_disconnect",
+                    resource_type="call",
+                    resource_id=state.livekit_room_id,
+                    branch_id=state.branch_id,
+                    ip_address=None,
+                    user_agent="voice-agent/1.0",
+                    metadata={
+                        "token_number": state.token_number,
+                        "redis_key": state.token_redis_key,
+                        "disconnect_reason": "call_dropped",
+                    },
+                    success=False,
+                )
+            except Exception as _audit_err:
+                logger.error("audit_write_failed_token_released", error=str(_audit_err))
 
     # Background watchdogs — both cancelled in finally on normal session end.
     solo_task = asyncio.create_task(_solo_cap_watchdog(state, session))

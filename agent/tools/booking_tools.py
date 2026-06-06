@@ -11,6 +11,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from agent.session_state import SessionState
 from backend.config import settings
 from backend.models.schema import Doctor, Token, Patient, Branch
+from backend.services.audit_service import write_audit_row
 
 logger = structlog.get_logger()
 
@@ -288,6 +289,26 @@ async def confirm_booking(
         patient_phone=patient_phone[-4:] if patient_phone else "unknown",
         via=source,
     )
+
+    # Audit log — voice path (Gap 10). Fire-and-forget; failure never blocks booking.
+    # PII_DENYLIST enforced by write_audit_row itself. Only safe keys included.
+    try:
+        await write_audit_row(
+            action="booking.confirmed",
+            resource_type="token",
+            resource_id=str(token.id),
+            branch_id=branch_id,
+            ip_address=None,
+            user_agent="voice-agent/1.0",
+            metadata={
+                "token_number": token_number,
+                "doctor_id": str(doctor_id),
+                "via": source,
+                "calendar_event_id": event_id,
+            },
+        )
+    except Exception as _audit_err:
+        logger.error("audit_write_failed_booking_confirmed", error=str(_audit_err))
 
     # 4. WhatsApp (fire-and-forget — never fails booking)
     if patient_phone:
