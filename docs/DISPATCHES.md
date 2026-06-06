@@ -1017,6 +1017,47 @@ The work below was done inline by the orchestrator (main thread) before the mand
 
 **Notes:**
 - D1 through D-Emergency entries verified already present in DISPATCHES.md (commits `20869d6`, `e7745d3`, `156b483`, `ad4bd7f`, `d0eb08e`). No duplication needed.
+
+---
+
+## 2026-06-06 — backend-engineer dispatched (D-MultiTenantFix — branch_id on Doctor queries + pool tuning + org_id in payment audit)
+
+**Scope:** Three critical multi-tenant gaps found by tester audit, fixed in one commit before 2nd clinic onboards: (1) 3 Doctor queries in booking_tools.py missing branch_id filter (DPDP Act 2023 defense-in-depth); (2) Postgres connection pool defaults too small for 10-clinic concurrency; (3) payment audit rows missing org_id attribution.
+
+**Inputs:** `agent/tools/booking_tools.py`, `backend/database.py`, `backend/routers/payments.py`, `backend/services/audit_service.py`, `backend/models/schema.py` (AuditLog org_id column verified)
+
+**Acceptance:**
+- `pytest tests/unit/test_booking_tools_branch_isolation.py tests/unit/test_database_pool.py -v` → all GREEN
+- `pytest tests/unit/ -v` → 107/107 PASS + 0 failed (96 baseline + 11 new)
+- `python -c "from backend.database import engine; pool = engine.sync_engine.pool; print(pool.size(), pool._max_overflow)"` → `10 20`
+- `grep -n "Doctor.branch_id" agent/tools/booking_tools.py` → 3 NEW occurrences (lines 116, 189, 318)
+- `python -c "import agent.tools.booking_tools; import backend.routers.payments"` → clean
+
+**Reviewer:** tester (verify no test weakening) + security-engineer (verify branch isolation correctness)
+
+**Result:** DONE
+
+**Files touched:**
+  - Modified: `agent/tools/booking_tools.py` — 3 Doctor lookups changed from `where(Doctor.id == doctor_id)` to `where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))` in check_availability (line 116), assign_token (line 189), confirm_booking (line 318)
+  - Modified: `backend/database.py` — added `pool_size=10, max_overflow=20` to `create_async_engine` call
+  - Modified: `backend/routers/payments.py` — added `import uuid as _uuid`, `_extract_org_id()` helper, `notes: dict | None` field to `VerifyPaymentRequest`, `org_id = _extract_org_id(req.notes)` extracted in verify_payment, both `write_audit_row` calls receive `org_id=org_id`
+  - Created: `tests/unit/test_booking_tools_branch_isolation.py` (3 tests — cross-branch doctor rejection for check_availability, assign_token, confirm_booking)
+  - Created: `tests/unit/test_database_pool.py` (3 tests — pool_size=10, pre_ping=True, AsyncEngine type)
+  - Created: `tests/unit/test_payments_audit_org_id.py` (5 tests — success audit has org_id, fail audit has org_id, None when no notes, invalid UUID handled gracefully, valid UUID extracted correctly)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+
+**Tests:** 11/11 new tests GREEN. Full unit suite 107/107 PASS. Zero regressions.
+
+**Commit:** (pending)
+
+**Follow-up dispatches:**
+  - security-engineer: review branch_id isolation correctness + confirm _extract_org_id cannot be bypassed
+  - tester: full regression after commit lands
+
+**Notes:**
+- Fix 1 (branch_id on Doctor): `and_` was already imported in booking_tools.py. No new imports needed. All 3 sites now use `and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id)`. The 4th Doctor query in `route_to_doctor` already had `Doctor.branch_id == branch_id` in its WHERE clause (fetches by branch only, not by id) — no change needed there.
+- Fix 2 (pool tuning): `pool_size=10, max_overflow=20` = 30 total connections. Aligns with 10-clinic × 3 sessions/tool-invocation peak. Neon free plan supports 10 connections per branch; production should use the Neon pooler URL (append `?pgbouncer=true` to DATABASE_URL) to multiplex at the Neon layer. Not changed here — URL is read from env var.
+- Fix 3 (org_id in audit): AuditLog table already has `org_id` column (added in Phase 4.5 Task 2). `write_audit_row()` already accepts `org_id: uuid.UUID | None = None`. No schema migration needed. `_extract_org_id()` is defensive (returns None on any error, never raises). Frontend must pass `notes={"org_id": "<uuid>"}` in VerifyPaymentRequest body for attribution to work; anonymous/pre-signup payments pass None which is acceptable per spec.
 - Diagnostic ops (Vobiz trunk direction flip outbound→inbound, old LiveKit trunks deleted, fresh provision with new DID, Vobiz API diagnostic uncovering is_verified=false + DID provider empty + recycled number) were orchestrator-inline ops, not specialist dispatches. Noted here for audit trail completeness.
 - TD-036 is the highest-severity new entry (P1) because it is a release blocker for clinic onboarding — without the pre-flight checker, every new clinic DID activation could hit the same opaque Vobiz failure mode.
 - TD-031 (Pipecat migration) is conditional and may never fire if LiveKit performs well in production.

@@ -112,7 +112,9 @@ async def check_availability(
     Returns:
         Human-readable availability string in the patient's language.
     """
-    result = await db.execute(select(Doctor).where(Doctor.id == doctor_id))
+    result = await db.execute(
+        select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
+    )
     doctor = result.scalar_one_or_none()
     if not doctor:
         return "Doctor not found."
@@ -183,7 +185,9 @@ async def assign_token(
         {"success": True, "token_number": int, "redis_key": str} or
         {"success": False, "reason": "full"|"doctor_not_found"|"appointment_time_required"}
     """
-    result = await db.execute(select(Doctor).where(Doctor.id == doctor_id))
+    result = await db.execute(
+        select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
+    )
     doctor = result.scalar_one_or_none()
     if not doctor:
         return {"success": False, "reason": "doctor_not_found"}
@@ -310,7 +314,9 @@ async def confirm_booking(
     await db.flush()
 
     # 3. Google Calendar (MUST succeed — raises if fails; booking aborts)
-    result = await db.execute(select(Doctor).where(Doctor.id == doctor_id))
+    result = await db.execute(
+        select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
+    )
     doctor = result.scalar_one()
     result = await db.execute(select(Branch).where(Branch.id == branch_id))
     branch = result.scalar_one()

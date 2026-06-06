@@ -9,6 +9,7 @@ Key secret never leaves the server. Frontend receives only razorpay_key_id (publ
 """
 import hashlib
 import hmac
+import uuid as _uuid
 
 import razorpay
 import structlog
@@ -21,6 +22,23 @@ from backend.middleware.rate_limit import create_order_limit, verify_payment_lim
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+def _extract_org_id(notes: dict | None) -> _uuid.UUID | None:
+    """Extract org_id UUID from Razorpay order notes dict.
+
+    Returns None if notes is absent, org_id key is missing, or the value is
+    not a valid UUID string. Never raises — org_id is best-effort attribution.
+    """
+    if not notes:
+        return None
+    raw = notes.get("org_id")
+    if not raw:
+        return None
+    try:
+        return _uuid.UUID(str(raw))
+    except (ValueError, AttributeError):
+        return None
 
 
 def _get_client() -> razorpay.Client:
@@ -47,6 +65,7 @@ class VerifyPaymentRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+    notes: dict | None = None  # optional — pass org_id here for audit attribution
 
 
 class VerifyPaymentResponse(BaseModel):
@@ -109,6 +128,7 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
     """
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
+    org_id = _extract_org_id(req.notes)
 
     if not settings.razorpay_key_secret:
         raise HTTPException(status_code=500, detail="Razorpay credentials not configured")
@@ -132,6 +152,7 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
                 action="payment.verify.fail",
                 resource_type="payment",
                 resource_id=req.razorpay_order_id,
+                org_id=org_id,
                 ip_address=client_ip,
                 user_agent=user_agent,
                 metadata={"error": "signature_mismatch"},
@@ -153,6 +174,7 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
             action="payment.verify.success",
             resource_type="payment",
             resource_id=req.razorpay_order_id,
+            org_id=org_id,
             ip_address=client_ip,
             user_agent=user_agent,
             metadata={"payment_id": req.razorpay_payment_id},
