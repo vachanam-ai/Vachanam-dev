@@ -16,14 +16,12 @@ class Settings(BaseSettings):
     vobiz_sip_domain: str = ""
     vobiz_sip_username: str = ""
     vobiz_sip_password: str = ""
-    vobiz_did_number: str = ""
     vobiz_partner_auth_id: str = ""
     vobiz_partner_auth_token: str = ""
     vobiz_trunk_id: str | None = None  # Vobiz internal trunk ID from console Step 1
 
     # WhatsApp
     meta_access_token: str = ""
-    meta_phone_number_id: str = ""
     meta_waba_id: str = ""
     meta_webhook_verify_token: str = ""
     meta_app_secret: str = ""
@@ -65,7 +63,7 @@ class Settings(BaseSettings):
     # Used in backend/middleware/rate_limit.py _EndpointRateLimiter.
     rate_limit_bypass_ips: str = ""
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

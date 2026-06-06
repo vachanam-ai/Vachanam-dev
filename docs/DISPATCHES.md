@@ -1,3 +1,4 @@
+
 # Vachanam — Dispatch Log (chronological)
 
 Every `Task(subagent_type=...)` dispatch is appended here. This is the audit trail. Anyone reading the repo cold can trace who did what, when, with which scope, who reviewed it, and which commit landed it.
@@ -1062,6 +1063,39 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - TD-036 is the highest-severity new entry (P1) because it is a release blocker for clinic onboarding — without the pre-flight checker, every new clinic DID activation could hit the same opaque Vobiz failure mode.
 - TD-031 (Pipecat migration) is conditional and may never fire if LiveKit performs well in production.
 - TD-033 overlaps with TD-030 (both track CLAUDE.md RULE 7 drift) but from different angles: TD-030 is the voice-agent-engineer's implementation note, TD-033 is the manager's doc-amendment task.
+
+---
+
+## 2026-06-06 — backend-engineer dispatched (D-DeadCode — remove unused Settings fields + extra=ignore)
+
+**Scope:** Dead-code cleanup: remove `vobiz_did_number` and `meta_phone_number_id` from the Settings class in `backend/config.py` (confirmed zero refs in backend/ + agent/); add `extra="ignore"` to model_config so the .env file (which still contains those vars) does not cause a ValidationError at startup. Stale imports for deleted modules (silence_handler, audio_quality) confirmed absent. No TECH_DEBT.md entries reference deleted modules.
+
+**Inputs:** `backend/config.py`, grep results across backend/, agent/, tests/, scripts/
+
+**Acceptance:**
+- `pytest tests/unit/ -v --tb=no -q` → 107/107 GREEN
+- `python -c "from backend.config import settings; import agent.agent; import backend.main"` → clean
+- `grep "vobiz_did_number\|meta_phone_number_id" backend/config.py` → 0 matches
+- Single commit: `chore(config): remove unused vobiz_did_number + meta_phone_number_id Settings fields`
+- Net negative lines in `git diff --stat`
+
+**Reviewer:** tester (no regressions)
+
+**Result:** DONE
+
+**Files touched:**
+  - Modified: `backend/config.py` — removed `vobiz_did_number: str = ""` (line 19), removed `meta_phone_number_id: str = ""` (line 26), added `"extra": "ignore"` to model_config (prevents ValidationError when .env still contains those vars)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+
+**Tests:** 107/107 unit tests GREEN. Zero regressions.
+
+**Commit:** (pending)
+
+**Follow-up dispatches:** None required.
+
+**Notes:**
+- Steps 2–4 were no-ops: silence_handler/audio_quality have no lingering imports; TECH_DEBT.md has no entries referencing those modules; config.py has only one import (BaseSettings) which remains in use.
+- `extra="ignore"` is the correct Pydantic v2 model_config key. Without it, Pydantic raises ValidationError for any env var present in .env that is not declared as a Settings field — removing fields from Settings without this guard would break startup.
 
 ---
 
