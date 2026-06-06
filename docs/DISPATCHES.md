@@ -939,3 +939,47 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - confirm_booking in booking_tools.py had a latent DetachedInstanceError: `doctor.name` and `branch.name` were read AFTER `await db.commit()` which ends the session. Fixed by capturing `doctor_name = doctor.name` and `branch_name = branch.name` before the commit.
 - D3 stubs (CalendarService + MetaService from backend/services/) are imported with try/except in the confirm_booking @function_tool closure. If import fails (D3 not yet committed or Phase 6 not shipped), inline stubs handle gracefully.
 
+---
+
+## 2026-06-06 — voice-agent-engineer dispatched (D-Emergency — SIP transfer on emergency keyword)
+
+**Scope:** Override CLAUDE.md RULE 7 (client decision 2026-06-06): replace "speak emergency_contact number, continue booking" with "SIP-transfer live call to branch.emergency_contact, release held token, end agent session." Fallback path: if SIP transfer fails, speak number once (digits spaced), write fallback audit row, then shutdown. Wire 5 unit tests.
+
+**Inputs:** `agent/agent.py`, `agent/session_state.py`, `agent/services/emergency.py` (read-only), `backend/services/audit_service.py` (read-only), `backend/config.py` (read-only), `docs/TECH_DEBT.md`, `docs/DISPATCHES.md`, LiveKit 1.5.9 SDK (`ctx.transfer_sip_participant` API inspected directly).
+
+**Acceptance:**
+  - `pytest tests/unit/test_emergency_transfer.py -v` → 5 required + 5 bonus edge cases = 10/10 GREEN
+  - `pytest tests/unit/ -v` → full unit suite GREEN (96/96 — no regressions)
+  - `python -c "import agent.agent"` clean (no ImportError)
+  - Code review: no path through emergency handler speaks raw number on success path
+  - Code review: `ctx.shutdown` always called after transfer succeeds OR fallback completes
+
+**Reviewer:** security-engineer (verify PII masking in audit rows; verify no emergency_contact leaks into logs)
+
+**Result:** DONE
+
+**Files touched:**
+  - Modified: `agent/agent.py` — replaced `on_user_turn_completed` emergency branch; added `_handle_emergency_transfer()` method; added 3 module-level helpers (`_normalize_to_e164`, `_write_emergency_audit`, `_release_token_on_emergency`); `VachananAgent.__init__` now accepts `ctx: agents.JobContext`; entrypoint updated to pass `ctx`.
+  - Created: `tests/unit/test_emergency_transfer.py` — 10 tests (5 required + 5 bonus `_normalize_to_e164` edge cases)
+  - Modified: `docs/TECH_DEBT.md` — appended TD-030 (CLAUDE.md RULE 7 documentation drift, P3, payback: next housekeeping pass)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+
+**Tests:** `pytest tests/unit/test_emergency_transfer.py -v` → 10/10 PASSED. `pytest tests/unit/ -v` → 96/96 PASSED. Zero regressions.
+
+**Commit:** (pending — see feat(agent): D-Emergency — SIP transfer on emergency)
+
+**Follow-up dispatches:**
+  - **Housekeeping (next manager pass):** Update CLAUDE.md RULE 7 text from "speak number, continue" to "SIP transfer, fallback speak, end session" (TD-030 payback).
+  - **Manual test required:** real inbound call to Vobiz DID; speak "chest pain"; verify LiveKit `transfer_sip_participant` REFER is sent to `branch.emergency_contact` and agent session ends. No way to unit-test real SIP REFER without live trunk.
+  - **Vobiz trunk config required:** "Enable call transfer" must be active on the Vobiz trunk before SIP REFER will be accepted. See LiveKit docs: https://docs.livekit.io/sip/transfer-cold/
+
+**Notes:**
+- **LiveKit API confirmed:** `ctx.transfer_sip_participant(participant, transfer_to, play_dialtone=False)` where `transfer_to` can be a raw E.164 number (`+91XXXXXXXXXX`) or SIP URI. The method wraps `api.TransferSIPParticipantRequest` and `api.sip.transfer_sip_participant`. Returns an `asyncio.Future[api.SIPParticipantInfo]` (awaitable). In console/fake-job mode it short-circuits with a no-op and a warning log. Inspected from `livekit.agents.JobContext` source.
+- **E.164 normalization:** `_normalize_to_e164()` strips spaces and dashes, handles 10-digit, 12-digit-with-91, and already-E.164 inputs. Unrecognized format returned as-is (LiveKit will surface the SIP error, not crash the agent).
+- **PII masking:** `ec_last4 = ec[-4:]` used in all logs and audit metadata. Full emergency_contact never logged.
+- **Fallback digit spacing:** `" ".join(ec)` space-separates every character of the EC string so TTS reads "plus 9 1 9 8 7 6 5 4 3 2 1 0" rather than mangling a phone number. The patient can distinguish each digit.
+- **Session property:** `agent.session` is a read-only property backed by `self._activity.session` in LiveKit 1.5.9. Tests inject a fake `_activity` object to avoid needing a real AgentSession.
+- **audit_service lazy import:** `_write_emergency_audit` does `from backend.services.audit_service import write_audit_row` inside the function body. Tests patch at `backend.services.audit_service.write_audit_row` (the real call site) rather than at `agent.agent.write_audit_row` (which doesn't exist at module level).
+- **ctx stored as `self._ctx`:** avoids session.userdata indirection (unreliable in test contexts). Both `transfer_sip_participant` and `shutdown` called directly on `self._ctx`.
+- Agent-engineer: this dispatch.
+

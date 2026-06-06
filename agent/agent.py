@@ -7,7 +7,8 @@ Component map:
   4. Branch context → resolved from SIP trunkPhoneNumber DID; fallback to room metadata
   5. Solo 4-min cap → _solo_cap_watchdog background task
   6. Inactivity     → _inactivity_watchdog (30s no-audio → graceful end)
-  7. Emergency      → keyword detect → speak branch.emergency_contact → continue booking
+  7. Emergency      → keyword detect → SIP transfer to branch.emergency_contact → end session
+                     (CLAUDE.md RULE 7 overridden 2026-06-06: transfer, not speak number)
 
 CLAUDE.md rules respected:
   - Every DB query filters by branch_id
@@ -16,6 +17,8 @@ CLAUDE.md rules respected:
   - Every session.say() through sanitize_for_tts()
   - Gemini primary → GPT-4o-mini fallback via FallbackAdapter
   - Structlog JSON with branch_id + last-4 phone on all significant events
+  - Emergency: SIP transfer to branch.emergency_contact (Rule 7 override 2026-06-06)
+    Fallback: speak number once if SIP transfer fails
 """
 # ── Bootstrap: must be at the very top, before any async-related import ──────
 # Gap 1: asyncpg requires SelectorEventLoop on Windows; Python 3.10+ defaults
@@ -345,17 +348,97 @@ def _make_booking_tools(state: SessionState) -> list:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Emergency transfer helpers
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _normalize_to_e164(phone: str) -> str:
+    """Ensure phone number is E.164 (+91XXXXXXXXXX).
+
+    Accepts:
+      - Already E.164: "+919876543210"  → "+919876543210"
+      - 10-digit Indian mobile: "9876543210" → "+919876543210"
+      - Strips spaces/dashes before normalizing.
+    Returns the original string unchanged if it does not look like an Indian number.
+    """
+    cleaned = phone.strip().replace(" ", "").replace("-", "")
+    if cleaned.startswith("+"):
+        return cleaned  # Already E.164
+    if len(cleaned) == 10 and cleaned.isdigit():
+        return f"+91{cleaned}"
+    if cleaned.startswith("91") and len(cleaned) == 12 and cleaned.isdigit():
+        return f"+{cleaned}"
+    # Cannot normalize — return as-is; LiveKit will surface the SIP error
+    return phone
+
+
+async def _write_emergency_audit(
+    action: str,
+    session_id: str,
+    state: "SessionState",
+    extra: dict | None = None,
+) -> None:
+    """Write an emergency-related audit row. Best-effort — never raises.
+
+    Extra keys must already pass PII denylist (caller's responsibility).
+    """
+    try:
+        from backend.services.audit_service import write_audit_row
+        metadata: dict = {"category": "medical_critical"}
+        if extra:
+            metadata.update(extra)
+        await write_audit_row(
+            action=action,
+            resource_type="call",
+            resource_id=session_id,
+            branch_id=state.branch_id,
+            user_agent="voice-agent/1.0",
+            metadata=metadata,
+        )
+    except Exception as audit_err:
+        logger.error(
+            "emergency_audit_write_failed",
+            action=action,
+            error=str(audit_err),
+            session_id=session_id,
+        )
+
+
+async def _release_token_on_emergency(state: "SessionState") -> None:
+    """Redis DECR on held token during emergency transfer. Best-effort — never raises."""
+    try:
+        r = aioredis.from_url(settings.redis_url)
+        try:
+            await r.decr(state.token_redis_key)
+            state.token_held = False
+            logger.warning(
+                "token_released_on_emergency_transfer",
+                token=state.token_number,
+                branch_id=str(state.branch_id) if state.branch_id else None,
+            )
+        finally:
+            await r.aclose()
+    except Exception as redis_err:
+        logger.error(
+            "token_release_on_emergency_failed",
+            error=str(redis_err),
+            token=state.token_number,
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Agent class — handles per-call lifecycle
 # ──────────────────────────────────────────────────────────────────────────
 
 
 class VachananAgent(Agent):
-    def __init__(self, state: SessionState) -> None:
+    def __init__(self, state: SessionState, ctx: agents.JobContext) -> None:
         super().__init__(
             instructions="",
             tools=_make_booking_tools(state),
         )
         self.state = state
+        self._ctx = ctx  # stored for SIP transfer in emergency handler
 
     async def on_enter(self) -> None:
         """Fires when agent joins the room. Load branch context then speak greeting."""
@@ -432,7 +515,14 @@ class VachananAgent(Agent):
         await self.session.say(greeting)
 
     async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
-        """Emergency keyword detection after each user turn (CLAUDE.md Rule 7).
+        """Emergency keyword detection after each user turn.
+
+        RULE 7 (overridden 2026-06-06): On emergency keyword detection, initiate
+        SIP transfer to branch.emergency_contact. Speak brief notice first. Release
+        any held token. End the agent session.
+
+        Fallback path: if SIP transfer fails for any reason, speak the emergency
+        contact number once (sanitized, digits spaced) and then shut down.
 
         new_message.content is list[ChatContent] in LiveKit 1.5.9.
         Use text_content property; fall back to manual extraction.
@@ -454,12 +544,108 @@ class VachananAgent(Agent):
             return
 
         if is_emergency(content):
-            contact = self.state.emergency_contact or "the clinic"
-            msg = sanitize_for_tts(
-                f"నేను అర్థం చేసుకున్నాను. దయచేసి వెంటనే ఈ నంబర్ కు కాల్ చేయండి: {contact}"
+            await self._handle_emergency_transfer()
+
+    async def _handle_emergency_transfer(self) -> None:
+        """SIP transfer flow on emergency detection (Rule 7 override 2026-06-06).
+
+        Steps:
+          1. Speak brief Telugu notice (sanitized).
+          2. Normalize emergency_contact to E.164.
+          3. SIP transfer via ctx.transfer_sip_participant().
+          4. Write audit row emergency.call_transferred.
+          5. Release held token (Redis DECR).
+          6. ctx.shutdown(reason="emergency_transferred").
+
+        On SIP transfer failure:
+          - Log emergency.transfer_failed_falling_back_to_spoken_number.
+          - Speak the contact number (digits spaced for clarity).
+          - Write audit row emergency.transfer_failed_fallback_spoken.
+          - Release held token + shutdown.
+        """
+        ec = self.state.emergency_contact or ""
+        ec_last4 = ec[-4:] if ec else "????"
+        session_id = self.state.livekit_room_id or "unknown"
+
+        # Step 1: Brief Telugu notice before any transfer attempt
+        await self.session.say(
+            sanitize_for_tts(
+                "Idi emergency. Mim mi clinic emergency line ki transfer chestunnanu."
             )
-            await self.session.say(msg)
-            # Continue booking — emergency contact given, do NOT disconnect
+        )
+
+        # Step 2: Normalize emergency_contact to E.164
+        transfer_to = _normalize_to_e164(ec)
+
+        # Step 3: Attempt SIP transfer
+        transfer_succeeded = False
+        try:
+            # Resolve the SIP participant identity for transfer
+            sip_participant = await _wait_for_sip_participant(self._ctx, timeout_s=5.0)
+            participant_ref: "rtc.RemoteParticipant | str"
+            if sip_participant is not None:
+                participant_ref = sip_participant
+            else:
+                raise RuntimeError("No SIP participant found in room for transfer")
+
+            await self._ctx.transfer_sip_participant(
+                participant=participant_ref,
+                transfer_to=transfer_to,
+                play_dialtone=False,
+            )
+            transfer_succeeded = True
+            logger.info(
+                "emergency_transfer_initiated",
+                branch_id=str(self.state.branch_id) if self.state.branch_id else None,
+                ec_last4=ec_last4,
+                session_id=session_id,
+                transfer_to_last4=transfer_to[-4:] if transfer_to else "????",
+            )
+        except Exception as transfer_err:
+            logger.error(
+                "emergency.transfer_failed_falling_back_to_spoken_number",
+                error=str(transfer_err),
+                branch_id=str(self.state.branch_id) if self.state.branch_id else None,
+                session_id=session_id,
+            )
+            # Fallback: speak the number (digits spaced for TTS clarity)
+            ec_spoken = " ".join(ec) if ec else "the clinic"
+            await self.session.say(
+                sanitize_for_tts(
+                    f"Transfer pani cheyaledhu. Mim mi emergency contact: {ec_spoken}. "
+                    f"Vidi number ki call cheyandi."
+                )
+            )
+            # Audit: fallback spoken
+            await _write_emergency_audit(
+                action="emergency.transfer_failed_fallback_spoken",
+                session_id=session_id,
+                state=self.state,
+                extra={"category": "medical_critical", "transferred_to_did_last4": ec_last4},
+            )
+
+        # Step 4: Audit the successful transfer (only if transfer succeeded)
+        if transfer_succeeded:
+            await _write_emergency_audit(
+                action="emergency.call_transferred",
+                session_id=session_id,
+                state=self.state,
+                extra={"category": "medical_critical", "transferred_to_did_last4": ec_last4},
+            )
+
+        # Step 5: Release held token
+        if self.state.token_held and not self.state.token_confirmed:
+            await _release_token_on_emergency(self.state)
+
+        # Step 6: End agent session — patient now on their own with clinic
+        try:
+            await self._ctx.shutdown(reason="emergency_transferred")
+        except Exception as shutdown_err:
+            logger.error(
+                "emergency_shutdown_failed",
+                error=str(shutdown_err),
+                session_id=session_id,
+            )
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -610,7 +796,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         session_kwargs["turn_detection"] = turn_detector
 
     session = AgentSession(**session_kwargs)
-    agent = VachananAgent(state=state)
+    agent = VachananAgent(state=state, ctx=ctx)
 
     # Inactivity guard — mutable list updated by event handler bump
     last_activity: list = [time.monotonic()]
