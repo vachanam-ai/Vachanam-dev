@@ -5,7 +5,7 @@ All three audit events exercised:
   2. token.released_on_disconnect (in agent.entrypoint on_disconnect)
   3. emergency.keyword_detected   (in VachananAgent.on_user_turn_completed)
 
-Tests are pure unit tests — no real DB, no Redis, no LiveKit.
+Tests are pure unit tests — no real DB, no Redis, no voice framework.
 write_audit_row is monkeypatched to capture calls.
 """
 from __future__ import annotations
@@ -163,7 +163,7 @@ async def test_audit_voice_booking_confirmed_pii_denylist() -> None:
 async def test_audit_voice_token_released_on_disconnect() -> None:
     """on_disconnect must write an audit row with action='token.released_on_disconnect'.
 
-    We simulate the disconnect handler logic directly (not the full LiveKit
+    We simulate the disconnect handler logic directly (not the full voice
     session) and verify write_audit_row is called with the right action.
     """
     captured_calls: list[dict] = []
@@ -176,7 +176,7 @@ async def test_audit_voice_token_released_on_disconnect() -> None:
     room_id = "room-test-001"
 
     # Simulate the on_disconnect logic from agent.py
-    # (extracted here so we can test without LiveKit infrastructure)
+    # (extracted here so we can test without voice framework infrastructure)
     async def simulate_on_disconnect(
         token_held: bool,
         token_confirmed: bool,

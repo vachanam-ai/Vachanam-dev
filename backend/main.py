@@ -167,6 +167,6 @@ async def health() -> dict:
 
     Returns 200 with env tag. Does NOT touch DB or Redis — health endpoint
     must stay fast and unauthenticated to avoid cascading failures.
-    Phase 10 adds: /health/deep that probes DB + Redis + LiveKit on demand.
+    Phase 10 adds: /health/deep that probes DB + Redis on demand.
     """
     return {"status": "ok", "env": settings.app_env, "service": "vachanam-api"}

@@ -22,7 +22,7 @@ def configure_structlog(log_level: str = "INFO") -> None:
     - JSON renderer (machine-parseable)
     - ISO 8601 UTC timestamps
     - Caller filename + line number (debug aid)
-    - stdlib logging integration so libraries (asyncpg, httpx, livekit)
+    - stdlib logging integration so libraries (asyncpg, httpx)
       also emit JSON-formatted records.
 
     Args:

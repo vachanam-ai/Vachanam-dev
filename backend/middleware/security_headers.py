@@ -26,7 +26,7 @@ logger = structlog.get_logger()
 
 # Content Security Policy — each directive on its own line for readability.
 # Keep this list in sync with the security spec §10.5 whenever new external
-# domains are added (e.g. Sarvam, LiveKit, etc.).
+# domains are added (e.g. Sarvam, Pipecat, etc.).
 _CSP_DIRECTIVE = (
     "default-src 'self'; "
     "script-src 'self' https://checkout.razorpay.com https://accounts.google.com; "

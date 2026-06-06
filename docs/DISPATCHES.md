@@ -1143,3 +1143,25 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - TD-036 (Vobiz DID pre-flight checker) is covered by Task 3 in the plan (will be closed when Task 3 ships).
 - Client granted full autonomy + commit authority for this session. No escalation needed for doc-only deliverables.
 
+## 2026-06-07 — manager (stack pivot removal pass)
+**Scope:** Remove all LiveKit Agents + Vobiz SIP integration code in preparation for Pipecat rewrite. Preserve all framework-agnostic business logic.
+**Inputs:** agent/agent.py, agent/requirements.txt, backend/config.py, agent/session_state.py, backend/models/schema.py, scripts/provision_vobiz_trunk.py, tests/unit/test_branch_resolution.py, tests/integration/test_booking_tools_registered.py, tests/unit/test_emergency_transfer.py, tests/unit/test_inactivity_watchdog.py, tests/unit/test_provision_vobiz_trunk.py
+**Acceptance:**
+  1. `agent/agent.py` and `scripts/provision_vobiz_trunk.py` deleted
+  2. `agent/requirements.txt` deleted (rebuild with Pipecat next session)
+  3. 5 LiveKit-specific test files deleted (30 tests removed)
+  4. `backend/config.py` stripped of 9 LiveKit/Vobiz Settings fields
+  5. `agent/session_state.py` livekit_room_id renamed to session_id
+  6. `backend/models/schema.py` Python attribute renamed session_id (DB column name preserved via name= kwarg)
+  7. LiveKit string references cleaned from comments in logging_config.py, main.py, security_headers.py, test_audit_voice.py, test_seed_phase1.py
+  8. `grep -rn "livekit|LiveKit" agent/ scripts/ tests/` returns ZERO (backend/models/schema.py has DB column name string only)
+  9. `pytest tests/unit/ -v` 77 passed, 0 failed
+  10. All 4 booking_tools functions import cleanly without LiveKit
+**Reviewer:** client (Vinay) — stack pivot decision
+**Result:** DONE
+**Files touched:**
+  - Deleted: agent/agent.py (849 LOC), agent/requirements.txt (11 LOC), scripts/provision_vobiz_trunk.py (598 LOC), tests/unit/test_branch_resolution.py (124 LOC), tests/integration/test_booking_tools_registered.py (59 LOC), tests/unit/test_emergency_transfer.py (344 LOC), tests/unit/test_inactivity_watchdog.py (95 LOC), tests/unit/test_provision_vobiz_trunk.py (350 LOC)
+  - Modified: backend/config.py (-13 lines), agent/session_state.py, agent/logging_config.py, backend/main.py, backend/middleware/security_headers.py, backend/models/schema.py, tests/unit/test_audit_voice.py, tests/integration/test_seed_phase1.py
+**Tests:** 77 passed (was 107; 30 tests removed with deleted files)
+**Follow-up dispatches:** Pipecat rewrite after Vinay provides official Pipecat docs
+

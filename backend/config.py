@@ -7,19 +7,6 @@ class Settings(BaseSettings):
     openai_api_key: str
     gemini_api_key: str
 
-    # LiveKit
-    livekit_url: str
-    livekit_api_key: str
-    livekit_api_secret: str
-
-    # Telephony — Vobiz SIP trunk
-    vobiz_sip_domain: str = ""
-    vobiz_sip_username: str = ""
-    vobiz_sip_password: str = ""
-    vobiz_partner_auth_id: str = ""
-    vobiz_partner_auth_token: str = ""
-    vobiz_trunk_id: str | None = None  # Vobiz internal trunk ID from console Step 1
-
     # WhatsApp
     meta_access_token: str = ""
     meta_waba_id: str = ""

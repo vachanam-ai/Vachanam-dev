@@ -136,9 +136,6 @@ async def test_seed_phase1_missing_did_exits_cleanly(tmp_path):
         "SARVAM_API_KEY=fake\n"
         "OPENAI_API_KEY=fake\n"
         "GEMINI_API_KEY=fake\n"
-        "LIVEKIT_URL=wss://fake.fly.dev\n"
-        "LIVEKIT_API_KEY=fake\n"
-        "LIVEKIT_API_SECRET=fake\n"
         "ADMIN_PHONE=+919000000001\n"
         # VOBIZ_DID_NUMBER intentionally absent
     )

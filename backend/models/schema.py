@@ -198,7 +198,7 @@ class Call(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_seconds: Mapped[int | None] = mapped_column(Integer)
-    livekit_room_id: Mapped[str | None] = mapped_column(String(255))
+    session_id: Mapped[str | None] = mapped_column("livekit_room_id", String(255))
     vobiz_call_id: Mapped[str | None] = mapped_column(String(255))
     outcome: Mapped[str | None] = mapped_column(
         Enum(

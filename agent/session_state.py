@@ -5,7 +5,7 @@ from uuid import UUID
 
 @dataclass
 class SessionState:
-    """Per-call state. One instance per LiveKit room. Never shared between calls."""
+    """Per-call state. One instance per voice session. Never shared between calls."""
 
     # Branch and doctor resolved at call start
     branch_id: UUID | None = None
@@ -39,4 +39,4 @@ class SessionState:
     solo_warning_sent: bool = False  # gate the 4-minute warning to fire only once
 
     # Logging
-    livekit_room_id: str | None = None
+    session_id: str | None = None
