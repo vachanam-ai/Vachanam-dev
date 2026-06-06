@@ -900,3 +900,42 @@ The work below was done inline by the orchestrator (main thread) before the mand
 - All audit writes are wrapped in try/except with structlog.error — audit failure never blocks the booking (CLAUDE.md Rule 4 + spec §8.5).
 - No schema changes required (AuditLog table from Phase 4.5 already has all needed columns).
 
+---
+
+## 2026-06-06 — voice-agent-engineer dispatched (Phase 1 D4 — strip silence/audio + DID lookup + tool registration)
+
+**Scope:** Four bundled jobs: (1) delete silence_handler.py + audio_quality.py + their 39 tests; replace with 30-line inactivity watchdog; (2) fix branch_id resolution for SIP-dispatched rooms (Gap 4) via _resolve_branch_from_sip() reading sip.trunkPhoneNumber; (3) register all 4 booking tools with VachananAgent via @function_tool + LLM-oriented docstrings; (4) booking_tools.py docstring rewrite for LLM tool-calling clarity.
+
+**Inputs:** agent/agent.py, agent/tools/booking_tools.py, agent/services/silence_handler.py, agent/services/audio_quality.py, tests/unit/test_silence_handler.py, tests/unit/test_audio_quality.py, .claude/agents/voice-agent-engineer.md, docs/DISPATCHES.md (append).
+
+**Acceptance:** python -c "import agent.agent" clean; 9 new tests 9/9 GREEN; 23/23 regression GREEN; ≥250 LOC deleted vs HEAD~1.
+
+**Reviewer:** tester (verify 9 new tests + 23/23 regression; confirm no silence_handler/audio_quality references remain).
+
+**Result:** DONE
+
+**Files touched:**
+  - Deleted: `agent/services/silence_handler.py` (157 LOC), `agent/services/audio_quality.py` (134 LOC), `tests/unit/test_silence_handler.py` (210 LOC), `tests/unit/test_audio_quality.py` (154 LOC)
+  - Modified: `agent/agent.py` (strip silence/audio imports + state machine code; add _resolve_branch_from_sip() + _wait_for_sip_participant(); add _make_booking_tools() factory with 4 @function_tool closures; add _inactivity_watchdog(); wire all into entrypoint())
+  - Modified: `agent/tools/booking_tools.py` (docstrings rewritten for LLM tool-calling; DetachedInstanceError fix in confirm_booking — capture doctor_name + branch_name before session closes)
+  - Created: `tests/unit/test_inactivity_watchdog.py` (3 tests)
+  - Created: `tests/unit/test_branch_resolution.py` (4 tests)
+  - Created: `tests/integration/test_booking_tools_registered.py` (2 tests)
+  - Modified: `docs/DISPATCHES.md` (this entry)
+
+**Tests:** 9/9 new GREEN. 23/23 regression GREEN (tts_sanitizer + emergency). Zero regressions.
+
+**Commit:** `ad4bd7f`
+
+**LOC delta:** git diff HEAD~1 --stat → 737 insertions, 958 deletions. Net: -221 lines. 4 deleted files account for 655 lines removed. Well above the ≥250 LOC dropped requirement.
+
+**Follow-up dispatches:** tester (verify D4 — confirm 9 new tests not weakened, regression still 23/23, no silence_handler/audio_quality stray references).
+
+**Notes:**
+- silence_handler state machine (5s/7s/10s DEFAULT timeouts, WAIT_REQUESTED, EMERGENCY modes, garbled counter) deleted. Replacement: 30s inactivity watchdog polling every 5s. Rationale confirmed by user: no real-caller data validates the complex state machine; start simple.
+- audio_quality.py (STT confidence layer A) also deleted. LiveKit 1.5.9 does not expose per-turn STT confidence to the Agent layer so this code was dead. Layer B (LLM clarification detection) also removed — was coupled to audio_quality import.
+- _resolve_branch_from_sip() uses ctx.wait_for_participant(kind=[PARTICIPANT_KIND_SIP]) with asyncio.wait_for timeout=10s. Falls back to room.metadata["branch_id"] for dev/test rooms. Raises ValueError (not None) if neither path resolves — entrypoint calls ctx.shutdown(reason=...) on ValueError.
+- Tool factory _make_booking_tools() uses lazy imports for google.generativeai + openai.AsyncOpenAI inside _llm_call (not at factory-call time). This keeps the tool-list construction testable without those packages installed, which matters in CI environments.
+- confirm_booking in booking_tools.py had a latent DetachedInstanceError: `doctor.name` and `branch.name` were read AFTER `await db.commit()` which ends the session. Fixed by capturing `doctor_name = doctor.name` and `branch_name = branch.name` before the commit.
+- D3 stubs (CalendarService + MetaService from backend/services/) are imported with try/except in the confirm_booking @function_tool closure. If import fails (D3 not yet committed or Phase 6 not shipped), inline stubs handle gracefully.
+
