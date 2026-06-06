@@ -1048,7 +1048,7 @@ The work below was done inline by the orchestrator (main thread) before the mand
 
 **Tests:** 11/11 new tests GREEN. Full unit suite 107/107 PASS. Zero regressions.
 
-**Commit:** (pending)
+**Commit:** `6a2d1cd`
 
 **Follow-up dispatches:**
   - security-engineer: review branch_id isolation correctness + confirm _extract_org_id cannot be bypassed
