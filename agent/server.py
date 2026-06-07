@@ -13,20 +13,30 @@ Endpoints:
 
 from __future__ import annotations
 
+import re
 import urllib.parse
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Optional
 from xml.sax.saxutils import escape
 
+import aiohttp
 import structlog
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
 from sqlalchemy import select
 
 import agent.bot as bot
 import backend.config as _cfg
 from backend.database import AsyncSessionLocal
 from backend.models.schema import Branch
+
+# ─── Recordings directory (module-level so tests can monkeypatch it) ──────────
+_RECORDINGS_DIR: Path = Path("agent/recordings")
+
+# ─── Allowed characters in CallSid from Vobiz (path-traversal guard) ─────────
+_CALL_SID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 logger = structlog.get_logger()
 
@@ -330,22 +340,209 @@ async def websocket_ws(websocket: WebSocket) -> None:
         )
 
 
-@app.post("/start")
-async def start() -> JSONResponse:
-    """Outbound call trigger. Filled in Task 10."""
-    return JSONResponse({"error": "not_implemented"}, status_code=501)
-
-
 @app.post("/recording-finished")
-async def recording_finished() -> JSONResponse:
-    """Vobiz callback when recording stream ends. Filled in Task 10."""
-    return JSONResponse({"error": "not_implemented"}, status_code=501)
+async def recording_finished(
+    CallSid: Annotated[str, Form()] = "",
+    duration: Annotated[Optional[str], Form()] = None,
+) -> JSONResponse:
+    """
+    Vobiz callback (POST form) when a recording stream finishes.
+
+    Always returns 200 so Vobiz does not retry — even when RECORDING_ENABLED
+    is false (guardrail: gate the business logic, never the HTTP response).
+
+    Logs a structured event `recording_finished` with:
+      - call_sid    — the Vobiz call identifier
+      - duration_seconds — parsed int if present, else None
+      - recording_enabled — current setting value
+
+    Privacy: CallSid is opaque and safe to log in full; no phone numbers here.
+    """
+    recording_enabled: bool = _cfg.settings.recording_enabled
+    duration_seconds: Optional[int] = None
+    if duration is not None:
+        try:
+            duration_seconds = int(duration)
+        except ValueError:
+            pass  # non-numeric duration — log None, don't crash
+
+    logger.info(
+        "recording_finished",
+        call_sid=CallSid,
+        duration_seconds=duration_seconds,
+        recording_enabled=recording_enabled,
+    )
+
+    if not recording_enabled:
+        logger.warning(
+            "recording_finished_ignored_recording_disabled",
+            call_sid=CallSid,
+        )
+
+    return JSONResponse({"ok": True})
 
 
 @app.post("/recording-ready")
-async def recording_ready() -> JSONResponse:
-    """Vobiz callback with MP3 download URL. Filled in Task 10."""
-    return JSONResponse({"error": "not_implemented"}, status_code=501)
+async def recording_ready(
+    CallSid: Annotated[str, Form()] = "",
+    recording_url: Annotated[str, Form()] = "",
+) -> JSONResponse:
+    """
+    Vobiz callback (POST form) with the MP3 download URL.
+
+    Accept form params — Vobiz follows the Twilio-style webhook pattern
+    (application/x-www-form-urlencoded). If a real call in Task 14 smoke
+    reveals JSON instead, switch `Form()` to `Body()` for those two fields.
+
+    Path-traversal protection: CallSid is validated against ^[A-Za-z0-9_-]+$
+    before being used in the filesystem path. Invalid CallSid → 400.
+
+    When RECORDING_ENABLED=false: log warning and return 200 immediately;
+    no download attempted (guardrail: always 200 to Vobiz).
+
+    On aiohttp error: log `recording_download_failed` (URL masked) + return
+    200 (download is best-effort; Vobiz must not retry for a local-save issue).
+
+    Vobiz auth headers are sent but NEVER logged (auth_id only, not token).
+    """
+    recording_enabled: bool = _cfg.settings.recording_enabled
+
+    # ── Guard: path traversal — validate CallSid before any filesystem use ──
+    if not CallSid or not _CALL_SID_RE.match(CallSid):
+        logger.warning(
+            "recording_ready_invalid_call_sid",
+            call_sid_raw=CallSid[:40],  # truncate any huge input
+        )
+        raise HTTPException(status_code=400, detail="invalid_call_sid")
+
+    if not recording_enabled:
+        logger.warning(
+            "recording_ready_skipped_recording_disabled",
+            call_sid=CallSid,
+        )
+        return JSONResponse({"ok": True})
+
+    auth_id: str = _cfg.settings.vobiz_auth_id
+    auth_token: str = _cfg.settings.vobiz_auth_token
+
+    # Log auth_id (public-ish identifier) but NEVER auth_token (guardrail 4).
+    logger.info(
+        "recording_ready_download_start",
+        call_sid=CallSid,
+        auth_id=auth_id,
+        # recording_url intentionally omitted — may contain signed tokens
+    )
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                recording_url,
+                headers={
+                    "X-Auth-ID": auth_id,
+                    "X-Auth-Token": auth_token,
+                },
+            ) as resp:
+                resp.raise_for_status()
+                content: bytes = await resp.read()
+
+        dest: Path = _RECORDINGS_DIR / f"{CallSid}.mp3"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(content)
+
+        logger.info(
+            "recording_downloaded",
+            call_sid=CallSid,
+            size_bytes=len(content),
+            path=str(dest),
+        )
+    except Exception as exc:
+        # Best-effort download — log but never let Vobiz retry for a local save failure.
+        logger.error(
+            "recording_download_failed",
+            call_sid=CallSid,
+            # URL masked — may contain signed auth tokens in query string
+            error=str(exc),
+        )
+
+    return JSONResponse({"ok": True})
+
+
+class _StartRequest(BaseModel):
+    """Outbound call trigger request body."""
+
+    to: str
+
+
+@app.post("/start")
+async def start(body: _StartRequest) -> JSONResponse:
+    """
+    Outbound call trigger (POST JSON).
+
+    Validates `to` is a non-empty E.164 number (starts with '+', digits only
+    after). Rejects with 400 otherwise (guardrail 5).
+
+    POSTs to Vobiz Partner API:
+      POST https://api.vobiz.ai/api/v1/Account/{auth_id}/Call/
+      Headers: X-Auth-ID, X-Auth-Token
+      Body:
+        from        — settings.vobiz_did_number
+        to          — caller-supplied destination
+        answer_url  — {settings.public_url}/answer
+        answer_method — POST
+
+    Returns the upstream Vobiz JSON response body verbatim.
+
+    TODO: Add per-minute outbound rate limiting via slowapi (TD-PIPECAT-XX).
+    Privacy: `to` is logged as last-4 digits only.
+    Auth: NEVER log X-Auth-Token (guardrail 4); only auth_id is logged.
+    """
+    to: str = body.to
+
+    # ── E.164 validation: must start with '+' and have only digits after ──────
+    if not to or not to.startswith("+") or not re.fullmatch(r"\+[0-9]+", to):
+        logger.warning("start_invalid_e164", to_last4=to[-4:] if to else "")
+        raise HTTPException(status_code=400, detail="invalid_e164_number")
+
+    auth_id: str = _cfg.settings.vobiz_auth_id
+    auth_token: str = _cfg.settings.vobiz_auth_token
+    from_number: str = _cfg.settings.vobiz_did_number
+    public_url: str = _cfg.settings.public_url.rstrip("/")
+    answer_url: str = f"{public_url}/answer"
+
+    vobiz_url = f"https://api.vobiz.ai/api/v1/Account/{auth_id}/Call/"
+
+    logger.info(
+        "outbound_call_start",
+        to_last4=to[-4:],
+        from_last4=from_number[-4:] if from_number else "",
+        auth_id=auth_id,
+        # auth_token NEVER logged
+    )
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            vobiz_url,
+            headers={
+                "X-Auth-ID": auth_id,
+                "X-Auth-Token": auth_token,
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": from_number,
+                "to": to,
+                "answer_url": answer_url,
+                "answer_method": "POST",
+            },
+        ) as resp:
+            resp.raise_for_status()
+            vobiz_data: dict = await resp.json()
+
+    logger.info(
+        "outbound_call_queued",
+        to_last4=to[-4:],
+        call_id=vobiz_data.get("call_id", "unknown"),
+    )
+    return JSONResponse(vobiz_data)
 
 
 @app.get("/transfer-emergency/{call_id}")
