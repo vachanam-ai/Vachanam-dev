@@ -50,6 +50,16 @@ class Settings(BaseSettings):
     # Used in backend/middleware/rate_limit.py _EndpointRateLimiter.
     rate_limit_bypass_ips: str = ""
 
+    # Voice agent (Pipecat)
+    public_url: str = "http://localhost:7860"
+    recording_enabled: bool = False
+    max_call_duration_seconds: int = 0  # 0 = unlimited; non-zero = wrap call at N seconds (Solo plan)
+
+    # Telephony (Vobiz Partner API + WebSocket)
+    vobiz_did_number: str = ""
+    vobiz_auth_id: str = ""
+    vobiz_auth_token: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

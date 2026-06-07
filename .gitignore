@@ -49,3 +49,8 @@ graphify-out/
 
 # User-cloned MCP servers (not project code)
 kindly-web-search-mcp-server/
+
+# Voice agent call recordings (TESTING-ONLY; never commit audio files)
+agent/recordings/*.mp3
+agent/recordings/*.wav
+agent/recordings/*.ogg
