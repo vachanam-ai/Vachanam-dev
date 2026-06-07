@@ -807,13 +807,14 @@ async def run_pipeline(
     call_id: str,
     did: str,
     caller: str,
+    redis_client: Any = None,
 ) -> None:
     """Run the per-call Pipecat pipeline.
 
     One invocation per inbound WebSocket connection. Called from agent/server.py:/ws.
     Opens its own DB session; closes it in finally regardless of outcome.
-    Token release on disconnect is wired in the finally block via the release_token
-    stub (Task 9 fills real Redis client).
+    Token release on disconnect is wired in the finally block via
+    release_token_on_disconnect (CLAUDE.md RULE 3).
 
     CLAUDE.md RULE 5: branch resolved from dialed DID (did param), never from caller.
     CLAUDE.md RULE 1: Doctor query filters by branch_id.
@@ -823,8 +824,9 @@ async def run_pipeline(
       transport.input()
       -> STT (Sarvam saaras:v3 te-IN)
       -> LLMUserAggregator (with SileroVAD — barge-in detection)
-      -> GoogleLLMService (gemini-2.5-flash; Task 7 adds GPT-4o-mini fallback)
+      -> GeminiFallbackLLMService (gemini-2.5-flash primary; gpt-4o-mini fallback)
       -> LLMAssistantAggregator
+      -> TtsSanitizerProcessor
       -> SarvamTTSService (bulbul:v3 te-IN)
       -> transport.output()
 
@@ -833,6 +835,19 @@ async def run_pipeline(
         call_id: Vobiz call identifier, passed as query param ?call_id=X.
         did: Dialed DID number (the clinic's phone number), from ?to=DID query param.
         caller: Caller's phone number (masked in logs), from ?from=CALLER query param.
+        redis_client: Optional async Redis client (aioredis). Opened by server.py:/ws
+            before calling run_pipeline; closed by server.py:/ws after return.
+            Passed to register_tools (assign_token + transfer handler) and to
+            release_token_on_disconnect in finally. Default None is safe —
+            release_token_on_disconnect is a no-op when redis_client is None.
+
+    _transfer_signals import note:
+        agent/server.py imports bot at module level (for run_pipeline + _call_id_to_did).
+        bot.py cannot import server at module level without a circular import.
+        We use a deferred import (inside this function body) to get _transfer_signals
+        from server only when run_pipeline is actually called at runtime — by which
+        point both modules are fully loaded. This is a well-established Python pattern
+        for breaking import cycles in module-level-dict sharing scenarios.
     """
     logger.info(
         "call_started",
@@ -898,15 +913,7 @@ async def run_pipeline(
         llm = build_llm_with_fallback(settings.gemini_api_key, settings.openai_api_key)
         tts = build_tts_service(settings.sarvam_api_key)
 
-        # ── 5. Register tools (stub — Task 7 fills) ───────────────────────────
-        register_tools(
-            llm,
-            db_session=db,
-            session_state=state,
-            branch_emergency_contact=branch_emergency_contact,
-        )
-
-        # ── 6. Build LLM context + aggregators ───────────────────────────────
+        # ── 5. Build LLM context + aggregators ───────────────────────────────
         # VAD on LLMUserAggregatorParams — Pipecat 1.x telephony requirement.
         # transport.params does NOT take a vad_analyzer in 1.x.
         context = LLMContext(messages=[])
@@ -920,7 +927,7 @@ async def run_pipeline(
             user_params=user_params,
         )
 
-        # ── 7. Build pipeline ─────────────────────────────────────────────────
+        # ── 6. Build pipeline ─────────────────────────────────────────────────
         # TtsSanitizerProcessor sits between assistant aggregator and TTS.
         # CLAUDE.md RULE 6: every TextFrame reaching TTS must be sanitized.
         pipeline = Pipeline(
@@ -943,10 +950,41 @@ async def run_pipeline(
             doctor_count=len(doctors),
         )
 
-        # ── 8. Run pipeline ───────────────────────────────────────────────────
+        # ── 7. Build PipelineWorker ───────────────────────────────────────────
         # PipelineTask is deprecated in 1.3.0; use PipelineWorker + WorkerRunner.
         # handle_sigint=False: we are embedded in FastAPI, not a standalone process.
         worker = PipelineWorker(pipeline)
+
+        # ── 8. Register tools ─────────────────────────────────────────────────
+        # Deferred import of _transfer_signals from agent.server avoids a circular
+        # import at module load time (server.py imports bot at module level for
+        # run_pipeline and _call_id_to_did; bot.py cannot import server at module
+        # level without creating a cycle). The deferred import is safe here because
+        # by the time run_pipeline is invoked, both modules are fully initialised.
+        from agent.server import _transfer_signals  # noqa: PLC0415 (deferred — see docstring)
+
+        # tts_say: pushes a TextFrame into the worker queue for immediate TTS output.
+        # PipelineWorker.queue_frame(frame, direction=DOWNSTREAM) is the Pipecat 1.3.0
+        # canonical API for injecting frames outside of normal pipeline flow (e.g. from
+        # a tool handler running concurrently with the pipeline). The frame flows through
+        # TtsSanitizerProcessor, then to SarvamTTS, then to transport.output().
+        # sanitize_for_tts() is already called by TtsSanitizerProcessor, but the
+        # transfer handler also calls it before passing to tts_say — double sanitize
+        # is harmless and guarantees safety even if tts_say is swapped in tests.
+        async def _tts_say(text: str) -> None:
+            await worker.queue_frame(TextFrame(text=text))
+
+        register_tools(
+            llm,
+            db_session=db,
+            session_state=state,
+            redis_client=redis_client,
+            signal_map=_transfer_signals,
+            branch_emergency_contact=branch_emergency_contact,
+            tts_say=_tts_say,
+        )
+
+        # ── 9. Run pipeline ───────────────────────────────────────────────────
         runner = WorkerRunner(handle_sigint=False)
         runner.add_workers(worker)
         await runner.run()
@@ -965,10 +1003,10 @@ async def run_pipeline(
         raise
     finally:
         # Token rollback on disconnect (CLAUDE.md RULE 3).
-        # Real Redis client is wired in Task 9; stub is safe to call with None
-        # (the stub checks token_held before doing anything with redis_client).
-        # For Task 6 we call the stub — Task 9 passes the real client from /ws.
-        await release_token_on_disconnect(state, redis_client=None)
+        # redis_client is provided by server.py:/ws and passed through to here.
+        # When redis_client is None (tests or legacy callers), release_token_on_disconnect
+        # is a safe no-op (the null-redis guard in that function handles it).
+        await release_token_on_disconnect(state, redis_client=redis_client)
 
         # Clean up call_id → DID mapping. Safe to call even if populate failed.
         _call_id_to_did.pop(call_id, None)

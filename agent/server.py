@@ -18,10 +18,12 @@ from typing import Annotated
 from xml.sax.saxutils import escape
 
 import structlog
-from fastapi import FastAPI, Form, HTTPException, WebSocket
+import redis.asyncio as aioredis
+from fastapi import FastAPI, Form, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select
 
+import agent.bot as bot
 import backend.config as _cfg
 from backend.database import AsyncSessionLocal
 from backend.models.schema import Branch
@@ -217,12 +219,115 @@ async def answer(
 
 @app.websocket("/ws")
 async def websocket_ws(websocket: WebSocket) -> None:
+    """WebSocket endpoint. Vobiz connects here after /answer returns <Stream>.
+
+    Query params (all required):
+      call_id — Vobiz call identifier (maps to _call_id_to_did and _transfer_signals)
+      to      — Dialed DID number (clinic's number). CLAUDE.md RULE 5: branch
+                identity comes from DID, NEVER from caller phone.
+      from    — Caller's phone number (used only for logging, last 4 digits).
+
+    Lifecycle:
+      1. Validate query params — 400 close if any missing.
+      2. Accept WebSocket.
+      3. Open a per-connection Redis client (aioredis.from_url).
+      4. Call bot.run_pipeline(websocket, call_id, did, caller, redis_client).
+      5. finally: close Redis, close WebSocket (idempotent).
+
+    Exception handling:
+      - WebSocketDisconnect from clean caller hangup → INFO log, not ERROR.
+      - All other exceptions → ERROR log before close.
+      - Nothing re-raised — uvicorn worker must not crash on call teardown.
+
+    Privacy: only last 4 digits of caller/DID logged in all structlog events.
     """
-    WebSocket endpoint. Vobiz connects here after /answer returns <Stream>.
-    Full Pipecat pipeline wired in Task 9.
-    """
+    # ── 1. Validate required query params ────────────────────────────────────
+    params = websocket.query_params
+    call_id: str | None = params.get("call_id")
+    to: str | None = params.get("to")
+    from_: str | None = params.get("from")
+
+    if not call_id or not to or not from_:
+        missing = [k for k, v in (("call_id", call_id), ("to", to), ("from", from_)) if not v]
+        logger.warning("ws_missing_query_params", missing=missing)
+        await websocket.close(code=1008, reason="missing_query_params")
+        return
+
+    # ── 2. Accept WebSocket ───────────────────────────────────────────────────
     await websocket.accept()
-    await websocket.close(code=1001, reason="not_implemented")
+
+    logger.info(
+        "ws_connected",
+        call_id=call_id,
+        did_last4=to[-4:],
+        caller_last4=from_[-4:],
+    )
+
+    # ── 3. Open per-connection Redis client ───────────────────────────────────
+    # One client per WebSocket connection — never module-level (event-loop safety).
+    # Same pattern as agent/tools/booking_tools.py:_redis (from_url + decode_responses).
+    redis_client = aioredis.from_url(
+        _cfg.settings.redis_url,
+        decode_responses=True,
+    )
+
+    # ── 4. Run pipeline; catch all exceptions so uvicorn worker survives ──────
+    try:
+        await bot.run_pipeline(
+            websocket=websocket,
+            call_id=call_id,
+            did=to,
+            caller=from_,
+            redis_client=redis_client,
+        )
+    except WebSocketDisconnect:
+        # Clean caller hangup — not an error condition.
+        logger.info(
+            "ws_disconnected_cleanly",
+            call_id=call_id,
+            did_last4=to[-4:],
+            caller_last4=from_[-4:],
+        )
+    except Exception as exc:
+        # Unexpected pipeline error — log as ERROR but do NOT re-raise.
+        # Re-raising would kill the uvicorn worker; other concurrent calls
+        # must continue running.
+        logger.error(
+            "ws_disconnected_with_exception",
+            call_id=call_id,
+            did_last4=to[-4:],
+            caller_last4=from_[-4:],
+            error=str(exc),
+        )
+    finally:
+        # ── 5. Cleanup — always runs regardless of exception path ─────────────
+        # Clear the transfer signal if the call ended before /transfer-emergency
+        # was fetched (avoids stale entries in the module dict for long-running
+        # servers across many calls).
+        _transfer_signals.pop(call_id, None)
+
+        # Close Redis client — mandatory to avoid connection leaks.
+        # aioredis.close() is an alias; aclose() is the canonical async close.
+        try:
+            await redis_client.aclose()
+        except Exception as redis_close_exc:
+            logger.warning(
+                "ws_redis_close_failed",
+                call_id=call_id,
+                error=str(redis_close_exc),
+            )
+
+        # Close WebSocket — idempotent if Pipecat or Vobiz already closed it.
+        try:
+            await websocket.close()
+        except Exception:
+            pass  # Already closed — safe to ignore
+
+        logger.info(
+            "ws_cleanup_complete",
+            call_id=call_id,
+            did_last4=to[-4:],
+        )
 
 
 @app.post("/start")
