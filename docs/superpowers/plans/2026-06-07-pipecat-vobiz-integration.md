@@ -335,14 +335,21 @@ Import-only smoke test in tests/unit/test_pipecat_imports.py."
 
 ---
 
-## Task 4: Recording disclosure in system prompt Step 0
+## Task 4: System prompt — recording disclosure + human-transfer trigger instructions
 
 **Owner:** voice-agent-engineer
 **Files:**
 - Modify: `agent/prompts/system_prompt.py`
 - Modify: `tests/unit/test_system_prompt.py` (or create if missing)
 
-When `settings.recording_enabled` is True, Step 0 disclosure in Telugu must include "ఈ కాల్ నాణ్యత మెరుగుదల కోసం రికార్డ్ చేయబడుతుంది." When False, this sentence is absent.
+Two updates to the system prompt:
+
+1. **Recording disclosure (gated):** when `settings.recording_enabled` is True, Step 0 disclosure in Telugu must include "ఈ కాల్ నాణ్యత మెరుగుదల కోసం రికార్డ్ చేయబడుతుంది." When False, this sentence is absent.
+
+2. **Human-transfer trigger (unconditional):** prompt body must instruct the LLM:
+   > "If the patient at any point CLEARLY asks to speak to a human, doctor, or receptionist (e.g. 'I want to talk to a person', 'doctor తో మాట్లాడాలి', 'human కావాలి'), OR keeps pushing for a human across MULTIPLE turns despite your offers to book, call the `request_human_transfer(reason)` tool. Pass reason='explicit_ask' for the first case, reason='persistent_pressure: <short summary>' for the second. Do NOT call this tool for medical-sounding words alone (e.g. 'chest pain', 'heart attack') — only for clear intent to bypass the AI. After calling, do not say anything else."
+
+This is a behavioural rule the LLM must follow at all times, not a gated section. See spec §3.1 and [[feedback-emergency-transfer]].
 
 - [ ] **Step 1: Read current `agent/prompts/system_prompt.py` to see Step 0 location**
 
@@ -361,6 +368,16 @@ def test_step_0_omits_recording_notice_when_disabled(monkeypatch):
     monkeypatch.setattr("backend.config.settings.recording_enabled", False)
     prompt = build_system_prompt(branch_name="Test Clinic", doctors=[], emergency_contact="+919000000000")
     assert "రికార్డ్" not in prompt
+
+def test_prompt_includes_transfer_trigger_instructions():
+    prompt = build_system_prompt(branch_name="Test Clinic", doctors=[], emergency_contact="+919000000000")
+    # LLM must be told to call request_human_transfer on explicit ask or persistent pressure
+    assert "request_human_transfer" in prompt
+    assert "explicit_ask" in prompt
+    assert "persistent_pressure" in prompt
+    # Must NOT instruct keyword-based transfer
+    assert "chest pain" not in prompt.lower()
+    assert "heart attack" not in prompt.lower()
 ```
 
 - [ ] **Step 3: Run test — verify failure**
@@ -370,20 +387,23 @@ pytest tests/unit/test_system_prompt.py -v
 ```
 Expected: FAIL.
 
-- [ ] **Step 4: Edit `agent/prompts/system_prompt.py` to inject recording sentence conditionally**
+- [ ] **Step 4: Edit `agent/prompts/system_prompt.py`** — (a) inject recording sentence conditionally on `settings.recording_enabled`; (b) add the request_human_transfer trigger instruction block to the prompt body (unconditional).
 
-- [ ] **Step 5: Run test — verify GREEN**
+- [ ] **Step 5: Run tests — verify GREEN**
 
 - [ ] **Step 6: Commit**
 
 ```
 git add agent/prompts/system_prompt.py tests/unit/test_system_prompt.py
-git commit -m "feat(agent): add recording-consent disclosure to Step 0 (gated)
+git commit -m "feat(agent): system prompt — recording disclosure + human-transfer trigger
 
-When RECORDING_ENABLED=true, Step 0 system prompt includes Telugu
-recording-consent sentence required by DPDP Act 2023 minimization
-principle. When false, sentence is absent. TESTING-ONLY override
-per memory entry feedback-no-voice-recording (2026-06-07)."
+- Step 0 gains recording-consent sentence in Telugu when
+  RECORDING_ENABLED=true (TESTING-ONLY override per
+  feedback-no-voice-recording memory 2026-06-07).
+- Prompt body adds explicit instructions for request_human_transfer tool:
+  trigger on explicit ask OR persistent pressure across multiple turns.
+  Do NOT trigger on medical-sounding words alone. Replaces removed
+  keyword-based emergency detection (see feedback-emergency-transfer)."
 ```
 
 ---
@@ -531,42 +551,119 @@ git commit -m "feat(agent): Pipecat pipeline core in agent/bot.py
 - Sarvam Saaras v3 te-IN STT, Gemini 2.5 Flash LLM, Sarvam Bulbul v3 TTS
 - VAD on LLMUserAggregatorParams per Pipecat 1.x telephony requirement
 - add_wav_header=False, FastAPI WebSocket transport with Vobiz serializer
-- Tool registration + emergency interceptor + disconnect handler are stubs"
+- Tool registration + TTS sanitizer + disconnect handler are stubs filled in by Tasks 7, 8, 9.
+  No keyword-based emergency interceptor — replaced by request_human_transfer LLM tool."
 ```
 
 ---
 
-## Task 7: LLM fallback + booking tool registration
+## Task 7: LLM fallback + 5-tool registration (4 booking + request_human_transfer)
 
 **Owner:** voice-agent-engineer
 **Files:**
 - Modify: `agent/bot.py`
 - Create: `tests/unit/test_bot_tools_and_fallback.py`
 
-Wire CLAUDE.md RULE 9 (Gemini → GPT-4o-mini fallback) using Pipecat's `LLMFallbackAdapter` (or, if 1.x ships a different class name, the equivalent — voice-agent-engineer verifies via `pipecat.services` introspection). Register the 4 booking tools (`route_to_doctor`, `check_availability`, `assign_token`, `confirm_booking`) via `FunctionSchema` + `llm.register_function(name, handler)`. Each handler unwraps `FunctionCallParams`, calls the booking_tools function with injected `db_session`, `redis_client`, `calendar_service`, `meta_service`, `session_state`, calls `params.result_callback(result_dict)`.
+Wire CLAUDE.md RULE 9 (Gemini → GPT-4o-mini fallback) using Pipecat's `LLMFallbackAdapter` (or, if 1.x ships a different class name, the equivalent — voice-agent-engineer verifies via `pipecat.services` introspection). Register **5 tools** via `FunctionSchema` + `llm.register_function(name, handler)`:
+
+- 4 booking tools (`route_to_doctor`, `check_availability`, `assign_token`, `confirm_booking`) — each handler unwraps `FunctionCallParams`, calls the booking_tools function with injected `db_session`, `redis_client`, `calendar_service`, `meta_service`, `session_state`, calls `params.result_callback(result_dict)`.
+- `request_human_transfer(reason: str)` — handler runs the transfer flow (see spec §3.1):
+  1. Brief Telugu TTS via `sanitize_for_tts()`: "Sare, miru clinic ki connect chestunnanu."
+  2. Write `audit_log` row `action="human_transfer_requested"`, metadata: `{"reason": <reason>, "branch_emergency_contact_last4": branch.emergency_contact[-4:]}` (PII denylist enforced; full phone NEVER logged).
+  3. Release any held token via Redis DECR if `session_state.token_held and not session_state.token_confirmed`.
+  4. Set the per-call signal `transfer_requested=True` in the server's signal map keyed by `call_id` (signal map module is `agent/server.py:_transfer_signals` dict; bot.py imports it).
+  5. `params.result_callback({"success": True, "transfer_initiated": True})` — the LLM returns nothing further; pipeline ends cleanly.
 
 - [ ] **Step 1: Write failing test**
 
 ```python
 # tests/unit/test_bot_tools_and_fallback.py
 import pytest
+from unittest.mock import AsyncMock, MagicMock
+from agent.session_state import SessionState
 
-def test_function_schemas_for_all_four_tools():
+def test_function_schemas_for_all_five_tools():
     from agent.bot import build_function_schemas
     schemas = build_function_schemas()
     names = {s.name for s in schemas}
-    assert names == {"route_to_doctor", "check_availability", "assign_token", "confirm_booking"}
+    assert names == {
+        "route_to_doctor",
+        "check_availability",
+        "assign_token",
+        "confirm_booking",
+        "request_human_transfer",
+    }
 
 def test_fallback_wraps_gemini_with_openai_secondary():
     from agent.bot import build_llm_with_fallback
     llm = build_llm_with_fallback(gemini_key="g", openai_key="o")
     # Adapter exposes both services as attributes/iterables — exact assertion depends on adapter class
     assert llm is not None
+
+@pytest.mark.asyncio
+async def test_request_human_transfer_handler_sets_signal_and_releases_token():
+    from agent.bot import make_request_human_transfer_handler
+    redis = AsyncMock()
+    signal_map = {}
+    state = SessionState(
+        token_held=True,
+        token_confirmed=False,
+        token_redis_key="token:d:b:2026-06-07",
+        token_number=5,
+        session_id="CALL_ABC",
+    )
+    audit_writer = AsyncMock()
+    handler = make_request_human_transfer_handler(
+        session_state=state,
+        redis_client=redis,
+        signal_map=signal_map,
+        audit_writer=audit_writer,
+        branch_emergency_contact="+919876543210",
+        tts_say=AsyncMock(),
+    )
+    params = MagicMock()
+    params.arguments = {"reason": "explicit_ask"}
+    params.result_callback = AsyncMock()
+    await handler(params)
+    # signal set
+    assert signal_map.get("CALL_ABC") is True
+    # token released
+    redis.decr.assert_awaited_once_with("token:d:b:2026-06-07")
+    # audit row written with masked phone
+    audit_writer.assert_awaited_once()
+    audit_args = audit_writer.await_args.kwargs
+    assert audit_args["action"] == "human_transfer_requested"
+    assert audit_args["metadata"]["branch_emergency_contact_last4"] == "3210"
+    assert audit_args["metadata"]["reason"] == "explicit_ask"
+    # result_callback called
+    params.result_callback.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_request_human_transfer_handler_does_not_decr_confirmed_token():
+    from agent.bot import make_request_human_transfer_handler
+    redis = AsyncMock()
+    state = SessionState(
+        token_held=True, token_confirmed=True, token_redis_key="k", token_number=5,
+        session_id="CALL_XYZ",
+    )
+    handler = make_request_human_transfer_handler(
+        session_state=state,
+        redis_client=redis,
+        signal_map={},
+        audit_writer=AsyncMock(),
+        branch_emergency_contact="+919000000000",
+        tts_say=AsyncMock(),
+    )
+    params = MagicMock()
+    params.arguments = {"reason": "explicit_ask"}
+    params.result_callback = AsyncMock()
+    await handler(params)
+    redis.decr.assert_not_called()
 ```
 
 - [ ] **Step 2: Run test — verify failure**
 
-- [ ] **Step 3: Implement `build_function_schemas()` returning `list[FunctionSchema]` with full property descriptions matching `booking_tools.py` signatures. Implement `register_tools(llm, session_state, db_session, calendar_service, meta_service)` that wires each schema to an async handler. Implement `build_llm_with_fallback(gemini_key, openai_key)` returning the configured fallback LLM.**
+- [ ] **Step 3: Implement `build_function_schemas()` returning `list[FunctionSchema]` for all 5 tools with full property descriptions matching `booking_tools.py` signatures + the `request_human_transfer` schema described in [[feedback-emergency-transfer]]. Implement `register_tools(llm, session_state, db_session, redis_client, calendar_service, meta_service, signal_map, branch_emergency_contact, tts_say)` that wires each schema to an async handler. Implement `make_request_human_transfer_handler(...)` as a factory returning the handler closure. Implement `build_llm_with_fallback(gemini_key, openai_key)` returning the configured fallback LLM.**
 
 - [ ] **Step 4: Run tests — verify GREEN**
 
@@ -574,45 +671,45 @@ def test_fallback_wraps_gemini_with_openai_secondary():
 
 ```
 git add agent/bot.py tests/unit/test_bot_tools_and_fallback.py
-git commit -m "feat(agent): wire LLM fallback + register 4 booking tools
+git commit -m "feat(agent): LLM fallback + 5-tool registration (4 booking + transfer)
 
 - Gemini 2.5 Flash primary, GPT-4o-mini fallback per CLAUDE.md RULE 9
-- FunctionSchema definitions for route_to_doctor, check_availability,
-  assign_token, confirm_booking
-- Each handler unwraps FunctionCallParams, calls booking_tools fn,
-  passes result via params.result_callback"
+- FunctionSchema for route_to_doctor, check_availability, assign_token,
+  confirm_booking, request_human_transfer
+- request_human_transfer handler: brief Telugu TTS, audit_log row with
+  PII-masked emergency contact, Redis DECR any held unconfirmed token,
+  set per-call transfer_requested signal in agent/server.py signal map
+- Keyword-based emergency detection removed — replaced by LLM intent
+  per feedback-emergency-transfer (2026-06-07) and project-clinic-scope
+  (Vachanam = dental + skin + diagnostics, low acuity)"
 ```
 
 ---
 
-## Task 8: Emergency interceptor + TTS sanitizer frame processors
+## Task 8: TTS sanitizer + transfer-XML endpoint + delete emergency.py
 
 **Owner:** voice-agent-engineer
 **Files:**
-- Modify: `agent/bot.py`
-- Modify: `agent/server.py` (signal channel from bot back to server for transfer)
-- Create: `tests/unit/test_bot_interceptors.py`
+- Modify: `agent/bot.py` (add `TtsSanitizerProcessor` only — no keyword interceptor)
+- Modify: `agent/server.py` (add `/transfer-emergency/{call_id}` route + `_transfer_signals` signal map; wire WebSocket close path to honor the signal)
+- DELETE: `agent/services/emergency.py`
+- DELETE: `tests/unit/test_emergency.py`
+- Create: `tests/unit/test_bot_tts_sanitizer.py`
+- Create: `tests/integration/test_transfer_emergency_endpoint.py`
 
-Emergency: a Pipecat `FrameProcessor` subclass `EmergencyInterceptor` that watches `TranscriptionFrame`s. On `emergency.detect(text) == True`, it (a) cancels the pipeline (`PipelineFrame.STOP`), (b) signals the server via shared `asyncio.Event` or a per-call signal dict that this call should be transferred. The server, on detecting the signal, returns a fresh `<Response><Dial>{branch.emergency_contact}</Dial></Response>` via the `/transfer-emergency/{call_id}` endpoint OR by closing the WebSocket cleanly and letting Vobiz fall through to a configured fallback URL — voice-agent-engineer confirms the Vobiz semantics in TDD with one probe call before locking the mechanism.
+**No keyword interceptor exists.** Transfer trigger is the `request_human_transfer` LLM tool (Task 7). This task wires the *response* side: TTS sanitizer between LLM and TTS, and the server endpoint Vobiz fetches when the signal is set.
 
-TTS sanitizer: a `FrameProcessor` between LLM and TTS that catches `TextFrame`s, runs `sanitize_for_tts(text)`, replaces `frame.text`. Honors CLAUDE.md RULE 6.
+TTS sanitizer: a Pipecat `FrameProcessor` between LLM and TTS that catches `TextFrame`s, runs `sanitize_for_tts(text)`, replaces `frame.text`. Honors CLAUDE.md RULE 6.
 
-- [ ] **Step 1: Write failing test**
+`/transfer-emergency/{call_id}`: GET (Vobiz fetches via `Redirect` verb or via fallback `/initiate-transfer` REST — voice-agent-engineer probes which mechanism Vobiz supports mid-call and locks the choice in TDD; see TD-PIPECAT-06). Returns `<Response><Dial>{branch.emergency_contact}</Dial></Response>` when the signal map for `call_id` has `transfer_requested=True` and the corresponding branch row is resolvable; else 404.
+
+`_transfer_signals` signal map: module-level `dict[str, bool]` in `agent/server.py`. Bot (Task 7 handler) imports and sets `_transfer_signals[call_id] = True`. Server reads and clears on `/transfer-emergency` fetch or on WebSocket close.
+
+- [ ] **Step 1: Write failing tests**
 
 ```python
-# tests/unit/test_bot_interceptors.py
+# tests/unit/test_bot_tts_sanitizer.py
 import pytest
-from unittest.mock import AsyncMock, MagicMock
-
-@pytest.mark.asyncio
-async def test_emergency_interceptor_fires_on_keyword():
-    from agent.bot import EmergencyInterceptor
-    from pipecat.frames.frames import TranscriptionFrame
-    signal = MagicMock()
-    interceptor = EmergencyInterceptor(emergency_signal=signal, branch_emergency_contact="+919000000000")
-    frame = TranscriptionFrame(text="నాకు గుండె నొప్పి వస్తోంది", user_id="user", timestamp="t")
-    await interceptor.process_frame(frame, direction="downstream")
-    signal.set.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_tts_sanitizer_strips_markdown():
@@ -623,29 +720,76 @@ async def test_tts_sanitizer_strips_markdown():
     out = await proc.process_frame(frame, direction="downstream")
     assert "**" not in out.text
     assert "#" not in out.text
+
+@pytest.mark.asyncio
+async def test_tts_sanitizer_passes_non_text_frames_through():
+    from agent.bot import TtsSanitizerProcessor
+    from pipecat.frames.frames import StartFrame
+    proc = TtsSanitizerProcessor()
+    frame = StartFrame()
+    out = await proc.process_frame(frame, direction="downstream")
+    assert out is frame  # passthrough
 ```
 
-- [ ] **Step 2: Run test — verify failure**
+```python
+# tests/integration/test_transfer_emergency_endpoint.py
+import pytest
+from fastapi.testclient import TestClient
 
-- [ ] **Step 3: Implement `EmergencyInterceptor` and `TtsSanitizerProcessor` in `agent/bot.py`. Wire both into `Pipeline([...])` between STT/aggregator and LLM (emergency) and between LLM and TTS (sanitizer).**
+@pytest.fixture
+def client_with_signal(monkeypatch):
+    from agent import server
+    server._transfer_signals.clear()
+    server._transfer_signals["CALL_TEST_ABC"] = True
+    # Stub branch lookup to return a known emergency contact
+    async def fake_resolve(call_id: str) -> str | None:
+        return "+919876543210" if call_id == "CALL_TEST_ABC" else None
+    monkeypatch.setattr(server, "resolve_branch_emergency_contact", fake_resolve)
+    return TestClient(server.app)
 
-- [ ] **Step 4: Add `/transfer-emergency/{call_id}` to `agent/server.py` returning `<Response><Dial>{emergency_contact}</Dial></Response>`. Add server-side per-call signal map keyed by `call_id`. Bot triggers it on emergency; server polls/awaits when closing the WebSocket.**
+def test_transfer_emergency_returns_dial_xml_for_signalled_call(client_with_signal):
+    r = client_with_signal.get("/transfer-emergency/CALL_TEST_ABC")
+    assert r.status_code == 200
+    assert "application/xml" in r.headers["content-type"] or "text/xml" in r.headers["content-type"]
+    assert "<Dial>+919876543210</Dial>" in r.text
 
-- [ ] **Step 5: Run tests — verify GREEN**
+def test_transfer_emergency_404_for_unsignalled_call(client_with_signal):
+    r = client_with_signal.get("/transfer-emergency/CALL_UNKNOWN")
+    assert r.status_code == 404
+```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 2: Run tests — verify failure**
+
+- [ ] **Step 3: Delete `agent/services/emergency.py` and `tests/unit/test_emergency.py`. Search for any `from agent.services.emergency import ...` references in `agent/bot.py`, `agent/server.py`, anywhere else — remove them. Run full test suite to confirm no other test depends on the removed module.**
 
 ```
-git add agent/bot.py agent/server.py tests/unit/test_bot_interceptors.py
-git commit -m "feat(agent): emergency keyword interceptor + TTS sanitizer processors
+git rm agent/services/emergency.py tests/unit/test_emergency.py
+pytest tests/ -x
+```
 
-- EmergencyInterceptor watches TranscriptionFrames, fires asyncio.Event
-  on keyword match, stops pipeline. Per feedback-emergency-transfer
-  memory: live call transferred to branch.emergency_contact via <Dial>.
-- TtsSanitizerProcessor runs sanitize_for_tts() on every TextFrame
-  before TTS (CLAUDE.md RULE 6)
-- /transfer-emergency/{call_id} returns <Dial> XML
-- Per-call signal map keyed by call_id in agent/server.py"
+- [ ] **Step 4: Implement `TtsSanitizerProcessor` in `agent/bot.py` (a `FrameProcessor` subclass; `process_frame` returns the modified `TextFrame` for text frames, passthrough for others). Wire it in the `Pipeline([transport.input(), stt, user_agg, llm, assistant_agg, TtsSanitizerProcessor(), tts, transport.output()])`.**
+
+- [ ] **Step 5: Implement `_transfer_signals` module-level dict + `resolve_branch_emergency_contact(call_id)` helper + `GET /transfer-emergency/{call_id}` route in `agent/server.py`. Route returns XML when the signal is set and branch resolved, 404 otherwise. Clear the signal after returning.**
+
+- [ ] **Step 6: Run tests — verify GREEN**
+
+- [ ] **Step 7: Commit**
+
+```
+git add agent/bot.py agent/server.py tests/unit/test_bot_tts_sanitizer.py tests/integration/test_transfer_emergency_endpoint.py
+git rm agent/services/emergency.py tests/unit/test_emergency.py
+git commit -m "feat(agent): TTS sanitizer + transfer-emergency endpoint; delete emergency.py
+
+- TtsSanitizerProcessor wraps every TextFrame in sanitize_for_tts() before
+  reaching TTS (CLAUDE.md RULE 6)
+- /transfer-emergency/{call_id} returns <Response><Dial>{branch.emergency_contact}</Dial></Response>
+  when bot has set the per-call transfer_requested signal; 404 otherwise
+- _transfer_signals module dict in agent/server.py; bot writes, server reads
+- DELETED agent/services/emergency.py (keyword detector) + paired tests.
+  Vachanam scope is dental + skin + diagnostics (project-clinic-scope);
+  human transfer is intent-based via the request_human_transfer LLM tool
+  (feedback-emergency-transfer 2026-06-07). No keyword detection anywhere
+  in the codebase."
 ```
 
 ---
