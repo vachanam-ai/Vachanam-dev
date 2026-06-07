@@ -492,7 +492,7 @@ async def start(body: _StartRequest) -> JSONResponse:
 
     Returns the upstream Vobiz JSON response body verbatim.
 
-    TODO: Add per-minute outbound rate limiting via slowapi (TD-PIPECAT-XX).
+    TODO: Add per-minute outbound rate limiting via slowapi (TD-037).
     Privacy: `to` is logged as last-4 digits only.
     Auth: NEVER log X-Auth-Token (guardrail 4); only auth_id is logged.
     """
@@ -519,30 +519,51 @@ async def start(body: _StartRequest) -> JSONResponse:
         # auth_token NEVER logged
     )
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            vobiz_url,
-            headers={
-                "X-Auth-ID": auth_id,
-                "X-Auth-Token": auth_token,
-                "Content-Type": "application/json",
-            },
-            json={
-                "from": from_number,
-                "to": to,
-                "answer_url": answer_url,
-                "answer_method": "POST",
-            },
-        ) as resp:
-            resp.raise_for_status()
-            vobiz_data: dict = await resp.json()
-
-    logger.info(
-        "outbound_call_queued",
-        to_last4=to[-4:],
-        call_id=vobiz_data.get("call_id", "unknown"),
-    )
-    return JSONResponse(vobiz_data)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                vobiz_url,
+                headers={
+                    "X-Auth-ID": auth_id,
+                    "X-Auth-Token": auth_token,
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": from_number,
+                    "to": to,
+                    "answer_url": answer_url,
+                    "answer_method": "POST",
+                },
+            ) as resp:
+                status = resp.status
+                vobiz_data: dict = await resp.json()
+        if status >= 400:
+            logger.warning(
+                "vobiz_outbound_call_rejected",
+                status=status,
+                to_last4=to[-4:],
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"vobiz_upstream_status_{status}",
+            )
+        logger.info(
+            "vobiz_outbound_call_accepted",
+            status=status,
+            to_last4=to[-4:],
+            call_id=vobiz_data.get("call_id", "unknown"),
+        )
+        return JSONResponse(content=vobiz_data, status_code=status)
+    except aiohttp.ClientError as e:
+        logger.error(
+            "vobiz_outbound_call_network_error",
+            error=str(e),
+            to_last4=to[-4:],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="vobiz_unreachable",
+        ) from e
 
 
 @app.get("/transfer-emergency/{call_id}")
