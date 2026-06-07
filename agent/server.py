@@ -18,14 +18,23 @@ from typing import Annotated
 from xml.sax.saxutils import escape
 
 import structlog
-from fastapi import FastAPI, Form, WebSocket
+from fastapi import FastAPI, Form, HTTPException, WebSocket
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy import select
 
 import backend.config as _cfg
+from backend.database import AsyncSessionLocal
+from backend.models.schema import Branch
 
 logger = structlog.get_logger()
 
 app = FastAPI(title="Vachanam Voice Agent", version="0.1.0")
+
+# ─── Transfer signal map ───────────────────────────────────────────────────────
+# Set by agent/bot.py:make_request_human_transfer_handler when the LLM tool fires.
+# Cleared (popped) by the /transfer-emergency/{call_id} route on successful read.
+# Keyed by call_id (str). Value is always True when present.
+_transfer_signals: dict[str, bool] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +97,68 @@ def _build_answer_xml(
         "</Response>"
     )
     return xml
+
+
+# ---------------------------------------------------------------------------
+# Branch emergency-contact resolver
+# ---------------------------------------------------------------------------
+
+
+async def resolve_branch_emergency_contact(call_id: str) -> str | None:
+    """Look up branch.emergency_contact for a given call_id.
+
+    Uses the call_id → DID mapping maintained by agent/bot.py:run_pipeline
+    (written on pipeline entry, deleted on exit). Then opens a fresh DB session
+    to query the Branch row by did_number.
+
+    Opens + closes its own AsyncSession (this runs in an HTTP request context,
+    not the WebSocket pipeline context). Follows CLAUDE.md RULE 5: branch
+    identity comes from dialed DID, never from caller phone.
+
+    Returns emergency_contact string or None if call_id is unknown / DID not
+    mapped to a branch / branch has no emergency_contact configured.
+
+    PII policy: emergency_contact full number is NEVER logged. Only last-4 is
+    recorded in any structlog event emitted here.
+    """
+    # Import here to avoid circular import at module load time
+    from agent.bot import _call_id_to_did
+
+    did = _call_id_to_did.get(call_id)
+    if not did:
+        logger.warning(
+            "resolve_branch_no_did_mapping",
+            call_id=call_id,
+        )
+        return None
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Branch).where(Branch.did_number == did)
+        )
+        branch = result.scalar_one_or_none()
+
+    if branch is None:
+        logger.warning(
+            "resolve_branch_unknown_did",
+            did_last4=did[-4:] if did else "unknown",
+        )
+        return None
+
+    contact = branch.emergency_contact
+    if not contact:
+        logger.warning(
+            "resolve_branch_no_emergency_contact",
+            branch_id=str(branch.id),
+        )
+        return None
+
+    logger.info(
+        "resolve_branch_emergency_contact_found",
+        branch_id=str(branch.id),
+        contact_last4=contact[-4:],
+    )
+    return contact
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +244,26 @@ async def recording_ready() -> JSONResponse:
 
 
 @app.get("/transfer-emergency/{call_id}")
-async def transfer_emergency(call_id: str) -> JSONResponse:
+async def transfer_emergency(call_id: str) -> Response:
     """
     Vobiz fetches this when request_human_transfer LLM tool fires for a call.
-    Returns <Dial> XML pointing at branch.emergency_contact. Filled in Task 8.
+    Returns <Dial> XML pointing at branch.emergency_contact. 404 when no signal
+    or branch is unresolvable. The signal is popped on read (single-use).
     """
-    return JSONResponse({"error": "not_implemented"}, status_code=501)
+    if not _transfer_signals.pop(call_id, False):
+        logger.info("transfer_emergency_no_signal", call_id=call_id)
+        raise HTTPException(status_code=404, detail="no transfer signal for call_id")
+
+    emergency_contact = await resolve_branch_emergency_contact(call_id)
+    if not emergency_contact:
+        logger.warning("transfer_emergency_unresolved", call_id=call_id)
+        raise HTTPException(status_code=404, detail="branch not resolvable for call_id")
+
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Response>\n'
+        f'  <Dial>{escape(emergency_contact)}</Dial>\n'
+        '</Response>'
+    )
+    logger.info("transfer_emergency_dial_returned", call_id=call_id, contact_last4=emergency_contact[-4:])
+    return Response(content=xml, media_type="application/xml")

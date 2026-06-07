@@ -59,6 +59,7 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.llm_service import FunctionCallParams  # noqa: F401 — used by handlers
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.frames.frames import AudioRawFrame, Frame, TextFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineWorker, PipelineParams  # PipelineTask deprecated
 from pipecat.pipeline.runner import WorkerRunner  # PipelineRunner deprecated
@@ -67,6 +68,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transcriptions.language import Language
 
 from agent.services.tts_sanitizer import sanitize_for_tts
@@ -76,6 +78,57 @@ from backend.database import AsyncSessionLocal
 from backend.models.schema import Branch, Doctor
 
 logger = structlog.get_logger()
+
+# ─── Call-ID → DID mapping ────────────────────────────────────────────────────
+# Populated by run_pipeline on entry; deleted on exit (finally block).
+# Used by server.py:resolve_branch_emergency_contact to look up the branch for
+# a transfer-emergency request without needing to re-query by call_id directly.
+# Lifecycle: run_pipeline entry → _call_id_to_did[call_id] = did
+#            run_pipeline finally → del _call_id_to_did[call_id]
+_call_id_to_did: dict[str, str] = {}
+
+
+# ─── TTS sanitizer processor ──────────────────────────────────────────────────
+
+
+class TtsSanitizerProcessor(FrameProcessor):
+    """Pipecat FrameProcessor that sanitizes TextFrame text before it reaches TTS.
+
+    Sits between the LLM assistant aggregator and the TTS service in the pipeline.
+    Intercepts every TextFrame and replaces its text with sanitize_for_tts(text),
+    stripping markdown, hash-number patterns, emojis, and other artifacts that
+    produce bad audio output on the phone.
+
+    Non-TextFrame frames pass through unchanged — identity passthrough.
+
+    CLAUDE.md RULE 6: every TTS string goes through sanitize_for_tts(). This
+    processor enforces that rule at the pipeline level so no call-site can forget.
+
+    Pipeline position (per spec §3.1 + Task 8):
+      ... -> LLM -> LLMAssistantAggregator -> TtsSanitizerProcessor() -> TTS -> ...
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        """Intercept TextFrame and sanitize its text; pass all other frames through.
+
+        Calls super().process_frame() first to let the base class handle
+        infrastructure frames (StartFrame lifecycle, CancelFrame, etc.).
+        Then pushes the frame downstream — sanitized for TextFrame, unchanged
+        for everything else.
+
+        Args:
+            frame: The pipeline frame to process.
+            direction: Direction of frame flow (typically FrameDirection.DOWNSTREAM).
+        """
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, TextFrame):
+            frame.text = sanitize_for_tts(frame.text)
+
+        await self.push_frame(frame, direction)
 
 
 # ─── Branch resolution ────────────────────────────────────────────────────────
@@ -793,6 +846,11 @@ async def run_pipeline(
         patient_phone=caller,
     )
 
+    # Populate call_id → DID mapping so server.py can resolve the branch
+    # for /transfer-emergency/{call_id} without re-querying by call_id directly.
+    # Lifecycle: written here on entry; deleted in finally below.
+    _call_id_to_did[call_id] = did
+
     db: AsyncSession = AsyncSessionLocal()
     try:
         # ── 1. Resolve branch from dialed DID (RULE 5) ────────────────────
@@ -861,6 +919,8 @@ async def run_pipeline(
         )
 
         # ── 7. Build pipeline ─────────────────────────────────────────────────
+        # TtsSanitizerProcessor sits between assistant aggregator and TTS.
+        # CLAUDE.md RULE 6: every TextFrame reaching TTS must be sanitized.
         pipeline = Pipeline(
             [
                 transport.input(),
@@ -868,6 +928,7 @@ async def run_pipeline(
                 agg_pair.user(),
                 llm,
                 agg_pair.assistant(),
+                TtsSanitizerProcessor(),
                 tts,
                 transport.output(),
             ]
@@ -906,6 +967,9 @@ async def run_pipeline(
         # (the stub checks token_held before doing anything with redis_client).
         # For Task 6 we call the stub — Task 9 passes the real client from /ws.
         await release_token_on_disconnect(state, redis_client=None)
+
+        # Clean up call_id → DID mapping. Safe to call even if populate failed.
+        _call_id_to_did.pop(call_id, None)
 
         await db.close()
         logger.info(
