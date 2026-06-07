@@ -32,7 +32,6 @@ CLAUDE.md rules enforced here:
 from __future__ import annotations
 
 import uuid
-import warnings
 from datetime import datetime
 from typing import Any
 
@@ -194,6 +193,8 @@ async def release_token_on_disconnect(
     The stub exists here so Task 9 has a stable import target and tests can
     assert the function is async (see test_bot_pipeline_builder.py).
     """
+    if redis_client is None:
+        return
     if state.token_held and not state.token_confirmed and state.token_redis_key:
         await redis_client.decr(state.token_redis_key)
         logger.warning(
@@ -343,10 +344,7 @@ async def run_pipeline(
         # ── 8. Run pipeline ───────────────────────────────────────────────────
         # PipelineTask is deprecated in 1.3.0; use PipelineWorker + WorkerRunner.
         # handle_sigint=False: we are embedded in FastAPI, not a standalone process.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            worker = PipelineWorker(pipeline)
-
+        worker = PipelineWorker(pipeline)
         runner = WorkerRunner(handle_sigint=False)
         runner.add_workers(worker)
         await runner.run()
