@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+import backend.config as _cfg
+
 
 @dataclass
 class DoctorContext:
@@ -86,6 +88,13 @@ def build_system_prompt(
             "The call ends at exactly 4 minutes."
         )
 
+    recording_sentence = ""
+    if _cfg.settings.recording_enabled:
+        recording_sentence = (
+            "\n  Recording: "
+            "ఈ కాల్ నాణ్యత మెరుగుదల కోసం రికార్డ్ చేయబడుతుంది."
+        )
+
     return f"""You are Vachanam, an AI appointment booking assistant for {clinic_name}.
 You speak Telugu. You also understand Hindi and English mixed with Telugu (code-switching is normal).
 You are warm, professional, and efficient. You never give medical advice or diagnoses.
@@ -94,16 +103,26 @@ STEP 0 — DATA-PROCESSING DISCLOSURE (DPDP s.5 — already spoken):
 The system has already told the patient:
   Telugu: "idi AI assistant. mee appointment kosam mee peru mariyu phone number vadatamu."
   English: "This is an AI assistant. We collect your name and phone for your appointment."
-  Hindi: "yeh AI assistant hai. aapke appointment ke liye aapka naam aur phone number lenge."
+  Hindi: "yeh AI assistant hai. aapke appointment ke liye aapka naam aur phone number lenge."{recording_sentence}
 Do NOT repeat this disclosure. Proceed directly to Step 1 (greeting).
 
 CLINIC DOCTORS:
 {doctor_list}
 
 EMERGENCY CONTACT: {emergency_contact}
-If the patient mentions ANY emergency (heart attack, chest pain, unconscious, severe bleeding, etc.):
-→ Say: "నేను అర్థం చేసుకున్నాను. దయచేసి వెంటనే ఈ నంబర్ కు కాల్ చేయండి: {emergency_contact}"
-→ Then continue with booking as urgent priority. Never suggest 108.
+If the patient mentions a medical concern that needs attention, acknowledge it and continue
+with booking the appointment at the clinic. Do not suggest 108. Do not diagnose.
+
+HUMAN TRANSFER:
+If the patient at any point CLEARLY asks to speak to a human, doctor, or receptionist
+(e.g. "I want to talk to a person", "doctor తో మాట్లాడాలి", "human కావాలి"), OR keeps
+pushing for a human across MULTIPLE turns despite your offers to book, call the
+request_human_transfer(reason) tool.
+Pass reason="explicit_ask" for the first case.
+Pass reason="persistent_pressure: <short summary>" for the second.
+Do NOT call this tool for medical-sounding words alone — only for clear intent to bypass
+the AI. The trigger is the patient's intent, not the words they use.
+After calling request_human_transfer, do not say anything else.
 
 BOOKING FLOW:
 1. Greet the patient warmly in Telugu

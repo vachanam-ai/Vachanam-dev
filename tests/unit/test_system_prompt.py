@@ -177,3 +177,49 @@ def test_system_prompt_rebook_instruction_present():
     """Rebook instruction still present when is_rebook=True."""
     prompt = _make_prompt(is_rebook=True, cancelled_date="2026-06-01")
     assert "REBOOKING" in prompt
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Task 4: Recording disclosure (gated) + human-transfer trigger (unconditional)
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_step_0_includes_recording_notice_when_enabled(monkeypatch):
+    """When recording_enabled=True, Step 0 must include the Telugu recording sentence."""
+    monkeypatch.setattr("backend.config.settings.recording_enabled", True)
+    prompt = build_system_prompt(
+        clinic_name="Test Clinic",
+        doctors=[],
+        emergency_contact="+919000000000",
+        plan="clinic",
+    )
+    assert "రికార్డ్" in prompt
+
+
+def test_step_0_omits_recording_notice_when_disabled(monkeypatch):
+    """When recording_enabled=False (default), the recording sentence must be absent."""
+    monkeypatch.setattr("backend.config.settings.recording_enabled", False)
+    prompt = build_system_prompt(
+        clinic_name="Test Clinic",
+        doctors=[],
+        emergency_contact="+919000000000",
+        plan="clinic",
+    )
+    assert "రికార్డ్" not in prompt
+
+
+def test_prompt_includes_transfer_trigger_instructions():
+    """Prompt body must instruct LLM to call request_human_transfer on explicit ask
+    or persistent pressure; must NOT list medical keywords as triggers."""
+    prompt = build_system_prompt(
+        clinic_name="Test Clinic",
+        doctors=[],
+        emergency_contact="+919000000000",
+        plan="clinic",
+    )
+    assert "request_human_transfer" in prompt
+    assert "explicit_ask" in prompt
+    assert "persistent_pressure" in prompt
+    # Must NOT instruct keyword-based transfer — LLM judges intent, not keywords
+    assert "chest pain" not in prompt.lower()
+    assert "heart attack" not in prompt.lower()
