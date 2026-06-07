@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import urllib.parse
 from typing import Annotated
+from xml.sax.saxutils import escape
 
 import structlog
 from fastapi import FastAPI, Form, WebSocket
@@ -74,7 +75,7 @@ def _build_answer_xml(
     if recording_enabled:
         record_action = f"{public_url.rstrip('/')}/recording-finished"
         record_block = (
-            f'\n  <Record action="{record_action}" recordSession="true"'
+            f'\n  <Record action="{escape(record_action)}" recordSession="true"'
             f' maxLength="3600" fileFormat="mp3"/>'
         )
 
@@ -82,7 +83,7 @@ def _build_answer_xml(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
         '  <Speak voice="WOMAN" language="te-IN">Hello</Speak>\n'
-        f'  <Stream bidirectional="true" contentType="audio/x-mulaw;rate=8000">{ws_url}</Stream>'
+        f'  <Stream bidirectional="true" contentType="audio/x-mulaw;rate=8000">{escape(ws_url)}</Stream>'
         f"{record_block}\n"
         "</Response>"
     )

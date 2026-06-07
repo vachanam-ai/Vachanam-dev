@@ -41,3 +41,18 @@ def test_answer_omits_record_when_disabled(monkeypatch):
     c = TestClient(app)
     r = c.post("/answer", data={"From": "+919999999999", "To": "+918046733493", "CallSid": "abc"})
     assert "<Record" not in r.text
+
+
+def test_answer_xml_is_wellformed(client):
+    import xml.etree.ElementTree as ET
+    r = client.post("/answer", data={"From": "+919999999999", "To": "+918046733493", "CallSid": "abc"})
+    # Must parse without raising
+    root = ET.fromstring(r.text)
+    assert root.tag == "Response"
+    # Stream child must exist and its text must contain wss://
+    stream = root.find("Stream")
+    assert stream is not None
+    assert "wss://agent-dev.vachanam.in/ws" in stream.text
+    # Query separators in the URL must be present as literal & after XML decoding (which ET.fromstring does)
+    assert "&to=" in stream.text
+    assert "&from=" in stream.text
