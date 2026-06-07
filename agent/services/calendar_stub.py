@@ -17,7 +17,7 @@ class CalendarService:
         self,
         calendar_id: str | None,
         patient_name: str,
-        patient_phone: str,
+        patient_phone: str | None,
         token_number: int,
         booking_date: date,
         appointment_time: time | None,
