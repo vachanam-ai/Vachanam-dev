@@ -8,6 +8,7 @@ Pipeline order (per spec §4 + CLAUDE.md rules):
   -> LLMUserAggregator  (VAD on aggregator per Pipecat 1.x telephony requirement)
   -> GeminiFallbackLLMService (gemini-2.5-flash primary; GPT-4o-mini fallback)
   -> LLMAssistantAggregator
+  -> TtsSanitizerProcessor (sanitize_for_tts on every TextFrame; CLAUDE.md RULE 6)
   -> SarvamTTSService (bulbul:v3, te-IN)
   -> transport.output()
 
@@ -531,7 +532,8 @@ def make_request_human_transfer_handler(
         # 3. Release held-unconfirmed token via Redis DECR. CLAUDE.md RULE 3.
         #    Confirmed tokens are NEVER released — DECR is rollback-only.
         if (
-            session_state.token_held
+            redis_client is not None
+            and session_state.token_held
             and not session_state.token_confirmed
             and session_state.token_redis_key
         ):
@@ -962,7 +964,7 @@ async def run_pipeline(
         )
         raise
     finally:
-        # Token rollback on disconnect (CLAUSE.md RULE 3).
+        # Token rollback on disconnect (CLAUDE.md RULE 3).
         # Real Redis client is wired in Task 9; stub is safe to call with None
         # (the stub checks token_held before doing anything with redis_client).
         # For Task 6 we call the stub — Task 9 passes the real client from /ws.
