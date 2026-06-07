@@ -300,7 +300,7 @@ Expected: FAIL — packages not installed.
 
 ```
 pipecat-ai[websocket,silero,openai,google,sarvam]>=1.2.0,<2
-pipecat-ai-vobiz>=0.0.3,<0.1
+pipecat-vobiz>=0.0.3,<0.1  # canonical PyPI name is pipecat-vobiz, NOT pipecat-ai-vobiz
 fastapi>=0.110
 uvicorn[standard]>=0.27
 aiohttp>=3.9
@@ -500,7 +500,15 @@ git commit -m "feat(agent): FastAPI server with /answer XML + /health
 1. Resolve `Branch` from `did` (CLAUDE.md RULE 5). Raise `ValueError` if unknown DID.
 2. Load active doctors for the branch (`select(Doctor).where(branch_id == X, status == "active")`).
 3. Build transport: `FastAPIWebsocketTransport(websocket, FastAPIWebsocketParams(add_wav_header=False, serializer=VobizFrameSerializer(), session_timeout=900))`.
-4. Build services: `SarvamSTTService(api_key, settings=Settings(model="saaras:v3", language=Language.TE_IN), keepalive_interval=5.0)`, `GoogleLLMService(api_key, model="gemini-2.5-flash")`, `SarvamTTSService(api_key, settings=Settings(model="bulbul:v3", language=Language.TE_IN, voice="anushka"))`.
+4. Build services using Pipecat 1.3.0 canonical paths (verified in Task 3 commit 825a60b):
+   - `from pipecat.services.sarvam.stt import SarvamSTTService`
+   - `from pipecat.services.sarvam.tts import SarvamTTSService`
+   - `from pipecat.services.google.llm import GoogleLLMService`
+   - `from pipecat.services.openai.llm import OpenAILLMService`
+   - `from pipecat.serializers.vobiz import parse_vobiz_start`
+   - `from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport, FastAPIWebsocketParams`
+   - `from pipecat.audio.vad.silero import SileroVADAnalyzer`
+   Then wire: Sarvam STT model `saaras:v3` language `te-IN`; `GoogleLLMService(model="gemini-2.5-flash")` wrapped in fallback adapter with `OpenAILLMService(model="gpt-4o-mini")` secondary; `SarvamTTSService(model="bulbul:v3")` Telugu voice.
 5. Build LLM context aggregator with `LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer(...))` per Pipecat 1.x.
 6. Build pipeline: `Pipeline([transport.input(), stt, user_agg, llm, assistant_agg, tts, transport.output()])`.
 7. Per-call `SessionState(branch_id=..., session_id=call_id, call_start=datetime.utcnow())`. Tools share via closure or `task.set_state()` (verify Pipecat 1.x API in TDD).

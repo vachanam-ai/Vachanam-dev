@@ -151,7 +151,7 @@ Tool handler:
 ```
 # agent/requirements.txt
 pipecat-ai[websocket,silero,openai,google,sarvam]>=1.2.0,<2
-pipecat-ai-vobiz>=0.0.3,<0.1
+pipecat-vobiz>=0.0.3,<0.1  # canonical PyPI name is pipecat-vobiz, NOT pipecat-ai-vobiz
 fastapi>=0.110
 uvicorn[standard]>=0.27
 aiohttp>=3.9
