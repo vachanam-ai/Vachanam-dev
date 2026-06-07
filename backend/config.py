@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # Voice agent (Pipecat)
     public_url: str = "http://localhost:7860"
     recording_enabled: bool = False
-    max_call_duration_seconds: int = 0  # 0 = unlimited; non-zero = wrap call at N seconds (Solo plan)
+    max_call_duration_seconds: int = 0  # 0 = unlimited; non-zero wraps call at N seconds (Solo plan billing cap)
 
     # Telephony (Vobiz Partner API + WebSocket)
     vobiz_did_number: str = ""
