@@ -252,7 +252,12 @@ async def answer(
     # ── Resolve clinic name for personalised greeting ─────────────────────────
     # Wrapped in try/except — a DB error must NEVER 500 this endpoint; Vobiz
     # needs an XML response or the call drops (guardrail 1).
-    _GENERIC_HOLD = "నమస్కారం, దయచేసి ఒక్క క్షణం వేచి ఉండండి"
+    # Fallback when branch is unknown / lookup fails: SaaS-branded greeting.
+    # TODO TD-038: per-clinic branding for pickup <Speak> message is fully
+    # implemented above (Branch.name lookup). Fallback is "Vachanam" SaaS
+    # brand — used only when the DID is not yet mapped to a Branch row
+    # (e.g. pre-onboarding test calls). See commit 27242da history.
+    _VACHANAM_FALLBACK = "నమస్కారం, Vachanam కి స్వాగతం"
     try:
         clinic_name: str | None = await resolve_branch_name_for_did(To)
     except Exception as exc:
@@ -271,8 +276,8 @@ async def answer(
             clinic_name=clinic_name,
         )
     else:
-        speak_text = escape(_GENERIC_HOLD)
-        logger.warning("answer_branch_not_found", did_last4=To[-4:])
+        speak_text = escape(_VACHANAM_FALLBACK)
+        logger.warning("answer_branch_not_found_using_saas_brand", did_last4=To[-4:])
 
     xml_body = _build_answer_xml(
         caller=From,

@@ -92,7 +92,7 @@ def test_answer_uses_clinic_name_when_branch_resolved(monkeypatch):
 
 def test_answer_falls_back_when_branch_not_found(monkeypatch):
     """When resolve_branch_name_for_did returns None,
-    the <Speak> element must contain the generic Telugu hold message."""
+    the <Speak> element must contain the SaaS-branded Vachanam greeting."""
     monkeypatch.setattr("backend.config.settings.recording_enabled", False)
     monkeypatch.setattr("backend.config.settings.public_url", "https://agent-dev.vachanam.in")
     import agent.server as server_mod
@@ -105,5 +105,17 @@ def test_answer_falls_back_when_branch_not_found(monkeypatch):
     c = TestClient(app)
     r = c.post("/answer", data={"From": "+919999999999", "To": "+918046733493", "CallSid": "abc"})
     assert r.status_code == 200
-    assert "దయచేసి ఒక్క క్షణం వేచి ఉండండి" in r.text
+    assert "Vachanam" in r.text
+    assert "నమస్కారం" in r.text
+    assert "స్వాగతం" in r.text
     assert "Pytest Clinic" not in r.text
+
+
+def test_answer_speak_uses_vachanam_branding(client):
+    """Default fixture stubs resolve_branch_name_for_did to None — verify
+    the SaaS Vachanam-branded greeting is emitted on the pickup XML."""
+    r = client.post("/answer", data={"From": "+919999999999", "To": "+918046733493", "CallSid": "abc"})
+    assert r.status_code == 200
+    assert "Vachanam" in r.text
+    assert "నమస్కారం" in r.text
+    assert "స్వాగతం" in r.text
