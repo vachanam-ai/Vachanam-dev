@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str
+    test_database_url: str = "postgresql+asyncpg://vachanam:localdev123@localhost:5432/vachanam_test"  # MUST be a separate DB from database_url; conftest enforces
 
     # Redis
     redis_url: str
