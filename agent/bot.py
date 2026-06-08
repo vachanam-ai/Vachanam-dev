@@ -804,19 +804,29 @@ async def release_token_on_disconnect(
 
 async def run_pipeline(
     websocket: Any,
-    call_id: str,
-    did: str,
-    caller: str,
     redis_client: Any = None,
 ) -> None:
     """Run the per-call Pipecat pipeline.
 
     One invocation per inbound WebSocket connection. Called from agent/server.py:/ws.
+    The WebSocket is already accepted by the /ws handler before this is called.
+
+    Call identity (call_id, dialed DID, caller phone) is extracted from the
+    Vobiz start event — the first WebSocket message — via parse_vobiz_start().
+    This is the Vobiz-native pattern: caller info is NOT in the WS URL.
+
+    DID extraction: the Vobiz start event payload (raw.start) does not currently
+    expose the dialed DID directly. We check raw.start.to / raw.start.called /
+    raw.start.customParameters.to as best-effort. If absent, we fall back to
+    settings.vobiz_did_number (env var = the platform-owned DID for this
+    agent instance). The fallback is logged at WARNING so single-DID dev
+    continues working cleanly. TD-039: 1-app-per-DID at multi-clinic scale.
+
     Opens its own DB session; closes it in finally regardless of outcome.
     Token release on disconnect is wired in the finally block via
     release_token_on_disconnect (CLAUDE.md RULE 3).
 
-    CLAUDE.md RULE 5: branch resolved from dialed DID (did param), never from caller.
+    CLAUDE.md RULE 5: branch resolved from dialed DID, never from caller.
     CLAUDE.md RULE 1: Doctor query filters by branch_id.
     CLAUDE.md RULE 10: structlog on call_started, branch_resolved, pipeline_built.
 
@@ -832,9 +842,7 @@ async def run_pipeline(
 
     Args:
         websocket: FastAPI WebSocket connection from the /ws endpoint.
-        call_id: Vobiz call identifier, passed as query param ?call_id=X.
-        did: Dialed DID number (the clinic's phone number), from ?to=DID query param.
-        caller: Caller's phone number (masked in logs), from ?from=CALLER query param.
+                   Must already be accepted (server.py:/ws calls accept() first).
         redis_client: Optional async Redis client (aioredis). Opened by server.py:/ws
             before calling run_pipeline; closed by server.py:/ws after return.
             Passed to register_tools (assign_token + transfer handler) and to
@@ -849,11 +857,46 @@ async def run_pipeline(
         point both modules are fully loaded. This is a well-established Python pattern
         for breaking import cycles in module-level-dict sharing scenarios.
     """
+    # ── 0. Parse Vobiz start event to get call_id and caller info ────────────
+    # parse_vobiz_start reads exactly one WS text message (the start frame).
+    # Subsequent media frames remain queued for the Pipecat transport to consume.
+    from pipecat.serializers.vobiz import parse_vobiz_start  # noqa: PLC0415 (deferred — avoids load-time side-effects)
+
+    start_info = await parse_vobiz_start(websocket)
+    call_id: str = start_info.get("call_id") or f"unknown-{id(websocket)}"
+    stream_id: str = start_info.get("stream_id") or call_id
+
+    # Extract dialed DID from start event raw payload.
+    # Vobiz may expose it as raw.start.to or raw.start.customParameters.to.
+    # If absent, fall back to settings.vobiz_did_number (single-DID dev model).
+    # TD-039: 1-app-per-DID lookup needed for multi-clinic scale.
+    raw_start: dict = (start_info.get("raw") or {}).get("start") or {}
+    custom_params: dict = raw_start.get("customParameters") or {}
+    did: str = (
+        raw_start.get("to")
+        or custom_params.get("to")
+        or ""
+    )
+    if not did:
+        did = settings.vobiz_did_number
+        logger.warning(
+            "run_pipeline_did_not_in_start_event_using_settings_fallback",
+            call_id=call_id,
+            did_last4=did[-4:] if did else "????",
+        )
+
+    # Extract caller phone from start event raw payload (best-effort, logging only).
+    caller: str = (
+        raw_start.get("from")
+        or custom_params.get("from")
+        or ""
+    )
+
     logger.info(
         "call_started",
         call_id=call_id,
-        did=did[-4:],
-        caller=caller[-4:] if caller else "unknown",
+        did_last4=did[-4:] if did else "????",
+        caller_last4=caller[-4:] if caller else "unknown",
     )
 
     # Per-call state — never module-level (CLAUDE.md guardrail)
@@ -901,10 +944,11 @@ async def run_pipeline(
         doctors = result.scalars().all()
 
         # ── 3. Build transport (add_wav_header=False is non-negotiable) ──────
+        # stream_id and call_id come from parse_vobiz_start (start of this function).
         transport = build_transport(
             websocket=websocket,
             public_url=settings.public_url,
-            stream_id=call_id,
+            stream_id=stream_id,
             call_id=call_id,
         )
 
@@ -1010,6 +1054,15 @@ async def run_pipeline(
 
         # Clean up call_id → DID mapping. Safe to call even if populate failed.
         _call_id_to_did.pop(call_id, None)
+
+        # Clean up transfer signal for this call. Deferred import avoids a circular
+        # import at module load time (same pattern as the try-block import above).
+        # Safe even if the try-block import never ran (e.g. exception before that line).
+        try:
+            from agent.server import _transfer_signals  # noqa: PLC0415 (deferred — see docstring)
+            _transfer_signals.pop(call_id, None)
+        except Exception:
+            pass  # Non-fatal — server may not be initialised in test contexts
 
         await db.close()
         logger.info(

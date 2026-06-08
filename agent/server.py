@@ -14,7 +14,6 @@ Endpoints:
 from __future__ import annotations
 
 import re
-import urllib.parse
 from pathlib import Path
 from typing import Annotated, Optional
 from xml.sax.saxutils import escape
@@ -22,7 +21,7 @@ from xml.sax.saxutils import escape
 import aiohttp
 import structlog
 import redis.asyncio as aioredis
-from fastapi import FastAPI, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Form, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -53,12 +52,17 @@ _transfer_signals: dict[str, bool] = {}
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_ws_url(public_url: str, call_sid: str, caller: str, did: str) -> str:
+def _build_ws_url(public_url: str) -> str:
     """
-    Convert PUBLIC_URL to a WebSocket URL and append query params.
+    Convert PUBLIC_URL to a bare WebSocket URL (no query params).
 
-    https://agent-dev.vachanam.in  →  wss://agent-dev.vachanam.in/ws?...
-    http://localhost:7860           →  ws://localhost:7860/ws?...
+    Vobiz does NOT read caller identity from the WS URL query string.
+    Caller info (call_uuid, dialed DID, caller phone) arrives in the first
+    WebSocket message (Vobiz "start event"), parsed by
+    pipecat.serializers.vobiz inside bot.run_pipeline.
+
+    https://agent-dev.vachanam.in  →  wss://agent-dev.vachanam.in/ws
+    http://localhost:7860           →  ws://localhost:7860/ws
     """
     base = public_url.rstrip("/")
     if base.startswith("https://"):
@@ -69,46 +73,48 @@ def _build_ws_url(public_url: str, call_sid: str, caller: str, did: str) -> str:
         # No scheme — default to ws:// (dev fallback)
         ws_base = f"ws://{base}"
 
-    encoded_caller = urllib.parse.quote_plus(caller)
-    encoded_did = urllib.parse.quote_plus(did)
-    return (
-        f"{ws_base}/ws"
-        f"?call_id={urllib.parse.quote_plus(call_sid)}"
-        f"&to={encoded_did}"
-        f"&from={encoded_caller}"
-    )
+    return f"{ws_base}/ws"
 
 
 def _build_answer_xml(
-    caller: str,
-    did: str,
-    call_sid: str,
     public_url: str,
     recording_enabled: bool,
     speak_text: str,
 ) -> str:
     """
-    Build the Vobiz TwiML-compatible XML response for POST /answer.
-    All string args are already validated by FastAPI Form parsing.
+    Build the Vobiz XML response for /answer.
 
     speak_text must already be XML-escaped by the caller (use escape() from
     xml.sax.saxutils). This keeps the builder pure / testable.
+
+    Stream tag uses bare WS URL — no query params. Caller identity arrives in
+    the Vobiz start event (first WebSocket message), not in the URL.
+
+    Vobiz-specific Stream attributes (from official Vobiz-X-Pipecat reference):
+      audioTrack="inbound"    — stream the inbound audio channel
+      keepCallAlive="true"    — keep the call alive while the WebSocket is open
+
+    Record tag uses Vobiz attribute naming:
+      callbackUrl    — NOT Twilio's "action"
+      callbackMethod — POST
+      fileFormat     — wav (Vobiz reference uses wav, not mp3)
     """
-    ws_url = _build_ws_url(public_url, call_sid, caller, did)
+    ws_url = _build_ws_url(public_url)
 
     record_block = ""
     if recording_enabled:
-        record_action = f"{public_url.rstrip('/')}/recording-finished"
+        callback_url = f"{public_url.rstrip('/')}/recording-ready"
         record_block = (
-            f'\n  <Record action="{escape(record_action)}" recordSession="true"'
-            f' maxLength="3600" fileFormat="mp3"/>'
+            f'\n  <Record callbackUrl="{escape(callback_url)}" callbackMethod="POST"'
+            f' recordSession="true" maxLength="3600" fileFormat="wav"/>'
         )
 
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
         f'  <Speak voice="WOMAN" language="te-IN">{speak_text}</Speak>\n'
-        f'  <Stream bidirectional="true" contentType="audio/x-mulaw;rate=8000">{escape(ws_url)}</Stream>'
+        f'  <Stream bidirectional="true" audioTrack="inbound" contentType="audio/x-mulaw;rate=8000"'
+        f' keepCallAlive="true">{escape(ws_url)}</Stream>'
         f"{record_block}\n"
         "</Response>"
     )
@@ -223,18 +229,30 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/answer")
+@app.api_route("/answer", methods=["GET", "POST"])
 async def answer(
-    From: Annotated[str, Form()],
-    To: Annotated[str, Form()],
-    CallSid: Annotated[str, Form()],
+    request: Request,
+    CallUUID: str | None = Query(None),
+    body_data: str | None = Query(None),
 ) -> Response:
     """
-    Vobiz calls this URL (POST, application/x-www-form-urlencoded) when a call arrives.
-    Returns XML telling Vobiz to speak a greeting, open a bidirectional WebSocket stream,
-    and optionally record the session.
+    Vobiz webhook — called when an inbound call arrives on the DID.
 
-    Privacy: only the last 4 digits of From/To are logged.
+    Accepts both GET and POST (Vobiz may use either depending on app config).
+    Caller identity is NOT available here — Vobiz does NOT send Twilio-style
+    From/To/CallSid Form fields. The call UUID is passed as the `CallUUID`
+    query param. An optional `body_data` query param carries base64-encoded JSON
+    (Vobiz extended payload — parsed if needed in future).
+
+    Branch resolution: uses settings.vobiz_did_number (env var = the
+    platform-owned DID for this agent instance). Single-DID dev model.
+    Multi-clinic at scale: TD-039 (1 Voice App per DID, look up by app ID).
+
+    Returns XML with <Speak>, <Stream>, and optionally <Record>.
+    This endpoint MUST NEVER return 5xx — Vobiz needs XML or the call drops.
+    All branch lookup + body parsing is wrapped in try/except (guardrail 1).
+
+    Privacy: full DID is never logged; only did_last4.
     """
     # Read settings fresh per request (not at module import time) so that
     # monkeypatch in tests can override them reliably.
@@ -243,27 +261,28 @@ async def answer(
 
     logger.info(
         "answer_received",
-        caller_last4=From[-4:],
-        did_last4=To[-4:],
-        call_sid=CallSid,
+        call_uuid=CallUUID,
+        method=request.method,
         recording_enabled=recording_enabled,
     )
 
     # ── Resolve clinic name for personalised greeting ─────────────────────────
-    # Wrapped in try/except — a DB error must NEVER 500 this endpoint; Vobiz
-    # needs an XML response or the call drops (guardrail 1).
-    # Fallback when branch is unknown / lookup fails: SaaS-branded greeting.
-    # TODO TD-038: per-clinic branding for pickup <Speak> message is fully
-    # implemented above (Branch.name lookup). Fallback is "Vachanam" SaaS
-    # brand — used only when the DID is not yet mapped to a Branch row
-    # (e.g. pre-onboarding test calls). See commit 27242da history.
+    # Branch comes from the DID configured in settings (CLAUDE.md RULE 7 /
+    # agent-persona-doc RULE 7: branch context from room metadata or env, never
+    # inferred from caller phone).
+    # Single-DID dev: settings.vobiz_did_number is authoritative.
+    # TD-039: at multi-clinic scale, switch to 1-app-per-DID + look up by
+    # Vobiz app_id so each DID maps to its own agent instance.
+    # Wrapped in try/except — DB error must NEVER 500 this endpoint.
     _VACHANAM_FALLBACK = "నమస్కారం, Vachanam కి స్వాగతం"
+    clinic_did: str = _cfg.settings.vobiz_did_number
+    did_last4: str = clinic_did[-4:] if clinic_did else "????"
     try:
-        clinic_name: str | None = await resolve_branch_name_for_did(To)
+        clinic_name: str | None = await resolve_branch_name_for_did(clinic_did)
     except Exception as exc:
-        logger.error(
+        logger.warning(
             "answer_branch_lookup_failed",
-            did_last4=To[-4:],
+            did_last4=did_last4,
             error=str(exc),
         )
         clinic_name = None
@@ -272,17 +291,14 @@ async def answer(
         speak_text = escape(f"నమస్కారం, {clinic_name} కి స్వాగతం")
         logger.info(
             "answer_branch_resolved",
-            did_last4=To[-4:],
+            did_last4=did_last4,
             clinic_name=clinic_name,
         )
     else:
         speak_text = escape(_VACHANAM_FALLBACK)
-        logger.warning("answer_branch_not_found_using_saas_brand", did_last4=To[-4:])
+        logger.warning("answer_branch_not_found_using_saas_brand", did_last4=did_last4)
 
     xml_body = _build_answer_xml(
-        caller=From,
-        did=To,
-        call_sid=CallSid,
         public_url=public_url,
         recording_enabled=recording_enabled,
         speak_text=speak_text,
@@ -299,101 +315,61 @@ async def answer(
 async def websocket_ws(websocket: WebSocket) -> None:
     """WebSocket endpoint. Vobiz connects here after /answer returns <Stream>.
 
-    Query params (all required):
-      call_id — Vobiz call identifier (maps to _call_id_to_did and _transfer_signals)
-      to      — Dialed DID number (clinic's number). CLAUDE.md RULE 5: branch
-                identity comes from DID, NEVER from caller phone.
-      from    — Caller's phone number (used only for logging, last 4 digits).
+    Vobiz does NOT put call identity in the WebSocket URL query string.
+    Caller info (call_uuid, dialed DID, caller phone) arrives in the FIRST
+    WebSocket message (the Vobiz "start event"), parsed by
+    pipecat.serializers.vobiz.parse_vobiz_start inside bot.run_pipeline.
 
-    Lifecycle:
-      1. Validate query params — 400 close if any missing.
-      2. Accept WebSocket.
-      3. Open a per-connection Redis client (aioredis.from_url).
-      4. Call bot.run_pipeline(websocket, call_id, did, caller, redis_client).
-      5. finally: close Redis, close WebSocket (idempotent).
+    This handler:
+      1. Accepts the WebSocket unconditionally — no 400 on missing params.
+      2. Opens a per-connection Redis client.
+      3. Delegates to bot.run_pipeline(websocket, redis_client).
+         run_pipeline calls parse_vobiz_start internally to extract call_id/DID.
+      4. finally: close Redis, close WebSocket (idempotent).
 
     Exception handling:
       - WebSocketDisconnect from clean caller hangup → INFO log, not ERROR.
-      - All other exceptions → ERROR log before close.
-      - Nothing re-raised — uvicorn worker must not crash on call teardown.
+      - All other exceptions → ERROR log; never re-raised (guardrail 2:
+        /ws must never raise out of the handler — uvicorn worker must survive).
 
-    Privacy: only last 4 digits of caller/DID logged in all structlog events.
+    Privacy: only last 4 digits of DID logged in all structlog events here.
     """
-    # ── 1. Validate required query params ────────────────────────────────────
-    params = websocket.query_params
-    call_id: str | None = params.get("call_id")
-    to: str | None = params.get("to")
-    from_: str | None = params.get("from")
-
-    if not call_id or not to or not from_:
-        missing = [k for k, v in (("call_id", call_id), ("to", to), ("from", from_)) if not v]
-        logger.warning("ws_missing_query_params", missing=missing)
-        await websocket.close(code=1008, reason="missing_query_params")
-        return
-
-    # ── 2. Accept WebSocket ───────────────────────────────────────────────────
+    # ── 1. Accept WebSocket unconditionally ──────────────────────────────────
+    # Caller identity (call_uuid, to, from) arrives in the Vobiz start event
+    # (first WS message) — NOT in the URL. Rejecting here would drop the call.
     await websocket.accept()
 
-    logger.info(
-        "ws_connected",
-        call_id=call_id,
-        did_last4=to[-4:],
-        caller_last4=from_[-4:],
-    )
+    logger.info("ws_connected")
 
-    # ── 3. Open per-connection Redis client ───────────────────────────────────
+    # ── 2. Open per-connection Redis client ───────────────────────────────────
     # One client per WebSocket connection — never module-level (event-loop safety).
-    # Same pattern as agent/tools/booking_tools.py:_redis (from_url + decode_responses).
     redis_client = aioredis.from_url(
         _cfg.settings.redis_url,
         decode_responses=True,
     )
 
-    # ── 4. Run pipeline; catch all exceptions so uvicorn worker survives ──────
+    # ── 3. Run pipeline; catch all exceptions so uvicorn worker survives ──────
     try:
         await bot.run_pipeline(
             websocket=websocket,
-            call_id=call_id,
-            did=to,
-            caller=from_,
             redis_client=redis_client,
         )
     except WebSocketDisconnect:
         # Clean caller hangup — not an error condition.
-        logger.info(
-            "ws_disconnected_cleanly",
-            call_id=call_id,
-            did_last4=to[-4:],
-            caller_last4=from_[-4:],
-        )
+        logger.info("ws_disconnected_cleanly")
     except Exception as exc:
         # Unexpected pipeline error — log as ERROR but do NOT re-raise.
         # Re-raising would kill the uvicorn worker; other concurrent calls
         # must continue running.
-        logger.error(
-            "ws_disconnected_with_exception",
-            call_id=call_id,
-            did_last4=to[-4:],
-            caller_last4=from_[-4:],
-            error=str(exc),
-        )
+        logger.error("ws_disconnected_with_exception", error=str(exc))
     finally:
-        # ── 5. Cleanup — always runs regardless of exception path ─────────────
-        # Clear the transfer signal if the call ended before /transfer-emergency
-        # was fetched (avoids stale entries in the module dict for long-running
-        # servers across many calls).
-        _transfer_signals.pop(call_id, None)
-
+        # ── 4. Cleanup — always runs regardless of exception path ─────────────
         # Close Redis client — mandatory to avoid connection leaks.
-        # aioredis.close() is an alias; aclose() is the canonical async close.
+        # aioredis.aclose() is the canonical async close.
         try:
             await redis_client.aclose()
         except Exception as redis_close_exc:
-            logger.warning(
-                "ws_redis_close_failed",
-                call_id=call_id,
-                error=str(redis_close_exc),
-            )
+            logger.warning("ws_redis_close_failed", error=str(redis_close_exc))
 
         # Close WebSocket — idempotent if Pipecat or Vobiz already closed it.
         try:
@@ -401,11 +377,7 @@ async def websocket_ws(websocket: WebSocket) -> None:
         except Exception:
             pass  # Already closed — safe to ignore
 
-        logger.info(
-            "ws_cleanup_complete",
-            call_id=call_id,
-            did_last4=to[-4:],
-        )
+        logger.info("ws_cleanup_complete")
 
 
 @app.post("/recording-finished")
