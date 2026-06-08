@@ -103,7 +103,7 @@ def _build_answer_xml(
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
-        '  <Speak voice="WOMAN" language="te-IN">Hello</Speak>\n'
+        '  <Speak voice="WOMAN" language="te-IN">నమస్కారం, దయచేసి ఒక్క క్షణం వేచి ఉండండి</Speak>\n'
         f'  <Stream bidirectional="true" contentType="audio/x-mulaw;rate=8000">{escape(ws_url)}</Stream>'
         f"{record_block}\n"
         "</Response>"
