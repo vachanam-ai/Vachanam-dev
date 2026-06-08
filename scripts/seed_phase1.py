@@ -128,7 +128,7 @@ async def _seed(
     branch = Branch(
         id=uuid.uuid4(),
         org_id=org.id,
-        name="Test Clinic Hyderabad",
+        name="Vachanam",
         address="Test Address Hyderabad 500001",
         city="Hyderabad",
         whatsapp_number=_admin,
