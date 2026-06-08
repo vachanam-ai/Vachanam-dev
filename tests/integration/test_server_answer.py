@@ -7,8 +7,20 @@ from fastapi.testclient import TestClient
 def client(monkeypatch):
     monkeypatch.setattr("backend.config.settings.recording_enabled", True)
     monkeypatch.setattr("backend.config.settings.public_url", "https://agent-dev.vachanam.in")
+    # Default: helper returns None so existing tests are unaffected by DB lookup
+    import agent.server as server_mod
+    monkeypatch.setattr(
+        server_mod,
+        "resolve_branch_name_for_did",
+        lambda did: _async_return(None),
+    )
     from agent.server import app
     return TestClient(app)
+
+
+async def _async_return(value):
+    """Minimal async wrapper for monkeypatching coroutine-returning helpers."""
+    return value
 
 
 def test_health_ok(client):
@@ -56,3 +68,42 @@ def test_answer_xml_is_wellformed(client):
     # Query separators in the URL must be present as literal & after XML decoding (which ET.fromstring does)
     assert "&to=" in stream.text
     assert "&from=" in stream.text
+
+
+def test_answer_uses_clinic_name_when_branch_resolved(monkeypatch):
+    """When resolve_branch_name_for_did returns a clinic name,
+    the <Speak> element must contain that name in the welcome message."""
+    monkeypatch.setattr("backend.config.settings.recording_enabled", False)
+    monkeypatch.setattr("backend.config.settings.public_url", "https://agent-dev.vachanam.in")
+    import agent.server as server_mod
+    monkeypatch.setattr(
+        server_mod,
+        "resolve_branch_name_for_did",
+        lambda did: _async_return("Pytest Clinic"),
+    )
+    from agent.server import app
+    c = TestClient(app)
+    r = c.post("/answer", data={"From": "+919999999999", "To": "+918046733493", "CallSid": "abc"})
+    assert r.status_code == 200
+    assert "Pytest Clinic" in r.text
+    assert "నమస్కారం" in r.text
+    assert "స్వాగతం" in r.text
+
+
+def test_answer_falls_back_when_branch_not_found(monkeypatch):
+    """When resolve_branch_name_for_did returns None,
+    the <Speak> element must contain the generic Telugu hold message."""
+    monkeypatch.setattr("backend.config.settings.recording_enabled", False)
+    monkeypatch.setattr("backend.config.settings.public_url", "https://agent-dev.vachanam.in")
+    import agent.server as server_mod
+    monkeypatch.setattr(
+        server_mod,
+        "resolve_branch_name_for_did",
+        lambda did: _async_return(None),
+    )
+    from agent.server import app
+    c = TestClient(app)
+    r = c.post("/answer", data={"From": "+919999999999", "To": "+918046733493", "CallSid": "abc"})
+    assert r.status_code == 200
+    assert "దయచేసి ఒక్క క్షణం వేచి ఉండండి" in r.text
+    assert "Pytest Clinic" not in r.text

@@ -85,10 +85,14 @@ def _build_answer_xml(
     call_sid: str,
     public_url: str,
     recording_enabled: bool,
+    speak_text: str,
 ) -> str:
     """
     Build the Vobiz TwiML-compatible XML response for POST /answer.
     All string args are already validated by FastAPI Form parsing.
+
+    speak_text must already be XML-escaped by the caller (use escape() from
+    xml.sax.saxutils). This keeps the builder pure / testable.
     """
     ws_url = _build_ws_url(public_url, call_sid, caller, did)
 
@@ -103,12 +107,45 @@ def _build_answer_xml(
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
-        '  <Speak voice="WOMAN" language="te-IN">నమస్కారం, దయచేసి ఒక్క క్షణం వేచి ఉండండి</Speak>\n'
+        f'  <Speak voice="WOMAN" language="te-IN">{speak_text}</Speak>\n'
         f'  <Stream bidirectional="true" contentType="audio/x-mulaw;rate=8000">{escape(ws_url)}</Stream>'
         f"{record_block}\n"
         "</Response>"
     )
     return xml
+
+
+# ---------------------------------------------------------------------------
+# Branch name resolver (for /answer DID greeting)
+# ---------------------------------------------------------------------------
+
+
+async def resolve_branch_name_for_did(did: str) -> str | None:
+    """Look up Branch.name for the dialed DID number.
+
+    Opens a fresh AsyncSession per call (never reuses a module-level session).
+    Follows CLAUDE.md RULE 5: branch identity comes from the dialed DID, never
+    from the caller phone.
+
+    Returns the branch name string, or None if:
+      - No branch row matches the DID.
+      - Any DB exception occurs (caller must handle gracefully).
+
+    PII policy: full DID is NEVER logged; only did_last4.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Branch).where(Branch.did_number == did)
+        )
+        branch = result.scalar_one_or_none()
+
+    if branch is None:
+        return None
+
+    # Capture attribute value before session closes (CLAUDE.md RULE 8 /
+    # DetachedInstanceError guard).
+    name: str = branch.name
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -212,12 +249,38 @@ async def answer(
         recording_enabled=recording_enabled,
     )
 
+    # ── Resolve clinic name for personalised greeting ─────────────────────────
+    # Wrapped in try/except — a DB error must NEVER 500 this endpoint; Vobiz
+    # needs an XML response or the call drops (guardrail 1).
+    _GENERIC_HOLD = "నమస్కారం, దయచేసి ఒక్క క్షణం వేచి ఉండండి"
+    try:
+        clinic_name: str | None = await resolve_branch_name_for_did(To)
+    except Exception as exc:
+        logger.error(
+            "answer_branch_lookup_failed",
+            did_last4=To[-4:],
+            error=str(exc),
+        )
+        clinic_name = None
+
+    if clinic_name:
+        speak_text = escape(f"నమస్కారం, {clinic_name} కి స్వాగతం")
+        logger.info(
+            "answer_branch_resolved",
+            did_last4=To[-4:],
+            clinic_name=clinic_name,
+        )
+    else:
+        speak_text = escape(_GENERIC_HOLD)
+        logger.warning("answer_branch_not_found", did_last4=To[-4:])
+
     xml_body = _build_answer_xml(
         caller=From,
         did=To,
         call_sid=CallSid,
         public_url=public_url,
         recording_enabled=recording_enabled,
+        speak_text=speak_text,
     )
 
     return Response(content=xml_body, media_type="application/xml")
