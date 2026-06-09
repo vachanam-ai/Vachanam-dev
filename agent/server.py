@@ -82,7 +82,7 @@ def _build_answer_xml(
     speak_text: str,
 ) -> str:
     """
-    Build the Vobiz XML response for /answer.
+    Build the Vobiz XML response for /answer (inbound path).
 
     speak_text must already be XML-escaped by the caller (use escape() from
     xml.sax.saxutils). This keeps the builder pure / testable.
@@ -116,6 +116,30 @@ def _build_answer_xml(
         f'  <Stream bidirectional="true" audioTrack="inbound" contentType="audio/x-mulaw;rate=8000"'
         f' keepCallAlive="true">{escape(ws_url)}</Stream>'
         f"{record_block}\n"
+        "</Response>"
+    )
+    return xml
+
+
+def _build_outbound_answer_xml(public_url: str) -> str:
+    """
+    Build the Vobiz XML response for /answer when Direction=outbound.
+
+    Differences from the inbound XML:
+      - NO <Speak> tag — patient was dialed by us; AI will speak first turn
+        through the WebSocket, no pre-WebSocket greeting needed.
+      - audioTrack="both" — we receive AND send audio on an outbound leg.
+      - NO <Record> — outbound recording is deferred (sub-spec concern).
+
+    Same /ws endpoint; Pipecat/bot.py handles the session identically.
+    """
+    ws_url = _build_ws_url(public_url)
+
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        "<Response>\n"
+        f'  <Stream bidirectional="true" audioTrack="both" contentType="audio/x-mulaw;rate=8000"'
+        f' keepCallAlive="true">{escape(ws_url)}</Stream>\n'
         "</Response>"
     )
     return xml
@@ -236,7 +260,7 @@ async def answer(
     body_data: str | None = Query(None),
 ) -> Response:
     """
-    Vobiz webhook — called when an inbound call arrives on the DID.
+    Vobiz webhook — called on both inbound call pickup and outbound call answer.
 
     Accepts both GET and POST (Vobiz may use either depending on app config).
     Caller identity is NOT available here — Vobiz does NOT send Twilio-style
@@ -244,11 +268,16 @@ async def answer(
     query param. An optional `body_data` query param carries base64-encoded JSON
     (Vobiz extended payload — parsed if needed in future).
 
+    Direction detection (form body field "Direction", capital-D per Vobiz docs):
+      - "outbound" (case-insensitive) → outbound XML: no <Speak>, audioTrack="both",
+        no <Record>. AI speaks first turn through the WebSocket.
+      - absent / any other value        → inbound XML (existing path, unchanged).
+
     Branch resolution: uses settings.vobiz_did_number (env var = the
     platform-owned DID for this agent instance). Single-DID dev model.
     Multi-clinic at scale: TD-039 (1 Voice App per DID, look up by app ID).
 
-    Returns XML with <Speak>, <Stream>, and optionally <Record>.
+    Returns XML with appropriate tags.
     This endpoint MUST NEVER return 5xx — Vobiz needs XML or the call drops.
     All branch lookup + body parsing is wrapped in try/except (guardrail 1).
 
@@ -259,14 +288,50 @@ async def answer(
     recording_enabled: bool = _cfg.settings.recording_enabled
     public_url: str = _cfg.settings.public_url
 
+    # ── Detect call direction from form body ──────────────────────────────────
+    # Vobiz POSTs form-urlencoded data; GET requests have no body.
+    # If the field is absent (e.g. a GET health-poll or older Vobiz firmware),
+    # default to inbound so existing behavior is preserved.
+    direction: str = ""
+    if request.method == "POST":
+        try:
+            form = await request.form()
+            direction = (form.get("Direction") or "").strip()
+        except Exception:
+            direction = ""
+
+    is_outbound: bool = direction.lower() == "outbound"
+
     logger.info(
         "answer_received",
         call_uuid=CallUUID,
         method=request.method,
         recording_enabled=recording_enabled,
+        direction=direction or "not_set",
+        is_outbound=is_outbound,
     )
 
-    # ── Resolve clinic name for personalised greeting ─────────────────────────
+    # ── Outbound path ─────────────────────────────────────────────────────────
+    # No greeting needed — we placed the call; AI speaks first via WebSocket.
+    if is_outbound:
+        xml_body = _build_outbound_answer_xml(public_url=public_url)
+        logger.info(
+            "answer_direction",
+            direction=direction,
+            call_uuid=CallUUID,
+            is_outbound=True,
+        )
+        return Response(content=xml_body, media_type="application/xml")
+
+    # ── Inbound path (original logic, unchanged) ──────────────────────────────
+    logger.info(
+        "answer_direction",
+        direction=direction or "not_set",
+        call_uuid=CallUUID,
+        is_outbound=False,
+    )
+
+    # Resolve clinic name for personalised greeting.
     # Branch comes from the DID configured in settings (CLAUDE.md RULE 7 /
     # agent-persona-doc RULE 7: branch context from room metadata or env, never
     # inferred from caller phone).
