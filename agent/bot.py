@@ -28,6 +28,10 @@ Import-path corrections vs original plan (pipecat-ai 1.3.0 verified):
 - FunctionCallParams: from pipecat.services.llm_service import FunctionCallParams
 - FunctionSchema: from pipecat.adapters.schemas.function_schema import FunctionSchema
 - register_function(name, handler) — confirmed signature in 1.3.0
+- Initial greeting: on_pipeline_started event on PipelineWorker queues TTSSpeakFrame
+  (DPDP disclosure + clinic greeting) so AI always speaks first on every call.
+  System prompt is wired into LLMContext(messages=[{"role":"system","content":...}])
+  at pipeline build time so the LLM has full context from turn 1.
 
 CLAUDE.md rules enforced here:
 - RULE 1: Doctor query includes Doctor.branch_id == branch.id
@@ -60,7 +64,7 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.llm_service import FunctionCallParams  # noqa: F401 — used by handlers
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import AudioRawFrame, Frame, TextFrame
+from pipecat.frames.frames import AudioRawFrame, Frame, TextFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.task import PipelineWorker, PipelineParams  # PipelineTask deprecated
 from pipecat.pipeline.runner import WorkerRunner  # PipelineRunner deprecated
@@ -72,6 +76,11 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.transcriptions.language import Language
 
+from agent.prompts.system_prompt import (
+    DoctorContext,
+    build_disclosure_utterance,
+    build_system_prompt,
+)
 from agent.services.tts_sanitizer import sanitize_for_tts
 from agent.session_state import SessionState
 from backend.config import settings
@@ -960,7 +969,29 @@ async def run_pipeline(
         # ── 5. Build LLM context + aggregators ───────────────────────────────
         # VAD on LLMUserAggregatorParams — Pipecat 1.x telephony requirement.
         # transport.params does NOT take a vad_analyzer in 1.x.
-        context = LLMContext(messages=[])
+
+        # Build system prompt from branch + doctor list (attrs captured above).
+        doctor_contexts = [
+            DoctorContext(
+                id=str(d.id),
+                name=d.name,
+                specialization=d.specialization or "",
+                routing_keywords=list(d.routing_keywords or []),
+                booking_type=d.booking_type or "token",
+                is_default=bool(d.is_default),
+            )
+            for d in doctors
+        ]
+        system_prompt_text = build_system_prompt(
+            clinic_name=branch_name,
+            doctors=doctor_contexts,
+            emergency_contact=branch_emergency_contact or "",
+            plan=state.plan or "clinic",
+        )
+
+        context = LLMContext(
+            messages=[{"role": "system", "content": system_prompt_text}]
+        )
 
         user_params = LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(),
@@ -998,6 +1029,55 @@ async def run_pipeline(
         # PipelineTask is deprecated in 1.3.0; use PipelineWorker + WorkerRunner.
         # handle_sigint=False: we are embedded in FastAPI, not a standalone process.
         worker = PipelineWorker(pipeline)
+
+        # ── 7a. Queue initial greeting on pipeline start ──────────────────────
+        # on_pipeline_started fires after StartFrame traverses the entire pipeline,
+        # guaranteeing all processors (STT, LLM, TTS, transport.output) are live.
+        # This fires on EVERY call — both inbound and outbound — so the AI always
+        # speaks first and the patient never hears silence.
+        #
+        # Sequence:
+        #   1. TTSSpeakFrame(DPDP disclosure, append_to_context=True) — speaks the
+        #      mandatory data-processing disclosure (DPDP s.5) via Sarvam TTS and
+        #      adds it to the LLM context so the LLM knows it was already spoken
+        #      (the system prompt says "STEP 0 … already spoken: do NOT repeat").
+        #   2. TTSSpeakFrame(greeting, append_to_context=True) — speaks the clinic
+        #      greeting ("Namaskaram, I'm Vachanam AI…") and adds it to context.
+        #      Using a static greeting here is intentional: it fires immediately
+        #      on connect (sub-second), before the patient says anything, whereas
+        #      an LLM-generated greeting would add ~1-2 s of latency on every call.
+        #      The LLM takes over for all subsequent turns.
+        #
+        # sanitize_for_tts() is applied before queuing (CLAUDE.md RULE 6) even though
+        # TtsSanitizerProcessor in the pipeline provides a second pass — belt-and-suspenders.
+        #
+        # Note: TTSSpeakFrame bypasses STT and LLM aggregator, flowing directly to
+        # TtsSanitizerProcessor → SarvamTTSService → transport.output().
+        disclosure_text = sanitize_for_tts(build_disclosure_utterance())
+        greeting_text = sanitize_for_tts(
+            f"Namaskaram! Nenu Vachanam AI assistant. Meeru {branch_name} ki appointment "
+            "book cheyyalanukuntunnara? Mee peru cheppagalara?"
+        )
+
+        @worker.event_handler("on_pipeline_started")
+        async def on_pipeline_started(wrk: PipelineWorker, frame: Frame) -> None:
+            """Queue DPDP disclosure + greeting the moment the pipeline is live.
+
+            Fires once per call. Both frames use append_to_context=True so the
+            LLM conversation history reflects that these utterances were spoken,
+            preventing the LLM from repeating the disclosure or opening greeting.
+            """
+            await wrk.queue_frame(
+                TTSSpeakFrame(text=disclosure_text, append_to_context=True)
+            )
+            await wrk.queue_frame(
+                TTSSpeakFrame(text=greeting_text, append_to_context=True)
+            )
+            logger.info(
+                "initial_greeting_queued",
+                branch_id=str(branch_id),
+                session_id=call_id,
+            )
 
         # ── 8. Register tools ─────────────────────────────────────────────────
         # Deferred import of _transfer_signals from agent.server avoids a circular
