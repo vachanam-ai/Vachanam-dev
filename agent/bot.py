@@ -978,7 +978,7 @@ async def run_pipeline(
                 specialization=d.specialization or "",
                 routing_keywords=list(d.routing_keywords or []),
                 booking_type=d.booking_type or "token",
-                is_default=bool(d.is_default),
+                is_default=bool(d.is_default_doctor),
             )
             for d in doctors
         ]
@@ -1110,7 +1110,7 @@ async def run_pipeline(
 
         # ── 9. Run pipeline ───────────────────────────────────────────────────
         runner = WorkerRunner(handle_sigint=False)
-        runner.add_workers(worker)
+        await runner.add_workers(worker)
         await runner.run()
 
     except ValueError as e:
