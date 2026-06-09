@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     google_application_credentials: str = "./google-service-account.json"
     google_calendar_service_email: str = ""
+    # Production: base64-encoded service-account JSON (stored in Render env).
+    # Dev: leave empty; google_application_credentials is used instead.
+    google_sa_json_b64: str | None = None
 
     # Database
     database_url: str
