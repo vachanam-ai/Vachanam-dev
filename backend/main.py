@@ -21,6 +21,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import structlog
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -28,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 
 from agent.logging_config import configure_structlog
 from backend.config import settings
+from backend.jobs.calendar_writer import run_calendar_writer
 from backend.middleware.rate_limit import close_rate_limiter, init_rate_limiter
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 
@@ -43,17 +46,34 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """App startup + shutdown. Phase 6 will register APScheduler here.
+    """App startup + shutdown.
 
     Rate-limiter note: fastapi-limiter (pyrate-limiter backend) requires one
     Redis connection shared across workers. We initialize it here and close
     on shutdown. Each uvicorn worker runs its own lifespan independently —
     no cross-loop binding issues because the Redis client is created inside
     the running event loop (not at module import time).
+
+    APScheduler: AsyncIOScheduler runs in-process on the same event loop.
+    Jobs are registered here so they share the app's loop (required for
+    async job functions). replace_existing=True allows hot-reload in dev.
     """
     logger.info("vachanam_starting", env=settings.app_env, base_url=settings.base_url)
     await init_rate_limiter()
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        run_calendar_writer,
+        IntervalTrigger(seconds=30),
+        id="calendar_writer",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logger.info("scheduler_started", jobs=["calendar_writer"])
+
     yield
+
+    scheduler.shutdown(wait=False)
     await close_rate_limiter()
     logger.info("vachanam_shutdown")
 
