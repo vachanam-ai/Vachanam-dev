@@ -172,8 +172,6 @@ def build_stt_service(api_key: str) -> SarvamSTTService:
     """
     return SarvamSTTService(
         api_key=api_key,
-        sample_rate=8000,
-        input_audio_codec="x-mulaw",
         settings=SarvamSTTSettings(
             model="saaras:v3",
             language=Language.TE_IN,
@@ -188,14 +186,19 @@ def build_tts_service(api_key: str) -> SarvamTTSService:
     Format: 8 kHz μ-law to match Vobiz telephony wire format
     (announced in /answer XML as audio/x-mulaw;rate=8000).
     Mismatch → Vobiz can't decode → silent call → timeout hangup.
+
+    NOTE: SarvamTTSSettings does NOT support output_audio_codec
+    (pipecat 1.3.0 limitation — codec lives on the deprecated InputParams).
+    When settings= is provided, params= is silently ignored. So we use
+    params= path with model+voice_id as init args (also deprecated).
     """
     return SarvamTTSService(
         api_key=api_key,
         sample_rate=8000,
-        settings=SarvamTTSSettings(
-            model="bulbul:v3",
+        model="bulbul:v3",
+        voice_id="priya",
+        params=SarvamTTSService.InputParams(
             language=Language.TE_IN,
-            voice="priya",
             output_audio_codec="mulaw",
         ),
     )
