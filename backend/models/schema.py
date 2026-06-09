@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, date, time
 from sqlalchemy import (
     String, Boolean, Integer, Text, DateTime, Date, Time,
-    ForeignKey, Enum, ARRAY, JSON, func
+    ForeignKey, Enum, ARRAY, JSON, func, text, false, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -101,9 +101,37 @@ class Doctor(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # --- Sub-spec A additions (migration fd4a95d354fa) ---
+    # available_weekdays: ISO int array 0-6 (0=Mon). All listed days share working_hours range.
+    # DPDP: aggregate metadata — no PII.
+    available_weekdays: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[0,1,2,3,4,5,6]'::jsonb")
+    )
+    # post_treatment_followup: auto-set TRUE for booking_type='appointment' at creation.
+    post_treatment_followup: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    # walkins_closed_today_date: receptionist sets to CURRENT_DATE to stop walk-ins.
+    # Auto-clears next day via date comparison in preflight check.
+    walkins_closed_today_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # calendar_event_id_recurring: token-doctor only — Google Cal recurring clinic-hours event ID.
+    calendar_event_id_recurring: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # user_id: links Doctor row to User account for doctor-role login.
+    # SET NULL on user deletion — preserves the Doctor row.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    # invited_email: org_admin enters doctor's Google email. Cleared after first sign-in.
+    invited_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     branch: Mapped["Branch"] = relationship(back_populates="doctors")
     tokens: Mapped[list["Token"]] = relationship(back_populates="doctor")
     followup_tasks: Mapped[list["FollowupTask"]] = relationship(back_populates="doctor")
+    unavailabilities: Mapped[list["DoctorUnavailability"]] = relationship(back_populates="doctor")
 
 
 class Patient(Base):
@@ -126,6 +154,11 @@ class Patient(Base):
 
 class Token(Base):
     __tablename__ = "tokens"
+    # Compound indexes for "today's queue" and "doctor X's tokens today" query patterns (TD-018).
+    __table_args__ = (
+        Index("ix_tokens_branch_date", "branch_id", "date"),
+        Index("ix_tokens_branch_doctor_date", "branch_id", "doctor_id", "date"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # RESTRICT: explicit deletion path for booking records (audit trail)
@@ -164,6 +197,15 @@ class Token(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+    # --- Sub-spec A additions (migration fd4a95d354fa) ---
+    # cancelled_by_user_id: UUID of User who triggered cascade cancellation (plain UUID, no FK).
+    # Plain UUID pattern consistent with marked_by_user_id — survives user deletion.
+    # DPDP: pseudonymous (UUID only, no name/phone).
+    cancelled_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # emergency_reason: required when walk-in bypasses daily cap via is_urgent=true.
+    # DPDP: sensitive — describes patient's stated urgency reason. Stored only here, not in audit log.
+    emergency_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     branch: Mapped["Branch"] = relationship(back_populates="tokens")
     doctor: Mapped["Doctor"] = relationship(back_populates="tokens")
@@ -251,6 +293,21 @@ class FollowupTask(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    # --- Sub-spec A additions (migration fd4a95d354fa) ---
+    # task_type: app-side enum (VARCHAR not DB ENUM) for zero-DDL growth.
+    # Values: 'post_appt_check' | 'pre_appt_reminder' | 'cascade_rebook'
+    task_type: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default="post_appt_check"
+    )
+    # token_id: back-reference to the original Token. Nullable for free-floating follow-ups.
+    # RESTRICT: Token cannot be deleted while a FollowupTask references it.
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tokens.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+
     branch: Mapped["Branch"] = relationship()
     doctor: Mapped["Doctor"] = relationship(back_populates="followup_tasks")
     patient: Mapped["Patient"] = relationship(back_populates="followup_tasks")
@@ -327,7 +384,10 @@ class User(Base):
     name: Mapped[str | None] = mapped_column(String(255))
     phone: Mapped[str | None] = mapped_column(String(20))
     role: Mapped[str] = mapped_column(
-        Enum("super_admin", "org_admin", "receptionist", name="user_role"),
+        # 'doctor' added via ALTER TYPE in migration fd4a95d354fa (sub-spec A).
+        # create_constraint=False prevents Alembic autogenerate from re-creating
+        # the enum type (it already exists in the DB from the initial migration).
+        Enum("super_admin", "org_admin", "receptionist", "doctor", name="user_role", create_constraint=False),
         nullable=False,
     )
     # branch_ids: JSONB list of branch UUID strings this user can access
@@ -375,3 +435,106 @@ class AuditLog(Base):
     # success: false = failure events (login failures, access denials, signature mismatches)
     # server_default="true" ensures DB-level default; default=True kept for ORM inserts
     success: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True, index=True)
+
+
+class DoctorUnavailability(Base):
+    """Date-specific doctor absence override.
+
+    A DoctorUnavailability row marks one doctor as absent on one specific date.
+    The UNIQUE(doctor_id, date) constraint prevents double-entries.
+
+    When inserted via POST /availability, the cascade flow:
+      1. INSERT INTO doctor_unavailability (one row per date, ON CONFLICT DO NOTHING)
+      2. Bulk cancel confirmed tokens for that doctor+date
+      3. Enqueue FollowupTask(task_type='cascade_rebook') for each cancelled token
+
+    DPDP classification: pseudonymous — doctor_id is UUID (no name/phone).
+    created_by_user_id is a plain UUID (no FK) — audit trail survives user deletion.
+
+    Added: migration fd4a95d354fa (sub-spec A, 2026-06-09).
+    """
+    __tablename__ = "doctor_unavailability"
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "date", name="uq_doctor_unavailability_doctor_date"),
+        Index("ix_doctor_unavailability_branch_date", "branch_id", "date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # branch_id: first non-PK column (Rule 1 — every multi-tenant table scoped to branch)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("doctors.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # created_by_user_id: plain UUID (no FK) — matches Token.marked_by_user_id pattern.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    doctor: Mapped["Doctor"] = relationship(back_populates="unavailabilities")
+
+
+class CalendarWriteTask(Base):
+    """Async Google Calendar write queue.
+
+    Used for the token-doctor path (no per-patient Cal events), and as
+    fallback for slot-doctor when the synchronous inline write exhausts its
+    retry budget (3 attempts: 0s, 2s, 5s).
+
+    Worker: backend/jobs/calendar_writer.py — APScheduler every 30s.
+    Backoff: 5s, 30s, 5min, 60min → failed_permanent after 5 total attempts.
+
+    DPDP classification: pseudonymous — payload_json stores patient_first_name
+    + last-4 digits of phone only (no full phone). Compliant with PII denylist.
+
+    branch_id is the first non-PK column (Rule 1).
+
+    Added: migration fd4a95d354fa (sub-spec A, 2026-06-09).
+    """
+    __tablename__ = "calendar_write_tasks"
+    # Worker poll index: WHERE status='pending' AND next_attempt_at <= NOW()
+    __table_args__ = (
+        Index("ix_calendar_tasks_status_next", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # branch_id: first non-PK column (Rule 1)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    token_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tokens.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    # operation: 'create' | 'update' | 'delete'
+    operation: Mapped[str] = mapped_column(String(20), nullable=False)
+    # payload_json: JSONB (Rule 8 — never plain JSON).
+    # Contents: {calendar_id, patient_first_name, patient_phone_last4, appointment_dt, duration_minutes, doctor_name}
+    payload_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # google_event_id: populated after successful create; reused for update/delete.
+    google_event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # status: 'pending' | 'in_progress' | 'done' | 'failed_permanent'
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # next_attempt_at: worker polls WHERE status='pending' AND next_attempt_at <= NOW()
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

@@ -109,3 +109,93 @@ data backfill required — no existing rows.
 
 **Reviewer:** security-engineer — verify append-only intent + FK ondelete matches DPDP
 data-lifecycle expectations + indexes don't expose data via SELECT performance side channels.
+
+---
+
+## fd4a95d354fa — subspec_a_schema
+
+**Date:** 2026-06-09
+**Author:** database-engineer (sub-spec A Task 2)
+**Spec:** `docs/superpowers/specs/2026-06-08-calendar-and-receptionist-pwa-design.md` §3
+
+**What:** Sub-spec A schema additions for Calendar + Receptionist PWA + RBAC.
+Seven logical groups of changes in a single migration (all additions — no drops):
+
+### 3.1 Doctor weekly availability additions (6 columns)
+
+- `available_weekdays JSONB NOT NULL DEFAULT '[0,1,2,3,4,5,6]'` — ISO weekday ints 0=Mon.
+  All existing Doctor rows silently inherit all-days (preserves today's behaviour).
+- `post_treatment_followup BOOLEAN NOT NULL DEFAULT FALSE`
+- `walkins_closed_today_date DATE NULL` — receptionist stop-walk-ins flag
+- `calendar_event_id_recurring VARCHAR(255) NULL` — token-doctor's Google Cal recurring event
+- `user_id UUID NULL UNIQUE REFERENCES users(id) ON DELETE SET NULL` — doctor login link
+- `invited_email VARCHAR(255) NULL` — org_admin pre-registers doctor's Google email
+
+Added FK `fk_doctors_user_id`, UNIQUE `uq_doctors_user_id`, and index `ix_doctors_user_id`.
+All columns are nullable or carry `server_default` — Postgres 11+ instant-default, no table rewrite.
+
+### 3.2 New table: doctor_unavailability
+
+Multi-tenant date-specific absence override. branch_id is first non-PK column (Rule 1).
+UNIQUE(doctor_id, date) prevents double-absence rows. created_by_user_id is plain UUID
+(no FK) — consistent with Token.marked_by_user_id, survives user deletion.
+Indexes: `ix_doctor_unavailability_branch_date` (compound, query-critical), plus single-column
+FK indexes for branch_id and doctor_id.
+
+### 3.3 FollowupTask additions (2 columns)
+
+- `task_type VARCHAR(30) NOT NULL DEFAULT 'post_appt_check'` — app-side enum (no ALTER TYPE
+  needed for new values). Values: post_appt_check | pre_appt_reminder | cascade_rebook.
+- `token_id UUID NULL REFERENCES tokens(id) ON DELETE RESTRICT` — back-reference to booking.
+  Index `ix_followup_tasks_token_id` added.
+
+### 3.4 Token additions (2 columns)
+
+- `cancelled_by_user_id UUID NULL` — who triggered cascade cancellation (plain UUID, no FK).
+- `emergency_reason TEXT NULL` — required text when walk-in bypasses daily cap.
+
+Both nullable — no backfill. DPDP: cancelled_by_user_id is pseudonymous; emergency_reason
+is sensitive (patient-stated urgency reason).
+
+### 3.5 New table: calendar_write_tasks
+
+Async Google Calendar write queue. branch_id first non-PK column (Rule 1). payload_json
+is JSONB (Rule 8). Compound index `ix_calendar_tasks_status_next` on (status, next_attempt_at)
+for worker poll query: WHERE status='pending' AND next_attempt_at <= NOW().
+
+### 3.6 user_role enum: 'doctor' value added
+
+`ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'doctor'` executed OUTSIDE a transaction using
+the op.execute("COMMIT") / ALTER TYPE / op.execute("BEGIN") recipe mandated in Alembic for
+Postgres enum additions. Cannot be reversed in downgrade() — Postgres has no DROP VALUE.
+Documented in downgrade() as acceptable limitation.
+
+### 3.7 Compound indexes on tokens (TD-018 payback)
+
+- `ix_tokens_branch_date` on (branch_id, date) — "today's queue for this branch" queries
+- `ix_tokens_branch_doctor_date` on (branch_id, doctor_id, date) — "doctor X's tokens today"
+
+These indexes were deferred in 8559268c0c44 pending EXPLAIN ANALYZE evidence. Sub-spec A
+query patterns (Queue page poll + walk-in preflight + cascade cancel) confirmed they are
+query-critical. TD-018 closed.
+
+**ORM models updated:** Doctor, Token, FollowupTask (columns added), DoctorUnavailability
+(new class), CalendarWriteTask (new class), User.role enum extended with 'doctor'.
+
+**Zero-downtime:** All ADD COLUMN use Postgres 11+ instant-default. New tables are empty.
+ALTER TYPE ADD VALUE is non-blocking. Compound indexes create with LOCK=SHARE (Postgres
+default for CREATE INDEX — no table lock, reads continue, writes may be briefly queued
+at index update time).
+
+**DPDP classification:**
+- available_weekdays, post_treatment_followup, walkins_closed_today_date: aggregate/operational — no PII
+- user_id, invited_email: pseudonymous (UUID link + email, no patient data)
+- doctor_unavailability: pseudonymous
+- cancelled_by_user_id: pseudonymous (UUID only)
+- emergency_reason: SENSITIVE — patient's stated urgency reason; stored in Token row only,
+  excluded from audit log metadata_json by PII denylist convention
+- calendar_write_tasks.payload_json: pseudonymous (patient_first_name + last4 only — complies with
+  PII rule: never full phone in Cal event summary or queue payload)
+
+**Reviewer:** security-engineer — verify payload_json PII compliance + emergency_reason
+exclusion from audit log + doctor-role enum value doesn't grant unintended access.
