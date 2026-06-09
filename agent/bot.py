@@ -172,6 +172,8 @@ def build_stt_service(api_key: str) -> SarvamSTTService:
     """
     return SarvamSTTService(
         api_key=api_key,
+        sample_rate=8000,
+        input_audio_codec="x-mulaw",
         settings=SarvamSTTSettings(
             model="saaras:v3",
             language=Language.TE_IN,
@@ -181,13 +183,20 @@ def build_stt_service(api_key: str) -> SarvamSTTService:
 
 
 def build_tts_service(api_key: str) -> SarvamTTSService:
-    """Build Sarvam Bulbul v3 TTS for Telugu with Anushka voice."""
+    """Build Sarvam Bulbul v3 TTS for Telugu (priya female voice).
+
+    Format: 8 kHz μ-law to match Vobiz telephony wire format
+    (announced in /answer XML as audio/x-mulaw;rate=8000).
+    Mismatch → Vobiz can't decode → silent call → timeout hangup.
+    """
     return SarvamTTSService(
         api_key=api_key,
+        sample_rate=8000,
         settings=SarvamTTSSettings(
             model="bulbul:v3",
             language=Language.TE_IN,
             voice="priya",
+            output_audio_codec="mulaw",
         ),
     )
 
