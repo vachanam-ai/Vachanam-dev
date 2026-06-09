@@ -54,3 +54,4 @@ kindly-web-search-mcp-server/
 agent/recordings/*.mp3
 agent/recordings/*.wav
 agent/recordings/*.ogg
+agent/vobiz_minimal/recordings/
