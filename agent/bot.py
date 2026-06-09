@@ -187,7 +187,7 @@ def build_tts_service(api_key: str) -> SarvamTTSService:
         settings=SarvamTTSSettings(
             model="bulbul:v3",
             language=Language.TE_IN,
-            voice="anushka",
+            voice="priya",
         ),
     )
 
