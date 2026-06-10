@@ -54,7 +54,6 @@ from sqlalchemy import and_, select  # noqa: E402
 
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
-    build_disclosure_utterance,
     build_system_prompt,
 )
 from agent.services.calendar_proxy import GoogleCalendarService  # noqa: E402
@@ -76,7 +75,22 @@ logger = logging.getLogger("vachanam-agent")
 
 AGENT_NAME = "vachanam-agent"
 
-GREETING = "నమస్కారం, ఇది {clinic} క్లినిక్. మీ పేరు చెప్పగలరా?"
+# DPDP s.5 disclosure + greeting in ONE short Telugu utterance (~6s spoken).
+# The 3-language disclosure (build_disclosure_utterance) took 16.8s of TTS and
+# killed the first impression — Telugu-only keeps the legal essence (AI agent,
+# name+phone collected, purpose) for the Telugu-market MVP. Decision 2026-06-10.
+DISCLOSURE_GREETING = (
+    "నమస్కారం! ఇది {clinic} క్లినిక్ AI అసిస్టెంట్. మీ అపాయింట్‌మెంట్ కోసం "
+    "మీ పేరు, ఫోన్ నంబర్ తీసుకుంటాము. మీ పేరు చెప్పగలరా?"
+)
+
+# Appended AFTER the shared production prompt — phone replies must be terse.
+# Long replies were costing 10-16s of TTS audio per turn on top of LLM time.
+BREVITY_OVERRIDE = (
+    "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి రిప్లై గరిష్టంగా "
+    "రెండు చిన్న వాక్యాలు (మొత్తం ~15 పదాలు). లిస్ట్‌లు, వివరణలు, రిపీట్‌లు వద్దు. "
+    "డిస్క్లోజర్ మళ్ళీ చెప్పవద్దు. ఒక ప్రశ్న మాత్రమే ఒకసారి అడగండి."
+)
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
@@ -349,15 +363,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             for d in doctors
         ]
 
-        instructions = build_system_prompt(
-            clinic_name=branch_name,
-            doctors=doctor_contexts,
-            emergency_contact=emergency_contact,
-            plan=state.plan or "clinic",
+        instructions = (
+            build_system_prompt(
+                clinic_name=branch_name,
+                doctors=doctor_contexts,
+                emergency_contact=emergency_contact,
+                plan=state.plan or "clinic",
+            )
+            + BREVITY_OVERRIDE
         )
 
         try:
-            calendar_service: GoogleCalendarService | None = GoogleCalendarService()
+            # SA path resolved against repo root — settings default is the
+            # relative './google-service-account.json', which breaks when the
+            # worker's cwd is livekit_minimal/.
+            sa_path = _REPO_ROOT / "google-service-account.json"
+            calendar_service: GoogleCalendarService | None = GoogleCalendarService(
+                sa_json_path=str(sa_path) if sa_path.exists() else None
+            )
         except Exception as e:
             logger.critical("calendar_service_init_failed: %s", e)
             calendar_service = None
@@ -431,9 +454,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             ),
         )
 
-        # RULE 6 chain: disclosure (DPDP s.5) then greeting, both sanitized.
-        await session.say(sanitize_for_tts(build_disclosure_utterance()))
-        await session.say(sanitize_for_tts(GREETING.format(clinic=branch_name)))
+        # RULE 6: single short disclosure+greeting utterance, sanitized.
+        await session.say(
+            sanitize_for_tts(DISCLOSURE_GREETING.format(clinic=branch_name))
+        )
 
 
 if __name__ == "__main__":
