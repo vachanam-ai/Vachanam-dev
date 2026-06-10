@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Vachanam design system — "calm clinic ledger" ──────────────────────
+   Cream paper surfaces, deep-teal structure, Spectral numerals as heroes,
+   gold reserved for "now serving". Subtle grain keeps it warm, not flat. */
+
+:root {
+  --teal: #006b6b;
+  --teal-deep: #004f4f;
+  --teal-light: #008f8f;
+  --teal-pale: #e0f2f1;
+  --teal-mint: #f0fafa;
+  --ink: #1a2e2e;
+  --cream: #fafcfc;
+  --hairline: #d0e4e4;
+  --gold: #f0c674;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  @apply bg-cream text-ink font-ui;
+  background-image:
+    radial-gradient(1200px 600px at 85% -10%, rgba(0, 143, 143, 0.06), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(0, 107, 107, 0.05), transparent 55%);
+  min-height: 100dvh;
+}
+
+/* Paper grain — one layer, fixed, barely there */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+#root { position: relative; z-index: 2; }
+
+/* ── Ledger primitives ── */
+.card {
+  @apply bg-white/85 border border-hairline rounded-2xl shadow-card;
+  backdrop-filter: blur(6px);
+}
+
+.ledger-row {
+  @apply flex items-center gap-4 px-4 py-3 border-b border-hairline last:border-b-0;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center gap-2 font-ui font-medium rounded-xl
+    px-4 py-2.5 transition-all duration-150 select-none
+    focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-light
+    disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98];
+}
+.btn-primary { @apply btn bg-teal text-white hover:bg-teal-deep shadow-card; }
+.btn-ghost { @apply btn bg-transparent text-teal border border-hairline hover:bg-teal-mint; }
+.btn-danger { @apply btn bg-white text-danger border border-danger/30 hover:bg-danger/5; }
+.btn-gold { @apply btn bg-gold-soft text-gold-ink border border-gold/60 hover:brightness-95; }
+
+.chip {
+  @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium font-ui;
+}
+.chip-token { @apply chip bg-teal-pale text-teal-deep; }
+.chip-slot { @apply chip bg-gold-soft text-gold-ink; }
+.chip-muted { @apply chip bg-slate-light/20 text-slate; }
+.chip-danger { @apply chip bg-danger/10 text-danger; }
+
+.field {
+  @apply w-full rounded-xl border border-hairline bg-white px-3.5 py-2.5 font-ui text-ink
+    placeholder:text-slate-light focus:border-teal-light focus:outline-none
+    focus:ring-2 focus:ring-teal-light/25 transition;
+}
+
+.label { @apply block text-xs font-medium uppercase tracking-[0.12em] text-slate mb-1.5 font-ui; }
+
+/* Hero numerals — Spectral, oldstyle feel */
+.numeral {
+  font-family: "Spectral", Georgia, serif;
+  font-weight: 600;
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Section headers — small caps editorial */
+.section-title {
+  @apply font-display text-ink text-lg font-semibold tracking-tight;
+}
+.eyebrow {
+  @apply text-[11px] font-ui font-semibold uppercase tracking-[0.18em] text-teal;
+}
+
+/* Scrollbars that match the paper */
+* { scrollbar-width: thin; scrollbar-color: var(--hairline) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 8px; }
+
+/* GSAP reveal targets start hidden to avoid flash */
+[data-reveal] { opacity: 0; }

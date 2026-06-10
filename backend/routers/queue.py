@@ -274,3 +274,158 @@ async def _update_status(
         marked_by_user_id=user_id,
     )
     return StatusResponse(status=new_status, token_id=token_id)
+
+
+# ── Walk-in registration (receptionist desk) ─────────────────────────────────
+
+
+class WalkInRequest(BaseModel):
+    doctor_id: str
+    patient_name: str
+    patient_phone: str | None = None
+    complaint: str | None = None
+    appointment_time: str | None = None  # "HH:MM", slot-doctors only
+    is_urgent: bool = False
+
+
+class WalkInResponse(BaseModel):
+    token_id: str
+    token_number: int | None
+    appointment_time: str | None
+    doctor_name: str
+    patient_name: str
+    booking_type: str
+
+
+@router.post(
+    "/{branch_id}/walkin",
+    response_model=WalkInResponse,
+    status_code=201,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("token.walkin_created", resource_type="token")
+async def create_walkin(
+    branch_id: str,
+    body: WalkInRequest,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> WalkInResponse:
+    """Register a walk-in patient for today.
+
+    Token-doctor: atomically assigns the next token (Redis INCR — Rule 2).
+    Slot-doctor: books the given HH:MM slot (per-slot Redis key, same atomicity).
+    Calendar write is hybrid (Rule 4 via booking_calendar): slot-doctor inline
+    with retries, token-doctor enqueued — a walk-in at the desk never blocks
+    on Google.
+    """
+    from datetime import time as time_cls
+
+    from agent.tools.booking_tools import assign_token as _assign_token
+    from backend.services.booking_calendar import write_booking_calendar
+
+    await assert_branch_access(current_user, branch_id, db)
+    branch_uuid = uuid.UUID(branch_id)
+    doctor_uuid = uuid.UUID(body.doctor_id)
+    today = date.today()
+
+    # Doctor must belong to THIS branch and be active (Rule 1)
+    result = await db.execute(
+        select(Doctor).where(Doctor.id == doctor_uuid, Doctor.branch_id == branch_uuid)
+    )
+    doctor = result.scalar_one_or_none()
+    if doctor is None or doctor.status != "active":
+        raise HTTPException(status_code=404, detail="Doctor not found in this branch")
+    if doctor.booking_type == "token" and doctor.walkins_closed_today_date == today:
+        raise HTTPException(status_code=409, detail="Walk-ins are closed for this doctor today")
+
+    appt_time: "time_cls | None" = None
+    if body.appointment_time:
+        try:
+            appt_time = time_cls.fromisoformat(body.appointment_time)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="appointment_time must be HH:MM")
+    if doctor.booking_type == "appointment" and appt_time is None:
+        raise HTTPException(status_code=422, detail="appointment_time required for this doctor")
+
+    assignment = await _assign_token(
+        doctor_id=doctor_uuid,
+        branch_id=branch_uuid,
+        booking_date=today,
+        db=db,
+        appointment_time=appt_time,
+    )
+    if not assignment.get("success"):
+        reason = assignment.get("reason", "unavailable")
+        status = 409 if reason in ("full", "slot_taken") else 422
+        raise HTTPException(status_code=status, detail=f"Could not book: {reason}")
+
+    # Patient: reuse by (branch, phone) when phone given; else fresh row (Rule 1)
+    patient = None
+    if body.patient_phone:
+        result = await db.execute(
+            select(Patient).where(
+                Patient.branch_id == branch_uuid, Patient.phone == body.patient_phone
+            )
+        )
+        patient = result.scalars().first()
+    if patient is None:
+        patient = Patient(
+            branch_id=branch_uuid, name=body.patient_name, phone=body.patient_phone
+        )
+        db.add(patient)
+        await db.flush()
+
+    token = Token(
+        branch_id=branch_uuid,
+        doctor_id=doctor_uuid,
+        patient_id=patient.id,
+        date=today,
+        token_number=assignment.get("token_number"),
+        appointment_time=appt_time,
+        source="walk_in",
+        status="confirmed",
+        is_urgent=body.is_urgent,
+        confirmed_at=datetime.now(timezone.utc),
+        marked_by_user_id=uuid.UUID(current_user.user_id),
+    )
+    db.add(token)
+    await db.commit()
+    await db.refresh(token)
+
+    # Hybrid calendar write — never fails the walk-in (Rule 4 handled inside)
+    result = await db.execute(select(Doctor).where(Doctor.id == doctor_uuid))
+    doctor = result.scalar_one()
+    from backend.models.schema import Branch as _Branch
+
+    branch_row = (
+        await db.execute(select(_Branch).where(_Branch.id == branch_uuid))
+    ).scalar_one()
+    await write_booking_calendar(
+        db,
+        token,
+        doctor,
+        doctor.google_calendar_id or branch_row.google_calendar_id,
+        patient_first_name=body.patient_name.split()[0] if body.patient_name else "",
+        patient_phone_last4=(body.patient_phone or "")[-4:],
+    )
+
+    request.state.audit_resource_id = str(token.id)
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+
+    logger.info(
+        "walkin_created",
+        branch_id=branch_id,
+        doctor_id=body.doctor_id,
+        token_number=token.token_number,
+        via="walk_in",
+    )
+    return WalkInResponse(
+        token_id=str(token.id),
+        token_number=token.token_number,
+        appointment_time=body.appointment_time,
+        doctor_name=doctor.name,
+        patient_name=body.patient_name,
+        booking_type=doctor.booking_type,
+    )

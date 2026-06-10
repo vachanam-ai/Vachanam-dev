@@ -17,7 +17,7 @@ import structlog
 from sqlalchemy import insert
 
 import backend.services.audit_service as _self  # monkeypatch-safe module self-reference
-from backend.database import AsyncSessionLocal
+import backend.database as _db_module
 from backend.models.schema import AuditLog
 
 logger = structlog.get_logger()
@@ -90,7 +90,13 @@ async def write_audit_row(
         )
 
     try:
-        async with AsyncSessionLocal() as db:
+        # Resolve the session factory at CALL time via the module, not a
+        # from-import frozen at import time. Two reasons: (1) tests patch
+        # backend.database.AsyncSessionLocal per-function with a fresh engine;
+        # (2) a factory captured on an earlier event loop carries pooled
+        # connections bound to that dead loop ("'NoneType' has no attribute
+        # 'send'") — late binding always gets the live one.
+        async with _db_module.AsyncSessionLocal() as db:
             await db.execute(
                 insert(AuditLog).values(
                     action=action,
