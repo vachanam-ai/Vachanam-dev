@@ -81,7 +81,7 @@ async def get_today_queue(
     and Doctor. With TD-018 indexes added, this is a single index scan.
     Without indexes (current state), it's a seq scan — fine for MVP scale.
     """
-    assert_branch_access(current_user, branch_id)
+    await assert_branch_access(current_user, branch_id, db)
 
     try:
         branch_uuid = uuid.UUID(branch_id)
@@ -186,7 +186,7 @@ async def mark_attended(
     Sets audit context on request.state so the @audit decorator can capture
     resource_id, user_id, and branch_id for the audit_log row.
     """
-    assert_branch_access(current_user, branch_id)
+    await assert_branch_access(current_user, branch_id, db)
     result = await _update_status(db, token_id, branch_id, "attended", current_user.user_id)
     # Set audit context AFTER success — decorator reads this in its finally block
     request.state.audit_resource_id = token_id
@@ -213,7 +213,7 @@ async def mark_no_show(
     Sets audit context on request.state so the @audit decorator can capture
     resource_id, user_id, and branch_id for the audit_log row.
     """
-    assert_branch_access(current_user, branch_id)
+    await assert_branch_access(current_user, branch_id, db)
     result = await _update_status(db, token_id, branch_id, "no_show", current_user.user_id)
     # Set audit context AFTER success — decorator reads this in its finally block
     request.state.audit_resource_id = token_id
