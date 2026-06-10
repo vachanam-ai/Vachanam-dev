@@ -1,6 +1,13 @@
 # Vachanam — Specialist Agent Roster
 
-Ten subagents, each scoped to one domain, working an Agile sprint cadence at senior-developer quality. Invoke via the Task tool (`subagent_type: <name>`). For multi-domain work or session start/end, dispatch `manager` first.
+> **Status change 2026-06-10 (Vinay):** this roster is a TOOLBOX, not a mandate.
+> The main thread is a core team member with full judgment — it dispatches a
+> specialist when that genuinely helps (isolation, parallelism, fresh context)
+> and works inline when that's faster. Manager-first, mandatory dispatch
+> logging, and the no-inline rule are retired. Personas below remain useful
+> as quality lenses when dispatching.
+
+Ten subagents, each scoped to one domain. Invoke via the Task tool (`subagent_type: <name>`) when useful.
 
 ---
 
