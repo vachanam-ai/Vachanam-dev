@@ -22,7 +22,7 @@ import os
 
 from dotenv import load_dotenv
 from livekit import agents, api
-from livekit.agents import Agent, AgentSession, RoomInputOptions
+from livekit.agents import Agent, AgentSession, MetricsCollectedEvent, RoomInputOptions, metrics
 from livekit.agents import llm as lk_llm
 from livekit.plugins import google, noise_cancellation, openai, sarvam, silero
 
@@ -103,6 +103,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             api_key=os.getenv("SARVAM_API_KEY"),
             model="saaras:v3",
             language="te-IN",
+            # Force the final transcript the moment client VAD detects end of
+            # speech, instead of waiting on Sarvam's server-side endpointing
+            # (saved ~1-2s of dead air per turn).
+            flush_signal=True,
         ),
         llm=fallback_llm,
         tts=sarvam.TTS(
@@ -117,7 +121,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # finishing the sentence; discard + regenerate if the final transcript
         # differs. Cuts perceived response delay substantially.
         preemptive_generation=True,
+        # VAD-based endpointing: commit the turn sooner after silence.
+        min_endpointing_delay=0.4,
+        max_endpointing_delay=3.0,
     )
+
+    # Per-turn latency telemetry (EOU delay, LLM TTFT, TTS TTFB) — drives tuning.
+    @session.on("metrics_collected")
+    def _on_metrics(ev: MetricsCollectedEvent) -> None:
+        metrics.log_metrics(ev.metrics)
 
     if phone_number:
         logger.info("Outbound: dialing %s via trunk %s", phone_number, OUTBOUND_TRUNK_ID)
