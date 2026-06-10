@@ -142,6 +142,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 # - admin: requires is_admin=True JWT claim (require_admin dependency)
 from backend.routers import admin as admin_router
 from backend.routers import auth as auth_router
+from backend.routers import doctors as doctors_router
 from backend.routers import legal as legal_router
 from backend.routers import payments as payments_router
 from backend.routers import queue as queue_router
@@ -150,6 +151,7 @@ app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(queue_router.router, prefix="/queue", tags=["queue"])
 app.include_router(payments_router.router, prefix="/api", tags=["payments"])
 app.include_router(admin_router.router, prefix="/admin", tags=["admin"])
+app.include_router(doctors_router.router, prefix="/doctors", tags=["doctors"])
 # Legal pages — public, no auth, no prefix (routes are /privacy /terms /dpa)
 app.include_router(legal_router.router, tags=["legal"])
 
