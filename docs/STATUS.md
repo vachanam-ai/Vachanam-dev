@@ -115,10 +115,10 @@ Voice agent ready for Phase 5 telephony enablement. Test suite below tester.md b
 | Component | Status | Where |
 |---|---|---|
 | Voice agent: TTS sanitizer | 11/11 tests pass | [agent/services/tts_sanitizer.py](../agent/services/tts_sanitizer.py) |
-| Voice agent: emergency keyword detection | 12/12 tests pass | [agent/services/emergency.py](../agent/services/emergency.py) |
+| Voice agent: human transfer (intent-based — explicit ask or persistent intent; keyword module removed 2026-06-07) | LLM prompt + transfer tool | [agent/bot.py](../agent/bot.py) |
 | Voice agent: session state, system prompt | manual review | [agent/session_state.py](../agent/session_state.py), [agent/prompts/system_prompt.py](../agent/prompts/system_prompt.py) |
 | Voice agent: 4 booking tools (route, check, assign, confirm) | unit logic verified | [agent/tools/booking_tools.py](../agent/tools/booking_tools.py) |
-| Voice agent: LiveKit entrypoint (Solo cap, emergency, token rollback) | code review | [agent/agent.py](../agent/agent.py) |
+| Voice agent: Pipecat entrypoint (Solo cap, transfer, token rollback) | live calls tested | [agent/bot.py](../agent/bot.py) |
 | Razorpay Standard Checkout | order_id created against live Razorpay test API, signature verify works | [backend/routers/payments.py](../backend/routers/payments.py) |
 | Razorpay test landing page | renders, all 3 plan buttons trigger checkout | [backend/static/index.html](../backend/static/index.html) (mirror of vachanam.in) |
 | DB schema (10 tables: Org, Branch, Doctor, Patient, Token, Call, FollowupTask, BillingCycle, WhatsAppSession, User) | imports without error | [backend/models/schema.py](../backend/models/schema.py) |

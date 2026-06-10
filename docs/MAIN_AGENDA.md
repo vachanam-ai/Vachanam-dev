@@ -64,7 +64,7 @@ Phases 1–4 complete (Foundation, Voice Agent, Razorpay Checkout, Backend Core)
 
 Graphify version 0.8.30 was run in AST-only mode (code files; no LLM semantic pass) on 2026-06-03. Results: 46 code files, 402 nodes, 1006 edges.
 
-- **`agent/agent.py` directly imports `backend/config.py`, `backend/database.py`, and `backend/models/schema.py`.** The voice agent (Fly.io Mumbai) and the backend API (Render Singapore) are two separate deployment containers but share Python modules via monorepo `PYTHONPATH`. A schema change in `backend/models/schema.py` requires both containers to redeploy simultaneously — this is an undocumented operational constraint not visible from reading either Dockerfile alone.
+- **`agent/agent.py` (now `agent/bot.py` after the Pipecat rewrite — same coupling) directly imports `backend/config.py`, `backend/database.py`, and `backend/models/schema.py`.** The voice agent (Fly.io Mumbai) and the backend API (Render Singapore) are two separate deployment containers but share Python modules via monorepo `PYTHONPATH`. A schema change in `backend/models/schema.py` requires both containers to redeploy simultaneously — this is an undocumented operational constraint not visible from reading either Dockerfile alone.
 
 - **`Doctor`, `Patient`, `Token` schema models appear on both the agent side (8 edges each) and the backend side (8 edges each).** The SQLAlchemy ORM models are the only inter-service contract. There is no separate interface layer (no protobuf, no shared Pydantic schemas, no OpenAPI client). This is the largest single architectural coupling in the codebase.
 

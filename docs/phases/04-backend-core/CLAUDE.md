@@ -1,4 +1,6 @@
-# Phase 4 — Backend Core 🔨 ACTIVE (start here next)
+# Phase 4 — Backend Core ✅ DONE
+
+> **Note:** all `payments_test_app.py` deletion steps below were completed (commit `6ffa2d7`); refs kept for history.
 
 **Goal:** Replace the standalone test app with the real `backend/main.py`. Add JWT auth, branch-scoped queue endpoints, and a fresh Alembic migration that covers the schema changes from 2026-05-22. End state: `uvicorn backend.main:app` boots, `/health` returns 200, `/api/create-order` still works, `/queue/{branch_id}/today` returns 401 without a JWT.
 

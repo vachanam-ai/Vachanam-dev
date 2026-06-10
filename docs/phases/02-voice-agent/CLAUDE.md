@@ -1,5 +1,7 @@
 # Phase 2 — Voice Agent ✅ DONE
 
+> **2026-06 update:** the LiveKit-era artifacts below were superseded by the Pipecat rewrite — `agent/agent.py` → `agent/bot.py`; `agent/services/emergency.py` and `tests/unit/test_emergency.py` deleted 2026-06-07 (transfer is intent-based now, no keyword detection). Links to deleted files are kept as plain text for history.
+
 **Goal:** Telugu voice AI that answers SIP calls, books appointments, handles emergencies, atomically assigns tokens. End-to-end agent capable of holding a 4-minute call and producing a confirmed booking.
 
 ---
@@ -7,13 +9,13 @@
 ## What was built
 
 ### Core agent
-- [`agent/agent.py`](../../../agent/agent.py) — LiveKit `JobContext` entrypoint, Solo 4-min cap (240s) with one-shot warning at 230s, token rollback on disconnect, Gemini→GPT-4o-mini fallback
+- `agent/agent.py` *(deleted — now [`agent/bot.py`](../../../agent/bot.py))* — Solo 4-min cap (240s) with one-shot warning at 230s, token rollback on disconnect, Gemini→GPT-4o-mini fallback
 - [`agent/session_state.py`](../../../agent/session_state.py) — per-call `SessionState` dataclass (branch_id, doctor_id, token_held, token_confirmed, call_start, solo_warning_sent, emergency_contact, etc.)
 - [`agent/prompts/system_prompt.py`](../../../agent/prompts/system_prompt.py) — Telugu system prompt builder with `DoctorContext`, emergency contact injection, rebook + Solo-cap variants
 
 ### Services
 - [`agent/services/tts_sanitizer.py`](../../../agent/services/tts_sanitizer.py) — strips markdown, hash-prefixes, emoji before Sarvam TTS. Critical: numbered-list dot strip uses `^(\d+)\.\s+` with `re.MULTILINE` so mid-sentence "5." is preserved
-- [`agent/services/emergency.py`](../../../agent/services/emergency.py) — MVP keyword detection only. No TYPE_1/TYPE_2 classification. On hit: say emergency contact in Telugu, continue booking
+- `agent/services/emergency.py` *(deleted 2026-06-07)* — keyword detection dropped; human transfer is intent-based via LLM prompt + `request_human_transfer` tool
 
 ### Booking tools (4 LLM function tools)
 - [`agent/tools/booking_tools.py`](../../../agent/tools/booking_tools.py):
@@ -24,7 +26,7 @@
 
 ### Tests
 - [`tests/unit/test_tts_sanitizer.py`](../../../tests/unit/test_tts_sanitizer.py) — **11/11 pass**
-- [`tests/unit/test_emergency.py`](../../../tests/unit/test_emergency.py) — **12/12 pass**
+- `tests/unit/test_emergency.py` *(deleted with emergency.py, 2026-06-07)*
 - [`tests/integration/test_booking_flow.py`](../../../tests/integration/test_booking_flow.py) — 4 tests, requires running Postgres + Redis
 - [`tests/edge_cases/test_concurrent_tokens.py`](../../../tests/edge_cases/test_concurrent_tokens.py) — 5 concurrent callers get unique sequential tokens; each coroutine opens its own `async with AsyncSessionLocal()` (shared session is NOT concurrent-safe)
 

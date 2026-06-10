@@ -73,16 +73,18 @@ Owner: `voice-agent-engineer`. Runs on Fly.io Mumbai. Connects to LiveKit + Sarv
 | Path | Status | Purpose |
 |---|---|---|
 | `agent/__init__.py` | placeholder | Package marker. |
-| `agent/agent.py` | working | LiveKit entrypoint. Solo cap watchdog, parallel branch+doctor DB load on greeting, smart turn detection, `allow_interruptions=True`, `_silence_watchdog`, emergency mark, token-rollback-on-disconnect. Pinned `livekit-agents==1.5.9` + `livekit-plugins-turn-detector==1.5.9`. |
+| `agent/bot.py` | working (live calls tested) | Pipecat 1.3.0 pipeline: Sarvam Saaras STT + Gemini 2.5 Flash (GPT-4o-mini fallback) + Sarvam Bulbul TTS (kavitha, Telugu script). Tool registration, token-rollback-on-disconnect, intent-based human transfer. Replaced `agent/agent.py` (LiveKit entrypoint, deleted). |
+| `agent/server.py` | working | FastAPI WS transport for Vobiz: `/answer` XML (inbound + outbound), `/ws` Pipecat bridge, transfer signal map, recording callback (testing-only). |
+| `agent/vobiz_minimal/` | frozen baseline | From-scratch Pipecat+Vobiz connector used to debug transport; reference only. |
+| `agent/livekit_minimal/` | working (in+out) | LiveKit v2 experiment: trunks + dispatch rule with agent dispatch (`setup_sip.py`), agent worker, outbound dispatch script. Quality comparison vs Pipecat pending. |
 | `agent/session_state.py` | working | Per-call state dataclass (branch_id, doctor_id, token_held, token_redis_key, language, etc.). |
 | `agent/requirements.txt` | working | Voice-agent Python pins (livekit-agents 1.5.9, livekit-plugins-sarvam, turn-detector, google-genai, openai, structlog, tenacity, asyncpg, redis). |
 | `agent/prompts/__init__.py` | placeholder | Package marker. |
 | `agent/prompts/system_prompt.py` | working | Telugu / Hindi / English system-prompt builder with WAIT REQUESTS, SILENCE PROMPTS, GARBLED INPUT sections. LLM handles wait semantically via prompt (no keyword detection). |
 | `agent/services/__init__.py` | placeholder | Package marker. |
 | `agent/services/tts_sanitizer.py` | tested (11/11) | Strip markdown, expand digit spacing, normalize for Bulbul TTS. RULE 6 — every `session.say()` goes through this. |
-| `agent/services/emergency.py` | tested (12/12) | Keyword detection (Telugu/Hindi/English). MVP behavior: surface `branch.emergency_contact` + continue booking with urgent priority. No TYPE_1/TYPE_2 classification — that is post-MVP. |
-| `agent/services/silence_handler.py` | tested (19/19) | Pure-logic state machine. Default 5s/7s/10s prompts -> hangup; wait variant 15s/30s/45s; emergency x 2 timeouts; uniform garbled counter (3 retries, hangup on 4th). |
-| `agent/services/audio_quality.py` | tested (20/20, Layer B only) | STT confidence assessor (Layer A — NOT WIRED, TD-021) + LLM clarification detector (Layer B — active in `on_agent_response_done`). |
+| `agent/services/calendar_proxy.py` | working | Re-export shim of `backend/services/calendar_service.py` for the agent runtime (wired into `register_tools` in bot.py). |
+| `agent/services/meta_stub.py` | working | No-op WhatsApp `MetaService` stub (real impl = MVP2). Logs masked phone, never blocks booking. |
 | `agent/tools/__init__.py` | placeholder | Package marker. |
 | `agent/tools/booking_tools.py` | working | 4 LLM function tools: `route_to_doctor`, `check_availability`, `assign_token` (Redis INCR), `confirm_booking`. RULE 3 — token released on disconnect if not confirmed. |
 
@@ -255,9 +257,7 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/__init__.py` | placeholder | Package marker. |
 | `tests/unit/__init__.py` | placeholder | Package marker. |
 | `tests/unit/test_tts_sanitizer.py` | tested (11/11) | TTS sanitization rules. |
-| `tests/unit/test_emergency.py` | tested (12/12) | Keyword detection in 3 languages. |
-| `tests/unit/test_silence_handler.py` | tested (19/19) | Silence state machine — all modes + sticky emergency + uniform garbled. |
-| `tests/unit/test_audio_quality.py` | tested (20/20) | STT confidence + LLM clarification detection. |
+| `tests/unit/test_bot_pipeline_builder.py`, `test_bot_tools_and_fallback.py`, `test_bot_tts_sanitizer.py`, `test_pipecat_imports.py` | tested | Pipecat bot pipeline, tool registration, LLM fallback, sanitizer wiring. (Replaced LiveKit-era test_emergency/test_silence_handler/test_audio_quality — modules deleted with the Pipecat rewrite.) |
 | `tests/unit/test_auth.py` | tested (6/6) | JWT + Google OAuth verification. |
 | `tests/integration/__init__.py` | placeholder | Package marker. |
 | `tests/integration/test_booking_flow.py` | tested (4/4) | Full booking happy path against real DB + real Redis. |

@@ -18,7 +18,7 @@
 
 **No-inline-embody rule (mandatory):** the main thread (orchestrator) must NOT impersonate a specialist by writing code/tests/docs that the specialist owns. Even when faster to do inline, dispatch is required. Rationale: separation of concerns, reviewer enforcement, traceability, persona-specific quality bar. Logged in [`docs/CHANGELOG.md`](docs/CHANGELOG.md) entry 2026-06-01 as the standing rule.
 
-The old `PHASE_0_*.md ... PHASE_5_*.md` files at the repo root and `docs/vachanam-progress.md` are historical reference only. `docs/phases/` is the canonical plan as of 2026-05-22.
+The old `PHASE_0_*.md ... PHASE_5_*.md` files (now in `docs/_legacy/`) and `docs/vachanam-progress.md` are historical reference only. `docs/phases/` is the canonical plan as of 2026-05-22.
 
 For decision history across sessions, see [`docs/CHANGELOG.md`](docs/CHANGELOG.md).
 
@@ -248,7 +248,8 @@ vachanam/
 │
 ├── agent/                            ← Voice agent (runs on Fly.io bom)
 │   ├── __init__.py
-│   ├── agent.py                      ← LiveKit entrypoint
+│   ├── bot.py                        ← Pipecat pipeline entrypoint (was agent.py — LiveKit entrypoint deleted in Pipecat rewrite)
+│   ├── server.py                     ← FastAPI WS transport for Vobiz (/answer + /ws)
 │   ├── session_state.py              ← per-call state dataclass
 │   ├── requirements.txt
 │   ├── prompts/
@@ -257,7 +258,9 @@ vachanam/
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── tts_sanitizer.py          ← sanitize before TTS
-│   │   └── emergency.py              ← MVP: keyword detect, give branch.emergency_contact
+│   │   ├── calendar_proxy.py         ← re-export of backend calendar service for agent runtime
+│   │   └── meta_stub.py              ← no-op WhatsApp stub (MVP2)
+│   │   # emergency.py removed 2026-06-07 — transfer is intent-based, no keyword module
 │   └── tools/
 │       ├── __init__.py
 │       └── booking_tools.py          ← 4 LLM function tools
@@ -431,6 +434,7 @@ await session.say(clean_text)
 ```
 
 ### RULE 7: Emergency MVP — keyword detect only, give branch emergency_contact
+> **SUPERSEDED 2026-06-07** — keyword detection removed; human transfer is intent-based (explicit ask or persistent intent). See docs/CHANGELOG.md. Rule text kept for history.
 ```python
 # MVP has NO TYPE_1/TYPE_2 classification. Do not implement it.
 # If patient mentions ANY emergency keywords at any point:

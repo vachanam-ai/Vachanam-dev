@@ -1,5 +1,7 @@
 # Phase 3 — Razorpay Standard Checkout ✅ DONE (test mode, standalone)
 
+> **Note:** `backend/payments_test_app.py` referenced below was retired in Phase 4 (deleted, commit `6ffa2d7`). The payments router now mounts in [`backend/main.py`](../../../backend/main.py) at `/api`.
+
 **Goal:** A one-time payment can be initiated from the Vachanam landing page, processed through Razorpay's hosted modal, signed-back, and verified server-side.
 
 This is **NOT** the SaaS subscription billing (that's Phase 9). This is one-time checkout — the primitive you compose with for any paid action.
