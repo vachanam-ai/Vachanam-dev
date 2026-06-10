@@ -56,5 +56,21 @@ export const fetchUnavailability = (doctorId, branchId) =>
     .get(`/availability/${doctorId}`, { params: { branch_id: branchId } })
     .then((r) => r.data);
 
+// ── Branch settings / team ──
+export const fetchBranchSettings = (branchId) =>
+  api.get(`/branches/${branchId}/settings`).then((r) => r.data);
+export const updateBranchSettings = (branchId, payload) =>
+  api.patch(`/branches/${branchId}/settings`, payload).then((r) => r.data);
+export const setBranchVoice = (branchId, tts_voice) =>
+  api.patch(`/branches/${branchId}/voice`, { tts_voice }).then((r) => r.data);
+export const testCalendar = (branchId) =>
+  api.post(`/branches/${branchId}/calendar-test`).then((r) => r.data);
+export const fetchStaff = (branchId) =>
+  api.get(`/branches/${branchId}/staff`).then((r) => r.data);
+export const addStaff = (branchId, payload) =>
+  api.post(`/branches/${branchId}/staff`, payload).then((r) => r.data);
+export const createDoctor = (branchId, payload) =>
+  api.post(`/doctors/${branchId}`, payload).then((r) => r.data);
+
 // ── Admin (super_admin only — no clinic PII by design) ──
 export const adminPing = () => api.get("/admin/ping").then((r) => r.data);

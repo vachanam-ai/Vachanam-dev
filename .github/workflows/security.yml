@@ -1,0 +1,45 @@
+name: security-gate
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Audit backend dependencies
+        # Fails the build on any known CVE in pinned requirements.
+        run: pip-audit -r backend/requirements.txt
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — the test scans every commit
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: pip install pytest
+      - name: Scan git history for real secrets
+        run: python -m pytest tests/security/test_secrets_not_in_repo.py -q --tb=short
+
+  frontend-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: npm audit (production deps, high+)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high

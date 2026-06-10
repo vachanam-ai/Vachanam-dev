@@ -105,3 +105,208 @@ async def update_branch_voice(
         emergency_contact=branch.emergency_contact,
         allowed_voices=ALLOWED_VOICES,
     )
+
+
+# ── Clinic details, calendar, team management (org_admin) ───────────────────
+
+
+class BranchDetailsUpdate(BaseModel):
+    name: str | None = None
+    address: str | None = None
+    emergency_contact: str | None = None
+    google_calendar_id: str | None = None
+    did_number: str | None = None  # assisted provisioning: owner enters the number we assign
+
+
+class StaffMember(BaseModel):
+    user_id: str
+    email: str
+    name: str | None
+    role: str
+
+
+class StaffCreate(BaseModel):
+    email: str
+    name: str
+    password: str
+    role: str = "receptionist"
+
+
+def _require_org_admin(current_user: CurrentUser) -> None:
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can do this")
+
+
+@router.patch(
+    "/{branch_id}/settings",
+    response_model=BranchSettings,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.settings_updated", resource_type="branch")
+async def update_branch_settings(
+    branch_id: str,
+    body: BranchDetailsUpdate,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BranchSettings:
+    """Update clinic details. org_admin only. Only provided fields change."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+
+    result = await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    branch = result.scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    for field in ("name", "address", "emergency_contact", "google_calendar_id", "did_number"):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(branch, field, value.strip() or None)
+    await db.commit()
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("branch_settings_updated", branch_id=branch_id)
+
+    return BranchSettings(
+        branch_id=branch_id,
+        name=branch.name,
+        tts_voice=getattr(branch, "tts_voice", "rupali"),
+        did_number=branch.did_number,
+        emergency_contact=branch.emergency_contact,
+        allowed_voices=ALLOWED_VOICES,
+    )
+
+
+@router.post(
+    "/{branch_id}/calendar-test",
+    dependencies=[Depends(queue_today_limit)],
+)
+async def test_calendar_connection(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Create + delete a probe event on the branch calendar. Proves the
+    service account has writer access before any real booking depends on it."""
+    await assert_branch_access(current_user, branch_id, db)
+    result = await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    branch = result.scalar_one_or_none()
+    if branch is None or not branch.google_calendar_id:
+        raise HTTPException(status_code=422, detail="Set a calendar ID first")
+
+    from backend.services.calendar_service import GoogleCalendarService
+
+    try:
+        svc = GoogleCalendarService()
+        ok = await _probe_calendar(svc, branch.google_calendar_id)
+    except Exception as e:
+        logger.warning("calendar_test_failed", branch_id=branch_id, error=str(e))
+        return {"ok": False, "detail": str(e)[:200]}
+    return {"ok": ok}
+
+
+async def _probe_calendar(svc, calendar_id: str) -> bool:
+    """Insert + delete a 1-minute probe event (sync client run in thread)."""
+    import asyncio as _asyncio
+    from datetime import datetime, timedelta, timezone as _tz
+
+    def _probe() -> bool:
+        start = datetime.now(_tz.utc) + timedelta(days=1)
+        ev = (
+            svc._service.events()
+            .insert(
+                calendarId=calendar_id,
+                body={
+                    "summary": "Vachanam connection test",
+                    "start": {"dateTime": start.isoformat()},
+                    "end": {"dateTime": (start + timedelta(minutes=1)).isoformat()},
+                },
+            )
+            .execute()
+        )
+        svc._service.events().delete(calendarId=calendar_id, eventId=ev["id"]).execute()
+        return True
+
+    return await _asyncio.to_thread(_probe)
+
+
+@router.get(
+    "/{branch_id}/staff",
+    response_model=list[StaffMember],
+    dependencies=[Depends(queue_today_limit)],
+)
+async def list_staff(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[StaffMember]:
+    """All users with access to this branch (org_admin only — emails are PII)."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+
+    from backend.models.schema import User
+
+    result = await db.execute(select(User).where(User.branch_ids.contains([branch_id])))
+    return [
+        StaffMember(user_id=str(u.id), email=u.email, name=u.name, role=u.role)
+        for u in result.scalars().all()
+    ]
+
+
+@router.post(
+    "/{branch_id}/staff",
+    response_model=StaffMember,
+    status_code=201,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.staff_added", resource_type="user")
+async def add_staff(
+    branch_id: str,
+    body: StaffCreate,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StaffMember:
+    """Owner adds a receptionist or doctor login for this branch.
+    The new user signs in with email+password (or Google once they sign in
+    with the same email)."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+    if body.role not in ("receptionist", "doctor"):
+        raise HTTPException(status_code=422, detail="Role must be receptionist or doctor")
+    if len(body.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    from backend.models.schema import User
+    from backend.routers.auth import _hash_password
+
+    email = body.email.strip().lower()
+    existing = (
+        await db.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=409, detail="A user with this email already exists")
+
+    user = User(
+        org_id=uuid.UUID(current_user.org_id) if current_user.org_id else None,
+        email=email,
+        name=body.name.strip(),
+        role=body.role,
+        branch_ids=[branch_id],
+        password_hash=_hash_password(body.password),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+
+    request.state.audit_resource_id = str(user.id)
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("staff_added", branch_id=branch_id, role=body.role)
+
+    return StaffMember(user_id=str(user.id), email=user.email, name=user.name, role=user.role)
