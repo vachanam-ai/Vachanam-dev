@@ -53,6 +53,8 @@ class Branch(Base):
     vobiz_did_id: Mapped[str | None] = mapped_column(String(255))
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))
+    # Sarvam Bulbul speaker for this clinic's voice agent (clinic-selectable)
+    tts_voice: Mapped[str] = mapped_column(String(32), default="rupali", server_default="rupali")
     timezone: Mapped[str] = mapped_column(String(50), default="Asia/Kolkata")
     status: Mapped[str] = mapped_column(
         Enum("active", "inactive", name="branch_status"),

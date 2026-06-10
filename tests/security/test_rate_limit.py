@@ -113,7 +113,7 @@ async def client(redis):
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def test_sixth_auth_google_within_60s_returns_429(client, redis):
+async def test_sixth_auth_google_within_60s_returns_429(client, redis, monkeypatch):
     """6th call to /auth/google in 60s from one IP → 429 (spec §6.3).
 
     First 5 are allowed (they fail auth with 401 because the id_token is junk —
@@ -124,7 +124,12 @@ async def test_sixth_auth_google_within_60s_returns_429(client, redis):
     fails). The point is the limiter counts these against the IP. If you see
     500s, your impl is crashing — fix that first. If you see all 5 as 401 and
     the 6th as 401 too, the limiter is NOT wired. If the 6th is 429, GREEN.
+
+    OAuth client id blanked: with a real id configured the handler records the
+    5 junk-token failures and BLOCKLISTS the IP → 6th would be 403, masking the
+    limiter behavior this test owns (blocklist has its own tests).
     """
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
     body = {"id_token": "junk.invalid.token"}
     statuses = []
     for _ in range(6):
@@ -143,8 +148,10 @@ async def test_sixth_auth_google_within_60s_returns_429(client, redis):
     )
 
 
-async def test_429_response_includes_retry_after_header(client, redis):
+async def test_429_response_includes_retry_after_header(client, redis, monkeypatch):
     """When 429 returned, Retry-After header must be present (spec §6.4)."""
+    # Blank OAuth id so failed-login blocklist (403) can't preempt the 429 path.
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
     body = {"id_token": "junk.invalid.token"}
     # Burn through the 5/min budget
     last_response = None
@@ -280,6 +287,12 @@ async def test_trusted_ip_bypasses_rate_limit(client, redis, monkeypatch):
     """
     # ── Phase A — confirm limiter is active when bypass is unset ─────────
     monkeypatch.delenv("RATE_LIMIT_BYPASS_IPS", raising=False)
+    # This test RELOADS config from env — blank the OAuth id at the env level
+    # AND on the live settings instance (auth.py imported it by reference long
+    # before the reload) so junk-token failures can't blocklist the IP
+    # (403 would mask the 429 this test owns).
+    monkeypatch.setenv("GOOGLE_OAUTH_CLIENT_ID", "")
+    monkeypatch.setattr(settings, "google_oauth_client_id", "")
     from importlib import reload
     from backend import config as cfg_mod
     reload(cfg_mod)

@@ -1,7 +1,9 @@
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { roleHome, useAuth } from "./hooks/useAuth.jsx";
 import Shell from "./components/Shell.jsx";
+import Landing from "./pages/Landing.jsx";
 import Login from "./pages/Login.jsx";
+import Settings from "./pages/Settings.jsx";
 import Queue from "./pages/Queue.jsx";
 import WalkIn from "./pages/WalkIn.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
@@ -35,6 +37,7 @@ export default function App() {
   const { user, role } = useAuth();
   return (
     <Routes>
+      <Route path="/" element={user ? <Navigate to={roleHome(role)} replace /> : <Landing />} />
       <Route path="/login" element={user ? <Navigate to={roleHome(role)} replace /> : <Login />} />
 
       <Route
@@ -73,6 +76,14 @@ export default function App() {
           element={
             <Protected roles={["doctor"]}>
               <DoctorSchedule />
+            </Protected>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <Protected roles={["org_admin"]}>
+              <Settings />
             </Protected>
           }
         />

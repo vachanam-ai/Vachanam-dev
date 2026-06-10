@@ -9,7 +9,8 @@ const NAV = {
   org_admin: [
     { to: "/dashboard", label: "Dashboard" },
     { to: "/queue", label: "Queue" },
-    { to: "/walk-in", label: "Walk-in" }
+    { to: "/walk-in", label: "Walk-in" },
+    { to: "/settings", label: "Settings" }
   ],
   doctor: [{ to: "/my-schedule", label: "My Schedule" }],
   super_admin: [{ to: "/admin", label: "Operations" }]

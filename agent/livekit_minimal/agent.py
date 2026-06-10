@@ -342,6 +342,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if True:  # noqa: SIM108 — preserves indentation of the call-setup block
         branch_id, branch_name = branch.id, branch.name
         emergency_contact = branch.emergency_contact or ""
+        tts_voice = getattr(branch, "tts_voice", None) or "rupali"
         state.branch_id = branch_id
         state.emergency_contact = emergency_contact
 
@@ -406,7 +407,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             tts=sarvam.TTS(
                 api_key=settings.sarvam_api_key,
                 model="bulbul:v3",
-                speaker="kavitha",
+                speaker=tts_voice,  # clinic-selected (branches.tts_voice, default rupali)
                 target_language_code="te-IN",
                 pace=1.3,
             ),
