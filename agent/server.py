@@ -128,17 +128,22 @@ def _build_outbound_answer_xml(public_url: str) -> str:
     Differences from the inbound XML:
       - NO <Speak> tag — patient was dialed by us; AI will speak first turn
         through the WebSocket, no pre-WebSocket greeting needed.
-      - audioTrack="both" — we receive AND send audio on an outbound leg.
-      - NO <Record> — outbound recording is deferred (sub-spec concern).
+      - Matches reference Vobiz-X-Pipecat server.py exactly:
+        <Record> precedes <Stream>; both required to keep Vobiz in webhook flow.
+      - audioTrack="inbound" — Vobiz only accepts "inbound"/"outbound".
+        bidirectional="true" handles the return audio path.
 
     Same /ws endpoint; Pipecat/bot.py handles the session identically.
     """
     ws_url = _build_ws_url(public_url)
+    recording_callback = f"{public_url.rstrip('/')}/recording-ready"
 
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         "<Response>\n"
-        f'  <Stream bidirectional="true" audioTrack="both" contentType="audio/x-mulaw;rate=8000"'
+        f'  <Record fileFormat="wav" maxLength="3600" recordSession="true"'
+        f' callbackUrl="{escape(recording_callback)}" callbackMethod="POST"></Record>\n'
+        f'  <Stream bidirectional="true" audioTrack="inbound" contentType="audio/x-mulaw;rate=8000"'
         f' keepCallAlive="true">{escape(ws_url)}</Stream>\n'
         "</Response>"
     )
