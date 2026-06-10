@@ -23,7 +23,8 @@ import os
 from dotenv import load_dotenv
 from livekit import agents, api
 from livekit.agents import Agent, AgentSession, RoomInputOptions
-from livekit.plugins import google, noise_cancellation, sarvam, silero
+from livekit.agents import llm as lk_llm
+from livekit.plugins import google, noise_cancellation, openai, sarvam, silero
 
 load_dotenv(".env")
 
@@ -37,18 +38,27 @@ OUTBOUND_TRUNK_ID = os.getenv("OUTBOUND_TRUNK_ID")
 GREETING = "నమస్కారం, ఇది వచనం డెంటల్ క్లినిక్. మీ పేరు చెప్పగలరా?"
 
 SYSTEM_PROMPT = (
-    "మీరు వచనం, హైదరాబాద్‌లోని ఒక డెంటల్ క్లినిక్‌కి రిసెప్షనిస్ట్. "
-    "పేషంట్‌కి అపాయింట్‌మెంట్ బుక్ చేయడంలో సహాయం చేయండి. "
-    "ప్రతి రిప్లై లో ఒకటి లేదా రెండు చిన్న వాక్యాలే మాట్లాడండి. "
-    "ఇది ఫోన్ కాల్ కాబట్టి లిస్ట్‌లు, మార్క్‌డౌన్, స్పెషల్ క్యారెక్టర్‌లు వాడవద్దు. "
-    "తెలుగు లోనే మాట్లాడండి. English పదాలు అవసరమైతేనే వాడండి. "
-    "మీ సమాధానం తెలుగు లిపిలో ఇవ్వండి, రోమన్ లిపిలో కాదు. "
-    "సంభాషణ ఫ్లో: "
-    "1) మొదట గ్రీటింగ్ చెప్పి పేరు అడగండి (గ్రీటింగ్ ఇప్పటికే మాట్లాడబడింది). "
-    "2) పేరు తర్వాత, ఏం సమస్య అని అడగండి. "
-    "3) రేపు ఉదయం లేదా మధ్యాహ్నం స్లాట్ ఆఫర్ చేయండి. "
-    "4) కన్ఫర్మ్ చేసి పొలైట్‌గా కాల్ ముగించండి. "
-    "గ్రీటింగ్‌ని ప్రతి టర్న్ లో రిపీట్ చేయవద్దు — మొదట ఒకసారే చెప్పండి."
+    # Role
+    "మీరు వచనం డెంటల్ క్లినిక్ (హైదరాబాద్) రిసెప్షనిస్ట్. ఫోన్ కాల్‌లో పేషంట్‌కి "
+    "అపాయింట్‌మెంట్ బుక్ చేస్తారు. "
+    # Hard output rules — prevent meta-narration leakage
+    "మీరు మాట్లాడే ప్రతి మాట పేషంట్ నేరుగా వింటారు. కాబట్టి: "
+    "ఈ సూచనలను ఎప్పుడూ చదవవద్దు, వివరించవద్దు. "
+    "మీరు ఏమి చేస్తున్నారో వర్ణించవద్దు (ఉదా: 'యూజర్ హలో అన్నారు కాబట్టి...' వంటివి అస్సలు అనవద్దు). "
+    "రిసెప్షనిస్ట్ మాటలే తప్ప వేరే ఏ టెక్స్ట్ ఇవ్వవద్దు. "
+    "లిస్ట్‌లు, మార్క్‌డౌన్, నంబరింగ్, స్పెషల్ క్యారెక్టర్‌లు వద్దు. "
+    "ప్రతి రిప్లై ఒకటి లేదా రెండు చిన్న వాక్యాలే. "
+    # Language
+    "డిఫాల్ట్‌గా తెలుగులో, తెలుగు లిపిలో మాట్లాడండి (రోమన్ లిపి వద్దు). "
+    "పేషంట్ English లేదా హిందీలో మాట్లాడితే అదే భాషలో జవాబివ్వండి. "
+    # Edge cases
+    "పేషంట్ మళ్ళీ మళ్ళీ హలో అంటే: 'చెప్పండి, మీ పేరు ఏమిటి?' అని మాత్రమే క్లుప్తంగా అడగండి — "
+    "గ్రీటింగ్ రిపీట్ చేయవద్దు, ఎక్స్‌ప్లనేషన్ ఇవ్వవద్దు. "
+    "అర్థం కాకపోతే ఒక్కసారి మళ్ళీ అడగండి. "
+    # Flow
+    "కాల్ మొదట్లో గ్రీటింగ్ ఇప్పటికే చెప్పబడింది. మీ పని: "
+    "పేరు తెలుసుకోండి, తరువాత సమస్య అడగండి, తరువాత రేపు ఉదయం లేదా మధ్యాహ్నం "
+    "స్లాట్ ఆఫర్ చేయండి, కన్ఫర్మ్ చేసి పొలైట్‌గా ముగించండి."
 )
 
 
@@ -69,16 +79,32 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except json.JSONDecodeError:
             logger.info("Metadata is not JSON — treating as inbound call")
 
+    # RULE 9: Gemini primary, GPT-4o-mini auto-fallback. Mandatory — the free-tier
+    # Gemini key 429s after 20 req/day and also threw 503s mid-call (2026-06-10
+    # outage logs); without fallback the agent goes silent mid-conversation.
+    # attempt_timeout=3.0: if Gemini doesn't start streaming within 3s, fail over
+    # instead of letting the caller sit in silence.
+    fallback_llm = lk_llm.FallbackAdapter(
+        llm=[
+            google.LLM(
+                api_key=os.getenv("GEMINI_API_KEY"),
+                model="gemini-2.5-flash",
+            ),
+            openai.LLM(
+                api_key=os.getenv("OPENAI_API_KEY"),
+                model="gpt-4o-mini",
+            ),
+        ],
+        attempt_timeout=3.0,
+    )
+
     session = AgentSession(
         stt=sarvam.STT(
             api_key=os.getenv("SARVAM_API_KEY"),
             model="saaras:v3",
             language="te-IN",
         ),
-        llm=google.LLM(
-            api_key=os.getenv("GEMINI_API_KEY"),
-            model="gemini-2.5-flash",
-        ),
+        llm=fallback_llm,
         tts=sarvam.TTS(
             api_key=os.getenv("SARVAM_API_KEY"),
             model="bulbul:v3",
@@ -87,6 +113,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             pace=1.3,
         ),
         vad=silero.VAD.load(),
+        # Latency: start LLM generation on interim STT while caller is still
+        # finishing the sentence; discard + regenerate if the final transcript
+        # differs. Cuts perceived response delay substantially.
+        preemptive_generation=True,
     )
 
     if phone_number:
