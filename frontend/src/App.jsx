@@ -3,6 +3,7 @@ import { roleHome, useAuth } from "./hooks/useAuth.jsx";
 import Shell from "./components/Shell.jsx";
 import Landing from "./pages/Landing.jsx";
 import Login from "./pages/Login.jsx";
+import Register from "./pages/Register.jsx";
 import Settings from "./pages/Settings.jsx";
 import Queue from "./pages/Queue.jsx";
 import WalkIn from "./pages/WalkIn.jsx";
@@ -39,6 +40,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={user ? <Navigate to={roleHome(role)} replace /> : <Landing />} />
       <Route path="/login" element={user ? <Navigate to={roleHome(role)} replace /> : <Login />} />
+      <Route path="/register" element={user ? <Navigate to={roleHome(role)} replace /> : <Register />} />
 
       <Route
         element={
@@ -74,7 +76,7 @@ export default function App() {
         <Route
           path="/my-schedule"
           element={
-            <Protected roles={["doctor"]}>
+            <Protected roles={["doctor", "org_admin"]}>
               <DoctorSchedule />
             </Protected>
           }

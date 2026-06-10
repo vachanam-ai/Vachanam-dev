@@ -1,5 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { clearToken, fetchMe, getToken, loginWithGoogle, setToken } from "../api/client";
+import {
+  clearToken,
+  fetchMe,
+  getToken,
+  loginWithGoogle,
+  loginWithPassword,
+  registerClinic,
+  setToken
+} from "../api/client";
 
 const AuthContext = createContext(null);
 
@@ -24,13 +32,25 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback(async (idToken) => {
-    const data = await loginWithGoogle(idToken);
+  const finishLogin = useCallback(async (data) => {
     setToken(data.access_token);
     const me = await fetchMe();
     setUser(me);
     return me;
   }, []);
+
+  const login = useCallback(
+    async (idToken) => finishLogin(await loginWithGoogle(idToken)),
+    [finishLogin]
+  );
+  const loginPassword = useCallback(
+    async (email, password) => finishLogin(await loginWithPassword(email, password)),
+    [finishLogin]
+  );
+  const register = useCallback(
+    async (payload) => finishLogin(await registerClinic(payload)),
+    [finishLogin]
+  );
 
   const logout = useCallback(() => {
     clearToken();
@@ -43,12 +63,14 @@ export function AuthProvider({ children }) {
       user,
       loading,
       login,
+      loginPassword,
+      register,
       logout,
       role: user?.role ?? null,
       branchId: user?.branch_ids?.[0] ?? null,
       branchIds: user?.branch_ids ?? []
     }),
-    [user, loading, login, logout]
+    [user, loading, login, loginPassword, register, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -39,9 +39,11 @@ export default function WalkIn() {
     enabled: Boolean(branchId)
   });
 
+  // DoctorOut carries no status field (router returns this branch's doctors);
+  // only filter if a status is actually present.
   const active = useMemo(
     () => (Array.isArray(doctors) ? doctors : doctors?.doctors ?? []).filter(
-      (d) => d.status === "active"
+      (d) => !d.status || d.status === "active"
     ),
     [doctors]
   );

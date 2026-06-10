@@ -12,6 +12,7 @@ export default defineConfig({
       "/queue": { target: "http://localhost:8000", changeOrigin: true },
       "/doctors": { target: "http://localhost:8000", changeOrigin: true },
       "/availability": { target: "http://localhost:8000", changeOrigin: true },
+      "/branches": { target: "http://localhost:8000", changeOrigin: true },
       "/dashboard": { target: "http://localhost:8000", changeOrigin: true },
       "/admin": { target: "http://localhost:8000", changeOrigin: true }
     }

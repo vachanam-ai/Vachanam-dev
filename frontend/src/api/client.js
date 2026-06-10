@@ -30,6 +30,10 @@ api.interceptors.response.use(
 // ── Auth ──
 export const loginWithGoogle = (id_token) =>
   api.post("/auth/google", { id_token }).then((r) => r.data);
+export const loginWithPassword = (email, password) =>
+  api.post("/auth/login", { email, password }).then((r) => r.data);
+export const registerClinic = (payload) =>
+  api.post("/auth/register", payload).then((r) => r.data);
 export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
 
 // ── Queue (receptionist) ──
@@ -40,13 +44,11 @@ export const markAttended = (branchId, tokenId) =>
 export const markNoShow = (branchId, tokenId) =>
   api.patch(`/queue/${branchId}/token/${tokenId}/no-show`).then((r) => r.data);
 
-// ── Doctors ──
+// ── Doctors ── (paths match backend/routers/doctors.py exactly)
 export const fetchDoctors = (branchId) =>
-  api.get(`/doctors`, { params: { branch_id: branchId } }).then((r) => r.data);
+  api.get(`/doctors/${branchId}`).then((r) => r.data);
 export const stopWalkinsToday = (doctorId, branchId) =>
-  api
-    .post(`/doctors/${doctorId}/stop-walkins-today`, null, { params: { branch_id: branchId } })
-    .then((r) => r.data);
+  api.patch(`/doctors/${branchId}/${doctorId}/stop-walkins-today`).then((r) => r.data);
 
 // ── Availability (doctor self-service) ──
 export const fetchUnavailability = (doctorId, branchId) =>

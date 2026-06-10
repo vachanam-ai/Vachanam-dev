@@ -205,3 +205,192 @@ async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
 
     await revoke_jwt(current_user.jti, exp_timestamp)
     logger.info("user_logout", user_id=current_user.user_id, jti=current_user.jti)
+
+
+# ── Self-serve clinic registration + email/password login ───────────────────
+
+
+class RegisterRequest(BaseModel):
+    clinic_name: str
+    owner_name: str
+    phone: str
+    email: str | None = None
+    password: str | None = None
+    id_token: str | None = None  # Google alternative to email+password
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+def _hash_password(password: str) -> str:
+    import bcrypt
+
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_password(password: str, password_hash: str) -> bool:
+    import bcrypt
+
+    try:
+        return bcrypt.checkpw(password.encode(), password_hash.encode())
+    except ValueError:
+        return False
+
+
+@router.post(
+    "/register",
+    response_model=TokenResponse,
+    status_code=201,
+    dependencies=[Depends(auth_google_limit)],
+)
+async def register_clinic(request: Request, body: RegisterRequest) -> TokenResponse:
+    """Self-serve clinic signup: creates Organization (14-day trial) + Branch +
+    org_admin User in one transaction, then signs the user in.
+
+    Identity: either email+password (bcrypt) or a Google ID token.
+    """
+    import uuid as _uuid
+    from datetime import datetime, timedelta, timezone as _tz
+
+    from backend.models.schema import Branch, Organization
+
+    client_ip = request.client.host if request.client else "unknown"
+    await check_ip_blocklist(request)
+
+    google_sub: str | None = None
+    email = (body.email or "").strip().lower()
+    if body.id_token:
+        if not settings.google_oauth_client_id:
+            raise HTTPException(status_code=401, detail="OAuth not configured")
+        try:
+            info = google_id_token.verify_oauth2_token(
+                body.id_token, google_requests.Request(), settings.google_oauth_client_id
+            )
+        except ValueError:
+            await record_failed_login(client_ip)
+            raise HTTPException(status_code=401, detail="Invalid Google token")
+        google_sub = info.get("sub")
+        email = (info.get("email") or "").lower()
+        if not google_sub or not email:
+            raise HTTPException(status_code=401, detail="Google token missing required claims")
+    else:
+        if not email or not body.password:
+            raise HTTPException(status_code=422, detail="email and password required")
+        if len(body.password) < 8:
+            raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if len(body.clinic_name.strip()) < 2:
+        raise HTTPException(status_code=422, detail="Clinic name required")
+
+    async with AsyncSessionLocal() as db:
+        existing = (
+            await db.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(
+                status_code=409, detail="Account already exists — sign in instead"
+            )
+
+        org = Organization(
+            name=body.clinic_name.strip(),
+            owner_phone=body.phone.strip(),
+            owner_email=email,
+            plan="clinic",
+            status="trial",
+            trial_ends_at=datetime.now(_tz.utc) + timedelta(days=14),
+        )
+        db.add(org)
+        await db.flush()
+
+        branch = Branch(
+            org_id=org.id,
+            name=body.clinic_name.strip(),
+            # WhatsApp wiring is MVP2 — unique placeholder satisfies the NOT NULL
+            # constraint until a real number is connected during onboarding.
+            whatsapp_number=f"pending-{_uuid.uuid4().hex[:12]}",
+            emergency_contact=body.phone.strip(),
+        )
+        db.add(branch)
+        await db.flush()
+
+        user = User(
+            org_id=org.id,
+            email=email,
+            name=body.owner_name.strip(),
+            phone=body.phone.strip(),
+            role="org_admin",
+            branch_ids=[str(branch.id)],
+            google_sub=google_sub,
+            password_hash=_hash_password(body.password) if body.password else None,
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+        user_id = user.id
+        token = create_access_token(user)
+
+    logger.info("clinic_registered", user_id=str(user_id), org=body.clinic_name[:30])
+    try:
+        await _audit_svc.write_audit_row(
+            action="user.register",
+            user_id=user_id,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
+    except Exception as audit_err:
+        logger.error("audit_write_failed", action="user.register", error=str(audit_err))
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=settings.jwt_expire_hours * 3600,
+    )
+
+
+@router.post(
+    "/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(auth_google_limit)],
+)
+async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
+    """Email + password sign-in. Same blocklist + failed-login accounting as
+    the Google path (5 failures/IP → 1h block)."""
+    client_ip = request.client.host if request.client else "unknown"
+    await check_ip_blocklist(request)
+
+    email = body.email.strip().lower()
+    async with AsyncSessionLocal() as db:
+        user = (
+            await db.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+        if user is None or not user.password_hash or not _verify_password(
+            body.password, user.password_hash
+        ):
+            await record_failed_login(client_ip)
+            # One message for both cases — no account-existence oracle
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        user_id = user.id
+        user_role = user.role
+        token = create_access_token(user)
+
+    logger.info("user_login", user_id=str(user_id), role=user_role, method="password")
+    try:
+        await _audit_svc.write_audit_row(
+            action="user.login.success",
+            user_id=user_id,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
+    except Exception as audit_err:
+        logger.error("audit_write_failed", action="user.login.success", error=str(audit_err))
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=settings.jwt_expire_hours * 3600,
+    )

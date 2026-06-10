@@ -398,6 +398,8 @@ class User(Base):
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
     # is_admin: Vachanam platform admin (Vinay only) — gives access to AdminDashboard
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # password_hash: bcrypt hash for email+password login (None for Google-only users)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization | None"] = relationship(back_populates="users")

@@ -19,7 +19,7 @@ export default {
         danger: "#a51d2d"
       },
       fontFamily: {
-        display: ["Spectral", "Georgia", "serif"],
+        display: ["Fraunces", "Georgia", "serif"],
         ui: ["Outfit", "system-ui", "sans-serif"],
         brand: ["Pacifico", "cursive"]
       },
