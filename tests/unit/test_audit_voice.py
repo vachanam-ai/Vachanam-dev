@@ -337,7 +337,9 @@ async def test_audit_voice_emergency_keyword_category_only() -> None:
         f"Expected a category string, got: {category!r}"
     )
 
-    # The raw keywords from emergency.py must NOT appear in metadata values
+    # Raw symptom phrases must NOT appear in metadata values. (emergency.py was
+    # removed 2026-06-07 — transfer is intent-based via the LLM prompt — but the
+    # PII rule stands: only category strings ever reach the audit log.)
     raw_keywords = [
         "heart attack", "chest pain", "unconscious", "not breathing",
         "severe bleeding", "stroke", "seizure", "collapsed", "fainted",

@@ -70,6 +70,7 @@ _DOC_CONTEXT_ALLOWLIST = [
 _SAFE_JWT_SECRETS = [
     "dev-secret-change-in-production",
     "ci-test-jwt-secret-not-real-do-not-use-in-prod",
+    "fakesecretfortestonly",  # this test suite's own fixture (in history at e7745d3bf7c3)
 ]
 
 # Known safe RAZORPAY_KEY_SECRET values (test-mode secrets, mentioned in docs)

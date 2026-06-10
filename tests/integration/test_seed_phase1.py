@@ -73,7 +73,8 @@ async def test_seed_phase1_creates_three_rows(db):
 
     # Spot-check seeded values
     branch = (await db.execute(select(Branch).where(Branch.did_number == test_did))).scalar_one()
-    assert branch.name == "Test Clinic Hyderabad"
+    # Branch renamed "Vachanam" 2026-06 so the voice greeting says the brand name
+    assert branch.name == "Vachanam"
     assert branch.emergency_contact == test_admin
 
     doctor = (await db.execute(select(Doctor).where(Doctor.branch_id == branch.id))).scalar_one()

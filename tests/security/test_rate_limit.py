@@ -191,6 +191,17 @@ async def test_five_failed_google_verifications_blocks_ip_in_redis(client, redis
     # which raises ValueError for junk tokens -> triggers record_failed_login().
     monkeypatch.setattr(settings, "google_oauth_client_id", "fake-client-id-for-test.apps.googleusercontent.com")
 
+    # Hermetic: real verify_oauth2_token fetches Google certs over the network
+    # BEFORE decoding the token (flaky/blocked in CI). Stub it to raise the
+    # same ValueError the real lib raises for an invalid token.
+    def _raise_invalid(*args: object, **kwargs: object) -> None:
+        raise ValueError("Invalid token signature (test stub)")
+
+    monkeypatch.setattr(
+        "backend.routers.auth.google_id_token.verify_oauth2_token",
+        _raise_invalid,
+    )
+
     body = {"id_token": "junk.invalid.token"}
     # 5 failed attempts (each 401 from google verify). Limiter is 5/min so the
     # 5th still goes through to the handler; the 6th would be 429 (Group 1).

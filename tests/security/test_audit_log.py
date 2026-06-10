@@ -220,6 +220,16 @@ async def test_failed_google_login_writes_audit_log_row(client, db, monkeypatch)
         "fake-client-id-for-test.apps.googleusercontent.com",
     )
 
+    # Hermetic: real verify_oauth2_token fetches Google certs over the network
+    # BEFORE decoding (flaky/blocked in CI). Simulate verification failure.
+    def _raise_invalid(*args: object, **kwargs: object) -> None:
+        raise ValueError("Invalid token signature (test stub)")
+
+    monkeypatch.setattr(
+        "backend.routers.auth.google_id_token.verify_oauth2_token",
+        _raise_invalid,
+    )
+
     r = await client.post("/auth/google", json={"id_token": "junk.invalid.token"})
     # 401 from Google verification failure -- that's expected
     assert r.status_code in (401, 403, 429), (

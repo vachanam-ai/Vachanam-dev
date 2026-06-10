@@ -81,6 +81,8 @@ from agent.prompts.system_prompt import (
     build_disclosure_utterance,
     build_system_prompt,
 )
+from agent.services.calendar_proxy import GoogleCalendarService
+from agent.services.meta_stub import MetaService
 from agent.services.tts_sanitizer import sanitize_for_tts
 from agent.session_state import SessionState
 from backend.config import settings
@@ -728,21 +730,44 @@ def register_tools(
         if args.get("appointment_time"):
             appointment_time = dtime.fromisoformat(args["appointment_time"])
 
-        result = await _confirm_booking(
-            doctor_id=doctor_id,
-            branch_id=session_state.branch_id,
-            patient_name=args["patient_name"],
-            patient_phone=args.get("patient_phone"),
-            complaint=args["complaint"],
-            booking_date=booking_date,
-            token_number=int(args["token_number"]),
-            followup_consent=bool(args["followup_consent"]),
-            appointment_time=appointment_time,
-            source="voice",
-            db=db_session,
-            calendar_service=calendar_service,
-            meta_service=meta_service,
-        )
+        if calendar_service is None:
+            # RULE 4: no calendar = no booking. Graceful tool result, never a crash.
+            logger.error(
+                "confirm_booking_no_calendar_service",
+                branch_id=str(session_state.branch_id),
+            )
+            await params.result_callback(
+                {"success": False, "error": "booking_system_unavailable"}
+            )
+            return
+
+        try:
+            result = await _confirm_booking(
+                doctor_id=doctor_id,
+                branch_id=session_state.branch_id,
+                patient_name=args["patient_name"],
+                patient_phone=args.get("patient_phone"),
+                complaint=args["complaint"],
+                booking_date=booking_date,
+                token_number=int(args["token_number"]),
+                followup_consent=bool(args["followup_consent"]),
+                appointment_time=appointment_time,
+                source="voice",
+                db=db_session,
+                calendar_service=calendar_service,
+                meta_service=meta_service,
+            )
+        except Exception as e:
+            # Calendar write failed after retries (RULE 4) or unexpected DB error.
+            # Token stays held; disconnect handler rolls it back if call ends here.
+            logger.error(
+                "confirm_booking_failed",
+                error=str(e),
+                branch_id=str(session_state.branch_id),
+            )
+            await params.result_callback({"success": False, "error": "booking_failed"})
+            return
+
         # On success, mark token confirmed so disconnect won't roll it back
         if result.get("success"):
             session_state.token_confirmed = True
@@ -1105,11 +1130,29 @@ async def run_pipeline(
         async def _tts_say(text: str) -> None:
             await worker.queue_frame(TextFrame(text=text))
 
+        # Booking dependencies. Calendar is REQUIRED for confirm_booking (RULE 4:
+        # calendar failure = booking failure); if the SA credential is missing we
+        # log critical and register None — the confirm handler converts that into
+        # a graceful "booking unavailable" tool result instead of a mid-call crash.
+        # MetaService is the MVP2 WhatsApp no-op stub (fire-and-forget contract).
+        try:
+            booking_calendar_service: GoogleCalendarService | None = GoogleCalendarService()
+        except Exception as e:
+            logger.critical(
+                "calendar_service_init_failed",
+                error=str(e),
+                session_id=call_id,
+            )
+            booking_calendar_service = None
+        booking_meta_service = MetaService()
+
         register_tools(
             llm,
             db_session=db,
             session_state=state,
             redis_client=redis_client,
+            calendar_service=booking_calendar_service,
+            meta_service=booking_meta_service,
             signal_map=_transfer_signals,
             branch_emergency_contact=branch_emergency_contact,
             tts_say=_tts_say,
