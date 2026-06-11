@@ -17,6 +17,7 @@ LiveKit + trunk IDs).
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -399,12 +400,39 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             ctx.shutdown()
             return
 
-    participant = await ctx.wait_for_participant()
+    # Resolve the dialed DID + caller from the SIP participant. For inbound the
+    # SIP leg is bridged into the room by LiveKit; we wait briefly for it but
+    # must NEVER hard-block here — if we don't reach session.start(), the agent
+    # never answers and the caller just hears endless ringback. So on any miss
+    # we fall back to the configured DID and let the session answer the call.
+    def _read_sip(p) -> tuple[str, str]:
+        a = (p.attributes or {}) if p else {}
+        return a.get("sip.trunkPhoneNumber", ""), a.get("sip.phoneNumber", "")
 
-    # RULE 5: branch context comes from the DIALED number (DID), never the caller.
-    attrs = participant.attributes or {}
-    did = attrs.get("sip.trunkPhoneNumber") or os.getenv("VOBIZ_OUTBOUND_NUMBER", "")
-    caller = attrs.get("sip.phoneNumber") or (outbound_number or "")
+    did = ""
+    caller = outbound_number or ""
+
+    # 1) The SIP leg is usually already in the room when the agent is dispatched.
+    for p in ctx.room.remote_participants.values():
+        d, c = _read_sip(p)
+        if d or c:
+            did, caller = d or did, c or caller
+            break
+
+    # 2) Otherwise wait briefly — but never hard-block: if we don't reach
+    #    session.start() the agent never answers and the caller hears endless
+    #    ringback. 4s is enough for the SIP leg; then we proceed with a fallback.
+    if not did and not caller:
+        try:
+            participant = await asyncio.wait_for(ctx.wait_for_participant(), timeout=4.0)
+            did, caller = _read_sip(participant)
+            caller = caller or outbound_number or ""
+        except Exception as e:  # noqa: BLE001 — proceed regardless of why
+            logger.warning("participant_wait_fallback: %s", e)
+
+    # 3) Single-DID test/fallback so the call always proceeds and is answered.
+    if not did:
+        did = os.getenv("VOBIZ_OUTBOUND_NUMBER", "") or settings.vobiz_did_number
     logger.info("call_started did=...%s caller=...%s", did[-4:], caller[-4:] if caller else "????")
 
     state = SessionState(session_id=ctx.room.name)

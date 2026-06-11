@@ -6,6 +6,7 @@ import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
 const PLANS = { solo: "Solo", clinic: "Clinic", multi: "Multi" };
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 // Mirror backend validators so the user gets instant, identical feedback.
 const phoneError = (v) => {
@@ -48,6 +49,7 @@ export default function Register() {
   const [devCodes, setDevCodes] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  const gsiRef = useRef(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const blur = (k) => () => setTouched((t) => ({ ...t, [k]: true }));
 
@@ -63,6 +65,56 @@ export default function Register() {
   useEffect(() => {
     revealStagger(pageRef.current);
   }, [step]);
+
+  // Google signup — skips OTP (Google already authenticated the identity).
+  // Requires clinic name + your name + valid phone from the form above.
+  useEffect(() => {
+    if (step !== "details") return;
+    let cancelled = false;
+    const mount = () => {
+      if (cancelled) return;
+      if (!window.google?.accounts?.id) return void setTimeout(mount, 150);
+      if (!GOOGLE_CLIENT_ID || !gsiRef.current) return;
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: async (resp) => {
+          if (errs.clinic_name || errs.owner_name || errs.phone) {
+            setTouched({ clinic_name: true, owner_name: true, phone: true });
+            toast.error("Fill clinic name, your name and a valid phone first");
+            return;
+          }
+          setBusy(true);
+          try {
+            const me = await register({
+              clinic_name: form.clinic_name.trim(),
+              owner_name: form.owner_name.trim(),
+              phone: form.phone.trim(),
+              plan: form.plan,
+              id_token: resp.credential
+            });
+            toast.success("Clinic created — 14-day trial started");
+            navigate(roleHome(me.role), { replace: true });
+          } catch (e) {
+            toast.error(e?.response?.data?.detail ?? "Google signup failed");
+          } finally {
+            setBusy(false);
+          }
+        }
+      });
+      window.google.accounts.id.renderButton(gsiRef.current, {
+        theme: "outline",
+        size: "large",
+        shape: "pill",
+        width: 320,
+        text: "signup_with"
+      });
+    };
+    mount();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, form.clinic_name, form.owner_name, form.phone, form.plan]);
 
   const sendOtp = async () => {
     setTouched({ phone: true, email: true, password: true, clinic_name: true, owner_name: true });
@@ -171,6 +223,21 @@ export default function Register() {
             <button className="btn-primary w-full py-3" disabled={busy}>
               {busy ? "Sending codes…" : "Verify phone & email"}
             </button>
+
+            {GOOGLE_CLIENT_ID && (
+              <>
+                <div className="flex items-center gap-3 pt-1">
+                  <span className="h-px flex-1 bg-hairline" />
+                  <span className="font-ui text-xs uppercase tracking-[0.14em] text-slate">or</span>
+                  <span className="h-px flex-1 bg-hairline" />
+                </div>
+                <div ref={gsiRef} className="flex justify-center" />
+                <p className="font-ui text-[11px] text-slate">
+                  Google signup skips the code step — Google already verified you. Uses the
+                  clinic name, your name and phone above.
+                </p>
+              </>
+            )}
           </form>
         ) : (
           <form data-reveal className="card mt-8 space-y-4 p-6" onSubmit={submit}>

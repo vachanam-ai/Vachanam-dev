@@ -321,10 +321,12 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
-    # ── OTP gate: phone always; email for password signups (Google verifies email) ──
-    if not body.phone_otp or not await otp_service.verify_code("sms", phone, body.phone_otp):
-        raise HTTPException(status_code=403, detail="Phone not verified — enter the SMS code")
+    # ── OTP gate: password signups only. A verified Google ID token is already
+    # a strong, Google-authenticated identity — no extra OTP friction
+    # (decision: Vinay 2026-06-11). Phone is still format-validated above.
     if not google_sub:
+        if not body.phone_otp or not await otp_service.verify_code("sms", phone, body.phone_otp):
+            raise HTTPException(status_code=403, detail="Phone not verified — enter the SMS code")
         if not body.email_otp or not await otp_service.verify_code("email", email, body.email_otp):
             raise HTTPException(status_code=403, detail="Email not verified — enter the email code")
 
