@@ -10,7 +10,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from agent.session_state import SessionState
 from backend.config import settings
-from backend.models.schema import Doctor, Token, Patient, Branch
+from backend.models.schema import Doctor, DoctorUnavailability, Token, Patient, Branch
 from backend.services.audit_service import write_audit_row
 
 logger = structlog.get_logger()
@@ -26,6 +26,49 @@ def _redis():
     ~1-2ms per call on localhost — negligible vs LLM/STT on the call path.
     """
     return aioredis.from_url(settings.redis_url, decode_responses=True)
+
+
+async def doctor_bookable(
+    doctor: Doctor, branch_id: UUID, booking_date: date, db: AsyncSession
+) -> str | None:
+    """Why this doctor can NOT take this date, or None if bookable.
+
+    Guards that were previously missing entirely: past dates, the doctor's
+    working weekdays, receptionist-marked leave (doctor_unavailability), and
+    same-day walk-in closure for token doctors.
+    """
+    if booking_date < date.today():
+        return f"{booking_date.strftime('%d %B')} is in the past. Ask for a future date."
+
+    weekdays = doctor.available_weekdays or []
+    if weekdays and booking_date.weekday() not in weekdays:
+        names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        sits = ", ".join(names[d] for d in sorted(weekdays))
+        return (
+            f"{doctor.name} does not sit on {names[booking_date.weekday()]}s. "
+            f"Available days: {sits}."
+        )
+
+    leave = await db.execute(
+        select(DoctorUnavailability.id).where(
+            and_(
+                DoctorUnavailability.branch_id == branch_id,
+                DoctorUnavailability.doctor_id == doctor.id,
+                DoctorUnavailability.date == booking_date,
+            )
+        )
+    )
+    if leave.scalar_one_or_none() is not None:
+        return f"{doctor.name} is on leave on {booking_date.strftime('%d %B')}. Offer another date."
+
+    if (
+        doctor.booking_type == "token"
+        and booking_date == date.today()
+        and doctor.walkins_closed_today_date == date.today()
+    ):
+        return f"{doctor.name} has closed bookings for today. Offer tomorrow."
+
+    return None
 
 
 async def route_to_doctor(
@@ -83,7 +126,9 @@ async def route_to_doctor(
             "content": (
                 f"Patient complaint: '{complaint}'\n"
                 f"Doctors: {json.dumps(doctors_json, ensure_ascii=False)}\n"
-                "Return JSON only: {\"doctor_id\": \"<uuid or null>\", \"confidence\": \"high|low|none\"}"
+                "List EVERY doctor whose specialization or routing_keywords fit "
+                "this complaint (often more than one). Return JSON only: "
+                '{"doctor_ids": ["<uuid>", ...], "confidence": "high|low|none"}'
             ),
         }
     ]
@@ -95,13 +140,29 @@ async def route_to_doctor(
         if "{" in raw:
             raw = raw[raw.index("{") : raw.rindex("}") + 1]
         parsed = json.loads(raw)
-        chosen = next(
-            (d for d in doctors if str(d.id) == str(parsed.get("doctor_id"))), None
-        )
-        if chosen is None or parsed.get("confidence") == "none":
+        ids = {str(i) for i in parsed.get("doctor_ids") or []}
+        if not ids and parsed.get("doctor_id"):  # tolerate old single-id shape
+            ids = {str(parsed["doctor_id"])}
+        matched = [d for d in doctors if str(d.id) in ids]
+        if not matched or parsed.get("confidence") == "none":
             default = next((d for d in doctors if d.is_default_doctor), doctors[0])
             return _hit(default, "none")
-        return _hit(chosen, parsed.get("confidence", "low"))
+        confidence = parsed.get("confidence", "low")
+        if len(matched) == 1:
+            return _hit(matched[0], confidence)
+        # Multiple doctors treat this problem: the AGENT must not pick one.
+        # Ask the patient's preferred day/time, check each candidate, offer both.
+        return {
+            "candidates": [_hit(d, confidence) for d in matched],
+            "confidence": confidence,
+            "instruction": (
+                "MULTIPLE doctors treat this problem. Do NOT choose one yourself. "
+                "Ask the patient which day and time suits them, then call "
+                "check_availability for EACH candidate doctor_id for that date/time, "
+                "and offer the patient the doctors (name + specialization) with "
+                "their available windows. Book whichever the patient picks."
+            ),
+        }
     except Exception as e:
         logger.error("route_to_doctor_failed", error=str(e))
         default = next((d for d in doctors if d.is_default_doctor), doctors[0])
@@ -136,6 +197,10 @@ async def check_availability(
     if not doctor:
         return "Doctor not found."
 
+    blocked = await doctor_bookable(doctor, branch_id, booking_date, db)
+    if blocked:
+        return blocked
+
     if doctor.booking_type == "token":
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
         async with _redis() as r:
@@ -153,31 +218,51 @@ async def check_availability(
     if not doctor.working_hours_start or not doctor.working_hours_end or not doctor.slot_duration_minutes:
         return "Doctor's schedule is not configured. Please call the clinic directly."
 
-    slots = _generate_slots(
+    all_slots = _generate_slots(
         doctor.working_hours_start,
         doctor.working_hours_end,
         doctor.slot_duration_minutes,
     )
-    if query_start and query_end:
-        slots = [s for s in slots if query_start <= s < query_end]
 
     available = []
     async with _redis() as r:
-        for slot in slots:
+        for slot in all_slots:
             key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
             booked = int(await r.get(key) or 0)
             if booked < (doctor.max_concurrent_per_slot or 1):
                 available.append(slot)
 
     if not available:
-        return f"Doctor is fully booked on {booking_date.strftime('%d %B')}."
+        return f"{doctor.name} is fully booked on {booking_date.strftime('%d %B')}."
 
-    ranges = _merge_to_ranges(available, doctor.slot_duration_minutes)
-    range_strs = [
-        f"{start.strftime('%I:%M %p').lstrip('0')} to {end.strftime('%I:%M %p').lstrip('0')}"
-        for start, end in ranges
-    ]
-    return f"Doctor is available {' and '.join(range_strs)} on {booking_date.strftime('%d %B')}."
+    def _ranges_str(slot_list: list) -> str:
+        ranges = _merge_to_ranges(slot_list, doctor.slot_duration_minutes)
+        return " and ".join(
+            f"{start.strftime('%I:%M %p').lstrip('0')} to {end.strftime('%I:%M %p').lstrip('0')}"
+            for start, end in ranges
+        )
+
+    if query_start and query_end:
+        in_window = [s for s in available if query_start <= s < query_end]
+        if in_window:
+            return (
+                f"{doctor.name} is available {_ranges_str(in_window)} "
+                f"on {booking_date.strftime('%d %B')}."
+            )
+        # Asked window full — offer the nearest free windows instead of a
+        # dead-end "fully booked" (patient picks doctor by time).
+        return (
+            f"{doctor.name} is NOT free between "
+            f"{query_start.strftime('%I:%M %p').lstrip('0')} and "
+            f"{query_end.strftime('%I:%M %p').lstrip('0')}, but IS available "
+            f"{_ranges_str(available)} on {booking_date.strftime('%d %B')}. "
+            "Offer the nearest of these windows to the patient."
+        )
+
+    return (
+        f"{doctor.name} is available {_ranges_str(available)} "
+        f"on {booking_date.strftime('%d %B')}."
+    )
 
 
 async def assign_token(
@@ -208,6 +293,10 @@ async def assign_token(
     doctor = result.scalar_one_or_none()
     if not doctor:
         return {"success": False, "reason": "doctor_not_found"}
+
+    blocked = await doctor_bookable(doctor, branch_id, booking_date, db)
+    if blocked:
+        return {"success": False, "reason": blocked}
 
     if doctor.booking_type == "token":
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"

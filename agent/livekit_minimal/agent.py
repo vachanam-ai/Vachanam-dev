@@ -79,13 +79,14 @@ logger = logging.getLogger("vachanam-agent")
 
 AGENT_NAME = "vachanam-agent"
 
-# DPDP s.5 disclosure + greeting in ONE short Telugu utterance (~6s spoken).
-# The 3-language disclosure (build_disclosure_utterance) took 16.8s of TTS and
-# killed the first impression — Telugu-only keeps the legal essence (AI agent,
-# name+phone collected, purpose) for the Telugu-market MVP. Decision 2026-06-10.
+# Professional welcome + DPDP s.5 AI disclosure in ONE short Telugu utterance.
+# "AI అసిస్టెంట్" must stay (DPDP — caller must know it's not a human). The
+# name/phone collection notice moved to the point of collection (booking flow
+# asks it when taking details) — better DPDP practice AND a warmer opening.
+# Wording per Vinay 2026-06-11.
 DISCLOSURE_GREETING = (
-    "నమస్కారం! ఇది {clinic} క్లినిక్ AI అసిస్టెంట్. మీ అపాయింట్‌మెంట్ కోసం "
-    "మీ పేరు, ఫోన్ నంబర్ తీసుకుంటాము. మీ పేరు చెప్పగలరా?"
+    "నమస్కారం! {clinic} కి స్వాగతం. నేను క్లినిక్ AI అసిస్టెంట్‌ని. "
+    "మీకు ఏ విధంగా సహాయపడగలను?"
 )
 
 # 15-minute pre-appointment reminder call (outbound, appointment-type only).
@@ -252,7 +253,10 @@ class VachanamAgent(Agent):
             llm_call=_routing_llm_call,
         )
         if result.get("doctor_id"):
+            # Single match — safe to pre-select for later tools.
             self._state.doctor_id = UUID(result["doctor_id"])
+        # Multiple candidates: leave state unset; the patient picks after
+        # hearing each doctor's availability (result carries instruction).
         return result
 
     @function_tool()
