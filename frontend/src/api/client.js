@@ -74,3 +74,5 @@ export const createDoctor = (branchId, payload) =>
 
 // ── Admin (super_admin only — no clinic PII by design) ──
 export const adminPing = () => api.get("/admin/ping").then((r) => r.data);
+export const fetchOwners = () => api.get("/admin/owners").then((r) => r.data);
+export const addOwner = (payload) => api.post("/admin/owners", payload).then((r) => r.data);

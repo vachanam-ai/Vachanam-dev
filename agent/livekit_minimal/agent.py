@@ -84,6 +84,26 @@ DISCLOSURE_GREETING = (
     "మీ పేరు, ఫోన్ నంబర్ తీసుకుంటాము. మీ పేరు చెప్పగలరా?"
 )
 
+# 15-minute pre-appointment reminder call (outbound, appointment-type only).
+REMINDER_GREETING = (
+    "నమస్కారం {patient} గారు! ఇది {clinic} క్లినిక్ నుండి రిమైండర్ కాల్. "
+    "ఈరోజు {time}కి {doctor} గారితో మీ అపాయింట్‌మెంట్ ఉంది. మీరు వస్తున్నారా?"
+)
+
+REMINDER_PROMPT_EXTRA = (
+    "\n\nTHIS IS A REMINDER CALL (not a new booking call). The patient has an "
+    "appointment today: token_id={token_id}, doctor={doctor}, time={time}. "
+    "The greeting already asked if they are coming.\n"
+    "- If they confirm: say 'సరే, ఎదురుచూస్తుంటాము. ధన్యవాదాలు!' and nothing more.\n"
+    "- If they CANNOT come: this patient matters — rebook them, do not lose them. "
+    "Ask which day and time suits them, then check_availability, assign_token, "
+    "confirm_booking as usual (same patient name and phone). AFTER the new booking "
+    "succeeds, call cancel_booking with the old token_id above. Then confirm the "
+    "new time in one breath and close warmly.\n"
+    "- If they want a different doctor or time, follow the normal availability "
+    "negotiation rules. Keep every reply to two short sentences."
+)
+
 # Appended AFTER the shared production prompt — phone replies must be terse.
 # Long replies were costing 10-16s of TTS audio per turn on top of LLM time.
 BREVITY_OVERRIDE = (
@@ -257,6 +277,65 @@ class VachanamAgent(Agent):
         return result
 
     @function_tool()
+    async def cancel_booking(self, context: RunContext, token_id: str) -> dict:
+        """Cancel an existing booking. ONLY for reminder-call reschedules, after
+        the replacement booking is confirmed. Releases the slot/token and removes
+        the calendar event."""
+        from sqlalchemy import and_ as _and
+
+        from backend.models.schema import Token
+
+        result = await self._db.execute(
+            select(Token).where(
+                _and(Token.id == UUID(token_id), Token.branch_id == self._state.branch_id)
+            )
+        )
+        token = result.scalar_one_or_none()
+        if token is None:
+            return {"success": False, "error": "booking_not_found"}
+        if token.status != "confirmed":
+            return {"success": False, "error": f"not_cancellable_{token.status}"}
+
+        token.status = "cancelled_by_clinic"
+        token.cancellation_reason = "patient_rescheduled_on_reminder_call"
+        await self._db.commit()
+
+        # Release the capacity reservation (RULE 2 inverse — only valid decr).
+        try:
+            r = aioredis.from_url(settings.redis_url, decode_responses=True)
+            try:
+                if token.appointment_time is not None:
+                    key = (
+                        f"slot:{token.doctor_id}:{token.branch_id}:{token.date}:"
+                        f"{token.appointment_time.strftime('%H%M')}"
+                    )
+                else:
+                    key = f"token:{token.doctor_id}:{token.branch_id}:{token.date}"
+                await r.decr(key)
+            finally:
+                await r.aclose()
+        except Exception as e:
+            logger.warning("cancel_redis_release_failed: %s", e)
+
+        if token.google_calendar_event_id and self._calendar is not None:
+            try:
+                result = await self._db.execute(
+                    select(Branch).where(Branch.id == self._state.branch_id)
+                )
+                cal_id = result.scalar_one().google_calendar_id
+                if cal_id:
+                    await self._calendar.delete_event(cal_id, token.google_calendar_event_id)
+            except Exception as e:
+                logger.warning("cancel_calendar_delete_failed: %s", e)
+
+        logger.info(
+            "booking_cancelled_for_reschedule token=%s branch_id=%s",
+            token_id[-8:],
+            str(self._state.branch_id),
+        )
+        return {"success": True}
+
+    @function_tool()
     async def request_human_transfer(self, context: RunContext, reason: str) -> dict:
         """Transfer the call to a human. Use ONLY if the patient explicitly asks
         for a person/doctor/receptionist, or keeps insisting across turns."""
@@ -292,13 +371,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
     logger.info("Joined room: %s", ctx.room.name)
 
-    # Outbound dispatches carry the callee number in job metadata
+    # Outbound dispatches carry the callee number (+ reminder context) in metadata
     outbound_number = None
+    meta: dict = {}
     if ctx.job.metadata:
         try:
-            outbound_number = json.loads(ctx.job.metadata).get("phone_number")
+            meta = json.loads(ctx.job.metadata)
+            outbound_number = meta.get("phone_number")
         except json.JSONDecodeError:
             pass
+    is_reminder = meta.get("call_type") == "reminder"
 
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
@@ -373,6 +455,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
             + BREVITY_OVERRIDE
         )
+        if is_reminder:
+            instructions += REMINDER_PROMPT_EXTRA.format(
+                token_id=meta.get("token_id", ""),
+                doctor=meta.get("doctor_name", ""),
+                time=meta.get("appointment_time", ""),
+            )
+            state.call_type = "reminder"
 
         try:
             # SA path resolved against repo root — settings default is the
@@ -455,10 +544,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             ),
         )
 
-        # RULE 6: single short disclosure+greeting utterance, sanitized.
-        await session.say(
-            sanitize_for_tts(DISCLOSURE_GREETING.format(clinic=branch_name))
-        )
+        # RULE 6: single short opening utterance, sanitized.
+        if is_reminder:
+            await session.say(
+                sanitize_for_tts(
+                    REMINDER_GREETING.format(
+                        patient=meta.get("patient_name", ""),
+                        clinic=branch_name,
+                        doctor=meta.get("doctor_name", ""),
+                        time=meta.get("appointment_time", ""),
+                    )
+                )
+            )
+        else:
+            await session.say(
+                sanitize_for_tts(DISCLOSURE_GREETING.format(clinic=branch_name))
+            )
 
 
 if __name__ == "__main__":

@@ -68,8 +68,16 @@ async def lifespan(app: FastAPI):
         id="calendar_writer",
         replace_existing=True,
     )
+    from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
+
+    scheduler.add_job(
+        run_pre_appt_reminders,
+        IntervalTrigger(seconds=60),
+        id="pre_appt_reminder",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("scheduler_started", jobs=["calendar_writer"])
+    logger.info("scheduler_started", jobs=["calendar_writer", "pre_appt_reminder"])
 
     yield
 

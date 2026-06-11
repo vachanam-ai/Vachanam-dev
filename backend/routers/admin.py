@@ -40,3 +40,88 @@ async def admin_ping(
         email=current_user.email,
     )
     return {"status": "ok", "admin_user_id": current_user.user_id}
+
+
+# ── Platform owner management (Vinay + delegates) ───────────────────────────
+
+
+from pydantic import BaseModel
+from sqlalchemy import select
+
+from backend.database import AsyncSessionLocal
+from backend.models.schema import User
+from backend.services.audit_service import audit
+
+
+class OwnerOut(BaseModel):
+    user_id: str
+    email: str
+    name: str | None
+
+
+class OwnerCreate(BaseModel):
+    email: str
+    name: str
+    password: str | None = None  # optional — Google sign-in works with email match
+
+
+@router.get("/owners", response_model=list[OwnerOut])
+async def list_owners(
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> list[OwnerOut]:
+    """All Vachanam platform owners (super_admin). No clinic PII here."""
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(select(User).where(User.role == "super_admin"))
+        ).scalars().all()
+        return [OwnerOut(user_id=str(u.id), email=u.email, name=u.name) for u in rows]
+
+
+@router.post("/owners", response_model=OwnerOut, status_code=201)
+@audit("admin.owner_added", resource_type="user")
+async def add_owner(
+    body: OwnerCreate,
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> OwnerOut:
+    """Create or promote a Vachanam platform owner. Owner-only — the keys to
+    the kingdom are handed out by existing owners, never self-claimed."""
+    email = body.email.strip().lower()
+    async with AsyncSessionLocal() as db:
+        user = (
+            await db.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+        if user:
+            user.role = "super_admin"
+            user.is_admin = True
+            if not user.name:
+                user.name = body.name.strip()
+        else:
+            password_hash = None
+            if body.password:
+                if len(body.password) < 8:
+                    from fastapi import HTTPException
+
+                    raise HTTPException(status_code=422, detail="Password must be 8+ characters")
+                from backend.routers.auth import _hash_password
+
+                password_hash = _hash_password(body.password)
+            user = User(
+                email=email,
+                name=body.name.strip(),
+                role="super_admin",
+                is_admin=True,
+                branch_ids=[],
+                password_hash=password_hash,
+            )
+            db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+        request.state.audit_resource_id = str(user.id)
+        request.state.audit_user_id = current_user.user_id
+        logger.info("owner_added", email=email, by=current_user.email)
+        return OwnerOut(user_id=str(user.id), email=user.email, name=user.name)
