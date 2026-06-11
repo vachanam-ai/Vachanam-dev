@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { addOwner, adminPing, fetchOwners } from "../api/client.js";
+import { addOwner, adminPing, fetchClients, fetchOwners } from "../api/client.js";
 import { revealStagger } from "../lib/motion.js";
 
 export default function Admin() {
@@ -14,6 +14,7 @@ export default function Admin() {
     refetchInterval: 30_000
   });
   const { data: owners = [] } = useQuery({ queryKey: ["owners"], queryFn: fetchOwners });
+  const { data: clients } = useQuery({ queryKey: ["clients"], queryFn: fetchClients, refetchInterval: 60_000 });
 
   const invite = useMutation({
     mutationFn: () =>
@@ -54,15 +55,59 @@ export default function Admin() {
         </div>
         <div data-reveal className="card p-5">
           <p className="eyebrow">Clients</p>
-          <p className="numeral mt-2 text-4xl text-teal-deep">—</p>
-          <p className="mt-1 font-ui text-xs text-slate">org/billing roll-up lands with the billing service</p>
+          <p className="numeral mt-2 text-4xl text-teal-deep">{clients?.total_clients ?? "—"}</p>
+          <p className="mt-1 font-ui text-xs text-slate">
+            {clients ? `${clients.trialing} trial · ${clients.active} active · ${clients.paused} paused` : "loading…"}
+          </p>
         </div>
         <div data-reveal className="card p-5">
-          <p className="eyebrow">Voice minutes (month)</p>
-          <p className="numeral mt-2 text-4xl text-teal-deep">—</p>
-          <p className="mt-1 font-ui text-xs text-slate">wired to call ledger after Fly.io deploy</p>
+          <p className="eyebrow">On trial</p>
+          <p className="numeral mt-2 text-4xl text-gold-ink">{clients?.trialing ?? "—"}</p>
+          <p className="mt-1 font-ui text-xs text-slate">convert before day 14</p>
         </div>
       </div>
+
+      {/* Registered clinics + billing status */}
+      <section data-reveal className="card overflow-hidden">
+        <header className="flex items-center justify-between border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <h2 className="font-display text-lg font-semibold">Registered clinics</h2>
+          <span className="font-ui text-sm text-slate">{clients?.total_clients ?? 0} total</span>
+        </header>
+        {!clients ? (
+          <p className="px-5 py-6 font-ui text-sm text-slate">Loading clients…</p>
+        ) : clients.clients.length === 0 ? (
+          <p className="px-5 py-6 font-ui text-sm text-slate">No clinics registered yet.</p>
+        ) : (
+          <div className="divide-y divide-hairline">
+            {clients.clients.map((c) => (
+              <div key={c.org_id} className="flex flex-wrap items-center gap-3 px-5 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-ui font-medium">{c.name}</p>
+                  <p className="truncate font-ui text-xs text-slate">
+                    {c.owner_email} · {c.owner_phone} · {c.branches} branch{c.branches === 1 ? "" : "es"}
+                  </p>
+                </div>
+                <span className="chip-slot">{c.plan}</span>
+                <span className={c.status === "trial" ? "chip-token" : c.status === "active" ? "chip-token" : "chip-danger"}>
+                  {c.status}
+                </span>
+                <div className="w-24 text-right">
+                  {c.status === "trial" && c.days_left != null ? (
+                    <span className="font-ui text-sm text-gold-ink">{c.days_left}d left</span>
+                  ) : (
+                    <span className="font-ui text-xs text-slate">
+                      {c.created_at ? new Date(c.created_at).toLocaleDateString("en-IN") : ""}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="border-t border-hairline px-5 py-3 font-ui text-xs text-slate">
+          Voice-minute usage + Razorpay invoice status attach here once the billing service ships.
+        </p>
+      </section>
 
       <section data-reveal className="card p-6">
         <h2 className="font-display text-lg font-semibold">Vachanam owners</h2>

@@ -217,11 +217,26 @@ class RegisterRequest(BaseModel):
     email: str | None = None
     password: str | None = None
     id_token: str | None = None  # Google alternative to email+password
+    plan: str = "clinic"         # solo | clinic | multi
+    phone_otp: str | None = None
+    email_otp: str | None = None
 
 
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class OtpRequest(BaseModel):
+    phone: str | None = None
+    email: str | None = None
+
+
+class OtpResponse(BaseModel):
+    sent: list[str]
+    # Dev only (no provider configured): codes echoed so signup is testable.
+    dev_phone_code: str | None = None
+    dev_email_code: str | None = None
 
 
 def _hash_password(password: str) -> str:
@@ -256,8 +271,27 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
 
     from backend.models.schema import Branch, Organization
 
+    from backend.services import otp_service
+    from backend.services.validators import (
+        normalize_email,
+        normalize_indian_phone,
+        validate_password,
+    )
+
     client_ip = request.client.host if request.client else "unknown"
     await check_ip_blocklist(request)
+
+    # ── Validate shape BEFORE any DB work (clear 422s, no garbage accepted) ──
+    if len(body.clinic_name.strip()) < 2:
+        raise HTTPException(status_code=422, detail="Clinic name is required")
+    if not body.owner_name.strip():
+        raise HTTPException(status_code=422, detail="Your name is required")
+    try:
+        phone = normalize_indian_phone(body.phone)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if body.plan not in ("solo", "clinic", "multi"):
+        raise HTTPException(status_code=422, detail="Invalid plan")
 
     google_sub: str | None = None
     email = (body.email or "").strip().lower()
@@ -272,16 +306,27 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             await record_failed_login(client_ip)
             raise HTTPException(status_code=401, detail="Invalid Google token")
         google_sub = info.get("sub")
-        email = (info.get("email") or "").lower()
+        email = (info.get("email") or "").lower()  # Google-verified
         if not google_sub or not email:
             raise HTTPException(status_code=401, detail="Google token missing required claims")
     else:
-        if not email or not body.password:
-            raise HTTPException(status_code=422, detail="email and password required")
-        if len(body.password) < 8:
-            raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
-    if len(body.clinic_name.strip()) < 2:
-        raise HTTPException(status_code=422, detail="Clinic name required")
+        try:
+            email = normalize_email(email)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        if not body.password:
+            raise HTTPException(status_code=422, detail="Password is required")
+        try:
+            validate_password(body.password)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    # ── OTP gate: phone always; email for password signups (Google verifies email) ──
+    if not body.phone_otp or not await otp_service.verify_code("sms", phone, body.phone_otp):
+        raise HTTPException(status_code=403, detail="Phone not verified — enter the SMS code")
+    if not google_sub:
+        if not body.email_otp or not await otp_service.verify_code("email", email, body.email_otp):
+            raise HTTPException(status_code=403, detail="Email not verified — enter the email code")
 
     async with AsyncSessionLocal() as db:
         existing = (
@@ -294,9 +339,9 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
 
         org = Organization(
             name=body.clinic_name.strip(),
-            owner_phone=body.phone.strip(),
+            owner_phone=phone,
             owner_email=email,
-            plan="clinic",
+            plan=body.plan,
             status="trial",
             trial_ends_at=datetime.now(_tz.utc) + timedelta(days=14),
         )
@@ -309,7 +354,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             # WhatsApp wiring is MVP2 — unique placeholder satisfies the NOT NULL
             # constraint until a real number is connected during onboarding.
             whatsapp_number=f"pending-{_uuid.uuid4().hex[:12]}",
-            emergency_contact=body.phone.strip(),
+            emergency_contact=phone,
         )
         db.add(branch)
         await db.flush()
@@ -318,7 +363,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             org_id=org.id,
             email=email,
             name=body.owner_name.strip(),
-            phone=body.phone.strip(),
+            phone=phone,
             role="org_admin",
             branch_ids=[str(branch.id)],
             google_sub=google_sub,
@@ -393,4 +438,51 @@ async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
         access_token=token,
         token_type="bearer",
         expires_in=settings.jwt_expire_hours * 3600,
+    )
+
+
+@router.post(
+    "/request-otp",
+    response_model=OtpResponse,
+    dependencies=[Depends(auth_google_limit)],
+)
+async def request_otp(request: Request, body: OtpRequest) -> OtpResponse:
+    """Issue OTP codes to phone and/or email for signup verification.
+
+    Validates the destinations first (no point texting a malformed number).
+    When no SMS/email provider is configured, codes are returned in the
+    response (dev) so the signup flow is fully testable.
+    """
+    from backend.services import otp_service
+    from backend.services.validators import normalize_email, normalize_indian_phone
+
+    client_ip = request.client.host if request.client else "unknown"
+    await check_ip_blocklist(request)
+
+    sent: list[str] = []
+    dev_phone_code: str | None = None
+    dev_email_code: str | None = None
+
+    if body.phone:
+        try:
+            phone = normalize_indian_phone(body.phone)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        dev_phone_code = await otp_service.issue_code("sms", phone)
+        sent.append("sms")
+
+    if body.email:
+        try:
+            email = normalize_email(body.email)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        dev_email_code = await otp_service.issue_code("email", email)
+        sent.append("email")
+
+    if not sent:
+        raise HTTPException(status_code=422, detail="Provide a phone or email to verify")
+
+    logger.info("otp_requested", channels=sent, ip=client_ip[-4:])
+    return OtpResponse(
+        sent=sent, dev_phone_code=dev_phone_code, dev_email_code=dev_email_code
     )

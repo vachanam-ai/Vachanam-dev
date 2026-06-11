@@ -34,6 +34,8 @@ export const loginWithPassword = (email, password) =>
   api.post("/auth/login", { email, password }).then((r) => r.data);
 export const registerClinic = (payload) =>
   api.post("/auth/register", payload).then((r) => r.data);
+export const requestOtp = (payload) =>
+  api.post("/auth/request-otp", payload).then((r) => r.data);
 export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
 
 // ── Queue (receptionist) ──
@@ -86,3 +88,4 @@ export const deleteDoctor = (branchId, doctorId) =>
 export const adminPing = () => api.get("/admin/ping").then((r) => r.data);
 export const fetchOwners = () => api.get("/admin/owners").then((r) => r.data);
 export const addOwner = (payload) => api.post("/admin/owners", payload).then((r) => r.data);
+export const fetchClients = () => api.get("/admin/clients").then((r) => r.data);

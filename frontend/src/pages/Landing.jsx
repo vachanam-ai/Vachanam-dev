@@ -223,9 +223,9 @@ export default function Landing() {
                   </li>
                 ))}
               </ul>
-              <a href="mailto:hello@vachanam.in?subject=Vachanam%20trial" className={p.popular ? "btn-primary mt-6 w-full" : "btn-ghost mt-6 w-full"}>
+              <Link to={`/register?plan=${p.name.toLowerCase()}`} className={p.popular ? "btn-primary mt-6 w-full" : "btn-ghost mt-6 w-full"}>
                 Start free trial
-              </a>
+              </Link>
             </div>
           ))}
         </div>
@@ -241,11 +241,15 @@ export default function Landing() {
           Healing starts with being heard.
         </h2>
         <p className="mt-3 font-ui text-teal-pale/85">
-          hello@vachanam.in · Hyderabad, India
+          <a href="mailto:hello@vachanam.in" className="underline-offset-4 hover:underline">hello@vachanam.in</a>
+          {" · "}Hyderabad, India
         </p>
-        <a href="mailto:hello@vachanam.in?subject=Vachanam%20trial" className="btn-gold mt-7 inline-flex px-8 py-3">
-          Talk to us
-        </a>
+        <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+          <Link to="/register" className="btn-gold inline-flex px-8 py-3">Start free trial</Link>
+          <a href="mailto:hello@vachanam.in?subject=Talk%20to%20Vachanam" className="btn inline-flex border border-white/30 px-8 py-3 text-white hover:bg-white/10">
+            Talk to us
+          </a>
+        </div>
       </section>
     </div>
   );

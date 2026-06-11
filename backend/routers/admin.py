@@ -125,3 +125,89 @@ async def add_owner(
         request.state.audit_user_id = current_user.user_id
         logger.info("owner_added", email=email, by=current_user.email)
         return OwnerOut(user_id=str(user.id), email=user.email, name=user.name)
+
+
+# ── Platform: registered clinics + billing roll-up (no patient PII) ─────────
+
+
+from datetime import datetime, timezone
+
+from backend.models.schema import Branch, Organization
+
+
+class ClientRow(BaseModel):
+    org_id: str
+    name: str
+    plan: str
+    status: str
+    owner_email: str
+    owner_phone: str
+    branches: int
+    trial_ends_at: str | None
+    days_left: int | None
+    created_at: str
+
+
+class ClientsSummary(BaseModel):
+    total_clients: int
+    trialing: int
+    active: int
+    paused: int
+    clients: list[ClientRow]
+
+
+@router.get("/clients", response_model=ClientsSummary)
+async def list_clients(
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> ClientsSummary:
+    """Every registered clinic + plan/billing status. super_admin only.
+    Org-level commercial data only — no patient data crosses this boundary."""
+    from sqlalchemy import func
+
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        orgs = (await db.execute(select(Organization))).scalars().all()
+        # branch counts per org in one query
+        counts = dict(
+            (await db.execute(
+                select(Branch.org_id, func.count()).group_by(Branch.org_id)
+            )).all()
+        )
+
+        rows: list[ClientRow] = []
+        trialing = active = paused = 0
+        for o in orgs:
+            if o.status == "trial":
+                trialing += 1
+            elif o.status == "active":
+                active += 1
+            elif o.status == "paused":
+                paused += 1
+            days_left = None
+            if o.trial_ends_at:
+                delta = o.trial_ends_at - now
+                days_left = max(0, delta.days)
+            rows.append(
+                ClientRow(
+                    org_id=str(o.id),
+                    name=o.name,
+                    plan=o.plan,
+                    status=o.status,
+                    owner_email=o.owner_email,
+                    owner_phone=o.owner_phone,
+                    branches=counts.get(o.id, 0),
+                    trial_ends_at=o.trial_ends_at.isoformat() if o.trial_ends_at else None,
+                    days_left=days_left,
+                    created_at=o.created_at.isoformat() if o.created_at else "",
+                )
+            )
+        rows.sort(key=lambda r: r.created_at, reverse=True)
+        return ClientsSummary(
+            total_clients=len(orgs),
+            trialing=trialing,
+            active=active,
+            paused=paused,
+            clients=rows,
+        )

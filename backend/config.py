@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     vobiz_auth_id: str = ""
     vobiz_auth_token: str = ""
 
+    # OTP verification (signup). When no provider is configured (dev), the code
+    # is logged and returned in the API response so the flow is testable.
+    msg91_auth_key: str = ""          # SMS provider (MSG91) — India default
+    msg91_sender_id: str = "VCHNAM"
+    smtp_host: str = ""               # email OTP
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "hello@vachanam.in"
+    otp_ttl_seconds: int = 600        # 10 minutes
+    otp_dev_echo: bool = True         # dev only: return code in response
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
