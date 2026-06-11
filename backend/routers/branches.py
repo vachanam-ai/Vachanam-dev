@@ -28,10 +28,49 @@ ALLOWED_VOICES = ["rupali", "simran", "kavya", "ishita", "shreya", "suhani"]
 class BranchSettings(BaseModel):
     branch_id: str
     name: str
+    address: str | None = None
+    city: str | None = None
+    clinic_phone: str | None = None
     tts_voice: str
     did_number: str | None
     emergency_contact: str | None
+    google_calendar_id: str | None = None
     allowed_voices: list[str]
+    doctors_count: int = 0
+    staff_count: int = 0
+    did_wired: bool | None = None  # set on PATCH when DID trunk sync runs
+
+
+async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, did_wired: bool | None = None) -> BranchSettings:
+    from sqlalchemy import func as _f
+
+    from backend.models.schema import Doctor, User
+
+    doctors_count = (
+        await db.execute(
+            select(_f.count()).select_from(Doctor).where(Doctor.branch_id == branch.id)
+        )
+    ).scalar_one()
+    staff_count = (
+        await db.execute(
+            select(_f.count()).select_from(User).where(User.branch_ids.contains([branch_id]))
+        )
+    ).scalar_one()
+    return BranchSettings(
+        branch_id=branch_id,
+        name=branch.name,
+        address=branch.address,
+        city=branch.city,
+        clinic_phone=getattr(branch, "clinic_phone", None),
+        tts_voice=getattr(branch, "tts_voice", "rupali"),
+        did_number=branch.did_number,
+        emergency_contact=branch.emergency_contact,
+        google_calendar_id=branch.google_calendar_id,
+        allowed_voices=ALLOWED_VOICES,
+        doctors_count=doctors_count,
+        staff_count=staff_count,
+        did_wired=did_wired,
+    )
 
 
 class VoiceUpdate(BaseModel):
@@ -54,14 +93,7 @@ async def get_branch_settings(
     branch = result.scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
-    return BranchSettings(
-        branch_id=branch_id,
-        name=branch.name,
-        tts_voice=getattr(branch, "tts_voice", "rupali"),
-        did_number=branch.did_number,
-        emergency_contact=branch.emergency_contact,
-        allowed_voices=ALLOWED_VOICES,
-    )
+    return await _settings_payload(db, branch, branch_id)
 
 
 @router.patch(
@@ -97,14 +129,7 @@ async def update_branch_voice(
     request.state.audit_branch_id = branch_id
 
     logger.info("branch_voice_changed", branch_id=branch_id, voice=body.tts_voice)
-    return BranchSettings(
-        branch_id=branch_id,
-        name=branch.name,
-        tts_voice=branch.tts_voice,
-        did_number=branch.did_number,
-        emergency_contact=branch.emergency_contact,
-        allowed_voices=ALLOWED_VOICES,
-    )
+    return await _settings_payload(db, branch, branch_id)
 
 
 # ── Clinic details, calendar, team management (org_admin) ───────────────────
@@ -113,9 +138,11 @@ async def update_branch_voice(
 class BranchDetailsUpdate(BaseModel):
     name: str | None = None
     address: str | None = None
+    city: str | None = None
+    clinic_phone: str | None = None
     emergency_contact: str | None = None
     google_calendar_id: str | None = None
-    did_number: str | None = None  # assisted provisioning: owner enters the number we assign
+    did_number: str | None = None  # owner enters the purchased/assigned number
 
 
 class StaffMember(BaseModel):
@@ -159,25 +186,32 @@ async def update_branch_settings(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    for field in ("name", "address", "emergency_contact", "google_calendar_id", "did_number"):
+    for field in (
+        "name", "address", "city", "clinic_phone",
+        "emergency_contact", "google_calendar_id", "did_number",
+    ):
         value = getattr(body, field)
         if value is not None:
             setattr(branch, field, value.strip() or None)
     await db.commit()
+
+    # DID changed -> wire it into the LiveKit inbound trunk so calls route
+    # immediately. Failure is reported in the response, never fails the save.
+    did_wired: bool | None = None
+    if body.did_number is not None and branch.did_number:
+        from backend.services.livekit_sip import sync_did_to_inbound_trunk
+
+        sync = await sync_did_to_inbound_trunk(branch.did_number)
+        did_wired = sync["ok"]
+        if not sync["ok"]:
+            logger.warning("did_wire_pending", branch_id=branch_id, detail=sync["detail"])
 
     request.state.audit_resource_id = branch_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
     logger.info("branch_settings_updated", branch_id=branch_id)
 
-    return BranchSettings(
-        branch_id=branch_id,
-        name=branch.name,
-        tts_voice=getattr(branch, "tts_voice", "rupali"),
-        did_number=branch.did_number,
-        emergency_contact=branch.emergency_contact,
-        allowed_voices=ALLOWED_VOICES,
-    )
+    return await _settings_payload(db, branch, branch_id, did_wired=did_wired)
 
 
 @router.post(

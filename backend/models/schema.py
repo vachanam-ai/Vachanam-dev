@@ -50,6 +50,8 @@ class Branch(Base):
     # meta_phone_number_id: Meta's internal numeric ID — used to identify receiving branch in webhook
     meta_phone_number_id: Mapped[str | None] = mapped_column(String(50), unique=True)
     did_number: Mapped[str | None] = mapped_column(String(20))
+    # clinic_phone: the clinic's existing patient-facing number (forwards to the DID)
+    clinic_phone: Mapped[str | None] = mapped_column(String(20))
     vobiz_did_id: Mapped[str | None] = mapped_column(String(255))
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))

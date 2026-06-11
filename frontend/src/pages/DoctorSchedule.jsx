@@ -5,6 +5,8 @@ import { createDoctor, fetchDoctors, fetchTodayQueue, stopWalkinsToday } from ".
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 0-6
+
 const EMPTY_DOCTOR = {
   name: "",
   specialization: "",
@@ -12,7 +14,32 @@ const EMPTY_DOCTOR = {
   daily_token_limit: 50,
   working_hours_start: "09:00",
   working_hours_end: "17:00",
-  slot_duration_minutes: 15
+  slot_duration_minutes: 15,
+  available_weekdays: [0, 1, 2, 3, 4, 5] // Mon-Sat default (Indian clinics)
+};
+
+function WeekdayPicker({ value, onChange }) {
+  const toggle = (i) =>
+    onChange(value.includes(i) ? value.filter((d) => d !== i) : [...value, i].sort());
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {WEEKDAYS.map((label, i) => (
+        <button type="button" key={label} onClick={() => toggle(i)}
+          className={`h-10 w-12 rounded-lg border font-ui text-sm font-medium transition ${
+            value.includes(i)
+              ? "border-teal bg-teal text-white"
+              : "border-hairline bg-white text-slate hover:border-teal-light/60"
+          }`}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const fmtDays = (days) => {
+  if (!days?.length || days.length === 7) return "Every day";
+  return days.map((d) => WEEKDAYS[d]).join(" · ");
 };
 
 function AddDoctorForm({ branchId, onDone }) {
@@ -29,7 +56,8 @@ function AddDoctorForm({ branchId, onDone }) {
         daily_token_limit: isToken ? Number(f.daily_token_limit) : null,
         working_hours_start: f.working_hours_start || null,
         working_hours_end: f.working_hours_end || null,
-        slot_duration_minutes: isToken ? null : Number(f.slot_duration_minutes)
+        slot_duration_minutes: isToken ? null : Number(f.slot_duration_minutes),
+        available_weekdays: f.available_weekdays
       }),
     onSuccess: (d) => {
       toast.success(`${d.name} added`);
@@ -75,6 +103,13 @@ function AddDoctorForm({ branchId, onDone }) {
             </button>
           ))}
         </div>
+      </div>
+      <div className="sm:col-span-2">
+        <label className="label">Available days</label>
+        <WeekdayPicker
+          value={f.available_weekdays}
+          onChange={(days) => setF((s) => ({ ...s, available_weekdays: days }))}
+        />
       </div>
       <div>
         <label className="label">Hours start</label>
@@ -165,6 +200,7 @@ export default function DoctorSchedule() {
                       {d.working_hours_start}–{d.working_hours_end}
                     </span>
                   )}
+                  <span className="font-ui text-xs text-slate">{fmtDays(d.available_weekdays)}</span>
                 </div>
               </div>
               <div className="text-center">

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -10,27 +10,54 @@ import {
   updateBranchSettings
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { revealStagger } from "../lib/motion.js";
 import VoicePicker from "../components/VoicePicker.jsx";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 
-function Section({ title, sub, children }) {
+/* Setup checklist derived from live data — the owner's map through onboarding. */
+function checklist(data, calOk) {
+  return [
+    { id: "details", label: "Clinic details", done: Boolean(data?.emergency_contact && data?.clinic_phone) },
+    { id: "doctors", label: "Add doctors", done: (data?.doctors_count ?? 0) > 0 },
+    { id: "calendar", label: "Connect calendar", done: calOk === true },
+    { id: "phone", label: "Phone number", done: Boolean(data?.did_number) },
+    { id: "team", label: "Add reception", done: (data?.staff_count ?? 0) > 1 }
+  ];
+}
+
+function Section({ id, title, sub, done, children }) {
   return (
-    <section data-reveal className="card p-6">
-      <h2 className="font-display text-lg font-semibold">{title}</h2>
-      {sub && <p className="mt-0.5 font-ui text-sm text-slate">{sub}</p>}
+    <section id={id} className="card scroll-mt-24 p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="font-display text-lg font-semibold">{title}</h2>
+          {sub && <p className="mt-0.5 font-ui text-sm text-slate">{sub}</p>}
+        </div>
+        {done !== undefined && (
+          <span className={done ? "chip-token shrink-0" : "chip-muted shrink-0"}>
+            {done ? "done" : "pending"}
+          </span>
+        )}
+      </div>
       <div className="mt-4">{children}</div>
     </section>
+  );
+}
+
+function InfoBox({ title, children }) {
+  return (
+    <div className="mt-4 rounded-xl border border-teal-pale bg-teal-mint/70 p-4 font-ui text-sm">
+      {title && <p className="font-medium">{title}</p>}
+      <div className="mt-1 space-y-1 text-ink-soft">{children}</div>
+    </div>
   );
 }
 
 export default function Settings() {
   const { branchId } = useAuth();
   const qc = useQueryClient();
-  const pageRef = useRef(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ["branch-settings", branchId],
     queryFn: () => fetchBranchSettings(branchId),
     enabled: Boolean(branchId)
@@ -41,28 +68,34 @@ export default function Settings() {
     enabled: Boolean(branchId)
   });
 
-  const [details, setDetails] = useState(null);
-  const [calId, setCalId] = useState("");
-  const [didInput, setDidInput] = useState("");
+  const [form, setForm] = useState(null);
+  const [calOk, setCalOk] = useState(null);
   const [newStaff, setNewStaff] = useState({ name: "", email: "", password: "", role: "receptionist" });
 
   useEffect(() => {
-    if (data && details === null) {
-      setDetails({ name: data.name ?? "", emergency_contact: data.emergency_contact ?? "" });
-      setCalId(data.google_calendar_id ?? "");
-      setDidInput(data.did_number ?? "");
+    if (data && form === null) {
+      setForm({
+        name: data.name ?? "",
+        address: data.address ?? "",
+        city: data.city ?? "",
+        clinic_phone: data.clinic_phone ?? "",
+        emergency_contact: data.emergency_contact ?? "",
+        google_calendar_id: data.google_calendar_id ?? "",
+        did_number: data.did_number ?? ""
+      });
     }
-  }, [data, details]);
+  }, [data, form]);
 
-  useEffect(() => {
-    if (data) revealStagger(pageRef.current);
-  }, [Boolean(data)]); // eslint-disable-line react-hooks/exhaustive-deps
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const save = useMutation({
     mutationFn: (payload) => updateBranchSettings(branchId, payload),
     onSuccess: (d) => {
-      qc.setQueryData(["branch-settings", branchId], (old) => ({ ...old, ...d }));
-      toast.success("Saved");
+      qc.setQueryData(["branch-settings", branchId], d);
+      if (d.did_wired === true) toast.success("Saved — number is wired and live");
+      else if (d.did_wired === false)
+        toast.warning("Saved. Number stored but telephony wiring pending — we've been notified.");
+      else toast.success("Saved");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Save failed")
   });
@@ -70,7 +103,7 @@ export default function Settings() {
   const voice = useMutation({
     mutationFn: (v) => setBranchVoice(branchId, v),
     onSuccess: (d) => {
-      qc.setQueryData(["branch-settings", branchId], (old) => ({ ...old, ...d }));
+      qc.setQueryData(["branch-settings", branchId], d);
       toast.success(`Voice set to ${d.tts_voice}`);
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change voice")
@@ -78,120 +111,196 @@ export default function Settings() {
 
   const calTest = useMutation({
     mutationFn: () => testCalendar(branchId),
-    onSuccess: (r) =>
+    onSuccess: (r) => {
+      setCalOk(r.ok);
       r.ok
         ? toast.success("Calendar connected — bookings will appear there")
-        : toast.error(`Calendar test failed: ${r.detail ?? "no writer access"}`),
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Calendar test failed")
+        : toast.error(`Calendar test failed: ${r.detail ?? "no writer access yet"}`);
+    },
+    onError: (e) => {
+      setCalOk(false);
+      toast.error(e?.response?.data?.detail ?? "Calendar test failed");
+    }
   });
 
   const invite = useMutation({
     mutationFn: () => addStaff(branchId, newStaff),
     onSuccess: (m) => {
       qc.invalidateQueries({ queryKey: ["staff", branchId] });
+      qc.invalidateQueries({ queryKey: ["branch-settings", branchId] });
       setNewStaff({ name: "", email: "", password: "", role: "receptionist" });
-      toast.success(`${m.role} account created — share the password with them`);
+      toast.success(`${m.role} account created — share the login with them`);
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not add member")
   });
 
-  if (isLoading || details === null)
+  if (error)
+    return (
+      <p className="font-ui text-danger">
+        Settings failed to load — {error?.response?.data?.detail ?? "is the backend running?"}
+      </p>
+    );
+  if (isLoading || form === null)
     return <p className="font-ui text-slate">Loading settings…</p>;
 
-  const fetchedCal = data?.google_calendar_id ?? "";
+  const steps = checklist(data, calOk);
+  const doneCount = steps.filter((s) => s.done).length;
 
   return (
-    <div ref={pageRef} className="space-y-6">
-      <div data-reveal>
-        <p className="eyebrow">Clinic settings</p>
-        <h1 className="section-title text-2xl">{data?.name}</h1>
+    <div className="space-y-6">
+      {/* Header + setup progress */}
+      <div className="card p-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="eyebrow">Clinic setup</p>
+            <h1 className="section-title text-2xl">{data?.name}</h1>
+          </div>
+          <p className="font-ui text-sm text-slate">
+            <span className="numeral text-2xl text-teal-deep">{doneCount}</span>
+            <span className="text-lg text-slate">/{steps.length}</span> steps complete
+          </p>
+        </div>
+        <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-teal-pale">
+          <div className="h-full rounded-full bg-teal transition-all duration-700"
+            style={{ width: `${(doneCount / steps.length) * 100}%` }} />
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {steps.map((s, i) => (
+            <a key={s.id} href={`#${s.id}`}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-ui text-xs font-medium transition ${
+                s.done
+                  ? "border-teal-pale bg-teal-mint text-teal-deep"
+                  : "border-hairline bg-white text-slate hover:border-teal-light/50"
+              }`}>
+              <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${s.done ? "bg-teal text-white" : "bg-slate-light/30"}`}>
+                {s.done ? "✓" : i + 1}
+              </span>
+              {s.label}
+            </a>
+          ))}
+        </div>
       </div>
 
-      <Section title="Clinic details" sub="Name patients hear on calls; emergency number the AI gives when asked.">
+      {/* 1 — Clinic details */}
+      <Section id="details" title="1 · Clinic details" done={steps[0].done}
+        sub="What patients hear and where they find you.">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="label">Clinic name</label>
-            <input className="field" value={details.name}
-              onChange={(e) => setDetails((d) => ({ ...d, name: e.target.value }))} />
+            <label className="label">Clinic name (spoken by the AI)</label>
+            <input className="field" value={form.name} onChange={set("name")} />
+          </div>
+          <div>
+            <label className="label">City</label>
+            <input className="field" value={form.city} onChange={set("city")} placeholder="Hyderabad" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Address</label>
+            <input className="field" value={form.address} onChange={set("address")}
+              placeholder="Shop 4, Ayyappa Society, Madhapur" />
+          </div>
+          <div>
+            <label className="label">Clinic's existing phone</label>
+            <input className="field" value={form.clinic_phone} onChange={set("clinic_phone")}
+              placeholder="+91 …" inputMode="tel" />
+            <p className="mt-1 font-ui text-xs text-slate">
+              The number patients already call — it will forward to your AI line.
+            </p>
           </div>
           <div>
             <label className="label">Emergency contact</label>
-            <input className="field" value={details.emergency_contact} placeholder="+91 …"
-              onChange={(e) => setDetails((d) => ({ ...d, emergency_contact: e.target.value }))} />
+            <input className="field" value={form.emergency_contact} onChange={set("emergency_contact")}
+              placeholder="+91 …" inputMode="tel" />
+            <p className="mt-1 font-ui text-xs text-slate">
+              Given to patients who urgently ask for a human. Usually the owner's mobile.
+            </p>
           </div>
         </div>
         <button className="btn-primary mt-4" disabled={save.isPending}
-          onClick={() => save.mutate(details)}>
+          onClick={() =>
+            save.mutate({
+              name: form.name, address: form.address, city: form.city,
+              clinic_phone: form.clinic_phone, emergency_contact: form.emergency_contact
+            })}>
           Save details
         </button>
       </Section>
 
-      <Section
-        title="Phone line (DID)"
-        sub="The Vachanam number patients call. Forward your existing clinic number to it and the AI answers every call."
-      >
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-64">
-            <label className="label">Your Vachanam number</label>
-            <input className="field numeral" value={didInput} placeholder="+91 …"
-              onChange={(e) => setDidInput(e.target.value)} />
-          </div>
-          <button className="btn-primary" disabled={save.isPending}
-            onClick={() => save.mutate({ did_number: didInput })}>
-            Save number
-          </button>
-          <a
-            className="btn-gold"
-            href={`mailto:hello@vachanam.in?subject=DID%20number%20request%20—%20${encodeURIComponent(data?.name ?? "clinic")}&body=Please%20assign%20a%20phone%20number%20for%20our%20clinic.`}
-          >
-            Request a number
-          </a>
-        </div>
-        <ol className="mt-4 list-decimal space-y-1 pl-5 font-ui text-sm text-slate">
-          <li>Request a number — we provision it on our telephony partner (1 business day).</li>
-          <li>Enter it above and save.</li>
-          <li>Set call forwarding from your clinic phone to this number (we send the exact steps).</li>
-        </ol>
+      {/* 2 — Doctors */}
+      <Section id="doctors" title="2 · Doctors" done={steps[1].done}
+        sub={`${data?.doctors_count ?? 0} configured. The AI books patients against these profiles.`}>
+        <InfoBox title="Two booking styles — pick per doctor:">
+          <p><strong>Token queue</strong> — numbered line for high-volume OP (the AI announces "your token number is 8"). Set a daily limit.</p>
+          <p><strong>Time slots</strong> — fixed appointment times. Set working hours, days, and slot length.</p>
+        </InfoBox>
+        <a href="/my-schedule" className="btn-primary mt-4 inline-flex">Manage doctors →</a>
       </Section>
 
-      <Section
-        title="Google Calendar"
-        sub="Every confirmed booking becomes an event on this calendar."
-      >
+      {/* 3 — Calendar */}
+      <Section id="calendar" title="3 · Google Calendar" done={steps[2].done}
+        sub="Every confirmed booking becomes an event the doctor can see on their phone.">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-72 flex-1">
-            <label className="label">Calendar ID (usually your Gmail address)</label>
-            <input className="field" value={calId} placeholder="clinic@gmail.com"
-              onChange={(e) => setCalId(e.target.value)} />
+            <label className="label">Calendar ID (usually the clinic Gmail)</label>
+            <input className="field" value={form.google_calendar_id} onChange={set("google_calendar_id")}
+              placeholder="yourclinic@gmail.com" />
           </div>
           <button className="btn-primary" disabled={save.isPending}
-            onClick={() => save.mutate({ google_calendar_id: calId })}>
+            onClick={() => save.mutate({ google_calendar_id: form.google_calendar_id })}>
             Save
           </button>
-          <button className="btn-ghost" disabled={calTest.isPending || !fetchedCal}
+          <button className="btn-ghost" disabled={calTest.isPending || !data?.google_calendar_id}
             onClick={() => calTest.mutate()}>
             {calTest.isPending ? "Testing…" : "Test connection"}
           </button>
         </div>
-        <div className="mt-4 rounded-xl bg-teal-mint/70 p-4 font-ui text-sm">
-          <p className="font-medium">One-time setup:</p>
-          <p className="mt-1 text-ink-soft">
-            Google Calendar → Settings → your calendar → <em>Share with specific people</em> → add
-          </p>
-          <code className="mt-1 block select-all break-all rounded bg-white px-2 py-1 text-xs">{SA_EMAIL}</code>
-          <p className="mt-1 text-ink-soft">with permission <strong>“Make changes to events”</strong>, then hit Test.</p>
-        </div>
+        <InfoBox title="One-time share (2 minutes):">
+          <p>1. Open Google Calendar → ⚙ Settings → <em>Settings for my calendars</em> → your calendar.</p>
+          <p>2. <em>Share with specific people</em> → <em>Add people</em> → paste:</p>
+          <code className="block select-all break-all rounded bg-white px-2 py-1 text-xs">{SA_EMAIL}</code>
+          <p>3. Permission: <strong>"Make changes to events"</strong> → Send → come back and press <em>Test connection</em>.</p>
+        </InfoBox>
       </Section>
 
-      <Section title="Agent voice" sub="The voice patients hear. Applies from the next call.">
+      {/* 4 — Phone number */}
+      <Section id="phone" title="4 · Phone number (AI line)" done={steps[3].done}
+        sub="The number your AI answers. Your existing clinic number forwards to it — patients notice nothing.">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-64">
+            <label className="label">Your Vachanam number</label>
+            <input className="field numeral" value={form.did_number} onChange={set("did_number")}
+              placeholder="+91 80XXXXXXXX" inputMode="tel" />
+          </div>
+          <button className="btn-primary" disabled={save.isPending}
+            onClick={() => save.mutate({ did_number: form.did_number })}>
+            Save & activate
+          </button>
+        </div>
+        <InfoBox title="How to get a number (choose one):">
+          <p><strong>We provision it (recommended):</strong>{" "}
+            <a className="text-teal underline underline-offset-2"
+              href={`mailto:hello@vachanam.in?subject=Number%20request%20—%20${encodeURIComponent(data?.name ?? "clinic")}`}>
+              request a number
+            </a>{" "}
+            — we buy a local number on our telephony partner and send it to you (1 business day).
+          </p>
+          <p><strong>You buy it:</strong> purchase a DID on Vobiz (console.vobiz.ai), point it at our SIP endpoint
+            (we send exact settings), then paste the number above.</p>
+          <p className="pt-1"><strong>After saving:</strong> we wire it to the voice system automatically — you'll
+            see "number is wired and live". Then set call forwarding from{" "}
+            {form.clinic_phone || "your clinic phone"} to this number (*21*number# on most Indian carriers, or ask
+            your operator for "unconditional call forwarding").</p>
+        </InfoBox>
+      </Section>
+
+      {/* 5 — Voice */}
+      <Section id="voice" title="Agent voice" sub="The voice patients hear. Applies from the next call.">
         <VoicePicker value={data?.tts_voice} onSelect={(v) => voice.mutate(v)} />
       </Section>
 
-      <Section
-        title="Team"
-        sub="Reception sees the queue and registers walk-ins. Doctors see their own schedule."
-      >
-        <div className="space-y-2">
+      {/* 6 — Team */}
+      <Section id="team" title="5 · Team" done={steps[4].done}
+        sub="Reception runs the queue and walk-ins on their phone. Doctors see their own day.">
+        <div className="space-y-1">
           {staff.map((m) => (
             <div key={m.user_id} className="ledger-row !px-0">
               <div className="min-w-0 flex-1">
@@ -202,25 +311,20 @@ export default function Settings() {
             </div>
           ))}
         </div>
-        <form
-          className="mt-5 grid gap-3 border-t border-hairline pt-5 sm:grid-cols-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            invite.mutate();
-          }}
-        >
+        <form className="mt-5 grid gap-3 border-t border-hairline pt-5 sm:grid-cols-2"
+          onSubmit={(e) => { e.preventDefault(); invite.mutate(); }}>
           <div>
             <label className="label">Name</label>
             <input className="field" required value={newStaff.name}
               onChange={(e) => setNewStaff((s) => ({ ...s, name: e.target.value }))} />
           </div>
           <div>
-            <label className="label">Email</label>
+            <label className="label">Email (their login)</label>
             <input className="field" type="email" required value={newStaff.email}
               onChange={(e) => setNewStaff((s) => ({ ...s, email: e.target.value }))} />
           </div>
           <div>
-            <label className="label">Temporary password</label>
+            <label className="label">Temporary password (8+ chars)</label>
             <input className="field" required minLength={8} value={newStaff.password}
               onChange={(e) => setNewStaff((s) => ({ ...s, password: e.target.value }))} />
           </div>
@@ -236,6 +340,11 @@ export default function Settings() {
             {invite.isPending ? "Creating…" : "Add team member"}
           </button>
         </form>
+        <InfoBox>
+          <p>Share the email + temporary password with them. They sign in at this site — reception lands on
+            the Queue, doctors on their schedule. They can also use "Continue with Google" if the Google
+            account has the same email.</p>
+        </InfoBox>
       </Section>
     </div>
   );
