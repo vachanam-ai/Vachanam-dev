@@ -71,6 +71,10 @@ export const addStaff = (branchId, payload) =>
   api.post(`/branches/${branchId}/staff`, payload).then((r) => r.data);
 export const createDoctor = (branchId, payload) =>
   api.post(`/doctors/${branchId}`, payload).then((r) => r.data);
+export const updateDoctor = (branchId, doctorId, payload) =>
+  api.patch(`/doctors/${branchId}/${doctorId}`, payload).then((r) => r.data);
+export const deleteDoctor = (branchId, doctorId) =>
+  api.delete(`/doctors/${branchId}/${doctorId}`);
 
 // ── Admin (super_admin only — no clinic PII by design) ──
 export const adminPing = () => api.get("/admin/ping").then((r) => r.data);

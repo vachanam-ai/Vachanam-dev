@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { createDoctor, fetchDoctors, fetchTodayQueue, stopWalkinsToday } from "../api/client.js";
+import {
+  createDoctor,
+  deleteDoctor,
+  fetchDoctors,
+  fetchTodayQueue,
+  stopWalkinsToday,
+  updateDoctor
+} from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
@@ -42,14 +49,28 @@ const fmtDays = (days) => {
   return days.map((d) => WEEKDAYS[d]).join(" · ");
 };
 
-function AddDoctorForm({ branchId, onDone }) {
-  const [f, setF] = useState(EMPTY_DOCTOR);
+function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCancel }) {
+  const isEdit = Boolean(doctorId);
+  const [f, setF] = useState(
+    initial
+      ? {
+          ...EMPTY_DOCTOR,
+          ...initial,
+          working_hours_start: initial.working_hours_start?.slice(0, 5) ?? "09:00",
+          working_hours_end: initial.working_hours_end?.slice(0, 5) ?? "17:00",
+          specialization: initial.specialization ?? "",
+          daily_token_limit: initial.daily_token_limit ?? 50,
+          slot_duration_minutes: initial.slot_duration_minutes ?? 15,
+          available_weekdays: initial.available_weekdays ?? [0, 1, 2, 3, 4, 5]
+        }
+      : EMPTY_DOCTOR
+  );
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const isToken = f.booking_type === "token";
 
   const create = useMutation({
-    mutationFn: () =>
-      createDoctor(branchId, {
+    mutationFn: () => {
+      const payload = {
         name: f.name.trim(),
         specialization: f.specialization.trim() || null,
         booking_type: f.booking_type,
@@ -58,13 +79,15 @@ function AddDoctorForm({ branchId, onDone }) {
         working_hours_end: f.working_hours_end || null,
         slot_duration_minutes: isToken ? null : Number(f.slot_duration_minutes),
         available_weekdays: f.available_weekdays
-      }),
+      };
+      return isEdit ? updateDoctor(branchId, doctorId, payload) : createDoctor(branchId, payload);
+    },
     onSuccess: (d) => {
-      toast.success(`${d.name} added`);
-      setF(EMPTY_DOCTOR);
+      toast.success(isEdit ? `${d.name} updated` : `${d.name} added`);
+      if (!isEdit) setF(EMPTY_DOCTOR);
       onDone();
     },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not add doctor")
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not save doctor")
   });
 
   return (
@@ -76,7 +99,7 @@ function AddDoctorForm({ branchId, onDone }) {
       }}
     >
       <div className="sm:col-span-2">
-        <h2 className="font-display text-lg font-semibold">Add a doctor</h2>
+        <h2 className="font-display text-lg font-semibold">{isEdit ? `Edit ${f.name || "doctor"}` : "Add a doctor"}</h2>
         <p className="font-ui text-sm text-slate">
           Token queue = numbered walk-in line (high-volume). Appointments = fixed time slots.
         </p>
@@ -132,9 +155,16 @@ function AddDoctorForm({ branchId, onDone }) {
             value={f.slot_duration_minutes} onChange={set("slot_duration_minutes")} />
         </div>
       )}
-      <button className="btn-primary sm:col-span-2" disabled={create.isPending}>
-        {create.isPending ? "Adding…" : "Add doctor"}
-      </button>
+      <div className="flex gap-3 sm:col-span-2">
+        <button className="btn-primary flex-1" disabled={create.isPending}>
+          {create.isPending ? "Saving…" : isEdit ? "Save changes" : "Add doctor"}
+        </button>
+        {isEdit && (
+          <button type="button" className="btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+      </div>
     </form>
   );
 }
@@ -143,6 +173,7 @@ export default function DoctorSchedule() {
   const { branchId, user, role } = useAuth();
   const qc = useQueryClient();
   const pageRef = useRef(null);
+  const [editingId, setEditingId] = useState(null);
 
   const { data: doctorsRaw } = useQuery({
     queryKey: ["doctors", branchId],
@@ -173,6 +204,15 @@ export default function DoctorSchedule() {
       qc.invalidateQueries({ queryKey: ["doctors", branchId] });
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not close walk-ins")
+  });
+
+  const remove = useMutation({
+    mutationFn: (doctorId) => deleteDoctor(branchId, doctorId),
+    onSuccess: () => {
+      toast.success("Doctor removed (bookings history is kept)");
+      qc.invalidateQueries({ queryKey: ["doctors", branchId] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove doctor")
   });
 
   return (
@@ -208,6 +248,43 @@ export default function DoctorSchedule() {
                 <p className="font-ui text-xs uppercase tracking-[0.14em] text-slate">waiting now</p>
               </div>
             </div>
+
+            {role === "org_admin" && (
+              <div className="mt-4 flex gap-2 border-t border-hairline pt-4">
+                <button
+                  className="btn-ghost px-3 py-1.5 text-sm"
+                  onClick={() => setEditingId(editingId === id ? null : id)}
+                >
+                  {editingId === id ? "Close editor" : "Edit"}
+                </button>
+                <button
+                  className="btn-danger px-3 py-1.5 text-sm"
+                  disabled={remove.isPending}
+                  onClick={() => {
+                    if (window.confirm(`Remove ${d.name}? Patients can no longer be booked with them; past bookings stay.`)) {
+                      remove.mutate(id);
+                    }
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+
+            {editingId === id && (
+              <div className="mt-4">
+                <AddDoctorForm
+                  branchId={branchId}
+                  doctorId={id}
+                  initial={d}
+                  onCancel={() => setEditingId(null)}
+                  onDone={() => {
+                    setEditingId(null);
+                    qc.invalidateQueries({ queryKey: ["doctors", branchId] });
+                  }}
+                />
+              </div>
+            )}
 
             {d.booking_type === "token" && (
               <div className="mt-5 border-t border-hairline pt-4">
