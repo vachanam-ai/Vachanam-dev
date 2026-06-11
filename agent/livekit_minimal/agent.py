@@ -22,7 +22,7 @@ import json
 import logging
 import os
 import sys
-from datetime import date as date_cls, time as time_cls
+from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
 from pathlib import Path
 from uuid import UUID
 
@@ -317,9 +317,14 @@ class VachanamAgent(Agent):
         followup_consent: bool,
         patient_phone: str | None = None,
         appointment_time: str | None = None,
+        patient_age: int | None = None,
+        patient_gender: str | None = None,
     ) -> dict:
         """Finalize the booking AFTER the patient explicitly confirms. Writes the
-        token to the database and creates the calendar event."""
+        token to the database and creates the calendar event. patient_name is the
+        PATIENT being seen (may differ from the caller — family bookings);
+        patient_phone defaults to the caller's number when omitted.
+        patient_gender: 'male' | 'female' | 'other' if known."""
         if self._calendar is None:
             logger.error("confirm_booking_no_calendar_service")
             return {"success": False, "error": "booking_system_unavailable"}
@@ -340,6 +345,8 @@ class VachanamAgent(Agent):
                 db=self._db,
                 calendar_service=self._calendar,
                 meta_service=self._meta,
+                patient_age=patient_age,
+                patient_gender=patient_gender,
             )
         except Exception as e:
             logger.error("confirm_booking_failed: %s", e)
@@ -560,6 +567,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             for d in doctors
         ]
 
+        # The LLM has NO clock: without this it guesses today's date (wrong
+        # year even), books "tomorrow" in the past, and the past-date guard
+        # then refuses everything. Branch-local time, not server time.
+        try:
+            from zoneinfo import ZoneInfo
+
+            now_b = datetime_cls.now(ZoneInfo(branch.timezone or "Asia/Kolkata"))
+        except Exception:
+            now_b = datetime_cls.now()
+        date_context = (
+            f"\n\nTODAY IS {now_b.strftime('%A, %d %B %Y')} "
+            f"({now_b.strftime('%Y-%m-%d')}), current time {now_b.strftime('%H:%M')}. "
+            "Resolve EVERY relative date from this — today/ఈరోజు, "
+            "tomorrow/రేపు, ఎల్లుండి (day after tomorrow), next Monday, etc. "
+            "Always pass booking_date as YYYY-MM-DD with the correct year. "
+            "Never announce a date the patient didn't ask about."
+        )
+
         instructions = (
             build_system_prompt(
                 clinic_name=branch_name,
@@ -567,6 +592,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 emergency_contact=emergency_contact,
                 plan=state.plan or "clinic",
             )
+            + date_context
             + BREVITY_OVERRIDE
         )
         if is_reminder:

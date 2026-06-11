@@ -129,28 +129,24 @@ def test_system_prompt_contains_step0_header():
     assert "STEP 0" in prompt
 
 
-def test_system_prompt_contains_telugu_disclosure():
-    """System prompt must embed the Telugu disclosure text so LLM knows it was given."""
+def test_system_prompt_contains_greeting_with_ai_disclosure():
+    """STEP 0 embeds the spoken greeting; 'AI అసిస్టెంట్' is the DPDP s.5
+    disclosure that must always be in it (greeting reworded 2026-06-11)."""
     prompt = _make_prompt()
-    assert DISCLOSURE_TELUGU in prompt
+    assert "స్వాగతం" in prompt
+    assert "AI" in prompt
 
 
-def test_system_prompt_contains_english_disclosure():
-    """System prompt must embed the English disclosure text."""
+def test_system_prompt_moves_collection_notice_to_point_of_collection():
+    """Name/phone notice now spoken when collecting details, not in greeting."""
     prompt = _make_prompt()
-    assert DISCLOSURE_ENGLISH in prompt
-
-
-def test_system_prompt_contains_hindi_disclosure():
-    """System prompt must embed the Hindi disclosure text."""
-    prompt = _make_prompt()
-    assert DISCLOSURE_HINDI in prompt
+    assert "అపాయింట్‌మెంట్ కోసం" in prompt
 
 
 def test_system_prompt_instructs_llm_not_to_repeat_disclosure():
-    """LLM must be told NOT to repeat the disclosure — it was already spoken."""
+    """LLM must be told NOT to repeat the greeting — it was already spoken."""
     prompt = _make_prompt()
-    assert "Do NOT repeat this disclosure" in prompt
+    assert "Do NOT repeat it" in prompt
 
 
 def test_system_prompt_starts_with_vachanam_identity():

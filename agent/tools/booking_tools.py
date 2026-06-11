@@ -1,6 +1,7 @@
 import json
 from datetime import date, timedelta, datetime, time
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import redis.asyncio as aioredis
 import structlog
@@ -28,6 +29,16 @@ def _redis():
     return aioredis.from_url(settings.redis_url, decode_responses=True)
 
 
+async def _branch_now(branch_id: UUID, db: AsyncSession) -> datetime:
+    """Clock in the BRANCH's timezone — server may run UTC (Fly.io)."""
+    result = await db.execute(select(Branch.timezone).where(Branch.id == branch_id))
+    tzname = result.scalar_one_or_none() or "Asia/Kolkata"
+    try:
+        return datetime.now(ZoneInfo(tzname))
+    except Exception:
+        return datetime.now(ZoneInfo("Asia/Kolkata"))
+
+
 async def doctor_bookable(
     doctor: Doctor, branch_id: UUID, booking_date: date, db: AsyncSession
 ) -> str | None:
@@ -37,8 +48,21 @@ async def doctor_bookable(
     working weekdays, receptionist-marked leave (doctor_unavailability), and
     same-day walk-in closure for token doctors.
     """
-    if booking_date < date.today():
+    now = await _branch_now(branch_id, db)
+    today = now.date()
+    if booking_date < today:
         return f"{booking_date.strftime('%d %B')} is in the past. Ask for a future date."
+
+    if (
+        booking_date == today
+        and doctor.working_hours_end
+        and now.time() >= doctor.working_hours_end
+    ):
+        return (
+            f"{doctor.name} has finished for today "
+            f"({doctor.working_hours_end.strftime('%I:%M %p').lstrip('0')}). "
+            "Offer tomorrow or a later day."
+        )
 
     weekdays = doctor.available_weekdays or []
     if weekdays and booking_date.weekday() not in weekdays:
@@ -63,8 +87,8 @@ async def doctor_bookable(
 
     if (
         doctor.booking_type == "token"
-        and booking_date == date.today()
-        and doctor.walkins_closed_today_date == date.today()
+        and booking_date == today
+        and doctor.walkins_closed_today_date == today
     ):
         return f"{doctor.name} has closed bookings for today. Offer tomorrow."
 
@@ -223,6 +247,10 @@ async def check_availability(
         doctor.working_hours_end,
         doctor.slot_duration_minutes,
     )
+    # Same-day booking: never offer a slot that has already passed.
+    now = await _branch_now(branch_id, db)
+    if booking_date == now.date():
+        all_slots = [s for s in all_slots if s > now.time()]
 
     available = []
     async with _redis() as r:
@@ -369,6 +397,8 @@ async def confirm_booking(
     db: AsyncSession,
     calendar_service,   # CalendarService instance (injected)
     meta_service,       # MetaService instance (injected)
+    patient_age: int | None = None,
+    patient_gender: str | None = None,
 ) -> dict:
     """Persist the booking: write DB record, create Calendar event, send WhatsApp.
 
@@ -385,24 +415,59 @@ async def confirm_booking(
     Returns:
         {"success": True, "token_id": str} or {"success": False, "reason": str}
     """
-    # 1. Find or create patient
+    # 1. Find or create patient. Match on phone AND name: a caller books for
+    # family members too, so several patients legitimately share one phone —
+    # matching on phone alone attached the booking to whoever called first.
     result = await db.execute(
         select(Patient).where(
             and_(Patient.branch_id == branch_id, Patient.phone == patient_phone)
         )
     )
-    patient = result.scalar_one_or_none()
+    same_phone = result.scalars().all()
+    wanted = patient_name.strip().lower()
+    patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
     if not patient:
         patient = Patient(
             branch_id=branch_id,
             name=patient_name,
             phone=patient_phone,
+            age=patient_age,
+            gender=patient_gender,
             followup_consent=followup_consent,
         )
         db.add(patient)
         await db.flush()
     else:
         patient.followup_consent = followup_consent
+        if patient_age is not None:
+            patient.age = patient_age
+        if patient_gender:
+            patient.gender = patient_gender
+
+    # 1b. Duplicate guard: same patient + doctor + date already confirmed.
+    dup = await db.execute(
+        select(Token).where(
+            and_(
+                Token.branch_id == branch_id,
+                Token.doctor_id == doctor_id,
+                Token.patient_id == patient.id,
+                Token.date == booking_date,
+                Token.status == "confirmed",
+            )
+        )
+    )
+    existing = dup.scalars().first()
+    if existing is not None:
+        return {
+            "success": False,
+            "reason": "already_booked",
+            "existing_token_number": existing.token_number,
+            "existing_time": existing.appointment_time.strftime("%H:%M")
+            if existing.appointment_time
+            else None,
+            "instruction": "Patient already has a confirmed booking that day — "
+            "tell them their existing booking instead of creating another.",
+        }
 
     # 2. Create token record
     token = Token(
