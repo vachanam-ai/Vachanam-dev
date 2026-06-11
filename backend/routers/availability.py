@@ -85,6 +85,24 @@ async def _require_org_admin(
     return current_user
 
 
+async def _require_staff(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    """Allow receptionist + org_admin (front-desk operations). Reception marks
+    doctor leave at the desk; super_admin/doctor are rejected for writes."""
+    if current_user.role not in ("org_admin", "receptionist"):
+        logger.warning(
+            "availability_write_access_denied",
+            user_id=current_user.user_id,
+            role=current_user.role,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="receptionist or org_admin role required",
+        )
+    return current_user
+
+
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
@@ -170,7 +188,7 @@ async def mark_unavailable(
     body: MarkUnavailableRequest,
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
-    _admin: CurrentUser = Depends(_require_org_admin),
+    _staff: CurrentUser = Depends(_require_staff),
     _rate: None = Depends(availability_post_limit),
     db: AsyncSession = Depends(get_db),
 ) -> MarkUnavailableResponse:

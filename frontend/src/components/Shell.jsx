@@ -4,12 +4,14 @@ import { useAuth } from "../hooks/useAuth.jsx";
 const NAV = {
   receptionist: [
     { to: "/queue", label: "Queue" },
-    { to: "/walk-in", label: "Walk-in" }
+    { to: "/walk-in", label: "Walk-in" },
+    { to: "/availability", label: "Doctor leave" }
   ],
   org_admin: [
     { to: "/dashboard", label: "Dashboard" },
     { to: "/queue", label: "Queue" },
     { to: "/walk-in", label: "Walk-in" },
+    { to: "/availability", label: "Doctor leave" },
     { to: "/my-schedule", label: "Doctors" },
     { to: "/settings", label: "Settings" }
   ],

@@ -572,20 +572,19 @@ async def test_delete_single_date_removes_row(
 
 
 @pytest.mark.asyncio
-async def test_receptionist_can_get_but_not_post(
+async def test_receptionist_can_get_and_post(
     client, db: AsyncSession, clinic, receptionist_jwt, org_admin_jwt
 ):
-    """Receptionist can GET affected (read) but gets 403 on POST (write)."""
+    """Receptionist marks doctor leave from the front desk (POST) + reads.
+    Contract changed 2026-06-11 — reception owns the desk. Doctors still 403."""
     doctor = await _seed_doctor(db, clinic["branch_id"], name="Dr RoleCheck")
 
-    # First, org_admin marks one date (so GET has something to return)
     await client.post(
         f"/availability/{clinic['branch_id']}/{doctor.id}",
         json={"date_from": "2027-03-01", "date_to": "2027-03-01"},
         headers=_auth(org_admin_jwt),
     )
 
-    # Receptionist GET affected — should work (200)
     r_get = await client.get(
         f"/availability/{clinic['branch_id']}/{doctor.id}/affected",
         params={"from": "2027-03-01", "to": "2027-03-01"},
@@ -593,7 +592,6 @@ async def test_receptionist_can_get_but_not_post(
     )
     assert r_get.status_code == 200, r_get.text
 
-    # Receptionist GET list — should work (200)
     r_list = await client.get(
         f"/availability/{clinic['branch_id']}/{doctor.id}",
         params={"from": "2027-03-01", "to": "2027-03-01"},
@@ -601,13 +599,27 @@ async def test_receptionist_can_get_but_not_post(
     )
     assert r_list.status_code == 200, r_list.text
 
-    # Receptionist POST — must return 403
+    # Receptionist POST — now allowed (200)
     r_post = await client.post(
         f"/availability/{clinic['branch_id']}/{doctor.id}",
         json={"date_from": "2027-03-02", "date_to": "2027-03-02"},
         headers=_auth(receptionist_jwt),
     )
-    assert r_post.status_code == 403, r_post.text
+    assert r_post.status_code == 200, r_post.text
+
+    # A doctor (not front-desk) must still be rejected on write
+    doctor_jwt = _make_jwt(
+        user_id=str(uuid.uuid4()),
+        email="doc@clinic.test",
+        role="doctor",
+        branch_ids=[clinic["branch_id"]],
+    )
+    r_doc = await client.post(
+        f"/availability/{clinic['branch_id']}/{doctor.id}",
+        json={"date_from": "2027-03-03", "date_to": "2027-03-03"},
+        headers=_auth(doctor_jwt),
+    )
+    assert r_doc.status_code == 403, r_doc.text
 
 
 @pytest.mark.asyncio

@@ -50,10 +50,16 @@ export const fetchDoctors = (branchId) =>
 export const stopWalkinsToday = (doctorId, branchId) =>
   api.patch(`/doctors/${branchId}/${doctorId}/stop-walkins-today`).then((r) => r.data);
 
-// ── Availability (doctor self-service) ──
-export const fetchUnavailability = (doctorId, branchId) =>
+// ── Availability (receptionist + owner) ──
+export const fetchUnavailability = (branchId, doctorId, from, to) =>
   api
-    .get(`/availability/${doctorId}`, { params: { branch_id: branchId } })
+    .get(`/availability/${branchId}/${doctorId}`, { params: { from, to } })
+    .then((r) => r.data);
+export const markUnavailable = (branchId, doctorId, payload) =>
+  api.post(`/availability/${branchId}/${doctorId}`, payload).then((r) => r.data);
+export const previewAffected = (branchId, doctorId, from, to) =>
+  api
+    .get(`/availability/${branchId}/${doctorId}/affected`, { params: { from, to } })
     .then((r) => r.data);
 
 // ── Branch settings / team ──
