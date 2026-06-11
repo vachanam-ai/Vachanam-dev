@@ -44,6 +44,7 @@ from livekit.agents import (  # noqa: E402
     MetricsCollectedEvent,
     RoomInputOptions,
     RunContext,
+    ToolError,
     function_tool,
     metrics,
 )
@@ -115,13 +116,18 @@ BREVITY_OVERRIDE = (
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
-    """RULE 9: Gemini primary, GPT-4o-mini automatic fallback (3s failover)."""
+    """RULE 9: Gemini primary, GPT-4o-mini automatic fallback.
+
+    attempt_timeout is forwarded to the provider as the HTTP deadline; the
+    Google GenAI API rejects anything under 10s with a 400, which silently
+    pushed every single turn onto GPT-4o-mini (and its much weaker Telugu).
+    """
     return lk_llm.FallbackAdapter(
         llm=[
             google.LLM(api_key=settings.gemini_api_key, model="gemini-2.5-flash"),
             openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
         ],
-        attempt_timeout=3.0,
+        attempt_timeout=10.0,
     )
 
 
@@ -169,6 +175,53 @@ class VachanamAgent(Agent):
         self._meta = meta_service
         self._transfer_to = transfer_to
 
+    async def _resolve_doctor_id(self, doctor_id: str | None) -> UUID:
+        """Never trust the LLM to echo a UUID. Accept a real UUID, else match a
+        doctor name within this branch, else fall back to the doctor selected by
+        route_to_doctor. Raises ToolError (LLM-visible) instead of crashing."""
+        if doctor_id:
+            try:
+                return UUID(doctor_id)
+            except ValueError:
+                pass  # probably a name — try matching below
+            needle = doctor_id.strip().lower().removeprefix("dr.").removeprefix("dr").strip()
+            if needle:
+                result = await self._db.execute(
+                    select(Doctor).where(
+                        and_(
+                            Doctor.branch_id == self._state.branch_id,
+                            Doctor.status == "active",
+                        )
+                    )
+                )
+                for doc in result.scalars():
+                    if needle in doc.name.lower():
+                        return doc.id
+        if self._state.doctor_id:
+            return self._state.doctor_id
+        raise ToolError(
+            "Unknown doctor. Call route_to_doctor with the patient's complaint "
+            "first, then use the doctor_id it returns."
+        )
+
+    @staticmethod
+    def _parse_date(booking_date: str) -> date_cls:
+        try:
+            return date_cls.fromisoformat(booking_date)
+        except ValueError:
+            raise ToolError(
+                f"Invalid booking_date '{booking_date}'. Use YYYY-MM-DD."
+            ) from None
+
+    @staticmethod
+    def _parse_time(value: str | None) -> time_cls | None:
+        if not value:
+            return None
+        try:
+            return time_cls.fromisoformat(value)
+        except ValueError:
+            raise ToolError(f"Invalid time '{value}'. Use HH:MM (24h).") from None
+
     @function_tool()
     async def route_to_doctor(self, context: RunContext, complaint: str) -> dict:
         """Match the patient's stated health complaint to the right doctor.
@@ -196,13 +249,14 @@ class VachanamAgent(Agent):
     ) -> dict:
         """Check whether the doctor has capacity on a date (YYYY-MM-DD).
         Optional query_start/query_end are HH:MM strings for slot doctors."""
+        resolved = await self._resolve_doctor_id(doctor_id)
         availability = await check_availability(
-            doctor_id=UUID(doctor_id),
+            doctor_id=resolved,
             branch_id=self._state.branch_id,
-            booking_date=date_cls.fromisoformat(booking_date),
+            booking_date=self._parse_date(booking_date),
             db=self._db,
-            query_start=time_cls.fromisoformat(query_start) if query_start else None,
-            query_end=time_cls.fromisoformat(query_end) if query_end else None,
+            query_start=self._parse_time(query_start),
+            query_end=self._parse_time(query_end),
         )
         return {"availability": availability}
 
@@ -218,13 +272,11 @@ class VachanamAgent(Agent):
         check_availability confirms capacity AND the patient agrees to the date.
         appointment_time (HH:MM) only for slot-type doctors."""
         result = await assign_token(
-            doctor_id=UUID(doctor_id),
+            doctor_id=await self._resolve_doctor_id(doctor_id),
             branch_id=self._state.branch_id,
-            booking_date=date_cls.fromisoformat(booking_date),
+            booking_date=self._parse_date(booking_date),
             db=self._db,
-            appointment_time=time_cls.fromisoformat(appointment_time)
-            if appointment_time
-            else None,
+            appointment_time=self._parse_time(appointment_time),
         )
         if result.get("success"):
             self._state.token_held = True
@@ -251,19 +303,18 @@ class VachanamAgent(Agent):
             logger.error("confirm_booking_no_calendar_service")
             return {"success": False, "error": "booking_system_unavailable"}
         phone = patient_phone or self._state.patient_phone
+        resolved = await self._resolve_doctor_id(doctor_id)
         try:
             result = await confirm_booking(
-                doctor_id=UUID(doctor_id),
+                doctor_id=resolved,
                 branch_id=self._state.branch_id,
                 patient_name=patient_name,
                 patient_phone=phone,
                 complaint=complaint,
-                booking_date=date_cls.fromisoformat(booking_date),
+                booking_date=self._parse_date(booking_date),
                 token_number=token_number,
                 followup_consent=followup_consent,
-                appointment_time=time_cls.fromisoformat(appointment_time)
-                if appointment_time
-                else None,
+                appointment_time=self._parse_time(appointment_time),
                 source="voice",
                 db=self._db,
                 calendar_service=self._calendar,
@@ -286,9 +337,15 @@ class VachanamAgent(Agent):
 
         from backend.models.schema import Token
 
+        try:
+            token_uuid = UUID(token_id)
+        except ValueError:
+            raise ToolError(
+                "token_id must be the booking id from the reminder metadata."
+            ) from None
         result = await self._db.execute(
             select(Token).where(
-                _and(Token.id == UUID(token_id), Token.branch_id == self._state.branch_id)
+                _and(Token.id == token_uuid, Token.branch_id == self._state.branch_id)
             )
         )
         token = result.scalar_one_or_none()
