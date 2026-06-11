@@ -58,7 +58,9 @@ from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_system_prompt,
 )
-from agent.services.calendar_proxy import GoogleCalendarService  # noqa: E402
+# CalendarService (legacy-signature shim), NOT GoogleCalendarService —
+# booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
+from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
@@ -122,9 +124,18 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     Google GenAI API rejects anything under 10s with a 400, which silently
     pushed every single turn onto GPT-4o-mini (and its much weaker Telugu).
     """
+    from google.genai import types as genai_types
+
     return lk_llm.FallbackAdapter(
         llm=[
-            google.LLM(api_key=settings.gemini_api_key, model="gemini-2.5-flash"),
+            google.LLM(
+                api_key=settings.gemini_api_key,
+                model="gemini-2.5-flash",
+                # Thinking is ON by default for 2.5 Flash and adds 1-3s+ of
+                # silence per turn before the first token. A booking
+                # receptionist needs none of it.
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            ),
             openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
         ],
         attempt_timeout=10.0,
@@ -136,10 +147,16 @@ async def _routing_llm_call(messages: list) -> str:
     combined = "\n".join(m["content"] for m in messages)
     try:
         from google import genai
+        from google.genai import types as genai_types
 
         client = genai.Client(api_key=settings.gemini_api_key)
         resp = await client.aio.models.generate_content(
-            model="gemini-2.5-flash", contents=combined
+            model="gemini-2.5-flash",
+            contents=combined,
+            config=genai_types.GenerateContentConfig(
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                response_mime_type="application/json",
+            ),
         )
         return resp.text or ""
     except Exception as exc:
@@ -163,7 +180,7 @@ class VachanamAgent(Agent):
         state: SessionState,
         db,
         room,
-        calendar_service: GoogleCalendarService | None,
+        calendar_service: CalendarService | None,
         meta_service: MetaService,
         transfer_to: str,
     ) -> None:
@@ -561,7 +578,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # relative './google-service-account.json', which breaks when the
             # worker's cwd is livekit_minimal/.
             sa_path = _REPO_ROOT / "google-service-account.json"
-            calendar_service: GoogleCalendarService | None = GoogleCalendarService(
+            calendar_service: CalendarService | None = CalendarService(
                 sa_json_path=str(sa_path) if sa_path.exists() else None
             )
         except Exception as e:

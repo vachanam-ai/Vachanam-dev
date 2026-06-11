@@ -53,8 +53,18 @@ async def route_to_doctor(
     )
     doctors = result.scalars().all()
 
+    def _hit(d, confidence: str) -> dict:
+        # name + specialization returned so the agent SPEAKS both:
+        # "ఇషితా గారు, డయాబెటిస్ స్పెషలిస్ట్" — not just the name.
+        return {
+            "doctor_id": str(d.id),
+            "doctor_name": d.name,
+            "specialization": d.specialization,
+            "confidence": confidence,
+        }
+
     if len(doctors) == 1:
-        return {"doctor_id": str(doctors[0].id), "confidence": "high"}
+        return _hit(doctors[0], "high")
 
     doctors_json = [
         {
@@ -80,15 +90,22 @@ async def route_to_doctor(
 
     try:
         response = await llm_call(prompt)
-        parsed = json.loads(response.strip())
-        if parsed.get("confidence") == "none":
+        # LLMs love ```json fences — keep only the {...} payload.
+        raw = response.strip()
+        if "{" in raw:
+            raw = raw[raw.index("{") : raw.rindex("}") + 1]
+        parsed = json.loads(raw)
+        chosen = next(
+            (d for d in doctors if str(d.id) == str(parsed.get("doctor_id"))), None
+        )
+        if chosen is None or parsed.get("confidence") == "none":
             default = next((d for d in doctors if d.is_default_doctor), doctors[0])
-            return {"doctor_id": str(default.id), "confidence": "none"}
-        return parsed
+            return _hit(default, "none")
+        return _hit(chosen, parsed.get("confidence", "low"))
     except Exception as e:
         logger.error("route_to_doctor_failed", error=str(e))
         default = next((d for d in doctors if d.is_default_doctor), doctors[0])
-        return {"doctor_id": str(default.id), "confidence": "none"}
+        return _hit(default, "none")
 
 
 async def check_availability(
