@@ -413,14 +413,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     db = AsyncSessionLocal()
 
-    # Branch by DID (RULE 5) + active doctors (RULE 1: branch_id filter)
-    result = await db.execute(select(Branch).where(Branch.did_number == did))
-    branch = result.scalar_one_or_none()
-    if branch is None:
-        logger.error("unknown_did ...%s — aborting call", did[-4:])
+    # Branch by DID (RULE 5) + active doctors (RULE 1: branch_id filter).
+    # .first() not .one_or_none(): a DB-level partial-unique index guarantees at
+    # most one branch per DID, but if that invariant were ever violated we must
+    # NOT crash the call — and must NOT silently serve an ambiguous tenant.
+    result = await db.execute(select(Branch).where(Branch.did_number == did).limit(2))
+    branches = result.scalars().all()
+    if len(branches) != 1:
+        logger.error(
+            "did_resolution_failed did=...%s matches=%d — aborting call",
+            did[-4:],
+            len(branches),
+        )
         await db.close()
         ctx.shutdown()
         return
+    branch = branches[0]
     if True:  # noqa: SIM108 — preserves indentation of the call-setup block
         branch_id, branch_name = branch.id, branch.name
         emergency_contact = branch.emergency_contact or ""

@@ -65,6 +65,18 @@ class Branch(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # No two clinics may share a DID — the voice agent resolves tenant identity
+    # from the dialed number. Partial unique (NULL DIDs allowed for un-provisioned
+    # branches). Matches alembic e1diduniq2026.
+    __table_args__ = (
+        Index(
+            "uq_branches_did_number",
+            "did_number",
+            unique=True,
+            postgresql_where=text("did_number IS NOT NULL"),
+        ),
+    )
+
     organization: Mapped["Organization"] = relationship(back_populates="branches")
     doctors: Mapped[list["Doctor"]] = relationship(back_populates="branch")
     patients: Mapped[list["Patient"]] = relationship(back_populates="branch")

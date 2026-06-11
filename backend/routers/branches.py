@@ -186,6 +186,30 @@ async def update_branch_settings(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
+    # SECURITY: a DID is a tenant's identity — the voice agent resolves the
+    # branch (and therefore which clinic's patients/doctors/calendar are
+    # touched) purely from the dialed number. If two branches shared a DID, a
+    # clinic could intercept another clinic's calls. Reject a DID already owned
+    # by a different branch. (DPDP cross-tenant breach prevention.)
+    if body.did_number is not None and body.did_number.strip():
+        new_did = body.did_number.strip()
+        clash = (
+            await db.execute(
+                select(Branch).where(
+                    Branch.did_number == new_did, Branch.id != branch.id
+                )
+            )
+        ).scalar_one_or_none()
+        if clash is not None:
+            logger.warning(
+                "did_collision_blocked", branch_id=branch_id, did_last4=new_did[-4:]
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="This number is already assigned to another clinic. "
+                "Contact support if this is your number.",
+            )
+
     for field in (
         "name", "address", "city", "clinic_phone",
         "emergency_contact", "google_calendar_id", "did_number",
