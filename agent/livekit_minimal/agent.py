@@ -73,6 +73,7 @@ from agent.tools.booking_tools import (  # noqa: E402
 from backend.config import settings  # noqa: E402
 from backend.database import AsyncSessionLocal  # noqa: E402
 from backend.models.schema import Branch, Doctor  # noqa: E402
+from backend.models.schema import Patient as _PatientModel  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vachanam-agent")
@@ -109,9 +110,14 @@ REBOOK_PROMPT_EXTRA = (
     "- If they want to rebook: ask which day suits them, then check_availability "
     "for the same doctor (skip leave days), assign_token, confirm_booking with "
     "the same patient name and phone. Keep it to two short sentences per turn.\n"
+    "- If they ask WHEN the doctor will be back/available: do NOT guess and do "
+    "NOT hang up — call check_availability for the next few days until one is "
+    "free, then offer that day: 'డాక్టర్ గారు ___ నుండి ఉంటారు. ఆ రోజు బుక్ "
+    "చేయమంటారా?'\n"
     "- If the doctor's next days are also on leave, offer the nearest available "
     "day, or another suitable doctor if they prefer.\n"
-    "- If they decline: apologise once more, thank them warmly, call end_call."
+    "- Only when the patient has clearly FINISHED (declined politely or said "
+    "bye, with NO open question): apologise once more, thank them, then end_call."
 )
 
 REMINDER_PROMPT_EXTRA = (
@@ -401,10 +407,54 @@ class VachanamAgent(Agent):
         return result
 
     @function_tool()
+    async def find_my_bookings(self, context: RunContext) -> dict:
+        """Look up the caller's upcoming confirmed bookings by the number they
+        are calling from. Use when the patient wants to reschedule, cancel, or
+        asks about an existing appointment. Returns each booking's token_id —
+        needed for cancel_booking."""
+        from backend.models.schema import Token
+
+        phone = self._state.patient_phone
+        if not phone:
+            return {"bookings": [], "note": "caller number unknown — ask for the booking phone number"}
+        rows = (
+            await self._db.execute(
+                select(Token, Doctor, _PatientModel)
+                .join(Doctor, Token.doctor_id == Doctor.id)
+                .join(_PatientModel, Token.patient_id == _PatientModel.id)
+                .where(
+                    and_(
+                        Token.branch_id == self._state.branch_id,  # RULE 1
+                        _PatientModel.phone == phone,
+                        Token.status == "confirmed",
+                        Token.date >= date_cls.today(),
+                    )
+                )
+                .order_by(Token.date)
+            )
+        ).all()
+        return {
+            "bookings": [
+                {
+                    "token_id": str(t.id),
+                    "patient_name": p.name,
+                    "doctor": d.name,
+                    "doctor_id": str(d.id),
+                    "date": t.date.isoformat(),
+                    "time": t.appointment_time.strftime("%H:%M") if t.appointment_time else None,
+                    "token_number": t.token_number,
+                    "booking_type": d.booking_type,
+                }
+                for t, d, p in rows
+            ]
+        }
+
+    @function_tool()
     async def cancel_booking(self, context: RunContext, token_id: str) -> dict:
-        """Cancel an existing booking. ONLY for reminder-call reschedules, after
-        the replacement booking is confirmed. Releases the slot/token and removes
-        the calendar event."""
+        """Cancel an existing confirmed booking (frees the slot/token and removes
+        the calendar event). Use for reminder-call reschedules AND when a caller
+        asks to cancel or reschedule — for reschedules, confirm the NEW booking
+        first, then cancel the old one."""
         from sqlalchemy import and_ as _and
 
         from backend.models.schema import Token
@@ -427,7 +477,7 @@ class VachanamAgent(Agent):
             return {"success": False, "error": f"not_cancellable_{token.status}"}
 
         token.status = "cancelled_by_clinic"
-        token.cancellation_reason = "patient_rescheduled_on_reminder_call"
+        token.cancellation_reason = "patient_cancelled_or_rescheduled_on_call"
         await self._db.commit()
 
         # Release the capacity reservation (RULE 2 inverse — only valid decr).
@@ -467,8 +517,10 @@ class VachanamAgent(Agent):
 
     @function_tool()
     async def end_call(self, context: RunContext) -> dict:
-        """Hang up the call. Call this ONLY after the goodbye has been spoken
-        and the patient has nothing further — booking done, or they said bye."""
+        """Hang up the call. STRICT rule: only when the conversation is truly
+        over — goodbye spoken AND the patient has no unanswered question and
+        asked for nothing further. NEVER call this because a phrase merely
+        sounded final; if the patient just asked something, answer it first."""
         try:
             # Let the goodbye finish playing before tearing the room down.
             await context.wait_for_playout()
@@ -580,8 +632,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             logger.warning("participant_wait_fallback: %s", e)
 
     # 3) Single-DID test/fallback so the call always proceeds and is answered.
+    # TENANT NOTE (RULE 5): branch context must come from the dialed DID. This
+    # fallback is only safe while one clinic exists; with multiple clinics a
+    # missing SIP attribute must never route a call to the wrong tenant, so we
+    # log loudly for monitoring.
     if not did:
         did = os.getenv("VOBIZ_OUTBOUND_NUMBER", "") or settings.vobiz_did_number
+        logger.warning(
+            "did_fallback_used room=%s — SIP trunkPhoneNumber missing; "
+            "verify dispatch rule passes attributes (multi-tenant risk)",
+            ctx.room.name,
+        )
     logger.info("call_started did=...%s caller=...%s", did[-4:], caller[-4:] if caller else "????")
 
     state = SessionState(session_id=ctx.room.name)

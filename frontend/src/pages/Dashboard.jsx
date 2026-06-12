@@ -18,8 +18,33 @@ function Hero({ label, value, sub, gold, suffix = "" }) {
   );
 }
 
-/* 14-day stacked bars (attended / no-show / cancelled) + show-rate line. */
+/* 14-day stacked bars (attended / no-show / cancelled) + show-rate line.
+   Motion (GSAP, Emil Kowalski principles): bars grow from their baseline
+   (origin-aware transform, not opacity-only), staggered left→right so the
+   eye reads time; the show-rate line draws itself after the bars land.
+   power3.out = fast start, soft landing — interruptible, never bouncy. */
 function TrendChart({ daily }) {
+  const svgRef = useRef(null);
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    import("gsap").then(({ gsap }) => {
+      gsap.fromTo(
+        svg.querySelectorAll("rect"),
+        { scaleY: 0, transformOrigin: "center bottom" },
+        { scaleY: 1, duration: 0.55, ease: "power3.out", stagger: 0.018 }
+      );
+      const line = svg.querySelector("polyline");
+      if (line) {
+        const len = line.getTotalLength();
+        gsap.fromTo(
+          line,
+          { strokeDasharray: len, strokeDashoffset: len },
+          { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut", delay: 0.4 }
+        );
+      }
+    });
+  }, [daily]);
   const W = 720, H = 220, PAD = 28, BW = Math.max(8, (W - PAD * 2) / Math.max(daily.length, 1) - 8);
   const maxBooked = Math.max(1, ...daily.map((d) => d.booked + d.cancelled));
   const x = (i) => PAD + i * ((W - PAD * 2) / Math.max(daily.length, 1)) + 4;
@@ -29,7 +54,7 @@ function TrendChart({ daily }) {
     .filter(Boolean)
     .join(" ");
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Daily bookings and show rate">
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Daily bookings and show rate">
       {[0.25, 0.5, 0.75, 1].map((g) => (
         <line key={g} x1={PAD} x2={W - PAD} y1={H - PAD - g * (H - PAD * 2)} y2={H - PAD - g * (H - PAD * 2)}
           stroke="#0f3d3a" strokeOpacity="0.08" strokeDasharray="3 5" />

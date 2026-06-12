@@ -26,7 +26,7 @@ Per CLAUDE.md:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
@@ -83,7 +83,7 @@ async def cascade_for_unavailability(
                 date=current,
                 reason=reason,
                 created_by_user_id=uuid.UUID(user_id) if user_id else None,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             .on_conflict_do_nothing(
                 index_elements=None,
@@ -153,7 +153,7 @@ async def cascade_for_unavailability(
             what_to_ask=(
                 f"Doctor unavailable on {snap['date'].isoformat()}. Reschedule."
             ),
-            scheduled_at=datetime.utcnow() + timedelta(minutes=1),
+            scheduled_at=datetime.now(timezone.utc) + timedelta(minutes=1),
             max_attempts=3,
             status="pending",
             channel="whatsapp",
@@ -197,7 +197,7 @@ async def cascade_for_unavailability(
                 google_event_id=snap["google_calendar_event_id"],
                 status="pending",
                 attempts=0,
-                next_attempt_at=datetime.utcnow(),
+                next_attempt_at=datetime.now(timezone.utc),
             )
             db.add(cal_task)
         except Exception as exc:
