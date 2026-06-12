@@ -1,4 +1,4 @@
-"""Proof tests for the 2026-06-12 bug-hunt fixes.
+﻿"""Proof tests for the 2026-06-12 bug-hunt fixes.
 
 Bug 2: confirm_booking's function-level @retry re-ran the whole function on a
        transient calendar failure; the session still held attempt #1's pending
@@ -13,7 +13,7 @@ Bug 3: cancelling a token-doctor booking DECR'd the Redis token counter, so
        token number.
 
 Bug 1: LLM-orchestrated reschedules kept cancelling without booking (or
-       booking without cancelling — Vinay's June 14 double). Fix: atomic
+       booking without cancelling â€” Vinay's June 14 double). Fix: atomic
        _do_reschedule. Proven by: one call leaves exactly one confirmed
        booking on the new date and the old one cancelled; impossible date ->
        old booking untouched.
@@ -123,7 +123,7 @@ async def _count_tokens(db, doctor_id, branch_id, day) -> int:
     ).scalar_one()
 
 
-# ── Bug 2: transient calendar failure must NOT duplicate bookings ────────────
+# â”€â”€ Bug 2: transient calendar failure must NOT duplicate bookings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db, redis):
@@ -142,6 +142,7 @@ async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db,
         booking_date=day,
         token_number=assigned["token_number"],
         followup_consent=False,
+        patient_age=30,
         appointment_time=None,
         source="voice",
         db=db,
@@ -153,7 +154,7 @@ async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db,
     assert await _count_tokens(db, doc.id, branch.id, day) == 1  # ONE row, not 2/3
 
 
-# ── Bug 3: cancelled token numbers are never reissued ────────────────────────
+# â”€â”€ Bug 3: cancelled token numbers are never reissued â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 async def test_cancelled_token_number_never_reissued(clinic, db, redis):
@@ -173,6 +174,7 @@ async def test_cancelled_token_number_never_reissued(clinic, db, redis):
         booking_date=day,
         token_number=1,
         followup_consent=False,
+        patient_age=30,
         appointment_time=None,
         source="voice",
         db=db,
@@ -196,14 +198,14 @@ async def test_cancelled_token_number_never_reissued(clinic, db, redis):
     cancel = await agent._do_cancel(confirmed["token_id"])
     assert cancel["success"]
 
-    # The cancelled patient held number 1; the next patient must get 2 — the
+    # The cancelled patient held number 1; the next patient must get 2 â€” the
     # old DECR behaviour would have reissued number 1 to a different person.
     second = await assign_token(doc.id, branch.id, day, db)
     assert second["success"]
     assert second["token_number"] == 2
 
 
-# ── Bug 1: reschedule is atomic — never leaves two confirmed bookings ────────
+# â”€â”€ Bug 1: reschedule is atomic â€” never leaves two confirmed bookings â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
@@ -224,6 +226,7 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
         booking_date=day,
         token_number=assigned["token_number"],
         followup_consent=False,
+        patient_age=30,
         appointment_time=time(10, 0),
         source="voice",
         db=db,
@@ -259,11 +262,11 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
     assert confirmed_rows[0].appointment_time == time(11, 0)
 
 
-# ── Bug 26: rebook call said "you don't have any booking" ───────────────────
+# â”€â”€ Bug 26: rebook call said "you don't have any booking" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 async def test_find_bookings_includes_recent_cancelled(clinic, db, redis):
-    """Cascade-cancelled bookings must still be visible — that cancelled
+    """Cascade-cancelled bookings must still be visible â€” that cancelled
     booking IS what the patient asks about on a rebook call."""
     from agent.livekit_minimal.agent import VachanamAgent
 
@@ -279,6 +282,7 @@ async def test_find_bookings_includes_recent_cancelled(clinic, db, redis):
         booking_date=day,
         token_number=assigned["token_number"],
         followup_consent=False,
+        patient_age=30,
         appointment_time=None,
         source="voice",
         db=db,
@@ -334,6 +338,7 @@ async def test_reschedule_failure_keeps_old_booking(clinic, db, redis):
         booking_date=day,
         token_number=assigned["token_number"],
         followup_consent=False,
+        patient_age=30,
         appointment_time=time(12, 0),
         source="voice",
         db=db,
@@ -365,3 +370,196 @@ async def test_reschedule_failure_keeps_old_booking(clinic, db, redis):
         await db.execute(select(Token).where(Token.id == _UUID(confirmed["token_id"])))
     ).scalar_one()
     assert old.status == "confirmed"  # patient still has their booking
+
+
+# ── Fix 31: out-of-scope complaint must NOT route to the default doctor ──────
+
+
+async def test_route_out_of_scope_lists_specialties(clinic, db):
+    from agent.tools.booking_tools import route_to_doctor
+
+    async def llm(messages):
+        return '{"doctor_ids": [], "confidence": "none", "out_of_scope": true}'
+
+    result = await route_to_doctor("arm pain", clinic["branch"].id, db, llm)
+    assert result.get("out_of_scope") is True
+    assert "doctor_id" not in result
+    assert "dermatology" in result["treated_specialties"]
+    assert "does NOT treat" in result["instruction"]
+
+
+async def test_route_vague_complaint_still_defaults(clinic, db):
+    """Vague (not out-of-scope) complaints keep the old default-doctor path."""
+    from agent.tools.booking_tools import route_to_doctor
+
+    async def llm(messages):
+        return '{"doctor_ids": [], "confidence": "none", "out_of_scope": false}'
+
+    result = await route_to_doctor("not feeling well", clinic["branch"].id, db, llm)
+    assert result.get("doctor_id")  # default doctor
+    assert result["confidence"] == "none"
+
+
+# ── Fix 30: asked time full -> NEAREST free times offered first ──────────────
+
+
+async def test_check_availability_offers_nearest_time(clinic, db, redis):
+    from agent.tools.booking_tools import check_availability
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=time(10, 0))
+    assert assigned["success"]
+    confirmed = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Slot Hog",
+        patient_phone="+919666444422", complaint="skin", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        patient_age=30, appointment_time=time(10, 0), source="voice",
+        db=db, calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert confirmed["success"]
+
+    msg = await check_availability(
+        doc.id, branch.id, day, db, query_start=time(10, 0), query_end=time(10, 30)
+    )
+    assert "NEAREST free times" in msg
+    assert ("9:30 AM" in msg) or ("10:30 AM" in msg)
+
+
+# ── Fix 33: first-time patient details are mandatory at the tool boundary ────
+
+
+async def test_confirm_booking_first_time_patient_requires_age(clinic, db, redis):
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db)
+
+    missing = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Brand New",
+        patient_phone="+919666444433", complaint="fever", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        appointment_time=None, source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert missing["success"] is False
+    assert missing["reason"] == "missing_patient_details"
+
+    ok = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Brand New",
+        patient_phone="+919666444433", complaint="fever", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        patient_age=42, appointment_time=None, source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert ok["success"], ok
+
+
+async def test_confirm_booking_known_patient_skips_age_gate(clinic, db, redis):
+    """Reschedules / repeat bookings must not be blocked by the details gate."""
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    a1 = await assign_token(doc.id, branch.id, day, db)
+    first = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Repeat Visitor",
+        patient_phone="+919666444455", complaint="fever", booking_date=day,
+        token_number=a1["token_number"], followup_consent=False,
+        patient_age=50, appointment_time=None, source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert first["success"]
+
+    day2 = day + timedelta(days=1)
+    while day2.weekday() == 6:
+        day2 += timedelta(days=1)
+    a2 = await assign_token(doc.id, branch.id, day2, db)
+    second = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Repeat Visitor",
+        patient_phone="+919666444455", complaint="fever", booking_date=day2,
+        token_number=a2["token_number"], followup_consent=False,
+        appointment_time=None, source="voice", db=db,  # NO age — known patient
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert second["success"], second
+
+
+# ── Fix 35: caller-ID format mismatch must not hide bookings ─────────────────
+
+
+async def test_find_bookings_matches_any_phone_format(clinic, db, redis):
+    from agent.tools.booking_tools import find_bookings_by_phone
+
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db)
+    confirmed = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Format Victim",
+        patient_phone="+919666444466", complaint="fever", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        patient_age=30, appointment_time=None, source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert confirmed["success"]
+
+    # stored as +919666444466 — every SIP caller-ID variant must still match
+    for variant in ("+919666444466", "919666444466", "09666444466", "9666444466"):
+        rows = await find_bookings_by_phone(branch.id, variant, db)
+        assert len(rows) == 1, f"variant {variant} found {len(rows)} bookings"
+        assert rows[0][2].name == "Format Victim"
+
+    assert await find_bookings_by_phone(branch.id, "12345", db) == []  # junk in, nothing out
+
+
+# ── Fix 32: never hang up mid-booking ────────────────────────────────────────
+
+
+async def test_end_call_blocked_while_booking_unconfirmed():
+    from livekit.agents import ToolError as _ToolError
+
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    state = SessionState(session_id="t5")
+    state.token_held = True
+    state.token_confirmed = False
+    with pytest.raises(_ToolError):
+        VachanamAgent._check_end_allowed(state, abandon_pending_booking=False)
+    # explicit abandon or a confirmed booking both allow hangup
+    VachanamAgent._check_end_allowed(state, abandon_pending_booking=True)
+    state.token_confirmed = True
+    VachanamAgent._check_end_allowed(state, abandon_pending_booking=False)
+
+
+# ── Fix 34: declining a rebook stops the outbound retry loop ─────────────────
+
+
+async def test_decline_rebook_completes_followup_task(clinic, db, redis):
+    from agent.livekit_minimal.agent import VachanamAgent
+    from backend.models.schema import FollowupTask
+
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    patient = Patient(
+        branch_id=branch.id, name="Decliner", phone="+919666444477",
+        followup_consent=False,
+    )
+    db.add(patient)
+    await db.flush()
+    task = FollowupTask(
+        branch_id=branch.id, doctor_id=doc.id, patient_id=patient.id,
+        task_type="cascade_rebook", channel="voice", status="in_progress",
+    )
+    db.add(task)
+    await db.commit()
+
+    state = SessionState(session_id="t6")
+    state.branch_id = branch.id
+    state.followup_task_id = task.id
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=None, meta_service=NullMeta(), transfer_to="",
+    )
+    assert await agent._complete_followup_task("patient_declined: test") is True
+
+    refreshed = (
+        await db.execute(select(FollowupTask).where(FollowupTask.id == task.id))
+    ).scalar_one()
+    assert refreshed.status == "completed"
+    assert "patient_declined" in refreshed.response_summary

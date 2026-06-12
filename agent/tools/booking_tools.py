@@ -166,8 +166,14 @@ async def route_to_doctor(
                 f"Patient complaint: '{complaint}'\n"
                 f"Doctors: {json.dumps(doctors_json, ensure_ascii=False)}\n"
                 "List EVERY doctor whose specialization or routing_keywords fit "
-                "this complaint (often more than one). Return JSON only: "
-                '{"doctor_ids": ["<uuid>", ...], "confidence": "high|low|none"}'
+                "this complaint (often more than one). If the complaint is "
+                "CLEARLY outside every doctor's field (a body part / condition "
+                "none of these specializations treats — e.g. arm pain at a "
+                "dental+skin+diabetes clinic), return an empty doctor_ids list "
+                "with out_of_scope true. Only use out_of_scope when certain; a "
+                "vague complaint is NOT out of scope. Return JSON only: "
+                '{"doctor_ids": ["<uuid>", ...], "confidence": "high|low|none", '
+                '"out_of_scope": false}'
             ),
         }
     ]
@@ -183,6 +189,23 @@ async def route_to_doctor(
         if not ids and parsed.get("doctor_id"):  # tolerate old single-id shape
             ids = {str(parsed["doctor_id"])}
         matched = [d for d in doctors if str(d.id) in ids]
+        if not matched and parsed.get("out_of_scope"):
+            # Clinic does not treat this problem AT ALL (arm pain at a dental
+            # clinic). Never silently route to the default doctor — tell the
+            # patient what the clinic DOES treat.
+            specialties = sorted({d.specialization for d in doctors if d.specialization})
+            return {
+                "out_of_scope": True,
+                "confidence": "none",
+                "treated_specialties": specialties,
+                "instruction": (
+                    "This clinic does NOT treat this problem. Politely tell the "
+                    "patient the clinic only treats these specialities: "
+                    + ", ".join(specialties)
+                    + ". Do NOT book any doctor for this complaint. Ask if they "
+                    "need help with any of those instead."
+                ),
+            }
         if not matched or parsed.get("confidence") == "none":
             default = next((d for d in doctors if d.is_default_doctor), doctors[0])
             return _hit(default, "none")
@@ -317,14 +340,23 @@ async def check_availability(
                 f"{doctor.name} is available {_ranges_str(in_window)} "
                 f"on {booking_date.strftime('%d %B')}."
             )
-        # Asked window full — offer the nearest free windows instead of a
-        # dead-end "fully booked" (patient picks doctor by time).
+        # Asked window full — lead with the times CLOSEST to what the patient
+        # asked (they picked that time for a reason), then the full ranges.
+        qs_dt = datetime.combine(booking_date, query_start)
+        nearest_free = sorted(
+            available,
+            key=lambda s: abs(datetime.combine(booking_date, s) - qs_dt),
+        )[:2]
+        nearest_str = " or ".join(
+            s.strftime("%I:%M %p").lstrip("0") for s in nearest_free
+        )
         return (
             f"{doctor.name} is NOT free between "
             f"{query_start.strftime('%I:%M %p').lstrip('0')} and "
-            f"{query_end.strftime('%I:%M %p').lstrip('0')}, but IS available "
-            f"{_ranges_str(available)} on {booking_date.strftime('%d %B')}. "
-            "Offer the nearest of these windows to the patient."
+            f"{query_end.strftime('%I:%M %p').lstrip('0')}. "
+            f"NEAREST free times to their request: {nearest_str}. "
+            f"Full availability {_ranges_str(available)} on "
+            f"{booking_date.strftime('%d %B')}. Offer the nearest time FIRST."
         )
 
     return (
@@ -530,6 +562,19 @@ async def confirm_booking(
     wanted = patient_name.strip().lower()
     patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
     if not patient:
+        # FIRST-TIME patient: details are MANDATORY (Vinay 2026-06-12). The
+        # prompt alone was skipped sometimes — enforce at the tool boundary.
+        if patient_age is None:
+            return {
+                "success": False,
+                "reason": "missing_patient_details",
+                "instruction": (
+                    f"'{patient_name}' is a first-time patient — name and age "
+                    "are mandatory. Ask the patient's age (and gender if not "
+                    "obvious from the name), then call confirm_booking again "
+                    "with patient_age set."
+                ),
+            }
         patient = Patient(
             branch_id=branch_id,
             name=patient_name,
@@ -673,6 +718,53 @@ async def confirm_booking(
             logger.error("whatsapp_confirmation_failed", error=str(e), token_id=str(token.id))
 
     return {"success": True, "token_id": str(token.id)}
+
+
+def _phone_digits(phone: str | None) -> str:
+    return "".join(ch for ch in (phone or "") if ch.isdigit())
+
+
+async def find_bookings_by_phone(
+    branch_id: UUID, phone: str | None, db: AsyncSession
+) -> list:
+    """Caller's bookings, matched on the LAST 10 DIGITS of the phone number.
+
+    SIP caller IDs arrive in varying formats (+919666444428, 09666444428,
+    bare 9666444428) while patients are stored E.164 — the old exact string
+    equality silently matched nothing, so the agent asked real patients for
+    their number again, the spoken digits got garbled by STT, and the patient
+    heard "name and number not matching" despite giving correct details.
+
+    Returns (Token, Doctor, Patient) rows: upcoming confirmed bookings plus
+    clinic-cancelled ones from the last 7 days (cascade rebook context).
+    """
+    digits = _phone_digits(phone)
+    if len(digits) < 10:
+        return []
+    last10 = digits[-10:]
+    today_local = (await _branch_now(branch_id, db)).date()
+    rows = (
+        await db.execute(
+            select(Token, Doctor, Patient)
+            .join(Doctor, Token.doctor_id == Doctor.id)
+            .join(Patient, Token.patient_id == Patient.id)
+            .where(
+                and_(
+                    Token.branch_id == branch_id,  # RULE 1
+                    Patient.phone.like(f"%{last10}"),
+                    Token.status.in_(["confirmed", "cancelled_by_clinic"]),
+                    Token.date >= today_local - timedelta(days=7),
+                )
+            )
+            .order_by(Token.date)
+        )
+    ).all()
+    return [
+        (t, d, p)
+        for t, d, p in rows
+        if (t.status == "confirmed" and t.date >= today_local)
+        or t.status == "cancelled_by_clinic"
+    ]
 
 
 def _generate_slots(start: time, end: time, duration_minutes: int) -> list[time]:

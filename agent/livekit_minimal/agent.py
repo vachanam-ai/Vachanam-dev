@@ -22,7 +22,7 @@ import json
 import logging
 import os
 import sys
-from datetime import date as date_cls, datetime as datetime_cls, time as time_cls, timedelta
+from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
 from datetime import timezone as _tz
 
 timezone_utc = _tz.utc
@@ -69,10 +69,10 @@ from agent.services.telugu_dates import telugu_date  # noqa: E402
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
-    _branch_now,
     assign_token,
     check_availability,
     confirm_booking,
+    find_bookings_by_phone,
     route_to_doctor,
 )
 from backend.config import settings  # noqa: E402
@@ -130,6 +130,11 @@ REBOOK_PROMPT_EXTRA = (
     "చేయమంటారా?'\n"
     "- If the doctor's next days are also on leave, offer the nearest available "
     "day, or another suitable doctor if they prefer.\n"
+    "- If they DO NOT want to rebook (say no, 'cancel it', or they'll call "
+    "later themselves): their booking is ALREADY cancelled — there is nothing "
+    "more to cancel, NEVER say they have no booking. Say 'మీ అపాయింట్‌మెంట్ "
+    "ఇప్పటికే క్యాన్సిల్ అయింది అండి', call decline_rebook (stops further "
+    "calls from the clinic), thank them, then end_call.\n"
     "- Only when the patient has clearly FINISHED (declined politely or said "
     "bye, with NO open question): apologise once more, thank them, then end_call."
 )
@@ -404,66 +409,73 @@ class VachanamAgent(Agent):
             self._state.patient_name = patient_name
             if self._state.followup_task_id:
                 # Cascade-rebook call achieved its goal — stop the retry loop.
-                try:
-                    from backend.models.schema import FollowupTask
-
-                    task = (
-                        await self._db.execute(
-                            select(FollowupTask).where(
-                                and_(
-                                    FollowupTask.id == self._state.followup_task_id,
-                                    FollowupTask.branch_id == self._state.branch_id,
-                                )
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if task is not None:
-                        task.status = "completed"
-                        task.response_summary = "rebooked_on_call"
-                        await self._db.commit()
-                except Exception as e:
-                    logger.warning("followup_complete_mark_failed: %s", e)
+                await self._complete_followup_task("rebooked_on_call")
         return result
 
-    @function_tool()
-    async def find_my_bookings(self, context: RunContext) -> dict:
-        """Look up the caller's bookings by the number they are calling from:
-        upcoming confirmed ones AND recently clinic-cancelled ones (doctor
-        leave). Use when the patient wants to reschedule, cancel, or asks
-        about an existing/previous appointment. status='cancelled_by_clinic'
-        bookings are what rebook calls are about — never tell such a patient
-        they have no booking; offer to rebook it instead."""
-        from backend.models.schema import Token
+    async def _complete_followup_task(self, summary: str) -> bool:
+        """Mark this call's FollowupTask completed (stops the outbound retry
+        loop). Used when the patient rebooks AND when they decline — either
+        way the clinic must stop calling them every 30 minutes."""
+        if not self._state.followup_task_id:
+            return False
+        try:
+            from backend.models.schema import FollowupTask
 
-        phone = self._state.patient_phone
-        if not phone:
-            return {"bookings": [], "note": "caller number unknown — ask for the booking phone number"}
-        today_local = (await _branch_now(self._state.branch_id, self._db)).date()
-        rows = (
-            await self._db.execute(
-                select(Token, Doctor, _PatientModel)
-                .join(Doctor, Token.doctor_id == Doctor.id)
-                .join(_PatientModel, Token.patient_id == _PatientModel.id)
-                .where(
-                    and_(
-                        Token.branch_id == self._state.branch_id,  # RULE 1
-                        _PatientModel.phone == phone,
-                        # upcoming confirmed OR clinic-cancelled in the last
-                        # week (cascade leave) — the latter is the "previous
-                        # booking" patients ask about on rebook calls
-                        Token.status.in_(["confirmed", "cancelled_by_clinic"]),
-                        Token.date >= today_local - timedelta(days=7),
+            task = (
+                await self._db.execute(
+                    select(FollowupTask).where(
+                        and_(
+                            FollowupTask.id == self._state.followup_task_id,
+                            FollowupTask.branch_id == self._state.branch_id,
+                        )
                     )
                 )
-                .order_by(Token.date)
-            )
-        ).all()
-        rows = [
-            (t, d, p)
-            for t, d, p in rows
-            if t.status == "confirmed" and t.date >= today_local
-            or t.status == "cancelled_by_clinic"
-        ]
+            ).scalar_one_or_none()
+            if task is None:
+                return False
+            task.status = "completed"
+            task.response_summary = summary[:200]
+            await self._db.commit()
+            return True
+        except Exception as e:
+            logger.warning("followup_complete_mark_failed: %s", e)
+            return False
+
+    @function_tool()
+    async def decline_rebook(self, context: RunContext, reason: str = "declined") -> dict:
+        """ONLY on clinic-initiated rebook/reminder calls: the patient does
+        NOT want to rebook (says no, asks to cancel, or will call back
+        themselves). Marks the follow-up done so the clinic STOPS calling
+        them. Their old booking is ALREADY cancelled — never tell them they
+        have no booking, and never call cancel_booking for it."""
+        done = await self._complete_followup_task(f"patient_declined: {reason}")
+        if not done:
+            return {"success": False, "error": "not_a_followup_call"}
+        return {
+            "success": True,
+            "instruction": (
+                "Acknowledge warmly that their appointment stays cancelled and "
+                "they can call anytime to book again. Thank them, then end_call."
+            ),
+        }
+
+    @function_tool()
+    async def find_my_bookings(
+        self, context: RunContext, phone_number: str | None = None
+    ) -> dict:
+        """Look up the caller's bookings: upcoming confirmed ones AND recently
+        clinic-cancelled ones (doctor leave). Matches by the number they are
+        calling from automatically — do NOT ask for their number first. Only
+        pass phone_number if the search came back empty AND the patient says
+        the booking was made with a different number. Use when the patient
+        wants to reschedule, cancel, or asks about an existing/previous
+        appointment. status='cancelled_by_clinic' bookings are what rebook
+        calls are about — never tell such a patient they have no booking;
+        offer to rebook it instead."""
+        phone = phone_number or self._state.patient_phone
+        if not phone:
+            return {"bookings": [], "note": "caller number unknown — ask for the booking phone number"}
+        rows = await find_bookings_by_phone(self._state.branch_id, phone, self._db)
         confirmed_rows = [r for r in rows if r[0].status == "confirmed"]
         if len(confirmed_rows) == 1:
             rows_single = confirmed_rows
@@ -628,6 +640,18 @@ class VachanamAgent(Agent):
         if token is None:
             return {"success": False, "error": "booking_not_found"}
         if token.status != "confirmed":
+            if token.status == "cancelled_by_clinic":
+                return {
+                    "success": False,
+                    "error": "already_cancelled",
+                    "instruction": (
+                        "This booking was ALREADY cancelled by the clinic "
+                        "(doctor leave). Tell the patient it is already "
+                        "cancelled and nothing more is needed — NEVER say "
+                        "they have no booking. On a rebook call, also call "
+                        "decline_rebook so the clinic stops calling them."
+                    ),
+                }
             return {"success": False, "error": f"not_cancellable_{token.status}"}
 
         token.status = "cancelled_by_clinic"
@@ -674,12 +698,31 @@ class VachanamAgent(Agent):
         )
         return {"success": True}
 
+    @staticmethod
+    def _check_end_allowed(state: SessionState, abandon_pending_booking: bool) -> None:
+        """Refuse to hang up mid-booking. The LLM once said a random
+        ధన్యవాదాలు and ended the call while a token was held but never
+        confirmed — the patient thought they were booked. Raises ToolError
+        (LLM-visible) unless the booking is complete or explicitly abandoned."""
+        if state.token_held and not state.token_confirmed and not abandon_pending_booking:
+            raise ToolError(
+                "A booking is IN PROGRESS (token held, not confirmed). Do not "
+                "end the call. Either finish confirm_booking, or — ONLY if the "
+                "patient clearly said they no longer want the booking — say "
+                "goodbye and call end_call with abandon_pending_booking=true."
+            )
+
     @function_tool()
-    async def end_call(self, context: RunContext) -> dict:
+    async def end_call(
+        self, context: RunContext, abandon_pending_booking: bool = False
+    ) -> dict:
         """Hang up the call. STRICT rule: only when the conversation is truly
         over — goodbye spoken AND the patient has no unanswered question and
         asked for nothing further. NEVER call this because a phrase merely
-        sounded final; if the patient just asked something, answer it first."""
+        sounded final; if the patient just asked something, answer it first.
+        abandon_pending_booking=true ONLY when a started booking is being
+        dropped because the patient clearly declined to finish it."""
+        self._check_end_allowed(self._state, abandon_pending_booking)
         try:
             # Let the goodbye finish playing before tearing the room down.
             await context.wait_for_playout()
