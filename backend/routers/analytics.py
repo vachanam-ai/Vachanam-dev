@@ -8,13 +8,24 @@ from datetime import date, timedelta
 import structlog
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select
+from sqlalchemy import Integer, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
-from backend.models.schema import Doctor, DoctorUnavailability, Patient, Token
+from backend.models.schema import (
+    Branch,
+    CallLog,
+    Doctor,
+    DoctorUnavailability,
+    Organization,
+    Patient,
+    Token,
+)
+
+# Included voice minutes per plan (pricing table; trial = 1000)
+PLAN_MINUTES = {"solo": 100, "clinic": 2100, "multi": 4200}
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -47,6 +58,23 @@ class LeaveRow(BaseModel):
     is_today: bool
 
 
+class CallsDay(BaseModel):
+    date: str
+    calls: int
+    bookings_made: int
+
+
+class MinutesUsage(BaseModel):
+    used: int  # minutes this calendar month
+    included: int  # plan allowance
+    pct: float
+
+
+class WeekdayLoad(BaseModel):
+    weekday: str  # Mon..Sun
+    bookings: int
+
+
 class Overview(BaseModel):
     today: DayPoint
     pending_today: int  # confirmed, not yet marked
@@ -55,6 +83,11 @@ class Overview(BaseModel):
     by_doctor: list[DoctorRow]  # over the selected period
     by_source: dict  # source -> bookings over the selected period
     on_leave: list[LeaveRow]  # today + next 30 days
+    calls_daily: list[CallsDay]  # answered calls per day (period)
+    calls_today: int
+    minutes: MinutesUsage  # this month vs plan
+    attendance_rate: float | None  # period: attended / (attended + no_show)
+    weekday_load: list[WeekdayLoad]  # bookings per weekday over the period
 
 
 def _show_rate(attended: int, no_show: int) -> float | None:
@@ -195,6 +228,64 @@ async def analytics_overview(
         )
     ).all()
 
+    # ── Calls (answered) per day + bookings made on calls ──
+    call_rows = (
+        await db.execute(
+            select(
+                func.date(CallLog.started_at),
+                func.count(),
+                func.sum(cast(CallLog.booking_made, Integer)),
+            )
+            .where(
+                and_(
+                    CallLog.branch_id == branch_id,  # Rule 1
+                    CallLog.answered.is_(True),
+                    func.date(CallLog.started_at) >= start,
+                )
+            )
+            .group_by(func.date(CallLog.started_at))
+        )
+    ).all()
+    calls_by_day = {d: (n, int(b or 0)) for d, n, b in call_rows}
+    calls_daily = [
+        CallsDay(
+            date=(start + timedelta(days=i)).isoformat(),
+            calls=calls_by_day.get(start + timedelta(days=i), (0, 0))[0],
+            bookings_made=calls_by_day.get(start + timedelta(days=i), (0, 0))[1],
+        )
+        for i in range(days)
+    ]
+
+    # ── Minutes used this calendar month vs plan allowance ──
+    month_start = today.replace(day=1)
+    used_seconds = (
+        await db.execute(
+            select(func.coalesce(func.sum(CallLog.duration_seconds), 0)).where(
+                and_(
+                    CallLog.branch_id == branch_id,
+                    func.date(CallLog.started_at) >= month_start,
+                )
+            )
+        )
+    ).scalar_one()
+    plan = (
+        await db.execute(
+            select(Organization.plan)
+            .join(Branch, Branch.org_id == Organization.id)
+            .where(Branch.id == branch_id)
+        )
+    ).scalar_one_or_none() or "clinic"
+    included = PLAN_MINUTES.get(plan, 2100)
+    used_min = int(used_seconds // 60)
+
+    # ── Attendance rate + weekday load over the period ──
+    total_attended = sum(d.attended for d in daily)
+    total_no_show = sum(d.no_show for d in daily)
+    weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    weekday_counts = [0] * 7
+    for d in daily:
+        weekday_counts[date.fromisoformat(d.date).weekday()] += d.booked
+
     return Overview(
         today=today_point,
         pending_today=pending_today,
@@ -202,6 +293,18 @@ async def analytics_overview(
         daily=daily,
         by_doctor=by_doctor,
         by_source={s: n for s, n in source_rows},
+        calls_daily=calls_daily,
+        calls_today=calls_daily[-1].calls if calls_daily else 0,
+        minutes=MinutesUsage(
+            used=used_min,
+            included=included,
+            pct=round(min(used_min / included, 1.0) * 100, 1) if included else 0.0,
+        ),
+        attendance_rate=_show_rate(total_attended, total_no_show),
+        weekday_load=[
+            WeekdayLoad(weekday=weekday_names[i], bookings=weekday_counts[i])
+            for i in range(7)
+        ],
         on_leave=[
             LeaveRow(
                 doctor_name=name,

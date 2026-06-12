@@ -91,6 +91,7 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                             "token_id": str(token.id),
                             "patient_name": patient.name,
                             "doctor_name": doctor.name,
+                            "doctor_id": str(doctor.id),
                             "appointment_time": token.appointment_time.strftime("%H:%M"),
                         }
                     ),

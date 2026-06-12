@@ -92,6 +92,7 @@ async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
                             "followup_task_id": str(task.id),
                             "patient_name": patient.name,
                             "doctor_name": doctor.name,
+                            "doctor_id": str(doctor.id),
                             "cancelled_date": token.date.isoformat(),
                         }
                     ),

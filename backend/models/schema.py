@@ -272,6 +272,29 @@ class Call(Base):
     branch: Mapped["Branch"] = relationship(back_populates="calls")
 
 
+class CallLog(Base):
+    """One row per voice call — analytics + minute metering.
+
+    Rule 9: caller stored as LAST-4 only; no names, no recordings.
+    Written by the voice agent at call end (and on failed outbound dials).
+    """
+    __tablename__ = "call_logs"
+    __table_args__ = (
+        Index("ix_call_logs_branch_started", "branch_id", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    call_type: Mapped[str] = mapped_column(String(20), nullable=False)  # inbound|reminder|cascade_rebook|outbound
+    caller_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    answered: Mapped[bool] = mapped_column(Boolean, default=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    booking_made: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 class FollowupTask(Base):
     __tablename__ = "followup_tasks"
 

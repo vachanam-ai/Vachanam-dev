@@ -133,6 +133,21 @@ async def route_to_doctor(
     if len(doctors) == 1:
         return _hit(doctors[0], "high")
 
+    # LATENCY FAST-PATH: direct keyword hit skips the extra LLM round-trip
+    # (~1-2s on the call). Only when UNAMBIGUOUS — exactly one doctor's
+    # keywords/specialization match; otherwise fall through to the LLM.
+    lowered = complaint.lower()
+    def _kw_hit(d) -> bool:
+        if any(k and k.lower() in lowered for k in (d.routing_keywords or [])):
+            return True
+        spec = (d.specialization or "").lower()
+        return bool(spec) and spec in lowered
+
+    kw_matches = [d for d in doctors if _kw_hit(d)]
+    if len(kw_matches) == 1:
+        logger.info("route_keyword_fastpath", doctor=kw_matches[0].name)
+        return _hit(kw_matches[0], "high")
+
     doctors_json = [
         {
             "id": str(d.id),

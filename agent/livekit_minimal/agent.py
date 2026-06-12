@@ -22,7 +22,10 @@ import json
 import logging
 import os
 import sys
-from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
+from datetime import date as date_cls, datetime as datetime_cls, time as time_cls, timedelta
+from datetime import timezone as _tz
+
+timezone_utc = _tz.utc
 from pathlib import Path
 from uuid import UUID
 
@@ -114,6 +117,10 @@ REBOOK_PROMPT_EXTRA = (
     "problem, NEVER restart the new-patient flow — this overrides the booking "
     "flow steps above. If their reply is unclear or mumbled, simply repeat "
     "your question once: 'సరిగా వినిపించలేదండి — వేరే రోజు బుక్ చేయమంటారా?'\n"
+    "If they ask about their PREVIOUS booking ('when was my appointment?'): "
+    "answer from THIS context — it was on {cancelled_date} with {doctor} and "
+    "the clinic cancelled it for the leave. NEVER say they have no booking; "
+    "find_my_bookings will show it with status=cancelled_by_clinic.\n"
     "- If they want to rebook: ask which day suits them, then check_availability "
     "for the same doctor (skip leave days), assign_token, confirm_booking with "
     "the same patient name and phone. Keep it to two short sentences per turn.\n"
@@ -187,7 +194,9 @@ async def _routing_llm_call(messages: list) -> str:
 
         client = genai.Client(api_key=settings.gemini_api_key)
         resp = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            # flash-lite: matching a complaint to a doctor list needs no depth;
+            # noticeably faster first token than full flash on the call path.
+            model="gemini-2.5-flash-lite",
             contents=combined,
             config=genai_types.GenerateContentConfig(
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
@@ -418,15 +427,18 @@ class VachanamAgent(Agent):
 
     @function_tool()
     async def find_my_bookings(self, context: RunContext) -> dict:
-        """Look up the caller's upcoming confirmed bookings by the number they
-        are calling from. Use when the patient wants to reschedule, cancel, or
-        asks about an existing appointment. Returns each booking's token_id —
-        needed for cancel_booking."""
+        """Look up the caller's bookings by the number they are calling from:
+        upcoming confirmed ones AND recently clinic-cancelled ones (doctor
+        leave). Use when the patient wants to reschedule, cancel, or asks
+        about an existing/previous appointment. status='cancelled_by_clinic'
+        bookings are what rebook calls are about — never tell such a patient
+        they have no booking; offer to rebook it instead."""
         from backend.models.schema import Token
 
         phone = self._state.patient_phone
         if not phone:
             return {"bookings": [], "note": "caller number unknown — ask for the booking phone number"}
+        today_local = (await _branch_now(self._state.branch_id, self._db)).date()
         rows = (
             await self._db.execute(
                 select(Token, Doctor, _PatientModel)
@@ -436,18 +448,31 @@ class VachanamAgent(Agent):
                     and_(
                         Token.branch_id == self._state.branch_id,  # RULE 1
                         _PatientModel.phone == phone,
-                        Token.status == "confirmed",
-                        # branch-local today, not server-local (Fly runs UTC)
-                        Token.date >= (await _branch_now(self._state.branch_id, self._db)).date(),
+                        # upcoming confirmed OR clinic-cancelled in the last
+                        # week (cascade leave) — the latter is the "previous
+                        # booking" patients ask about on rebook calls
+                        Token.status.in_(["confirmed", "cancelled_by_clinic"]),
+                        Token.date >= today_local - timedelta(days=7),
                     )
                 )
                 .order_by(Token.date)
             )
         ).all()
-        if len(rows) == 1:
-            # One upcoming booking: pre-select its doctor so later tools never
+        rows = [
+            (t, d, p)
+            for t, d, p in rows
+            if t.status == "confirmed" and t.date >= today_local
+            or t.status == "cancelled_by_clinic"
+        ]
+        confirmed_rows = [r for r in rows if r[0].status == "confirmed"]
+        if len(confirmed_rows) == 1:
+            rows_single = confirmed_rows
+        else:
+            rows_single = rows if len(rows) == 1 else []
+        if rows_single:
+            # One relevant booking: pre-select its doctor so later tools never
             # hit "Unknown doctor" (reschedules skip route_to_doctor entirely).
-            self._state.doctor_id = rows[0][1].id
+            self._state.doctor_id = rows_single[0][1].id
         return {
             "bookings": [
                 {
@@ -459,6 +484,7 @@ class VachanamAgent(Agent):
                     "time": t.appointment_time.strftime("%H:%M") if t.appointment_time else None,
                     "token_number": t.token_number,
                     "booking_type": d.booking_type,
+                    "status": t.status,
                 }
                 for t, d, p in rows
             ]
@@ -781,6 +807,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     state = SessionState(session_id=ctx.room.name)
     state.patient_phone = caller or None
     state.call_type = "outbound" if outbound_number else "inbound_booking"
+    state.call_start = datetime_cls.now(timezone_utc)
 
     db = AsyncSessionLocal()
 
@@ -853,6 +880,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             + date_context
             + BREVITY_OVERRIDE
         )
+        # Outbound calls carry the doctor in metadata — pre-select so tools
+        # never fail with "Unknown doctor" no matter how the LLM names them.
+        if meta.get("doctor_id"):
+            try:
+                state.doctor_id = UUID(meta["doctor_id"])
+            except ValueError:
+                pass
         if is_reminder:
             instructions += REMINDER_PROMPT_EXTRA.format(
                 token_id=meta.get("token_id", ""),
@@ -933,14 +967,44 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ):
                     r = aioredis.from_url(settings.redis_url, decode_responses=True)
                     try:
-                        await r.decr(state.token_redis_key)
-                        logger.warning(
-                            "token_released_on_disconnect token=%s branch_id=%s",
-                            state.token_number,
-                            str(state.branch_id),
-                        )
+                        # Only roll back if OUR number is still the latest —
+                        # a blind DECR after someone else INCRed would make the
+                        # counter reissue their number (same bug as cancel's).
+                        current = int(await r.get(state.token_redis_key) or 0)
+                        if state.token_number is not None and current == state.token_number:
+                            await r.decr(state.token_redis_key)
+                            logger.warning(
+                                "token_released_on_disconnect token=%s branch_id=%s",
+                                state.token_number,
+                                str(state.branch_id),
+                            )
                     finally:
                         await r.aclose()
+                # Call log — analytics + minute metering (Rule 9: last-4 only).
+                try:
+                    from backend.models.schema import CallLog
+
+                    started = state.call_start or datetime_cls.now(timezone_utc)
+                    await db.rollback()  # clear any failed tx before logging
+                    db.add(
+                        CallLog(
+                            branch_id=state.branch_id,
+                            call_type=state.call_type or "inbound",
+                            caller_last4=(state.patient_phone or "")[-4:] or None,
+                            answered=True,
+                            started_at=started,
+                            duration_seconds=max(
+                                0,
+                                int(
+                                    (datetime_cls.now(timezone_utc) - started).total_seconds()
+                                ),
+                            ),
+                            booking_made=state.token_confirmed,
+                        )
+                    )
+                    await db.commit()
+                except Exception as e:
+                    logger.warning("call_log_write_failed: %s", e)
             finally:
                 await db.close()
 

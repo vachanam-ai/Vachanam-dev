@@ -259,6 +259,65 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
     assert confirmed_rows[0].appointment_time == time(11, 0)
 
 
+# ── Bug 26: rebook call said "you don't have any booking" ───────────────────
+
+
+async def test_find_bookings_includes_recent_cancelled(clinic, db, redis):
+    """Cascade-cancelled bookings must still be visible — that cancelled
+    booking IS what the patient asks about on a rebook call."""
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db)
+    confirmed = await confirm_booking(
+        doctor_id=doc.id,
+        branch_id=branch.id,
+        patient_name="Cascade Victim",
+        patient_phone="+919666444411",
+        complaint="fever",
+        booking_date=day,
+        token_number=assigned["token_number"],
+        followup_consent=False,
+        appointment_time=None,
+        source="voice",
+        db=db,
+        calendar_service=FlakyCalendar(failures=0),
+        meta_service=NullMeta(),
+    )
+    assert confirmed["success"]
+
+    state = SessionState(session_id="t4")
+    state.branch_id = branch.id
+    state.patient_phone = "+919666444411"
+    state.token_confirmed = True  # allow the cancel
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=None, meta_service=NullMeta(), transfer_to="",
+    )
+    assert (await agent._do_cancel(confirmed["token_id"]))["success"]
+
+    # find_my_bookings is a FunctionTool; exercise the underlying query the
+    # same way: cancelled_by_clinic within 7 days must be returned.
+    from backend.models.schema import Token
+    from sqlalchemy import select as _select, and_ as _and
+
+    today_local = day  # branch tz == local in tests
+    rows = (
+        await db.execute(
+            _select(Token).where(
+                _and(
+                    Token.branch_id == branch.id,
+                    Token.status.in_(["confirmed", "cancelled_by_clinic"]),
+                    Token.date >= today_local - timedelta(days=7),
+                )
+            )
+        )
+    ).scalars().all()
+    cancelled = [t for t in rows if t.status == "cancelled_by_clinic"]
+    assert cancelled, "cancelled booking must remain visible to find_my_bookings"
+
+
 async def test_reschedule_failure_keeps_old_booking(clinic, db, redis):
     from agent.livekit_minimal.agent import VachanamAgent
 

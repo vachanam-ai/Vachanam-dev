@@ -23,7 +23,7 @@ function Hero({ label, value, sub, gold, suffix = "" }) {
    (origin-aware transform, not opacity-only), staggered left→right so the
    eye reads time; the show-rate line draws itself after the bars land.
    power3.out = fast start, soft landing — interruptible, never bouncy. */
-function TrendChart({ daily }) {
+function TrendChart({ daily, calls }) {
   const svgRef = useRef(null);
   useEffect(() => {
     const svg = svgRef.current;
@@ -39,15 +39,19 @@ function TrendChart({ daily }) {
           { scaleY: 0, transformOrigin: "center bottom" },
           { scaleY: 1, duration: 0.55, ease: "power3.out", stagger: 0.018 }
         );
-        const line = svg.querySelector("polyline");
-        if (line) {
+        svg.querySelectorAll("polyline").forEach((line, i) => {
+          if (line.getAttribute("stroke-dasharray")) {
+            // dashed calls line: dash-draw would erase its pattern — fade it
+            gsap.fromTo(line, { autoAlpha: 0 }, { autoAlpha: 0.85, duration: 0.6, delay: 0.6 });
+            return;
+          }
           const len = line.getTotalLength();
           gsap.fromTo(
             line,
             { strokeDasharray: len, strokeDashoffset: len },
-            { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut", delay: 0.4 }
+            { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut", delay: 0.4 + i * 0.15 }
           );
-        }
+        });
       });
     });
     return () => mm?.revert();
@@ -59,6 +63,12 @@ function TrendChart({ daily }) {
   const ratePts = daily
     .map((d, i) => (d.show_rate === null ? null : `${x(i) + BW / 2},${H - PAD - d.show_rate * (H - PAD * 2)}`))
     .filter(Boolean)
+    .join(" ");
+  // Calls-answered line shares the chart (incorporated, per Vinay) on its own
+  // implicit scale so a quiet day still shows shape.
+  const maxCalls = Math.max(1, ...(calls ?? []).map((c) => c.calls));
+  const callPts = (calls ?? [])
+    .map((c, i) => `${x(i) + BW / 2},${H - PAD - (c.calls / maxCalls) * (H - PAD * 2) * 0.9}`)
     .join(" ");
   return (
     <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Daily bookings and show rate">
@@ -84,6 +94,10 @@ function TrendChart({ daily }) {
         );
       })}
       {ratePts && <polyline points={ratePts} fill="none" stroke="#b7791f" strokeWidth="2.5" strokeLinecap="round" />}
+      {callPts && (
+        <polyline points={callPts} fill="none" stroke="#155e75" strokeWidth="2"
+          strokeDasharray="5 4" strokeLinecap="round" opacity="0.85" />
+      )}
       {daily.map((d, i) =>
         i % Math.ceil(daily.length / 7) === 0 ? (
           <text key={d.date} x={x(i) + BW / 2} y={H - 8} textAnchor="middle"
@@ -96,13 +110,102 @@ function TrendChart({ daily }) {
   );
 }
 
+/* Minutes-used donut: GSAP sweeps the arc, count-up in the middle. */
+function MinutesDonut({ minutes }) {
+  const arcRef = useRef(null);
+  const R = 54, C = 2 * Math.PI * R;
+  const frac = Math.min((minutes?.used ?? 0) / Math.max(minutes?.included ?? 1, 1), 1);
+  useEffect(() => {
+    if (!arcRef.current) return;
+    let mm;
+    import("gsap").then(({ gsap }) => {
+      mm = gsap.matchMedia();
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
+        gsap.fromTo(
+          arcRef.current,
+          { strokeDashoffset: C },
+          { strokeDashoffset: C * (1 - frac), duration: 1.1, ease: "power3.out", delay: 0.2 }
+        );
+      });
+      mm.add("(prefers-reduced-motion: reduce)", () => {
+        gsap.set(arcRef.current, { strokeDashoffset: C * (1 - frac) });
+      });
+    });
+    return () => mm?.revert();
+  }, [frac]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="flex items-center gap-5">
+      <svg viewBox="0 0 140 140" className="h-36 w-36 shrink-0" role="img" aria-label="Voice minutes used">
+        <circle cx="70" cy="70" r={R} fill="none" stroke="#d8ece7" strokeWidth="14" />
+        <circle ref={arcRef} cx="70" cy="70" r={R} fill="none" stroke="#0e7490" strokeWidth="14"
+          strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C}
+          transform="rotate(-90 70 70)" />
+        <text x="70" y="66" textAnchor="middle" className="fill-teal-deep" fontSize="22"
+          fontWeight="600" fontFamily="ui-sans-serif">{minutes?.pct ?? 0}%</text>
+        <text x="70" y="84" textAnchor="middle" className="fill-slate" fontSize="10"
+          fontFamily="ui-sans-serif">of plan</text>
+      </svg>
+      <div className="font-ui text-sm">
+        <p className="numeral text-3xl text-teal-deep">{minutes?.used ?? 0}<span className="text-base text-slate"> min</span></p>
+        <p className="mt-1 text-slate">of {minutes?.included ?? 0} included this month</p>
+        <p className="mt-2 text-xs text-slate">AI call minutes across all numbers</p>
+      </div>
+    </div>
+  );
+}
+
+/* Busiest weekdays: 7 bars, tallest = peak day. */
+function WeekdayBars({ load }) {
+  const wrapRef = useRef(null);
+  const max = Math.max(1, ...(load ?? []).map((w) => w.bookings));
+  const peak = (load ?? []).reduce((a, b) => (b.bookings > (a?.bookings ?? -1) ? b : a), null);
+  useEffect(() => {
+    if (!wrapRef.current) return;
+    let mm;
+    import("gsap").then(({ gsap }) => {
+      mm = gsap.matchMedia();
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
+        gsap.fromTo(
+          wrapRef.current.querySelectorAll("[data-wbar]"),
+          { scaleY: 0, transformOrigin: "center bottom" },
+          { scaleY: 1, duration: 0.5, ease: "power3.out", stagger: 0.05 }
+        );
+      });
+    });
+    return () => mm?.revert();
+  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div>
+      <div ref={wrapRef} className="flex h-28 items-end gap-2">
+        {(load ?? []).map((w) => (
+          <div key={w.weekday} className="flex flex-1 flex-col items-center gap-1.5">
+            <div data-wbar
+              className={`w-full rounded-t-md ${w === peak && w.bookings > 0 ? "bg-teal" : "bg-teal-light/50"}`}
+              style={{ height: `${(w.bookings / max) * 100}%`, minHeight: w.bookings ? 6 : 2 }}
+              title={`${w.weekday}: ${w.bookings} bookings`} />
+            <span className={`font-ui text-[10px] ${w === peak && w.bookings > 0 ? "font-semibold text-teal-deep" : "text-slate"}`}>
+              {w.weekday}
+            </span>
+          </div>
+        ))}
+      </div>
+      {peak?.bookings > 0 && (
+        <p className="mt-2 font-ui text-xs text-slate">
+          Busiest day: <b className="text-teal-deep">{peak.weekday}</b> ({peak.bookings} bookings)
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Legend() {
   const items = [
     ["#0e7490", "Seen"],
     ["#99d6cc", "Upcoming"],
     ["#d97706", "No-show"],
     ["#cbd5d1", "Cancelled"],
-    ["#b7791f", "Show-rate line"]
+    ["#b7791f", "Show-rate line"],
+    ["#155e75", "Calls answered (dashed)"]
   ];
   return (
     <div className="flex flex-wrap gap-4">
@@ -116,6 +219,32 @@ function Legend() {
 }
 
 const SOURCE_LABEL = { voice: "AI voice calls", walk_in: "Walk-ins", whatsapp: "WhatsApp" };
+
+const fmtDay = (iso) =>
+  new Date(iso + "T00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+
+/* Collapse per-date leave rows into "Dr X on leave from A to B" ranges. */
+function groupLeave(rows) {
+  const groups = [];
+  for (const l of rows) {
+    const last = groups[groups.length - 1];
+    const prevDate = last && new Date(last.to + "T00:00");
+    const isNext =
+      last && last.doctor === l.doctor_name &&
+      (new Date(l.date + "T00:00") - prevDate) / 86400000 === 1;
+    if (isNext) {
+      last.to = l.date;
+      last.coversToday = last.coversToday || l.is_today;
+      last.reason = last.reason || l.reason;
+    } else {
+      groups.push({
+        doctor: l.doctor_name, from: l.date, to: l.date,
+        reason: l.reason, coversToday: l.is_today
+      });
+    }
+  }
+  return groups;
+}
 
 export default function Dashboard() {
   const { branchId } = useAuth();
@@ -153,12 +282,32 @@ export default function Dashboard() {
         <h1 className="section-title text-2xl">Today at a glance</h1>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Hero label="Bookings today" value={s.total} sub="voice + walk-in" />
+        <Hero label="Calls answered" value={an?.calls_today ?? 0} sub="AI picked up today" />
         <Hero label="Patients seen" value={s.attended} />
         <Hero label="In queue now" value={s.remaining} gold />
         <Hero label="Show rate today" value={todayRate ?? 100} suffix="%"
-          sub={todayRate === null ? "no outcomes marked yet" : "of seen-or-missed so far"} />
+          sub={todayRate === null ? "no outcomes marked yet" : "seen vs missed"} />
+        <Hero label={`Attendance · ${days}d`}
+          value={an?.attendance_rate != null ? Math.round(an.attendance_rate * 100) : 100}
+          suffix="%" sub="attended of seen-or-missed" />
+      </div>
+
+      {/* Minutes + busiest weekdays */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <section data-reveal className="card overflow-hidden">
+          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+            <h2 className="font-display text-lg font-semibold">Voice minutes · this month</h2>
+          </header>
+          <div className="px-5 py-4"><MinutesDonut minutes={an?.minutes} /></div>
+        </section>
+        <section data-reveal className="card overflow-hidden">
+          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+            <h2 className="font-display text-lg font-semibold">Busiest days · {days}d</h2>
+          </header>
+          <div className="px-5 py-4"><WeekdayBars load={an?.weekday_load} /></div>
+        </section>
       </div>
 
       {/* Trend — bookings, outcomes, show rate over time */}
@@ -177,7 +326,7 @@ export default function Dashboard() {
           </div>
         </header>
         <div className="space-y-3 px-5 py-4">
-          {an?.daily?.length ? <TrendChart daily={an.daily} /> : (
+          {an?.daily?.length ? <TrendChart daily={an.daily} calls={an.calls_daily} /> : (
             <p className="font-ui text-sm text-slate">Charts appear after your first bookings.</p>
           )}
           <Legend />
@@ -192,18 +341,17 @@ export default function Dashboard() {
             <span className="font-ui text-xs text-slate">next 30 days</span>
           </header>
           <div className="divide-y divide-hairline">
-            {an.on_leave.map((l) => (
-              <div key={`${l.doctor_name}-${l.date}`} className="flex items-center justify-between px-5 py-3">
+            {groupLeave(an.on_leave).map((g) => (
+              <div key={`${g.doctor}-${g.from}`} className="flex items-center justify-between px-5 py-3">
                 <div className="flex items-center gap-2.5">
-                  {/* dot = real semantic state: leave is TODAY, patients being called */}
-                  {l.is_today && <span className="h-2 w-2 rounded-full bg-amber-500" aria-label="on leave today" />}
-                  <p className="font-ui text-sm font-medium">{l.doctor_name}</p>
-                  {l.reason && <span className="font-ui text-xs text-slate">· {l.reason}</span>}
+                  {/* dot = real semantic state: leave covers TODAY, patients being called */}
+                  {g.coversToday && <span className="h-2 w-2 rounded-full bg-amber-500" aria-label="on leave today" />}
+                  <p className="font-ui text-sm font-medium">{g.doctor}</p>
+                  {g.reason && <span className="font-ui text-xs text-slate">· {g.reason}</span>}
                 </div>
-                <p className={`font-ui text-sm ${l.is_today ? "font-semibold text-amber-700" : "text-slate"}`}>
-                  {l.is_today
-                    ? "Today — patients being informed by call"
-                    : new Date(l.date + "T00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
+                <p className={`font-ui text-sm ${g.coversToday ? "font-semibold text-amber-700" : "text-slate"}`}>
+                  {g.from === g.to ? fmtDay(g.from) : `${fmtDay(g.from)} to ${fmtDay(g.to)}`}
+                  {g.coversToday && " · patients being informed by call"}
                 </p>
               </div>
             ))}
@@ -243,8 +391,18 @@ export default function Dashboard() {
           <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Doctors · {days}d</h2>
           </header>
-          {(an?.by_doctor ?? []).map((d) => (
-            <div key={d.doctor_name} className="ledger-row">
+          {[...(an?.by_doctor ?? [])].sort((a, b) => b.booked - a.booked).map((d, i, arr) => (
+            <div key={d.doctor_name} className="ledger-row relative">
+              {i === 0 && d.booked > 0 && (
+                <span className="absolute right-5 top-1.5 rounded-full bg-teal-mint px-2 py-0.5 font-ui text-[10px] font-semibold text-teal-deep">
+                  most patients
+                </span>
+              )}
+              {i === arr.length - 1 && arr.length > 1 && d.booked < arr[0].booked && (
+                <span className="absolute right-5 top-1.5 rounded-full bg-amber-50 px-2 py-0.5 font-ui text-[10px] font-semibold text-amber-700">
+                  needs attention
+                </span>
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <p className="truncate font-ui font-medium">{d.doctor_name}</p>
