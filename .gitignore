@@ -55,3 +55,6 @@ agent/recordings/*.mp3
 agent/recordings/*.wav
 agent/recordings/*.ogg
 agent/vobiz_minimal/recordings/
+
+# ralph-loop session state (local only)
+.claude/ralph-loop.local.md
