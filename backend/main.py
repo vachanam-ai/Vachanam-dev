@@ -160,6 +160,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 # - payments: independent (Razorpay flow doesn't need our JWT)
 # - admin: requires is_admin=True JWT claim (require_admin dependency)
 from backend.routers import admin as admin_router
+from backend.routers import analytics as analytics_router
 from backend.routers import auth as auth_router
 from backend.routers import availability as availability_router
 from backend.routers import branches as branches_router
@@ -177,6 +178,7 @@ app.include_router(availability_router.router, prefix="/availability", tags=["av
 app.include_router(branches_router.router, prefix="/branches", tags=["branches"])
 # Legal pages — public, no auth, no prefix (routes are /privacy /terms /dpa)
 app.include_router(legal_router.router, tags=["legal"])
+app.include_router(analytics_router.router, tags=["analytics"])
 
 # Landing page (Vachanam marketing mirror + Razorpay test target).
 # Static files served from backend/static/ — landing index.html at /,

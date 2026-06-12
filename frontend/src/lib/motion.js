@@ -13,7 +13,7 @@ export function revealStagger(scope) {
 }
 
 /** Count a numeral element up to `value` (Spectral tabular nums hold width). */
-export function countUp(el, value, { duration = 0.9 } = {}) {
+export function countUp(el, value, { duration = 0.9, suffix = "" } = {}) {
   if (!el) return;
   const obj = { v: 0 };
   gsap.to(obj, {
@@ -21,7 +21,7 @@ export function countUp(el, value, { duration = 0.9 } = {}) {
     duration,
     ease: "power2.out",
     onUpdate: () => {
-      el.textContent = Math.round(obj.v).toString();
+      el.textContent = Math.round(obj.v).toString() + suffix;
     }
   });
 }

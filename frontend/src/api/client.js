@@ -38,6 +38,10 @@ export const requestOtp = (payload) =>
   api.post("/auth/request-otp", payload).then((r) => r.data);
 export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
 
+// ── Analytics (owner) ──
+export const fetchAnalytics = (branchId, days = 14) =>
+  api.get("/analytics/overview", { params: { branch_id: branchId, days } }).then((r) => r.data);
+
 // ── Queue (receptionist) ──
 export const fetchTodayQueue = (branchId) =>
   api.get(`/queue/${branchId}/today`).then((r) => r.data);
