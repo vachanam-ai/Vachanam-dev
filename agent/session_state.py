@@ -28,9 +28,10 @@ class SessionState:
     followup_consent: bool = False
 
     # Call type and rebook context
-    call_type: str = "inbound_booking"  # inbound_booking | followup | cancellation_notify
+    call_type: str = "inbound_booking"  # inbound_booking | reminder | cascade_rebook
     is_rebook: bool = False
     cancelled_token_id: UUID | None = None
+    followup_task_id: UUID | None = None  # cascade_rebook: mark completed on confirm
 
     # Solo plan 4-minute cap
     elapsed_seconds: int = 0

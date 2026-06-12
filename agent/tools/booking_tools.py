@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import redis.asyncio as aioredis
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from agent.session_state import SessionState
@@ -252,11 +252,29 @@ async def check_availability(
     if booking_date == now.date():
         all_slots = [s for s in all_slots if s > now.time()]
 
+    # Occupancy = max(Redis reservation count, DB confirmed count). Redis is
+    # the atomic gate but it is a cache — a Redis restart wiped slot keys and
+    # made a confirmed 16:30 booking look free (double-booking risk).
+    db_counts: dict[time, int] = {}
+    confirmed = await db.execute(
+        select(Token.appointment_time).where(
+            and_(
+                Token.branch_id == branch_id,
+                Token.doctor_id == doctor_id,
+                Token.date == booking_date,
+                Token.status == "confirmed",
+                Token.appointment_time.is_not(None),
+            )
+        )
+    )
+    for (t,) in confirmed.all():
+        db_counts[t] = db_counts.get(t, 0) + 1
+
     available = []
     async with _redis() as r:
         for slot in all_slots:
             key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
-            booked = int(await r.get(key) or 0)
+            booked = max(int(await r.get(key) or 0), db_counts.get(slot, 0))
             if booked < (doctor.max_concurrent_per_slot or 1):
                 available.append(slot)
 
@@ -270,7 +288,14 @@ async def check_availability(
             for start, end in ranges
         )
 
-    if query_start and query_end:
+    if query_start:
+        # LLMs pass "4pm to 4pm" for an exact-time ask — a zero-width window
+        # matched nothing and the patient heard "not free" for a FREE slot.
+        # Guarantee the window spans at least one slot.
+        slot_min = doctor.slot_duration_minutes or 30
+        if not query_end or query_end <= query_start:
+            qs_dt = datetime.combine(booking_date, query_start)
+            query_end = (qs_dt + timedelta(minutes=slot_min)).time()
         in_window = [s for s in available if query_start <= s < query_end]
         if in_window:
             return (
@@ -327,6 +352,7 @@ async def assign_token(
         return {"success": False, "reason": blocked}
 
     if doctor.booking_type == "token":
+        appointment_time = None  # token queue has no clock time — ignore strays
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
         # Midnight of booking_date + 2h buffer
         midnight = datetime.combine(booking_date + timedelta(days=1), time(0, 0))
@@ -354,6 +380,43 @@ async def assign_token(
         if not appointment_time:
             return {"success": False, "reason": "appointment_time_required"}
 
+        # Requested time must sit on the doctor's slot grid (e.g. hours from
+        # 9:00 every 30min -> 16:00 valid, 16:10 not). Snap is the agent's job;
+        # here we refuse with the nearest grid times so it can re-offer.
+        grid = _generate_slots(
+            doctor.working_hours_start,
+            doctor.working_hours_end,
+            doctor.slot_duration_minutes,
+        )
+        if grid and appointment_time not in grid:
+            nearest = sorted(grid, key=lambda s: abs(
+                datetime.combine(booking_date, s) - datetime.combine(booking_date, appointment_time)
+            ))[:2]
+            return {
+                "success": False,
+                "reason": "off_grid_time",
+                "nearest_slots": [s.strftime("%H:%M") for s in nearest],
+            }
+
+        max_per_slot = doctor.max_concurrent_per_slot or 1
+        # DB confirmed count closes the Redis-restart hole (cache loss must
+        # never allow a double-booking — DB is the source of truth).
+        db_confirmed = (
+            await db.execute(
+                select(func.count()).select_from(Token).where(
+                    and_(
+                        Token.branch_id == branch_id,
+                        Token.doctor_id == doctor_id,
+                        Token.date == booking_date,
+                        Token.appointment_time == appointment_time,
+                        Token.status == "confirmed",
+                    )
+                )
+            )
+        ).scalar_one()
+        if db_confirmed >= max_per_slot:
+            return {"success": False, "reason": "full"}
+
         slot_key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{appointment_time.strftime('%H%M')}"
         slot_dt = datetime.combine(booking_date, appointment_time)
         ttl_seconds = int((slot_dt - datetime.now()).total_seconds()) + 7200
@@ -362,8 +425,7 @@ async def assign_token(
             slot_count = await r.incr(slot_key)
             await r.expire(slot_key, max(ttl_seconds, 7200))
 
-            max_per_slot = doctor.max_concurrent_per_slot or 1
-            if slot_count > max_per_slot:
+            if max(slot_count, db_confirmed + 1) > max_per_slot:
                 await r.decr(slot_key)  # rollback
                 return {"success": False, "reason": "full"}
 
@@ -399,6 +461,7 @@ async def confirm_booking(
     meta_service,       # MetaService instance (injected)
     patient_age: int | None = None,
     patient_gender: str | None = None,
+    different_person: bool = False,
 ) -> dict:
     """Persist the booking: write DB record, create Calendar event, send WhatsApp.
 
@@ -415,6 +478,26 @@ async def confirm_booking(
     Returns:
         {"success": True, "token_id": str} or {"success": False, "reason": str}
     """
+    # 0. Phone sanity. Spoken numbers arrive garbled ("nine triple six double
+    # four..." became 9-digit 966444428) and were stored as-is, splitting one
+    # patient into several records. Reject anything that is not a valid Indian
+    # mobile so the agent re-asks digit by digit.
+    if patient_phone:
+        from backend.services.validators import normalize_indian_phone
+
+        try:
+            patient_phone = normalize_indian_phone(patient_phone)
+        except ValueError:
+            return {
+                "success": False,
+                "reason": "invalid_phone",
+                "instruction": (
+                    f"'{patient_phone}' is not a valid 10-digit Indian mobile. "
+                    "Re-ask the patient for the number, then read it back in "
+                    "ENGLISH digits one by one for confirmation before retrying."
+                ),
+            }
+
     # 1. Find or create patient. Match on phone AND name: a caller books for
     # family members too, so several patients legitimately share one phone —
     # matching on phone alone attached the booking to whoever called first.
@@ -444,18 +527,27 @@ async def confirm_booking(
         if patient_gender:
             patient.gender = patient_gender
 
-    # 1b. Duplicate guard: same patient + doctor + date already confirmed.
-    dup = await db.execute(
-        select(Token).where(
-            and_(
-                Token.branch_id == branch_id,
-                Token.doctor_id == doctor_id,
-                Token.patient_id == patient.id,
-                Token.date == booking_date,
-                Token.status == "confirmed",
+    # 1b. Duplicate guard at PHONE level: same phone + doctor + date already
+    # confirmed. Name-level matching alone failed (STT spells the same name
+    # differently across calls). different_person=True lets a family member
+    # sharing the phone book the same doctor the same day.
+    dup_filters = [
+        Token.branch_id == branch_id,
+        Token.doctor_id == doctor_id,
+        Token.date == booking_date,
+        Token.status == "confirmed",
+    ]
+    if patient_phone and not different_person:
+        dup_filters.append(
+            Token.patient_id.in_(
+                select(Patient.id).where(
+                    and_(Patient.branch_id == branch_id, Patient.phone == patient_phone)
+                )
             )
         )
-    )
+    else:
+        dup_filters.append(Token.patient_id == patient.id)
+    dup = await db.execute(select(Token).where(and_(*dup_filters)))
     existing = dup.scalars().first()
     if existing is not None:
         return {

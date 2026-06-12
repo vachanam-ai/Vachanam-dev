@@ -95,6 +95,25 @@ REMINDER_GREETING = (
     "ఈరోజు {time}కి {doctor} గారితో మీ అపాయింట్‌మెంట్ ఉంది. మీరు వస్తున్నారా?"
 )
 
+# Doctor-leave cascade rebook call (outbound). Apologise, rebook, retain.
+REBOOK_GREETING = (
+    "నమస్కారం {patient} గారు! {clinic} క్లినిక్ నుండి కాల్ చేస్తున్నాము. "
+    "{date}న {doctor} గారు సెలవులో ఉండటం వల్ల మీ అపాయింట్‌మెంట్ క్యాన్సిల్ "
+    "అయింది. క్షమించండి. వేరే రోజు బుక్ చేయమంటారా?"
+)
+
+REBOOK_PROMPT_EXTRA = (
+    "\n\nTHIS IS A CASCADE-REBOOK CALL (doctor went on leave; the patient's "
+    "booking on {cancelled_date} with {doctor} was cancelled by the clinic). "
+    "The greeting already apologised and offered to rebook.\n"
+    "- If they want to rebook: ask which day suits them, then check_availability "
+    "for the same doctor (skip leave days), assign_token, confirm_booking with "
+    "the same patient name and phone. Keep it to two short sentences per turn.\n"
+    "- If the doctor's next days are also on leave, offer the nearest available "
+    "day, or another suitable doctor if they prefer.\n"
+    "- If they decline: apologise once more, thank them warmly, call end_call."
+)
+
 REMINDER_PROMPT_EXTRA = (
     "\n\nTHIS IS A REMINDER CALL (not a new booking call). The patient has an "
     "appointment today: token_id={token_id}, doctor={doctor}, time={time}. "
@@ -319,12 +338,15 @@ class VachanamAgent(Agent):
         appointment_time: str | None = None,
         patient_age: int | None = None,
         patient_gender: str | None = None,
+        different_person: bool = False,
     ) -> dict:
         """Finalize the booking AFTER the patient explicitly confirms. Writes the
         token to the database and creates the calendar event. patient_name is the
         PATIENT being seen (may differ from the caller — family bookings);
         patient_phone defaults to the caller's number when omitted.
-        patient_gender: 'male' | 'female' | 'other' if known."""
+        patient_gender: 'male' | 'female' | 'other' if known.
+        different_person: True ONLY when the caller explicitly books for a
+        DIFFERENT family member who already has a booking that day."""
         if self._calendar is None:
             logger.error("confirm_booking_no_calendar_service")
             return {"success": False, "error": "booking_system_unavailable"}
@@ -347,6 +369,7 @@ class VachanamAgent(Agent):
                 meta_service=self._meta,
                 patient_age=patient_age,
                 patient_gender=patient_gender,
+                different_person=different_person,
             )
         except Exception as e:
             logger.error("confirm_booking_failed: %s", e)
@@ -354,6 +377,27 @@ class VachanamAgent(Agent):
         if result.get("success"):
             self._state.token_confirmed = True
             self._state.patient_name = patient_name
+            if self._state.followup_task_id:
+                # Cascade-rebook call achieved its goal — stop the retry loop.
+                try:
+                    from backend.models.schema import FollowupTask
+
+                    task = (
+                        await self._db.execute(
+                            select(FollowupTask).where(
+                                and_(
+                                    FollowupTask.id == self._state.followup_task_id,
+                                    FollowupTask.branch_id == self._state.branch_id,
+                                )
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if task is not None:
+                        task.status = "completed"
+                        task.response_summary = "rebooked_on_call"
+                        await self._db.commit()
+                except Exception as e:
+                    logger.warning("followup_complete_mark_failed: %s", e)
         return result
 
     @function_tool()
@@ -486,6 +530,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except json.JSONDecodeError:
             pass
     is_reminder = meta.get("call_type") == "reminder"
+    is_rebook_call = meta.get("call_type") == "cascade_rebook"
 
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
@@ -621,6 +666,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 time=meta.get("appointment_time", ""),
             )
             state.call_type = "reminder"
+        elif is_rebook_call:
+            instructions += REBOOK_PROMPT_EXTRA.format(
+                cancelled_date=meta.get("cancelled_date", ""),
+                doctor=meta.get("doctor_name", ""),
+            )
+            state.call_type = "cascade_rebook"
+            if meta.get("followup_task_id"):
+                try:
+                    state.followup_task_id = UUID(meta["followup_task_id"])
+                except ValueError:
+                    pass
 
         try:
             # SA path resolved against repo root — settings default is the
@@ -712,6 +768,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         clinic=branch_name,
                         doctor=meta.get("doctor_name", ""),
                         time=meta.get("appointment_time", ""),
+                    )
+                )
+            )
+        elif is_rebook_call:
+            await session.say(
+                sanitize_for_tts(
+                    REBOOK_GREETING.format(
+                        patient=meta.get("patient_name", ""),
+                        clinic=branch_name,
+                        doctor=meta.get("doctor_name", ""),
+                        date=meta.get("cancelled_date", ""),
                     )
                 )
             )

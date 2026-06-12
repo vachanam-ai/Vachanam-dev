@@ -76,8 +76,19 @@ async def lifespan(app: FastAPI):
         id="pre_appt_reminder",
         replace_existing=True,
     )
+    from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
+
+    scheduler.add_job(
+        run_cascade_rebook_calls,
+        IntervalTrigger(seconds=60),
+        id="cascade_rebook_caller",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info("scheduler_started", jobs=["calendar_writer", "pre_appt_reminder"])
+    logger.info(
+        "scheduler_started",
+        jobs=["calendar_writer", "pre_appt_reminder", "cascade_rebook_caller"],
+    )
 
     yield
 
