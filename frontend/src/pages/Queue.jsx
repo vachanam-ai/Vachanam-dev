@@ -37,7 +37,8 @@ function PatientRow({ p, doctor, onAttend, onNoShow, busy }) {
           <span className="numeral text-2xl text-teal">{p.token_number ?? "—"}</span>
         ) : (
           <span className="numeral text-base text-gold-ink">
-            {p.confirmed_at ? p.confirmed_at.slice(11, 16) : "—"}
+            {/* the SLOT time — confirmed_at is when the booking was MADE (UTC) */}
+            {p.appointment_time ?? "—"}
           </span>
         )}
       </div>

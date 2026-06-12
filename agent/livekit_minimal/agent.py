@@ -269,9 +269,18 @@ class VachanamAgent(Agent):
                         )
                     )
                 )
-                for doc in result.scalars():
-                    if needle in doc.name.lower():
-                        return doc.id
+                matches = [doc for doc in result.scalars() if needle in doc.name.lower()]
+                if len(matches) == 1:
+                    return matches[0].id
+                if len(matches) > 1:
+                    # "kumar" matches both "Test Kumar" and "Ravi Kumar" — never
+                    # guess; a silent first-match books the WRONG doctor.
+                    names = ", ".join(d.name for d in matches)
+                    raise ToolError(
+                        f"'{doctor_id}' matches multiple doctors: {names}. Use the "
+                        "exact doctor_id returned by route_to_doctor or "
+                        "find_my_bookings instead of a name."
+                    )
         if self._state.doctor_id:
             return self._state.doctor_id
         raise ToolError(
@@ -390,6 +399,12 @@ class VachanamAgent(Agent):
             return {"success": False, "error": "booking_system_unavailable"}
         phone = patient_phone or self._state.patient_phone
         resolved = await self._resolve_doctor_id(doctor_id)
+        # RULE 2 at the persistence step: the number reserved by assign_token
+        # (held server-side in state) is the truth — never trust the LLM's
+        # echo of token_number, a stale/hallucinated value would print the
+        # same queue number for two patients.
+        if self._state.token_held and self._state.token_number is not None:
+            token_number = self._state.token_number
         try:
             result = await confirm_booking(
                 doctor_id=resolved,
@@ -862,12 +877,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     db = AsyncSessionLocal()
 
-    # Branch by DID (RULE 5) + active doctors (RULE 1: branch_id filter).
-    # .first() not .one_or_none(): a DB-level partial-unique index guarantees at
-    # most one branch per DID, but if that invariant were ever violated we must
-    # NOT crash the call — and must NOT silently serve an ambiguous tenant.
-    result = await db.execute(select(Branch).where(Branch.did_number == did).limit(2))
-    branches = result.scalars().all()
+    # Branch resolution. INBOUND: by dialed DID (RULE 5). OUTBOUND: there is
+    # no dialed DID — the dispatch metadata carries the branch_id; relying on
+    # the DID fallback would resolve the WRONG tenant the moment a second
+    # clinic exists (caller's number must never pick the branch).
+    branches = []
+    if outbound_number and meta.get("branch_id"):
+        try:
+            meta_branch_uuid = UUID(meta["branch_id"])
+            result = await db.execute(select(Branch).where(Branch.id == meta_branch_uuid))
+            branches = result.scalars().all()
+        except ValueError:
+            logger.error("outbound_branch_id_invalid: %s", meta.get("branch_id"))
+    if not branches:
+        # .first() not .one_or_none(): a DB-level partial-unique index guarantees at
+        # most one branch per DID, but if that invariant were ever violated we must
+        # NOT crash the call — and must NOT silently serve an ambiguous tenant.
+        result = await db.execute(select(Branch).where(Branch.did_number == did).limit(2))
+        branches = result.scalars().all()
     if len(branches) != 1:
         logger.error(
             "did_resolution_failed did=...%s matches=%d — aborting call",

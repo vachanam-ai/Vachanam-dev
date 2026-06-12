@@ -1,13 +1,13 @@
-"""Unit tests for backend/jobs/calendar_writer.py.
+﻿"""Unit tests for backend/jobs/calendar_writer.py.
 
 Tests:
-  1. test_backoff_schedule            — verifies BACKOFF_SECONDS constant + _compute_next_attempt math.
-  2. test_permanent_fail_after_5_attempts — task with attempts=4 + simulated failure
-                                            → status='failed_permanent' + admin_alert called once.
-  3. test_success_marks_done_and_writes_event_id — 'create' op + mocked Cal call
-                                                   → status='done' + google_event_id + Token updated.
-  4. test_retry_increments_attempts_and_schedules_next — attempts=1 + simulated failure
-                                                          → attempts=2 + next_attempt_at ≈ now + 30s.
+  1. test_backoff_schedule            â€” verifies BACKOFF_SECONDS constant + _compute_next_attempt math.
+  2. test_permanent_fail_after_5_attempts â€” task with attempts=4 + simulated failure
+                                            â†’ status='failed_permanent' + admin_alert called once.
+  3. test_success_marks_done_and_writes_event_id â€” 'create' op + mocked Cal call
+                                                   â†’ status='done' + google_event_id + Token updated.
+  4. test_retry_increments_attempts_and_schedules_next â€” attempts=1 + simulated failure
+                                                          â†’ attempts=2 + next_attempt_at â‰ˆ now + 30s.
 
 Tests 2-4 use the `db` conftest fixture (test Postgres).  They are tagged
 pytest.mark.requires_db so the CI unit-test job can gate them separately.
@@ -38,7 +38,7 @@ UTC = timezone.utc
 
 
 # ---------------------------------------------------------------------------
-# 1. Pure-unit test — no DB required
+# 1. Pure-unit test â€” no DB required
 # ---------------------------------------------------------------------------
 
 
@@ -55,7 +55,7 @@ def test_backoff_schedule() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers — build the minimum ORM graph needed to create a CalendarWriteTask
+# Helpers â€” build the minimum ORM graph needed to create a CalendarWriteTask
 # without violating FK constraints in the test DB.
 # ---------------------------------------------------------------------------
 
@@ -147,7 +147,7 @@ async def test_permanent_fail_after_5_attempts(db) -> None:
             new_callable=AsyncMock,
         ) as mock_alert,
     ):
-        await _process_one_task(db, task)
+        await _process_one_task(db, task, None)  # svc unused — _do_calendar_op patched
 
     await db.refresh(task)
     assert task.status == "failed_permanent", f"expected failed_permanent, got {task.status}"
@@ -177,7 +177,7 @@ async def test_success_marks_done_and_writes_event_id(db) -> None:
         new_callable=AsyncMock,
         return_value=fake_event_id,
     ):
-        await _process_one_task(db, task)
+        await _process_one_task(db, task, None)  # svc unused — _do_calendar_op patched
 
     await db.refresh(task)
     assert task.status == "done", f"expected done, got {task.status}"
@@ -189,14 +189,14 @@ async def test_success_marks_done_and_writes_event_id(db) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Failure at attempts=1 → retry scheduled at now + 30s
+# 4. Failure at attempts=1 â†’ retry scheduled at now + 30s
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_retry_increments_attempts_and_schedules_next(db) -> None:
     """A task with attempts=1 that fails must increment to attempts=2
-    and schedule next_attempt_at ≈ now + 30s (BACKOFF_SECONDS[1])."""
+    and schedule next_attempt_at â‰ˆ now + 30s (BACKOFF_SECONDS[1])."""
     task = await _make_write_task(db, attempts=1)
 
     before = datetime.now(timezone.utc)
@@ -205,7 +205,7 @@ async def test_retry_increments_attempts_and_schedules_next(db) -> None:
         "backend.jobs.calendar_writer._do_calendar_op",
         side_effect=Exception("transient error"),
     ):
-        await _process_one_task(db, task)
+        await _process_one_task(db, task, None)  # svc unused — _do_calendar_op patched
 
     after = datetime.now(timezone.utc)
 

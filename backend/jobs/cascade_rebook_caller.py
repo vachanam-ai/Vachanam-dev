@@ -88,6 +88,10 @@ async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
                     metadata=json.dumps(
                         {
                             "call_type": "cascade_rebook",
+                            # RULE 5 is DID->branch for INBOUND; outbound has no
+                            # dialed DID, so the branch must travel in metadata
+                            # or a multi-clinic deploy resolves the wrong tenant.
+                            "branch_id": str(task.branch_id),
                             "phone_number": patient.phone,
                             "followup_task_id": str(task.id),
                             "patient_name": patient.name,

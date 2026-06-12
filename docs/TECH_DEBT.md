@@ -97,3 +97,5 @@ When closing a future row, append here with this format:
 - P1 debt overdue twice = escalation
 - Paid-down rows are NEVER deleted — they're moved to the bottom for historical record
 - When a row blocks a feature, link the feature task to this row
+
+| TD-019 | P1 | 2026-06-12 | *(pending)* | Razorpay verify-payment validates the HMAC but persists NOTHING (no BillingCycle row, no org status change) and razorpay_webhook_secret has no webhook route (bug-bounty B10). A 'verified' payment does not activate/extend any subscription. Must be wired in the Razorpay billing phase BEFORE first paying clinic. |

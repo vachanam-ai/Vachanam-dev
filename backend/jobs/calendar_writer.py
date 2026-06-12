@@ -30,7 +30,7 @@ import structlog
 from sqlalchemy import select
 
 from backend.database import AsyncSessionLocal
-from backend.models.schema import CalendarWriteTask, Token
+from backend.models.schema import Branch, CalendarWriteTask, Doctor, Token
 from backend.services.admin_alert import alert_admin
 from backend.services.calendar_service import GoogleCalendarService, CalendarWriteFailed
 
@@ -60,9 +60,33 @@ def _compute_next_attempt(attempts: int, now: datetime) -> datetime:
     return now + timedelta(seconds=BACKOFF_SECONDS[attempts - 1])
 
 
+async def _resolve_calendar_id(db, task: CalendarWriteTask) -> Optional[str]:
+    """Calendar id for this task: payload value, else resolved from the
+    task's Token -> Doctor.google_calendar_id -> Branch.google_calendar_id.
+
+    cascade_cancel enqueues delete tasks with payload calendar_id=None (its
+    comment claimed the writer fills it in — nothing ever did), so every
+    cascade calendar delete failed 5x and went failed_permanent while the
+    doctor kept seeing ghost appointments on their calendar.
+    """
+    cal_id = (task.payload_json or {}).get("calendar_id")
+    if cal_id:
+        return cal_id
+    token = await db.get(Token, task.token_id)
+    if token is not None:
+        doctor = await db.get(Doctor, token.doctor_id)
+        if doctor is not None and doctor.google_calendar_id:
+            return doctor.google_calendar_id
+    branch = await db.get(Branch, task.branch_id)
+    if branch is not None and branch.google_calendar_id:
+        return branch.google_calendar_id
+    return None
+
+
 async def _do_calendar_op(
     svc: GoogleCalendarService,
     task: CalendarWriteTask,
+    db,
 ) -> Optional[str]:
     """Dispatch the calendar operation encoded in task.operation.
 
@@ -87,7 +111,12 @@ async def _do_calendar_op(
 
     if task.operation == "delete":
         if task.google_event_id:
-            await svc.delete_event(p["calendar_id"], task.google_event_id)
+            cal_id = await _resolve_calendar_id(db, task)
+            if not cal_id:
+                raise CalendarWriteFailed(
+                    f"no calendar_id resolvable for delete task {task.id}"
+                )
+            await svc.delete_event(cal_id, task.google_event_id)
         else:
             # No event_id means the create never succeeded — nothing to delete.
             logger.warning(
@@ -112,7 +141,7 @@ async def _do_calendar_op(
     raise ValueError(f"unknown calendar operation: {task.operation!r}")
 
 
-async def _process_one_task(db, task: CalendarWriteTask) -> None:
+async def _process_one_task(db, task: CalendarWriteTask, svc: GoogleCalendarService) -> None:
     """Process a single CalendarWriteTask within the given DB session.
 
     Marks in_progress → attempts the calendar op → marks done or retries.
@@ -123,9 +152,8 @@ async def _process_one_task(db, task: CalendarWriteTask) -> None:
     task.status = "in_progress"
     await db.commit()
 
-    svc = GoogleCalendarService()
     try:
-        event_id = await _do_calendar_op(svc, task)
+        event_id = await _do_calendar_op(svc, task, db)
         task.status = "done"
         if event_id:
             task.google_event_id = event_id
@@ -198,5 +226,8 @@ async def run_calendar_writer() -> None:
             return
 
         logger.info("calendar_writer_tick", pending_count=len(tasks))
+        # ONE service per tick — building SA creds + discovery client per task
+        # was 50 client builds on a busy 30s tick.
+        svc = GoogleCalendarService()
         for task in tasks:
-            await _process_one_task(db, task)
+            await _process_one_task(db, task, svc)

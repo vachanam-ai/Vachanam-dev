@@ -547,7 +547,9 @@ async def stop_walkins_today(
     if not doc:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
-    today = date.today()
+    from backend.routers.queue import _branch_today
+
+    today = await _branch_today(branch_uuid, db)  # branch tz, not server UTC
     doc.walkins_closed_today_date = today
     await db.commit()
 

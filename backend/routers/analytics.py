@@ -1,4 +1,4 @@
-"""Owner analytics — daily series, show rate, source split, per-doctor stats.
+﻿"""Owner analytics â€” daily series, show rate, source split, per-doctor stats.
 
 Aggregates only (counts and rates, no patient PII in responses).
 Rule 1: every query filters branch_id; branch access asserted from JWT.
@@ -6,7 +6,7 @@ Rule 1: every query filters branch_id; branch access asserted from JWT.
 from datetime import date, timedelta
 
 import structlog
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import Integer, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -102,8 +102,20 @@ async def analytics_overview(
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Validate format BEFORE the access check (the other routers 400 on
+    # garbage; this one relied on asyncpg coercion), then compute "today" in
+    # the BRANCH timezone - UTC server time shifts every day-bucket between
+    # 00:00 and 05:30 IST.
+    import uuid as _uuid
+
+    try:
+        branch_uuid = _uuid.UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid branch_id format")
     await assert_branch_access(user, branch_id, db)
-    today = date.today()
+    from backend.routers.queue import _branch_today
+
+    today = await _branch_today(branch_uuid, db)
     start = today - timedelta(days=days - 1)
 
     # One grouped query for the whole period: date x status counts.
@@ -112,7 +124,7 @@ async def analytics_overview(
             select(Token.date, Token.status, func.count())
             .where(
                 and_(
-                    Token.branch_id == branch_id,  # Rule 1
+                    Token.branch_id == branch_uuid,  # Rule 1
                     Token.date >= start,
                     Token.date <= today,
                 )
@@ -146,7 +158,7 @@ async def analytics_overview(
         await db.execute(
             select(func.count()).select_from(Token).where(
                 and_(
-                    Token.branch_id == branch_id,
+                    Token.branch_id == branch_uuid,
                     Token.date == today,
                     Token.status == "confirmed",
                 )
@@ -158,7 +170,7 @@ async def analytics_overview(
         await db.execute(
             select(func.count()).select_from(Patient).where(
                 and_(
-                    Patient.branch_id == branch_id,
+                    Patient.branch_id == branch_uuid,
                     func.date(Patient.created_at) == today,
                 )
             )
@@ -171,7 +183,7 @@ async def analytics_overview(
             .join(Token, Token.doctor_id == Doctor.id)
             .where(
                 and_(
-                    Token.branch_id == branch_id,
+                    Token.branch_id == branch_uuid,
                     Token.date >= start,
                     Token.date <= today,
                 )
@@ -203,7 +215,7 @@ async def analytics_overview(
             select(Token.source, func.count())
             .where(
                 and_(
-                    Token.branch_id == branch_id,
+                    Token.branch_id == branch_uuid,
                     Token.date >= start,
                     Token.date <= today,
                     Token.status.in_(ACTIVE),
@@ -219,7 +231,7 @@ async def analytics_overview(
             .join(Doctor, DoctorUnavailability.doctor_id == Doctor.id)
             .where(
                 and_(
-                    DoctorUnavailability.branch_id == branch_id,  # Rule 1
+                    DoctorUnavailability.branch_id == branch_uuid,  # Rule 1
                     DoctorUnavailability.date >= today,
                     DoctorUnavailability.date <= today + timedelta(days=30),
                 )
@@ -228,7 +240,7 @@ async def analytics_overview(
         )
     ).all()
 
-    # ── Calls (answered) per day + bookings made on calls ──
+    # â”€â”€ Calls (answered) per day + bookings made on calls â”€â”€
     call_rows = (
         await db.execute(
             select(
@@ -238,7 +250,7 @@ async def analytics_overview(
             )
             .where(
                 and_(
-                    CallLog.branch_id == branch_id,  # Rule 1
+                    CallLog.branch_id == branch_uuid,  # Rule 1
                     CallLog.answered.is_(True),
                     func.date(CallLog.started_at) >= start,
                 )
@@ -256,13 +268,13 @@ async def analytics_overview(
         for i in range(days)
     ]
 
-    # ── Minutes used this calendar month vs plan allowance ──
+    # â”€â”€ Minutes used this calendar month vs plan allowance â”€â”€
     month_start = today.replace(day=1)
     used_seconds = (
         await db.execute(
             select(func.coalesce(func.sum(CallLog.duration_seconds), 0)).where(
                 and_(
-                    CallLog.branch_id == branch_id,
+                    CallLog.branch_id == branch_uuid,
                     func.date(CallLog.started_at) >= month_start,
                 )
             )
@@ -278,7 +290,7 @@ async def analytics_overview(
     included = PLAN_MINUTES.get(plan, 2100)
     used_min = int(used_seconds // 60)
 
-    # ── Attendance rate + weekday load over the period ──
+    # â”€â”€ Attendance rate + weekday load over the period â”€â”€
     total_attended = sum(d.attended for d in daily)
     total_no_show = sum(d.no_show for d in daily)
     weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]

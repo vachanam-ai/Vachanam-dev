@@ -30,6 +30,27 @@ WINDOW_MIN = 14
 WINDOW_MAX = 17
 
 
+def reminder_window(now_local: datetime) -> tuple[datetime, datetime]:
+    """The [lo, hi] DATETIME window an appointment must fall in to be
+    reminded now. Datetimes, not bare times: near midnight the old
+    time-only comparison wrapped (lo > hi) and matched nothing, silently
+    skipping late-night reminders."""
+    return (
+        now_local + timedelta(minutes=WINDOW_MIN),
+        now_local + timedelta(minutes=WINDOW_MAX),
+    )
+
+
+def appointment_in_window(
+    token_date, appointment_time, lo: datetime, hi: datetime
+) -> bool:
+    """True when date+time (branch-local) falls inside [lo, hi]."""
+    if appointment_time is None:
+        return False
+    appt = datetime.combine(token_date, appointment_time, tzinfo=lo.tzinfo)
+    return lo <= appt <= hi
+
+
 async def run_pre_appt_reminders() -> None:
     if not (os.getenv("LIVEKIT_URL") and os.getenv("LIVEKIT_API_KEY")):
         return  # voice control plane not configured on this deployment
@@ -39,9 +60,11 @@ async def run_pre_appt_reminders() -> None:
         for branch in branches:
             tz = ZoneInfo(branch.timezone or "Asia/Kolkata")
             now_local = datetime.now(tz)
-            lo = (now_local + timedelta(minutes=WINDOW_MIN)).time()
-            hi = (now_local + timedelta(minutes=WINDOW_MAX)).time()
+            lo, hi = reminder_window(now_local)
 
+            # Candidate pull is date-bounded only (covers the midnight case
+            # where lo and hi are on different dates); the precise 14-17min
+            # check happens in Python on full datetimes.
             rows = (
                 await db.execute(
                     select(Token, Doctor, Patient)
@@ -50,12 +73,10 @@ async def run_pre_appt_reminders() -> None:
                     .where(
                         and_(
                             Token.branch_id == branch.id,  # RULE 1
-                            Token.date == now_local.date(),
+                            Token.date.in_({lo.date(), hi.date()}),
                             Token.status == "confirmed",
                             Token.reminder_sent.is_(False),
                             Token.appointment_time.is_not(None),
-                            Token.appointment_time >= lo,
-                            Token.appointment_time <= hi,
                             Doctor.booking_type == "appointment",
                             Doctor.pre_appointment_reminder.is_(True),
                         )
@@ -64,11 +85,14 @@ async def run_pre_appt_reminders() -> None:
             ).all()
 
             for token, doctor, patient in rows:
-                if not patient.phone:
-                    token.reminder_sent = True  # nothing to dial — don't rescan forever
+                if not appointment_in_window(token.date, token.appointment_time, lo, hi):
                     continue
                 token.reminder_sent = True
+                # commit in BOTH branches — the old no-phone path skipped the
+                # commit, so phoneless tokens were rescanned every minute forever
                 await db.commit()
+                if not patient.phone:
+                    continue  # nothing to dial
                 await _dispatch_reminder_call(branch, token, doctor, patient)
 
 
@@ -87,6 +111,7 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                     metadata=json.dumps(
                         {
                             "call_type": "reminder",
+                            "branch_id": str(branch.id),  # outbound: no dialed DID
                             "phone_number": patient.phone,
                             "token_id": str(token.id),
                             "patient_name": patient.name,

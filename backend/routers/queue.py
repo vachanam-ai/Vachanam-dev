@@ -23,11 +23,24 @@ from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import queue_today_limit
-from backend.models.schema import Doctor, Patient, Token
+from backend.models.schema import Branch, Doctor, Patient, Token
 from backend.services.audit_service import audit
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+async def _branch_today(branch_uuid: uuid.UUID, db: AsyncSession) -> date:
+    """Today's date in the branch's timezone (server clock may be UTC)."""
+    from zoneinfo import ZoneInfo
+
+    tzname = (
+        await db.execute(select(Branch.timezone).where(Branch.id == branch_uuid))
+    ).scalar_one_or_none() or "Asia/Kolkata"
+    try:
+        return datetime.now(ZoneInfo(tzname)).date()
+    except Exception:
+        return datetime.now(ZoneInfo("Asia/Kolkata")).date()
 
 
 class PatientEntry(BaseModel):
@@ -37,6 +50,7 @@ class PatientEntry(BaseModel):
     status: str
     is_urgent: bool
     confirmed_at: str | None
+    appointment_time: str | None  # "HH:MM" — the SLOT time, not booking time
 
 
 class DoctorEntry(BaseModel):
@@ -88,7 +102,11 @@ async def get_today_queue(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid branch_id format")
 
-    today = date.today()
+    # "Today" in the BRANCH's timezone, not the server's. The voice agent
+    # books under the branch-local date; date.today() on a UTC server points
+    # at YESTERDAY between 00:00 and 05:30 IST, hiding bookings from the
+    # receptionist's queue in that window.
+    today = await _branch_today(branch_uuid, db)
 
     try:
         result = await db.execute(
@@ -138,6 +156,9 @@ async def get_today_queue(
                 status=token.status,
                 is_urgent=token.is_urgent,
                 confirmed_at=token.confirmed_at.isoformat() if token.confirmed_at else None,
+                appointment_time=token.appointment_time.strftime("%H:%M")
+                if token.appointment_time
+                else None,
             )
         )
         if token.status == "attended":
@@ -327,7 +348,7 @@ async def create_walkin(
     await assert_branch_access(current_user, branch_id, db)
     branch_uuid = uuid.UUID(branch_id)
     doctor_uuid = uuid.UUID(body.doctor_id)
-    today = date.today()
+    today = await _branch_today(branch_uuid, db)  # branch tz, not server UTC
 
     # Doctor must belong to THIS branch and be active (Rule 1)
     result = await db.execute(
