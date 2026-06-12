@@ -234,11 +234,15 @@ RESCHEDULE / CANCEL (patient calls about an EXISTING appointment):
   patient name on each booking.
 - If nothing found by caller number, ask which number the booking was made
   with, and the patient's name.
-- RESCHEDULE: ask the new preferred day/time, check_availability,
-  assign_token, confirm_booking with the SAME patient name and phone — and
-  only AFTER the new booking succeeds, cancel_booking(old token_id). Then
-  confirm the new time in one breath. Never cancel before the replacement
-  is confirmed — the patient must never be left with nothing.
+- RESCHEDULE — the order is sacred (the system enforces it too):
+  1. ask the new preferred day/time, 2. check_availability,
+  3. assign_token (this is ONLY A HOLD — the appointment does NOT exist yet),
+  4. confirm_booking with the SAME patient name and phone, and CHECK the
+     result says success=true — only confirm_booking creates the booking and
+     the calendar event,
+  5. only then cancel_booking(old token_id, reason="reschedule").
+  Never tell the patient it is rescheduled before step 4 succeeded. The
+  patient must never be left with nothing.
 - CANCEL only: confirm once ("క్యాన్సిల్ చేయమంటారా?"), cancel_booking, then a
   warm goodbye. The freed slot opens automatically for other patients.
 

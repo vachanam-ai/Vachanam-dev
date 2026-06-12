@@ -451,14 +451,28 @@ class VachanamAgent(Agent):
         }
 
     @function_tool()
-    async def cancel_booking(self, context: RunContext, token_id: str) -> dict:
+    async def cancel_booking(
+        self, context: RunContext, token_id: str, reason: str = "cancel"
+    ) -> dict:
         """Cancel an existing confirmed booking (frees the slot/token and removes
-        the calendar event). Use for reminder-call reschedules AND when a caller
-        asks to cancel or reschedule — for reschedules, confirm the NEW booking
-        first, then cancel the old one."""
+        the calendar event). reason: 'cancel' when the patient just cancels;
+        'reschedule' when replacing with a new booking — for reschedules the NEW
+        booking must already be confirmed via confirm_booking (assign_token alone
+        is only a temporary hold, NOT a booking)."""
         from sqlalchemy import and_ as _and
 
         from backend.models.schema import Token
+
+        # HARD GUARD: a reschedule may only cancel after the replacement is
+        # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
+        # the old appointment, and left the patient with nothing.
+        unconfirmed_hold = self._state.token_held and not self._state.token_confirmed
+        if (reason == "reschedule" or unconfirmed_hold) and not self._state.token_confirmed:
+            raise ToolError(
+                "Replacement booking is NOT confirmed yet. assign_token is only "
+                "a hold — call confirm_booking for the new slot first, verify "
+                "success=true, and only then cancel the old booking."
+            )
 
         try:
             token_uuid = UUID(token_id)
