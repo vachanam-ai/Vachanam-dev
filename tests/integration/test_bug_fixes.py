@@ -563,3 +563,72 @@ async def test_decline_rebook_completes_followup_task(clinic, db, redis):
     ).scalar_one()
     assert refreshed.status == "completed"
     assert "patient_declined" in refreshed.response_summary
+
+
+# ── Fix 36: 3 AM booking — working-hours enforced at the tool boundary ───────
+
+
+async def test_assign_token_refuses_outside_working_hours(clinic, db, redis):
+    from agent.tools.booking_tools import assign_token as _assign
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]  # works 9:00-17:00
+    day = _tomorrow()
+    result = await _assign(doc.id, branch.id, day, db, appointment_time=time(3, 0))
+    assert result["success"] is False
+    assert result["reason"] == "outside_working_hours"
+    assert "9:00 AM" in result["working_hours"]
+
+
+async def test_confirm_booking_refuses_outside_working_hours(clinic, db, redis):
+    """confirm_booking gets its own copy of the time from the LLM — it must
+    re-validate, not trust assign_token's earlier check."""
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=time(15, 0))
+    assert assigned["success"]
+    result = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Night Owl",
+        patient_phone="+919666444488", complaint="skin", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        patient_age=30, appointment_time=time(3, 0),  # LLM passed 03:00, not 15:00
+        source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert result["success"] is False
+    assert result["reason"] == "outside_working_hours"
+
+
+async def test_confirm_booking_token_doctor_drops_stray_time(clinic, db, redis):
+    """Token doctors have no clock time — a stray 03:00 from the LLM must not
+    be stored or reach the calendar."""
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db)
+    result = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Stray Time",
+        patient_phone="+919666444499", complaint="fever", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        patient_age=30, appointment_time=time(3, 0),  # stray — must be ignored
+        source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert result["success"], result
+    from uuid import UUID as _UUID
+    stored = (
+        await db.execute(select(Token).where(Token.id == _UUID(result["token_id"])))
+    ).scalar_one()
+    assert stored.appointment_time is None
+
+
+async def test_assign_token_refuses_unconfigured_schedule(clinic, db, redis):
+    """Empty slot grid used to mean NO time validation at all."""
+    branch = clinic["branch"]
+    bare = Doctor(
+        branch_id=branch.id, name="Dr. NoHours", specialization="cardiology",
+        routing_keywords=["heart"], booking_type="appointment", status="active",
+    )
+    db.add(bare)
+    await db.commit()
+    result = await assign_token(bare.id, branch.id, _tomorrow(), db, appointment_time=time(3, 0))
+    assert result["success"] is False
+    assert result["reason"] == "schedule_not_configured"

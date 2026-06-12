@@ -39,6 +39,31 @@ async def _branch_now(branch_id: UUID, db: AsyncSession) -> datetime:
         return datetime.now(ZoneInfo("Asia/Kolkata"))
 
 
+def _outside_working_hours(doctor: Doctor, appointment_time: time) -> dict | None:
+    """Failure dict when the time falls outside the doctor's working hours,
+    else None. AM/PM confusion ("3" heard as 03:00) must die HERE — the last
+    code between the LLM and a 3 AM calendar event."""
+    start, end = doctor.working_hours_start, doctor.working_hours_end
+    if start and end and not (start <= appointment_time < end):
+        hours = (
+            f"{start.strftime('%I:%M %p').lstrip('0')} to "
+            f"{end.strftime('%I:%M %p').lstrip('0')}"
+        )
+        return {
+            "success": False,
+            "reason": "outside_working_hours",
+            "working_hours": hours,
+            "instruction": (
+                f"{appointment_time.strftime('%I:%M %p').lstrip('0')} is OUTSIDE "
+                f"{doctor.name}'s working hours ({hours}). If the patient said a "
+                "bare number like '3', they almost certainly meant the PM time "
+                "inside working hours — re-read their request, convert to 24h "
+                "correctly, and retry with a time within working hours."
+            ),
+        }
+    return None
+
+
 async def doctor_bookable(
     doctor: Doctor, branch_id: UUID, booking_date: date, db: AsyncSession
 ) -> str | None:
@@ -427,6 +452,28 @@ async def assign_token(
         if not appointment_time:
             return {"success": False, "reason": "appointment_time_required"}
 
+        # No configured schedule used to mean NO validation at all — any time
+        # (3 AM included) sailed through the empty grid check below.
+        if (
+            not doctor.working_hours_start
+            or not doctor.working_hours_end
+            or not doctor.slot_duration_minutes
+        ):
+            return {
+                "success": False,
+                "reason": "schedule_not_configured",
+                "instruction": (
+                    f"{doctor.name}'s working hours are not configured — do NOT "
+                    "book a time. Ask the patient to call the clinic directly."
+                ),
+            }
+
+        # HARD BOUND: never book outside working hours. The LLM read a spoken
+        # "3" as 03:00 and a patient got a 3 AM appointment.
+        hours_block = _outside_working_hours(doctor, appointment_time)
+        if hours_block:
+            return hours_block
+
         # Requested time must sit on the doctor's slot grid (e.g. hours from
         # 9:00 every 30min -> 16:00 valid, 16:10 not). Snap is the agent's job;
         # here we refuse with the nearest grid times so it can re-offer.
@@ -549,6 +596,24 @@ async def confirm_booking(
                     "ENGLISH digits one by one for confirmation before retrying."
                 ),
             }
+
+    # 0b. Validate the time against THIS doctor before anything is written.
+    # confirm_booking used to trust appointment_time blindly: assign_token
+    # forces None for token doctors and grid-checks slot doctors, but the LLM
+    # passes confirm_booking its own copy of the time — a spoken "3" became a
+    # stored 03:00 and a 3 AM calendar event.
+    result = await db.execute(
+        select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
+    )
+    doctor = result.scalar_one_or_none()
+    if doctor is None:
+        return {"success": False, "reason": "doctor_not_found"}
+    if doctor.booking_type == "token":
+        appointment_time = None  # token queue has no clock time — ignore strays
+    elif appointment_time is not None:
+        hours_block = _outside_working_hours(doctor, appointment_time)
+        if hours_block:
+            return hours_block
 
     # 1. Find or create patient. Match on phone AND name: a caller books for
     # family members too, so several patients legitimately share one phone —
