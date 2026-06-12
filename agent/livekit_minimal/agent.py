@@ -62,6 +62,7 @@ from agent.prompts.system_prompt import (  # noqa: E402
 # booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
+from agent.services.telugu_dates import telugu_date  # noqa: E402
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
@@ -833,13 +834,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
             )
         elif is_rebook_call:
+            # ISO date would be read digit-by-digit by TTS — speak it in Telugu.
+            try:
+                spoken_date = telugu_date(date_cls.fromisoformat(meta.get("cancelled_date", "")))
+            except ValueError:
+                spoken_date = meta.get("cancelled_date", "")
             await session.say(
                 sanitize_for_tts(
                     REBOOK_GREETING.format(
                         patient=meta.get("patient_name", ""),
                         clinic=branch_name,
                         doctor=meta.get("doctor_name", ""),
-                        date=meta.get("cancelled_date", ""),
+                        date=spoken_date,
                     )
                 )
             )
