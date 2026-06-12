@@ -93,3 +93,10 @@ export const adminPing = () => api.get("/admin/ping").then((r) => r.data);
 export const fetchOwners = () => api.get("/admin/owners").then((r) => r.data);
 export const addOwner = (payload) => api.post("/admin/owners", payload).then((r) => r.data);
 export const fetchClients = () => api.get("/admin/clients").then((r) => r.data);
+export const fetchAdminOverview = () => api.get("/admin/overview").then((r) => r.data);
+export const setOrgStatus = (orgId, status) =>
+  api.post(`/admin/orgs/${orgId}/status`, { status }).then((r) => r.data);
+export const setOrgPlan = (orgId, plan) =>
+  api.post(`/admin/orgs/${orgId}/plan`, { plan }).then((r) => r.data);
+export const setOrgHardBlock = (orgId, enabled) =>
+  api.post(`/admin/orgs/${orgId}/hard-block`, { enabled }).then((r) => r.data);

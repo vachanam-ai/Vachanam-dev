@@ -85,6 +85,14 @@ logger = logging.getLogger("vachanam-agent")
 
 AGENT_NAME = "vachanam-agent"
 
+# Service-blocked utterances (org paused by super-admin, or hard-block after
+# minutes exhausted). RULE 8: the call is ANSWERED and gets one coherent
+# sentence — never dead air, never endless ringing.
+SERVICE_BLOCKED_UTTERANCE = (
+    "నమస్కారం! క్షమించండి, ఈ సేవ ప్రస్తుతం తాత్కాలికంగా అందుబాటులో లేదు. "
+    "దయచేసి క్లినిక్‌ని నేరుగా సంప్రదించండి. ధన్యవాదాలు."
+)
+
 # Professional welcome + DPDP s.5 AI disclosure in ONE short Telugu utterance.
 # "AI అసిస్టెంట్" must stay (DPDP — caller must know it's not a human). The
 # name/phone collection notice moved to the point of collection (booking flow
@@ -870,6 +878,79 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         ctx.shutdown()
         return
     branch = branches[0]
+
+    # Super-admin service gate: paused/cancelled org, or hard-block with the
+    # month's minutes exhausted -> answer, speak ONE line, hang up (RULE 8).
+    blocked_reason = None
+    try:
+        from backend.models.schema import CallLog, Organization
+        from backend.services.billing_math import call_blocked, included_minutes
+
+        org = (
+            await db.execute(select(Organization).where(Organization.id == branch.org_id))
+        ).scalar_one_or_none()
+        if org is not None:
+            used_min = 0.0
+            if getattr(org, "hard_block_on_exhaust", False):
+                month_start = datetime_cls.now(timezone_utc).replace(
+                    day=1, hour=0, minute=0, second=0, microsecond=0
+                )
+                from sqlalchemy import func as _func
+
+                branch_ids = (
+                    await db.execute(select(Branch.id).where(Branch.org_id == org.id))
+                ).scalars().all()
+                secs = (
+                    await db.execute(
+                        select(_func.coalesce(_func.sum(CallLog.duration_seconds), 0)).where(
+                            and_(
+                                CallLog.branch_id.in_(branch_ids),
+                                CallLog.started_at >= month_start,
+                            )
+                        )
+                    )
+                ).scalar_one()
+                used_min = secs / 60.0
+            blocked_reason = call_blocked(
+                org.status, org.plan, bool(getattr(org, "hard_block_on_exhaust", False)), used_min
+            )
+    except Exception as e:  # gate must never kill a call — fail open
+        logger.warning("service_gate_check_failed: %s", e)
+
+    if blocked_reason:
+        logger.warning(
+            "call_blocked reason=%s branch_id=%s did=...%s",
+            blocked_reason,
+            str(branch.id),
+            did[-4:],
+        )
+        gate_session = AgentSession(
+            stt=sarvam.STT(api_key=settings.sarvam_api_key, model="saaras:v3", language="te-IN"),
+            llm=_build_fallback_llm(),
+            tts=sarvam.TTS(
+                api_key=settings.sarvam_api_key,
+                model="bulbul:v3",
+                speaker=getattr(branch, "tts_voice", None) or "rupali",
+                target_language_code="te-IN",
+                pace=1.3,
+            ),
+            vad=silero.VAD.load(),
+        )
+        await gate_session.start(
+            room=ctx.room,
+            agent=Agent(instructions="Say nothing. The call is being ended."),
+        )
+        await gate_session.say(sanitize_for_tts(SERVICE_BLOCKED_UTTERANCE))
+        await asyncio.sleep(1.0)  # let the tail of the audio flush
+        try:
+            lkapi = api.LiveKitAPI()
+            await lkapi.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+            await lkapi.aclose()
+        except Exception as e:
+            logger.error("blocked_call_hangup_failed: %s", e)
+        await db.close()
+        return
+
     if True:  # noqa: SIM108 — preserves indentation of the call-setup block
         branch_id, branch_name = branch.id, branch.name
         emergency_contact = branch.emergency_contact or ""

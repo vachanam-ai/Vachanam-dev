@@ -27,6 +27,12 @@ class Organization(Base):
         default="trial",
         nullable=False,
     )
+    # Super-admin kill switch: when True and the month's voice minutes reach
+    # the plan's included bucket, the agent answers with a one-line "service
+    # unavailable" and hangs up. Default False — overage billing is normal.
+    hard_block_on_exhaust: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     branches: Mapped[list["Branch"]] = relationship(back_populates="organization")
