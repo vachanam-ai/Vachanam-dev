@@ -196,12 +196,11 @@ async def _maybe_upsert_recurring_cal_event(
 ) -> None:
     """Best-effort: create/update recurring clinic-hours Calendar event.
 
-    Called after POST/PATCH when doctor.booking_type=='token' and a
-    calendar_id is available (doctor or branch level). Any exception is
-    caught and logged — never raises (spec §5.2 constraint 4).
+    Called after POST/PATCH for EVERY doctor type when a calendar_id is
+    available (doctor or branch level) — clinics expect each doctor's hours
+    visible in the calendar regardless of token/appointment booking. Any
+    exception is caught and logged — never raises (spec §5.2 constraint 4).
     """
-    if doc.booking_type != "token":
-        return
     cal_id = doc.google_calendar_id or branch.google_calendar_id
     if not cal_id:
         return

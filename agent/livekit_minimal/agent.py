@@ -422,6 +422,25 @@ class VachanamAgent(Agent):
         return {"success": True}
 
     @function_tool()
+    async def end_call(self, context: RunContext) -> dict:
+        """Hang up the call. Call this ONLY after the goodbye has been spoken
+        and the patient has nothing further — booking done, or they said bye."""
+        try:
+            # Let the goodbye finish playing before tearing the room down.
+            await context.wait_for_playout()
+        except Exception:
+            pass
+        try:
+            lkapi = api.LiveKitAPI()
+            await lkapi.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+            await lkapi.aclose()
+            logger.info("call_ended_by_agent room=%s", self._room.name)
+            return {"success": True}
+        except Exception as e:
+            logger.error("end_call_failed: %s", e)
+            return {"success": False}
+
+    @function_tool()
     async def request_human_transfer(self, context: RunContext, reason: str) -> dict:
         """Transfer the call to a human. Use ONLY if the patient explicitly asks
         for a person/doctor/receptionist, or keeps insisting across turns."""
