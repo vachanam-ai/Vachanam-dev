@@ -1,20 +1,33 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// Several backend prefixes (/availability, /doctors, /admin, ...) are ALSO
+// React Router page routes. A plain proxy sent full-page reloads of those
+// routes to FastAPI -> {"detail":"Not Found"}. bypass(): browser navigations
+// (Accept: text/html) get index.html (SPA takes over); XHR/fetch JSON calls
+// proxy through to uvicorn.
+const toBackend = {
+  target: "http://localhost:8000",
+  changeOrigin: true,
+  bypass(req) {
+    if (req.headers.accept?.includes("text/html")) return "/index.html";
+  }
+};
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
     proxy: {
-      // Backend (uvicorn) on :8000 in dev — keeps the app same-origin.
-      "/api": { target: "http://localhost:8000", changeOrigin: true },
-      "/auth": { target: "http://localhost:8000", changeOrigin: true },
-      "/queue": { target: "http://localhost:8000", changeOrigin: true },
-      "/doctors": { target: "http://localhost:8000", changeOrigin: true },
-      "/availability": { target: "http://localhost:8000", changeOrigin: true },
-      "/branches": { target: "http://localhost:8000", changeOrigin: true },
-      "/dashboard": { target: "http://localhost:8000", changeOrigin: true },
-      "/admin": { target: "http://localhost:8000", changeOrigin: true }
+      "/api": toBackend,
+      "/auth": toBackend,
+      "/queue": toBackend,
+      "/doctors": toBackend,
+      "/availability": toBackend,
+      "/branches": toBackend,
+      "/dashboard": toBackend,
+      "/admin": toBackend,
+      "/analytics": toBackend
     }
   }
 });
