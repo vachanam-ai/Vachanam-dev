@@ -444,7 +444,11 @@ async def assign_token(
         }
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+# NOTE: deliberately NO function-level @retry here. The old
+# @retry(stop_after_attempt(3)) re-ran the WHOLE function on a transient
+# calendar failure, and because the session still held attempt #1's pending
+# Token row, attempt #2 added a second one — duplicate bookings on success.
+# The only flaky step (Google Calendar) gets its own retry below.
 async def confirm_booking(
     doctor_id: UUID,
     branch_id: UUID,
@@ -462,6 +466,7 @@ async def confirm_booking(
     patient_age: int | None = None,
     patient_gender: str | None = None,
     different_person: bool = False,
+    exclude_token_id: UUID | None = None,  # reschedule: ignore the booking being replaced
 ) -> dict:
     """Persist the booking: write DB record, create Calendar event, send WhatsApp.
 
@@ -537,6 +542,8 @@ async def confirm_booking(
         Token.date == booking_date,
         Token.status == "confirmed",
     ]
+    if exclude_token_id is not None:
+        dup_filters.append(Token.id != exclude_token_id)
     if patient_phone and not different_person:
         dup_filters.append(
             Token.patient_id.in_(
@@ -590,15 +597,19 @@ async def confirm_booking(
     branch_calendar_id = branch.google_calendar_id
     branch_name = branch.name
 
-    event_id = await calendar_service.create_booking_event(
-        calendar_id=doctor_calendar_id or branch_calendar_id,
-        patient_name=patient_name,
-        patient_phone=patient_phone[-4:] if patient_phone else "unknown",
-        token_number=token_number,
-        booking_date=booking_date,
-        appointment_time=appointment_time,
-        doctor_name=doctor_name,
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+    async def _calendar_write() -> str:
+        return await calendar_service.create_booking_event(
+            calendar_id=doctor_calendar_id or branch_calendar_id,
+            patient_name=patient_name,
+            patient_phone=patient_phone[-4:] if patient_phone else "unknown",
+            token_number=token_number,
+            booking_date=booking_date,
+            appointment_time=appointment_time,
+            doctor_name=doctor_name,
+        )
+
+    event_id = await _calendar_write()
     token.google_calendar_event_id = event_id
 
     await db.commit()

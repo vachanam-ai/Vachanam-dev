@@ -66,6 +66,7 @@ from agent.services.telugu_dates import telugu_date  # noqa: E402
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
+    _branch_now,
     assign_token,
     check_availability,
     confirm_booking,
@@ -135,10 +136,10 @@ REMINDER_PROMPT_EXTRA = (
     "steps above). Unclear/mumbled reply -> repeat the same question once.\n"
     "- If they confirm: say 'సరే, ఎదురుచూస్తుంటాము. ధన్యవాదాలు!' and nothing more.\n"
     "- If they CANNOT come: this patient matters — rebook them, do not lose them. "
-    "Ask which day and time suits them, then check_availability, assign_token, "
-    "confirm_booking as usual (same patient name and phone). AFTER the new booking "
-    "succeeds, call cancel_booking with the old token_id above. Then confirm the "
-    "new time in one breath and close warmly.\n"
+    "Ask which day and time suits them, then call reschedule_booking("
+    "old_token_id=token_id above, new_date, new_time) — one atomic call. If it "
+    "returns success=true, confirm the new time in one breath and close warmly; "
+    "if false, offer another slot.\n"
     "- If they want a different doctor or time, follow the normal availability "
     "negotiation rules. Keep every reply to two short sentences."
 )
@@ -436,12 +437,17 @@ class VachanamAgent(Agent):
                         Token.branch_id == self._state.branch_id,  # RULE 1
                         _PatientModel.phone == phone,
                         Token.status == "confirmed",
-                        Token.date >= date_cls.today(),
+                        # branch-local today, not server-local (Fly runs UTC)
+                        Token.date >= (await _branch_now(self._state.branch_id, self._db)).date(),
                     )
                 )
                 .order_by(Token.date)
             )
         ).all()
+        if len(rows) == 1:
+            # One upcoming booking: pre-select its doctor so later tools never
+            # hit "Unknown doctor" (reschedules skip route_to_doctor entirely).
+            self._state.doctor_id = rows[0][1].id
         return {
             "bookings": [
                 {
@@ -459,18 +465,107 @@ class VachanamAgent(Agent):
         }
 
     @function_tool()
+    async def reschedule_booking(
+        self,
+        context: RunContext,
+        old_token_id: str,
+        new_date: str,
+        new_time: str | None = None,
+    ) -> dict:
+        """Reschedule an existing confirmed booking to a new date/time in ONE
+        atomic step: books the new slot for the SAME patient and same doctor,
+        and only after the new booking is confirmed cancels the old one. Use
+        this instead of manual assign/confirm/cancel for every reschedule.
+        new_time (HH:MM) required only for schedule (appointment) doctors."""
+        return await self._do_reschedule(old_token_id, new_date, new_time)
+
+    async def _do_reschedule(
+        self, old_token_id: str, new_date: str, new_time: str | None = None
+    ) -> dict:
+        from backend.models.schema import Token
+
+        try:
+            old_uuid = UUID(old_token_id)
+        except ValueError:
+            raise ToolError(
+                "old_token_id must be the token_id returned by find_my_bookings."
+            ) from None
+        row = (
+            await self._db.execute(
+                select(Token, _PatientModel)
+                .join(_PatientModel, Token.patient_id == _PatientModel.id)
+                .where(
+                    and_(
+                        Token.id == old_uuid,
+                        Token.branch_id == self._state.branch_id,  # RULE 1
+                    )
+                )
+            )
+        ).first()
+        if row is None:
+            return {"success": False, "error": "booking_not_found"}
+        old_token, patient = row
+        if old_token.status != "confirmed":
+            return {"success": False, "error": f"not_reschedulable_{old_token.status}"}
+
+        booking_date = self._parse_date(new_date)
+        appt_time = self._parse_time(new_time)
+        assigned = await assign_token(
+            doctor_id=old_token.doctor_id,
+            branch_id=self._state.branch_id,
+            booking_date=booking_date,
+            db=self._db,
+            appointment_time=appt_time,
+        )
+        if not assigned.get("success"):
+            return {"success": False, "step": "assign", **assigned}
+
+        try:
+            confirmed = await confirm_booking(
+                doctor_id=old_token.doctor_id,
+                branch_id=self._state.branch_id,
+                patient_name=patient.name,
+                patient_phone=patient.phone,
+                complaint=self._state.complaint or "reschedule",
+                booking_date=booking_date,
+                token_number=assigned["token_number"],
+                followup_consent=patient.followup_consent,
+                appointment_time=self._parse_time(
+                    assigned.get("appointment_time") or new_time
+                ),
+                source="voice",
+                db=self._db,
+                calendar_service=self._calendar,
+                meta_service=self._meta,
+                exclude_token_id=old_token.id,  # ignore the booking being replaced
+            )
+        except Exception as e:
+            logger.error("reschedule_confirm_failed: %s", e)
+            return {"success": False, "step": "confirm", "error": "booking_failed"}
+        if not confirmed.get("success"):
+            return {"success": False, "step": "confirm", **confirmed}
+        self._state.token_confirmed = True
+        self._state.token_number = confirmed.get("token_number") or assigned["token_number"]
+
+        # New booking exists — NOW it is safe to drop the old one.
+        cancelled = await self._do_cancel(str(old_token.id))
+        return {
+            "success": True,
+            "new_token_number": assigned["token_number"],
+            "new_date": booking_date.isoformat(),
+            "new_time": assigned.get("appointment_time"),
+            "old_cancelled": bool(cancelled.get("success")),
+        }
+
+    @function_tool()
     async def cancel_booking(
         self, context: RunContext, token_id: str, reason: str = "cancel"
     ) -> dict:
-        """Cancel an existing confirmed booking (frees the slot/token and removes
-        the calendar event). reason: 'cancel' when the patient just cancels;
-        'reschedule' when replacing with a new booking — for reschedules the NEW
-        booking must already be confirmed via confirm_booking (assign_token alone
-        is only a temporary hold, NOT a booking)."""
-        from sqlalchemy import and_ as _and
-
-        from backend.models.schema import Token
-
+        """Cancel an existing confirmed booking (frees the slot and removes the
+        calendar event). reason: 'cancel' when the patient just cancels;
+        for reschedules PREFER the reschedule_booking tool (atomic). If you do
+        cancel manually for a reschedule, the NEW booking must already be
+        confirmed."""
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
         # the old appointment, and left the patient with nothing.
@@ -479,14 +574,24 @@ class VachanamAgent(Agent):
             raise ToolError(
                 "Replacement booking is NOT confirmed yet. assign_token is only "
                 "a hold — call confirm_booking for the new slot first, verify "
-                "success=true, and only then cancel the old booking."
+                "success=true, and only then cancel the old booking. For "
+                "reschedules prefer the reschedule_booking tool."
             )
+        return await self._do_cancel(token_id)
+
+    async def _do_cancel(self, token_id: str) -> dict:
+        """Shared cancel core (no guards) — used by cancel_booking and
+        reschedule_booking after their preconditions hold."""
+        from sqlalchemy import and_ as _and
+
+        from backend.models.schema import Token
 
         try:
             token_uuid = UUID(token_id)
         except ValueError:
             raise ToolError(
-                "token_id must be the booking id from the reminder metadata."
+                "token_id must be the booking id from find_my_bookings or the "
+                "reminder metadata."
             ) from None
         result = await self._db.execute(
             select(Token).where(
@@ -503,22 +608,27 @@ class VachanamAgent(Agent):
         token.cancellation_reason = "patient_cancelled_or_rescheduled_on_call"
         await self._db.commit()
 
-        # Release the capacity reservation (RULE 2 inverse — only valid decr).
-        try:
-            r = aioredis.from_url(settings.redis_url, decode_responses=True)
+        # Release capacity — SLOT doctors only. Token counters must NEVER be
+        # decremented: the counter IS the queue-number sequence, so a DECR
+        # makes the next patient receive the SAME token number as the
+        # cancelled one (and DECR on an expired key goes to -1 -> token 0).
+        # Cancelled token capacity is simply not reclaimed — token numbers
+        # stay unique, which matters more than one lost queue slot.
+        if token.appointment_time is not None:
             try:
-                if token.appointment_time is not None:
+                r = aioredis.from_url(settings.redis_url, decode_responses=True)
+                try:
                     key = (
                         f"slot:{token.doctor_id}:{token.branch_id}:{token.date}:"
                         f"{token.appointment_time.strftime('%H%M')}"
                     )
-                else:
-                    key = f"token:{token.doctor_id}:{token.branch_id}:{token.date}"
-                await r.decr(key)
-            finally:
-                await r.aclose()
-        except Exception as e:
-            logger.warning("cancel_redis_release_failed: %s", e)
+                    # guard: never push an absent/zero key negative
+                    if int(await r.get(key) or 0) > 0:
+                        await r.decr(key)
+                finally:
+                    await r.aclose()
+            except Exception as e:
+                logger.warning("cancel_redis_release_failed: %s", e)
 
         if token.google_calendar_event_id and self._calendar is not None:
             try:
