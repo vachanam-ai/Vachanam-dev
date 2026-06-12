@@ -28,22 +28,29 @@ function TrendChart({ daily }) {
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
+    let mm;
     import("gsap").then(({ gsap }) => {
-      gsap.fromTo(
-        svg.querySelectorAll("rect"),
-        { scaleY: 0, transformOrigin: "center bottom" },
-        { scaleY: 1, duration: 0.55, ease: "power3.out", stagger: 0.018 }
-      );
-      const line = svg.querySelector("polyline");
-      if (line) {
-        const len = line.getTotalLength();
+      // gsap.matchMedia: bars/line animate only when motion is welcome;
+      // reduced-motion users get the chart instantly (gsap-core a11y rule).
+      mm = gsap.matchMedia();
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
         gsap.fromTo(
-          line,
-          { strokeDasharray: len, strokeDashoffset: len },
-          { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut", delay: 0.4 }
+          svg.querySelectorAll("rect"),
+          { scaleY: 0, transformOrigin: "center bottom" },
+          { scaleY: 1, duration: 0.55, ease: "power3.out", stagger: 0.018 }
         );
-      }
+        const line = svg.querySelector("polyline");
+        if (line) {
+          const len = line.getTotalLength();
+          gsap.fromTo(
+            line,
+            { strokeDasharray: len, strokeDashoffset: len },
+            { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut", delay: 0.4 }
+          );
+        }
+      });
     });
+    return () => mm?.revert();
   }, [daily]);
   const W = 720, H = 220, PAD = 28, BW = Math.max(8, (W - PAD * 2) / Math.max(daily.length, 1) - 8);
   const maxBooked = Math.max(1, ...daily.map((d) => d.booked + d.cancelled));
@@ -161,7 +168,7 @@ export default function Dashboard() {
           <div className="flex gap-1">
             {[7, 14, 30].map((d) => (
               <button key={d} onClick={() => setDays(d)}
-                className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition ${
+                className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
                   days === d ? "bg-teal text-white" : "bg-white text-slate hover:bg-teal-pale"
                 }`}>
                 {d}d
@@ -176,6 +183,33 @@ export default function Dashboard() {
           <Legend />
         </div>
       </section>
+
+      {/* Doctors on leave — today highlighted; receptionist marks leave, owner sees it here */}
+      {(an?.on_leave ?? []).length > 0 && (
+        <section data-reveal className="card overflow-hidden border-amber-200/70">
+          <header className="flex items-center justify-between border-b border-hairline bg-amber-50/70 px-5 py-3">
+            <h2 className="font-display text-lg font-semibold">Doctors on leave</h2>
+            <span className="font-ui text-xs text-slate">next 30 days</span>
+          </header>
+          <div className="divide-y divide-hairline">
+            {an.on_leave.map((l) => (
+              <div key={`${l.doctor_name}-${l.date}`} className="flex items-center justify-between px-5 py-3">
+                <div className="flex items-center gap-2.5">
+                  {/* dot = real semantic state: leave is TODAY, patients being called */}
+                  {l.is_today && <span className="h-2 w-2 rounded-full bg-amber-500" aria-label="on leave today" />}
+                  <p className="font-ui text-sm font-medium">{l.doctor_name}</p>
+                  {l.reason && <span className="font-ui text-xs text-slate">· {l.reason}</span>}
+                </div>
+                <p className={`font-ui text-sm ${l.is_today ? "font-semibold text-amber-700" : "text-slate"}`}>
+                  {l.is_today
+                    ? "Today — patients being informed by call"
+                    : new Date(l.date + "T00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Where bookings come from */}

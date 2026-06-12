@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
-from backend.models.schema import Doctor, Patient, Token
+from backend.models.schema import Doctor, DoctorUnavailability, Patient, Token
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -40,6 +40,13 @@ class DoctorRow(BaseModel):
     show_rate: float | None
 
 
+class LeaveRow(BaseModel):
+    doctor_name: str
+    date: str
+    reason: str | None
+    is_today: bool
+
+
 class Overview(BaseModel):
     today: DayPoint
     pending_today: int  # confirmed, not yet marked
@@ -47,6 +54,7 @@ class Overview(BaseModel):
     daily: list[DayPoint]
     by_doctor: list[DoctorRow]  # over the selected period
     by_source: dict  # source -> bookings over the selected period
+    on_leave: list[LeaveRow]  # today + next 30 days
 
 
 def _show_rate(attended: int, no_show: int) -> float | None:
@@ -172,6 +180,21 @@ async def analytics_overview(
         )
     ).all()
 
+    leave_rows = (
+        await db.execute(
+            select(Doctor.name, DoctorUnavailability.date, DoctorUnavailability.reason)
+            .join(Doctor, DoctorUnavailability.doctor_id == Doctor.id)
+            .where(
+                and_(
+                    DoctorUnavailability.branch_id == branch_id,  # Rule 1
+                    DoctorUnavailability.date >= today,
+                    DoctorUnavailability.date <= today + timedelta(days=30),
+                )
+            )
+            .order_by(DoctorUnavailability.date)
+        )
+    ).all()
+
     return Overview(
         today=today_point,
         pending_today=pending_today,
@@ -179,4 +202,13 @@ async def analytics_overview(
         daily=daily,
         by_doctor=by_doctor,
         by_source={s: n for s, n in source_rows},
+        on_leave=[
+            LeaveRow(
+                doctor_name=name,
+                date=d.isoformat(),
+                reason=reason,
+                is_today=d == today,
+            )
+            for name, d, reason in leave_rows
+        ],
     )

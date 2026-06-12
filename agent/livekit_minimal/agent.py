@@ -108,6 +108,11 @@ REBOOK_PROMPT_EXTRA = (
     "\n\nTHIS IS A CASCADE-REBOOK CALL (doctor went on leave; the patient's "
     "booking on {cancelled_date} with {doctor} was cancelled by the clinic). "
     "The greeting already apologised and offered to rebook.\n"
+    "YOU ALREADY KNOW THIS PATIENT: name={patient}, phone=the number you "
+    "dialed, doctor={doctor}. NEVER ask who they are, NEVER ask their health "
+    "problem, NEVER restart the new-patient flow — this overrides the booking "
+    "flow steps above. If their reply is unclear or mumbled, simply repeat "
+    "your question once: 'సరిగా వినిపించలేదండి — వేరే రోజు బుక్ చేయమంటారా?'\n"
     "- If they want to rebook: ask which day suits them, then check_availability "
     "for the same doctor (skip leave days), assign_token, confirm_booking with "
     "the same patient name and phone. Keep it to two short sentences per turn.\n"
@@ -125,6 +130,9 @@ REMINDER_PROMPT_EXTRA = (
     "\n\nTHIS IS A REMINDER CALL (not a new booking call). The patient has an "
     "appointment today: token_id={token_id}, doctor={doctor}, time={time}. "
     "The greeting already asked if they are coming.\n"
+    "YOU ALREADY KNOW THIS PATIENT — never ask who they are or their health "
+    "problem, never restart the new-patient flow (overrides the booking flow "
+    "steps above). Unclear/mumbled reply -> repeat the same question once.\n"
     "- If they confirm: say 'సరే, ఎదురుచూస్తుంటాము. ధన్యవాదాలు!' and nothing more.\n"
     "- If they CANNOT come: this patient matters — rebook them, do not lose them. "
     "Ask which day and time suits them, then check_availability, assign_token, "
@@ -746,6 +754,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             instructions += REBOOK_PROMPT_EXTRA.format(
                 cancelled_date=meta.get("cancelled_date", ""),
                 doctor=meta.get("doctor_name", ""),
+                patient=meta.get("patient_name", ""),
             )
             state.call_type = "cascade_rebook"
             if meta.get("followup_task_id"):
