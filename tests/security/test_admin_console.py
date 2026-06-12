@@ -160,6 +160,14 @@ async def test_plan_change_persists_and_validates(client, db, biz_org):
     org = await _fresh_org(uuid.UUID(org_id))
     assert org.plan == "multi"
 
+    # downgrade path too — "can't change clinic to solo" was reported 06-12
+    r = await client.post(
+        f"/admin/orgs/{org_id}/plan", json={"plan": "solo"}, headers=_admin_headers()
+    )
+    assert r.status_code == 200, r.text
+    org = await _fresh_org(uuid.UUID(org_id))
+    assert org.plan == "solo"
+
     r = await client.post(
         f"/admin/orgs/{org_id}/plan", json={"plan": "enterprise"}, headers=_admin_headers()
     )

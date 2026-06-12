@@ -444,13 +444,23 @@ async def admin_overview(
                 for o in orgs
                 if o.created_at and o.created_at.strftime("%Y-%m") == mkey
             )
-            # platform-level estimate: every active org's base + pooled overage
-            est_rev = sum(
-                month_revenue(o.plan, o.status, org_min_this.get(o.id, 0.0))
-                for o in orgs
-            ) if mkey == this_month.strftime("%Y-%m") else 0.0
+            # Money history is only knowable for the CURRENT month until
+            # BillingCycle rows exist (TD-019). Past months: minutes-cost only
+            # — painting today's DID rent into empty history months drew
+            # identical fake expense bars across the whole chart.
+            is_current = mkey == this_month.strftime("%Y-%m")
+            est_rev = (
+                sum(
+                    month_revenue(o.plan, o.status, org_min_this.get(o.id, 0.0))
+                    for o in orgs
+                )
+                if is_current
+                else 0.0
+            )
             est_exp = round(
-                mins * 1.49 + sum(1 for b in branches if b.did_number) * 1000, 2
+                mins * 1.49
+                + (sum(1 for b in branches if b.did_number) * 1000 if is_current else 0),
+                2,
             )
             monthly.append(
                 MonthPoint(

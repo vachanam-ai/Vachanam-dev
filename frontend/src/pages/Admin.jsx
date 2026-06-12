@@ -100,12 +100,21 @@ function MoneyTrend({ monthly }) {
         const x = PAD + i * bw;
         const rh = (p.revenue / maxMoney) * (H - PAD * 2 - 14);
         const eh = (p.expense / maxMoney) * (H - PAD * 2 - 14);
+        const tip = `${p.month} — revenue ${inr(p.revenue)} · expense ${inr(p.expense)} · ${Math.round(p.minutes)} min · +${p.new_clients} clients`;
         return (
           <g key={p.month}>
+            {/* full-column hover target so the numbers show anywhere over the month */}
+            <rect x={x} y={0} width={bw} height={H} fill="transparent">
+              <title>{tip}</title>
+            </rect>
             <rect data-bar x={x + bw * 0.16} y={H - PAD - rh} width={bw * 0.28} height={Math.max(rh, 1)}
-              rx="2" className="fill-teal-deep" />
+              rx="2" className="fill-teal-deep">
+              <title>{tip}</title>
+            </rect>
             <rect data-bar x={x + bw * 0.52} y={H - PAD - eh} width={bw * 0.28} height={Math.max(eh, 1)}
-              rx="2" className="fill-gold-ink opacity-70" />
+              rx="2" className="fill-gold-ink opacity-70">
+              <title>{tip}</title>
+            </rect>
             <text x={x + bw / 2} y={H + 12} textAnchor="middle" className="fill-slate font-ui text-[9px]">
               {p.month.slice(5)}
             </text>
@@ -113,7 +122,7 @@ function MoneyTrend({ monthly }) {
         );
       })}
       <path data-minline d={minPath} fill="none" strokeWidth="2" strokeDasharray="5 4"
-        className="stroke-[#155e75]" />
+        className="stroke-[#155e75]" pointerEvents="none" />
     </svg>
   );
 }
@@ -132,7 +141,7 @@ function UsageBar({ row }) {
   }, [row.pct_used]);
   const tone = row.exhausted ? "bg-danger" : row.approaching_limit ? "bg-gold-ink" : "bg-teal-deep";
   return (
-    <div>
+    <div title={`${row.minutes_used} of ${row.minutes_included} min used (${row.pct_used}%) · ${row.minutes_left} left`}>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-hairline">
         <div ref={ref} className={`h-full rounded-full ${tone}`} style={{ width: `${row.pct_used}%` }} />
       </div>

@@ -154,8 +154,13 @@ async def test_full_signup_with_real_sample_data(client, db):
 
 
 @pytest.mark.asyncio
-async def test_otp_code_is_single_use(client):
-    """A verified code can't be replayed for a second registration."""
+async def test_otp_code_is_single_use(client, db):
+    """A verified code can't be replayed for a second registration.
+
+    db fixture is REQUIRED even though unused directly: it patches the app's
+    sessions onto vachanam_test. Without it this test's successful /register
+    wrote a 'Replay Clinic' org into the PRODUCTION database on every suite
+    run (20+ ghost clinics on the admin console, 2026-06-12)."""
     email = _unique_email()
     codes = (
         await client.post("/auth/request-otp", json={"phone": REAL_PHONE, "email": email})
