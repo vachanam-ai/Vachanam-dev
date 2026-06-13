@@ -1,5 +1,5 @@
 import json
-from datetime import date, timedelta, datetime, time
+from datetime import date, timedelta, datetime, time, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -822,7 +822,7 @@ async def confirm_booking(
         appointment_time=appointment_time,
         source=source,
         status="confirmed",
-        confirmed_at=datetime.utcnow(),
+        confirmed_at=datetime.now(timezone.utc),  # G13: tz-aware for a tz column
     )
     db.add(token)
     await db.flush()  # token-number races are caught by the pre-check above and

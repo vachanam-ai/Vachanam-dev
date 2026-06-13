@@ -93,8 +93,10 @@ async def create_order(request: Request, req: CreateOrderRequest) -> CreateOrder
     try:
         order = client.order.create(payload)
     except razorpay.errors.BadRequestError as e:
+        # G12: log the detail, return a generic message — the raw provider error
+        # can carry internal IDs/config hints.
         logger.error("razorpay_order_bad_request", error=str(e), amount=req.amount)
-        raise HTTPException(status_code=400, detail=f"Razorpay rejected: {e}")
+        raise HTTPException(status_code=400, detail="Order rejected by payment provider")
     except razorpay.errors.SignatureVerificationError as e:
         logger.error("razorpay_auth_failed", error=str(e))
         raise HTTPException(status_code=401, detail="Razorpay auth failed")

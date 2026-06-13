@@ -50,3 +50,33 @@ async def test_otp_echoed_when_no_provider(monkeypatch, redis):
 
     out = await otp_service.issue_code("sms", "+919999000222")
     assert out is not None and len(out) == 6
+
+
+@pytest.mark.asyncio
+async def test_otp_send_throttled_per_destination(monkeypatch, redis):
+    """G16: with a provider wired, a 2nd send to the same dest within 60s is throttled."""
+    monkeypatch.setattr(settings, "msg91_auth_key", "key", raising=False)
+    monkeypatch.setattr(settings, "app_env", "development", raising=False)
+
+    sends = {"n": 0}
+
+    async def _ok_send(channel, dest, code):
+        sends["n"] += 1
+        return True
+
+    monkeypatch.setattr(otp_service, "_send", _ok_send)
+    dest = f"+9199{__import__('uuid').uuid4().int % 10**8:08d}"
+    await otp_service.issue_code("sms", dest)
+    await otp_service.issue_code("sms", dest)  # within cooldown → no 2nd send
+    assert sends["n"] == 1
+
+
+def test_confirmed_at_is_timezone_aware():
+    """G13: Token.confirmed_at is written tz-aware (no naive utcnow into a tz column)."""
+    import inspect
+
+    from agent.tools import booking_tools
+
+    src = inspect.getsource(booking_tools.confirm_booking)
+    assert "datetime.utcnow()" not in src
+    assert "datetime.now(timezone.utc)" in src

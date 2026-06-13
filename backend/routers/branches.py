@@ -157,6 +157,7 @@ class StaffCreate(BaseModel):
     name: str
     password: str
     role: str = "receptionist"
+    doctor_id: str | None = None  # link a doctor-role login to its Doctor row (G5)
 
 
 def _require_org_admin(current_user: CurrentUser) -> None:
@@ -213,6 +214,7 @@ async def update_branch_settings(
                 "Contact support if this is your number.",
             )
 
+    old_did = branch.did_number  # capture before mutate (G9 trunk cleanup)
     for field in (
         "name", "address", "city", "clinic_phone",
         "emergency_contact", "google_calendar_id", "did_number",
@@ -226,7 +228,15 @@ async def update_branch_settings(
     # immediately. Failure is reported in the response, never fails the save.
     did_wired: bool | None = None
     if body.did_number is not None and branch.did_number:
-        from backend.services.livekit_sip import sync_did_to_inbound_trunk
+        from backend.services.livekit_sip import (
+            remove_did_from_inbound_trunk,
+            sync_did_to_inbound_trunk,
+        )
+
+        # G9: if the DID actually changed, pull the OLD number off the trunk
+        # first so a future reassignment of it can't route into our system.
+        if old_did and old_did != branch.did_number:
+            await remove_did_from_inbound_trunk(old_did)
 
         sync = await sync_did_to_inbound_trunk(branch.did_number)
         did_wired = sync["ok"]
@@ -340,10 +350,16 @@ async def add_staff(
     _require_org_admin(current_user)
     if body.role not in ("receptionist", "doctor"):
         raise HTTPException(status_code=422, detail="Role must be receptionist or doctor")
-    if len(body.password) < 8:
-        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    # G6: same strength rules as owner signup — a weak staff/doctor login is a
+    # foothold into clinic PII. (Was a bare len>=8 check.)
+    from backend.services.validators import validate_password
 
-    from backend.models.schema import User
+    try:
+        validate_password(body.password)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    from backend.models.schema import Doctor, User
     from backend.routers.auth import _hash_password
 
     email = body.email.strip().lower()
@@ -352,6 +368,46 @@ async def add_staff(
     ).scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=409, detail="A user with this email already exists")
+
+    # G5: a doctor-role login must bind to a Doctor row, else /my-schedule (which
+    # filters by Doctor.user_id) shows nothing — an orphaned account. Resolve the
+    # target doctor from body.doctor_id, else auto-match by the invited_email the
+    # owner set when creating the doctor. Fail loudly rather than orphan it.
+    target_doctor: Doctor | None = None
+    if body.role == "doctor":
+        if body.doctor_id:
+            try:
+                did_uuid = uuid.UUID(body.doctor_id)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="Invalid doctor_id")
+            target_doctor = (
+                await db.execute(
+                    select(Doctor).where(
+                        Doctor.id == did_uuid,
+                        Doctor.branch_id == uuid.UUID(branch_id),  # Rule 1
+                    )
+                )
+            ).scalar_one_or_none()
+        else:
+            target_doctor = (
+                await db.execute(
+                    select(Doctor).where(
+                        Doctor.branch_id == uuid.UUID(branch_id),
+                        Doctor.invited_email == email,
+                        Doctor.user_id.is_(None),
+                    )
+                )
+            ).scalars().first()
+        if target_doctor is None:
+            raise HTTPException(
+                status_code=422,
+                detail="No matching doctor in this branch to link. Create the "
+                "doctor first (with this email as invited_email) or pass doctor_id.",
+            )
+        if target_doctor.user_id is not None:
+            raise HTTPException(
+                status_code=409, detail="That doctor already has a login."
+            )
 
     user = User(
         org_id=uuid.UUID(current_user.org_id) if current_user.org_id else None,
@@ -362,6 +418,9 @@ async def add_staff(
         password_hash=_hash_password(body.password),
     )
     db.add(user)
+    await db.flush()
+    if target_doctor is not None:
+        target_doctor.user_id = user.id  # bind the login to the Doctor record
     await db.commit()
     await db.refresh(user)
 

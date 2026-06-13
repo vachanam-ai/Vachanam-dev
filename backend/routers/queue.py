@@ -14,7 +14,7 @@ from datetime import date, datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -301,10 +301,11 @@ async def _update_status(
 
 
 class WalkInRequest(BaseModel):
+    # G17: bound free-text so an over-long value is a clean 422, not a DB 500.
     doctor_id: str
-    patient_name: str
-    patient_phone: str | None = None
-    complaint: str | None = None
+    patient_name: str = Field(..., min_length=1, max_length=120)
+    patient_phone: str | None = Field(default=None, max_length=20)
+    complaint: str | None = Field(default=None, max_length=500)
     appointment_time: str | None = None  # "HH:MM", slot-doctors only
     is_urgent: bool = False
 

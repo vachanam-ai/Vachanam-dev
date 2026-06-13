@@ -40,6 +40,21 @@ def _verified_key(channel: str, dest: str) -> str:
 
 async def issue_code(channel: str, dest: str) -> str | None:
     """Generate + store a code, send it, and (dev) return it. channel: sms|email."""
+    # G16: per-destination send cooldown — one real send per dest per 60s, so a
+    # single attacker can't SMS-bomb a victim's number (and burn MSG91 credits)
+    # by spamming /request-otp. Only throttle when a provider is actually wired;
+    # dev/no-provider keeps echoing so the signup flow stays testable. The
+    # previously-issued code is still valid (TTL 600s) during the cooldown.
+    if _provider_configured(channel):
+        r_cd = _redis()
+        try:
+            fresh = await r_cd.set(f"otp_cd:{channel}:{dest}", "1", ex=60, nx=True)
+        finally:
+            await r_cd.aclose()
+        if not fresh:
+            logger.info("otp_throttled", channel=channel, dest=_mask(dest))
+            return None
+
     code = f"{secrets.randbelow(1_000_000):06d}"
     r = _redis()
     try:

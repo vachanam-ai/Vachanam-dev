@@ -32,6 +32,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -356,6 +357,16 @@ async def create_doctor(
         status="active",
     )
     db.add(doc)
+    await db.flush()
+    # G8: at most ONE default doctor per branch — the agent's out-of-scope
+    # fallback picks `next(d for d in doctors if d.is_default_doctor)`, which is
+    # non-deterministic with two defaults. Setting a new default clears the rest.
+    if doc.is_default_doctor:
+        await db.execute(
+            sa_update(Doctor)
+            .where(Doctor.branch_id == branch_uuid, Doctor.id != doc.id)
+            .values(is_default_doctor=False)
+        )
     await db.commit()
 
     logger.info(
@@ -440,6 +451,14 @@ async def update_doctor(
             doc.working_hours_end = _parse_time(value, "working_hours_end")
         else:
             setattr(doc, field, value)
+
+    # G8: promoting this doctor to default demotes every other in the branch.
+    if changed.get("is_default_doctor") is True:
+        await db.execute(
+            sa_update(Doctor)
+            .where(Doctor.branch_id == branch_uuid, Doctor.id != doc.id)
+            .values(is_default_doctor=False)
+        )
 
     await db.commit()
 
