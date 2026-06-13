@@ -775,6 +775,25 @@ async def confirm_booking(
                 "reason": "full",
                 "instruction": f"{doctor.name} is fully booked that day. Offer another day.",
             }
+        # This exact queue number already confirmed today? (bug-bounty T1 — the
+        # DB unique index is the race backstop; this SELECT gives a clean
+        # already_booked in the normal/sequential case without hitting it.)
+        num_taken = (
+            await db.execute(
+                select(Token.id).where(
+                    and_(*cap_filters, Token.token_number == token_number)
+                )
+            )
+        ).first()
+        if num_taken is not None:
+            return {
+                "success": False,
+                "reason": "already_booked",
+                "instruction": (
+                    "That queue number is already taken — call assign_token "
+                    "for a fresh number before confirming."
+                ),
+            }
     else:  # slot doctor — per-slot occupancy
         slot_confirmed = (
             await db.execute(
@@ -806,7 +825,10 @@ async def confirm_booking(
         confirmed_at=datetime.utcnow(),
     )
     db.add(token)
-    await db.flush()
+    await db.flush()  # token-number races are caught by the pre-check above and
+    # the DB partial unique index (uq_token_number_confirmed) is the final
+    # backstop; on a true concurrent collision the agent wrapper rolls back and
+    # returns booking_failed (the patient retries) — data stays consistent.
 
     # 3. Google Calendar (MUST succeed — raises if fails; booking aborts)
     result = await db.execute(

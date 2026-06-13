@@ -399,10 +399,29 @@ class VachanamAgent(Agent):
             return {"success": False, "error": "booking_system_unavailable"}
         phone = patient_phone or self._state.patient_phone
         resolved = await self._resolve_doctor_id(doctor_id)
-        # RULE 2 at the persistence step: the number reserved by assign_token
-        # (held server-side in state) is the truth — never trust the LLM's
-        # echo of token_number, a stale/hallucinated value would print the
-        # same queue number for two patients.
+        parsed_date = self._parse_date(booking_date)
+        parsed_time = self._parse_time(appointment_time)
+        # RULE 2 (race-proof): if the LLM skipped assign_token there is no
+        # server-side hold, and confirm_booking's DB re-count is TOCTOU under
+        # concurrency (bug-bounty T1). Acquire the atomic Redis hold NOW — same
+        # gate assign_token uses — so two simultaneous skip-assign confirms for
+        # the last slot can't both pass. assign_token also respects
+        # max_concurrent_per_slot, which a DB unique index could not.
+        if not self._state.token_held:
+            held = await assign_token(
+                doctor_id=resolved,
+                branch_id=self._state.branch_id,
+                booking_date=parsed_date,
+                db=self._db,
+                appointment_time=parsed_time,
+            )
+            if not held.get("success"):
+                return held  # full / past_slot / outside_hours — surfaced to LLM
+            self._state.token_held = True
+            self._state.token_number = held["token_number"]
+            self._state.token_redis_key = held.get("redis_key")
+        # The number reserved by assign_token (held server-side) is the truth —
+        # never trust the LLM's echo of token_number.
         if self._state.token_held and self._state.token_number is not None:
             token_number = self._state.token_number
         try:
@@ -412,7 +431,7 @@ class VachanamAgent(Agent):
                 patient_name=patient_name,
                 patient_phone=phone,
                 complaint=complaint,
-                booking_date=self._parse_date(booking_date),
+                booking_date=parsed_date,
                 token_number=token_number,
                 followup_consent=followup_consent,
                 appointment_time=self._parse_time(appointment_time),
@@ -426,6 +445,12 @@ class VachanamAgent(Agent):
             )
         except Exception as e:
             logger.error("confirm_booking_failed: %s", e)
+            # Recover the session so a same-call retry works (e.g. the rare
+            # unique-index race backstop poisons the transaction).
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
             return {"success": False, "error": "booking_failed"}
         if result.get("success"):
             self._state.token_confirmed = True
@@ -580,6 +605,12 @@ class VachanamAgent(Agent):
         )
         if not assigned.get("success"):
             return {"success": False, "step": "assign", **assigned}
+        # Record the hold so a hard call-drop between assign and confirm is
+        # released by _cleanup_on_shutdown (bug-bounty T4) — not just the
+        # in-band failure paths that call _release_hold below.
+        self._state.token_held = True
+        self._state.token_number = assigned["token_number"]
+        self._state.token_redis_key = assigned.get("redis_key")
 
         try:
             confirmed = await confirm_booking(
@@ -603,9 +634,11 @@ class VachanamAgent(Agent):
         except Exception as e:
             logger.error("reschedule_confirm_failed: %s", e)
             await self._release_hold(assigned)  # RULE 3: don't leak the new hold
+            self._clear_hold()  # so shutdown cleanup doesn't DECR it a 2nd time
             return {"success": False, "step": "confirm", "error": "booking_failed"}
         if not confirmed.get("success"):
             await self._release_hold(assigned)  # RULE 3: dup guard / capacity etc.
+            self._clear_hold()
             return {"success": False, "step": "confirm", **confirmed}
         self._state.token_confirmed = True
         self._state.token_number = confirmed.get("token_number") or assigned["token_number"]
@@ -641,6 +674,13 @@ class VachanamAgent(Agent):
                 "reschedules prefer the reschedule_booking tool."
             )
         return await self._do_cancel(token_id)
+
+    def _clear_hold(self) -> None:
+        """Forget the server-side hold so _cleanup_on_shutdown won't DECR a key
+        that an in-band failure path already released (avoids double-release)."""
+        self._state.token_held = False
+        self._state.token_redis_key = None
+        self._state.token_number = None
 
     @staticmethod
     async def _release_hold(assigned: dict) -> None:
@@ -1278,7 +1318,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # watchdog (TD-009) was lost in the LiveKit port — solo calls ran
         # unbounded. Warn 10s before the cap, then close politely AT the cap.
         # Only solo; clinic/multi are flat-minute plans with no per-call cap.
-        cap = settings.max_call_duration_seconds
+        # Default 240s for solo even when the env var is 0/unset (bug-bounty T2 —
+        # the cap shipped disabled-by-default). A non-zero env value overrides.
+        SOLO_CAP_DEFAULT = 240
+        cap = settings.max_call_duration_seconds or SOLO_CAP_DEFAULT
         if state.plan == "solo" and cap and cap > 15:
 
             async def _solo_cap_watchdog() -> None:

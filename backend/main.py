@@ -120,9 +120,17 @@ async def lifespan(app: FastAPI):
         scheduler.shutdown(wait=False)
     if leader_conn is not None:
         try:
-            await leader_conn.close()  # releases the advisory lock
-        except Exception:
-            pass
+            # Explicit unlock (T5): closing a pooled connection returns it to
+            # the pool with the session-level advisory lock STILL held, so a
+            # graceful in-process restart could never elect a new leader.
+            # pg_advisory_unlock releases it before the connection goes back.
+            if got:
+                await leader_conn.driver_connection.fetchval(
+                    "SELECT pg_advisory_unlock($1)", SCHED_LOCK_KEY
+                )
+            await leader_conn.close()
+        except Exception as e:
+            logger.warning("scheduler_leader_unlock_failed", error=str(e))
     await close_rate_limiter()
     logger.info("vachanam_shutdown")
 

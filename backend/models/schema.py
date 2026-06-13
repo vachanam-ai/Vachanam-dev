@@ -180,9 +180,19 @@ class Patient(Base):
 class Token(Base):
     __tablename__ = "tokens"
     # Compound indexes for "today's queue" and "doctor X's tokens today" query patterns (TD-018).
+    # Partial unique index (migration i5tokuniq2026): race-proof token-doctor
+    # queue numbers — a concurrent double-book the TOCTOU re-count races past is
+    # rejected at the DB (bug-bounty T1). Defined here so create_all (tests)
+    # builds it too. Slot doctors are excluded (per-slot number + max_concurrent).
     __table_args__ = (
         Index("ix_tokens_branch_date", "branch_id", "date"),
         Index("ix_tokens_branch_doctor_date", "branch_id", "doctor_id", "date"),
+        Index(
+            "uq_token_number_confirmed",
+            "branch_id", "doctor_id", "date", "token_number",
+            unique=True,
+            postgresql_where=text("status = 'confirmed' AND appointment_time IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

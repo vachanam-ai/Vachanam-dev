@@ -422,7 +422,8 @@ async def admin_overview(
                     exhausted=exhausted,
                     hard_block=bool(o.hard_block_on_exhaust),
                     blocked_now=call_blocked(
-                        o.status, o.plan, bool(o.hard_block_on_exhaust), used
+                        o.status, o.plan, bool(o.hard_block_on_exhaust), used,
+                        trial_ends_at=o.trial_ends_at,  # T6: match the agent gate
                     )
                     is not None,
                     revenue_month=rev,
