@@ -108,3 +108,19 @@ When closing a future row, append here with this format:
 | TD-025 | P2 | 2026-06-13 | *(pending)* | Bug-bounty T9: /api/create-order and /api/verify-payment are unauthenticated and trust body org_id. Harmless while persistence is a no-op (TD-019) but becomes activation-spoofing once billing wires in. Require auth + derive org_id server-side as part of the Razorpay billing phase (do together with TD-019). |
 | TD-026 | P2 | 2026-06-13 | *(pending)* | Bug-bounty F9: token-doctor capacity is enforced on the monotonic Redis number-minter (issued count), which is never decremented on cancel. Same-day cancellation of a CONFIRMED token frees a real seat but the clinic still reports "full" until the daily key expires. A correct fix needs a SEPARATE decrement-on-cancel occupancy counter (Redis or DB confirmed-count gate) while the number-minter stays monotonic — must not weaken the no-overbook invariant (confirm_booking's confirmed>=limit hard check). Attempted in r4, reverted: gating assign on db_confirmed alone let in-flight holds mint unbounded numbers and broke the capacity tests. Key resets daily so impact is bounded. |
 | TD-027 | P2 | 2026-06-13 | *(pending)* | Bug-bounty F5/F6/F11 (durability cluster): (F5) slot doctors have NO DB unique/exclusion backstop for occupancy — only Redis + a TOCTOU confirmed-count guard protect a slot; add a partial unique on (branch,doctor,date,appointment_time) when max_concurrent_per_slot==1, or SELECT…FOR UPDATE on the slot count. (F6) call minutes are written only in the shutdown callback (best-effort) — a killed worker loses the metering that drives overage billing + hard-block; persist a row at call start and finalize at end, or reconcile from LiveKit/Vobiz CDRs. (F11) after a Redis eviction the number-minter is reseeded from confirmed COUNT, so a previously-cancelled number can be reissued — seed from a durable high-water mark max(token_number) over all statuses instead. |
+
+## Paid down — 2026-06-13 (go-live sprint)
+
+- **TD-019 + TD-025 (P1/P2) — Razorpay billing + payments auth: CLOSED.** create-order is auth-gated + plan-priced + server-sets order notes; new `/api/razorpay-webhook` (HMAC-verified) is the authoritative activation → flips org to active + writes a paid BillingCycle, idempotent on razorpay_payment_id. FIXLOG #88. NOTE: requires the live `RAZORPAY_PLAN_*_ID` + `razorpay_webhook_secret` env + the webhook URL registered in the Razorpay dashboard (owner action — see GO_LIVE.md).
+- **TD-027 (P2) — call-metering durability: CLOSED (F5/F6 portion).** CallLog now written at call start and finalized at end; `finalize_stale_calls` reconciles crash-stranded rows. FIXLOG #89. (The F5 slot-occupancy DB backstop and F11 high-water seed remain — see TD-026 cluster note.)
+- **TD-020 (P2) — cancelled_by_patient enum: CLOSED.** Migration j6cancelpatient2026 + agent + analytics. FIXLOG #90.
+- **TD-023 (P2) — doctor calendar-id change resync: CLOSED.** FIXLOG #91.
+- **TD-014 (P2) — Dockerfiles non-root: CLOSED.** FIXLOG #93.
+
+## Still open (carry to post-launch / need Vinay)
+
+- **TD-021 (P2)** — urgent walk-in bypass: PRODUCT DECISION needed (bypass full queue vs remove flag).
+- **TD-022 (P3)** — cosmetic `if True:` de-indent in agent.py.
+- **TD-024 (P3)** — solo-cap watchdog grace mid-confirm.
+- **TD-026 (P2)** — token capacity frees same-day cancelled seats (needs 2-key design; bounded — daily reset).
+- **G15 (LOW)** — CSP img-src/style-src tightening pending a frontend render check.

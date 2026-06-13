@@ -743,7 +743,12 @@ class VachanamAgent(Agent):
                 }
             return {"success": False, "error": f"not_cancellable_{token.status}"}
 
-        token.status = "cancelled_by_clinic"
+        # TD-020: the PATIENT is cancelling their own booking on the call —
+        # distinct from a clinic cascade-cancel (doctor leave). Keeping them
+        # separate stops analytics conflating the two and stops a self-cancelled
+        # patient ever getting a rebook call (rebook context filters on
+        # cancelled_by_clinic only).
+        token.status = "cancelled_by_patient"
         token.cancellation_reason = "patient_cancelled_or_rescheduled_on_call"
         await self._db.commit()
 
@@ -1114,6 +1119,34 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         state.emergency_contact = emergency_contact
         state.plan = org_plan  # was always "clinic" — solo cap could never fire
 
+        # DURABLE METERING (TD-027/F6): write the CallLog row NOW, at call start,
+        # not only in the shutdown callback. If the worker is OOM-killed or
+        # redeployed mid-call the shutdown callback never runs and the minutes
+        # were lost entirely; an at-start row means the call is always recorded
+        # (finalize_stale_call_logs reconciles any left at duration 0). Never
+        # block the call on a metering write.
+        try:
+            from backend.models.schema import CallLog as _CallLog
+
+            _start_row = _CallLog(
+                branch_id=branch_id,
+                call_type=state.call_type or "inbound",
+                caller_last4=(state.patient_phone or "")[-4:] or None,
+                answered=True,
+                started_at=state.call_start or datetime_cls.now(timezone_utc),
+                duration_seconds=0,
+                booking_made=False,
+            )
+            db.add(_start_row)
+            await db.commit()
+            state.call_log_id = _start_row.id
+        except Exception as _e:
+            logger.warning("call_log_start_write_failed: %s", _e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+
         result = await db.execute(
             select(Doctor).where(
                 and_(Doctor.branch_id == branch_id, Doctor.status == "active")
@@ -1261,27 +1294,41 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     finally:
                         await r.aclose()
                 # Call log — analytics + minute metering (Rule 9: last-4 only).
+                # FINALIZE the at-start row (TD-027/F6) with the real duration +
+                # booking outcome. Fall back to an INSERT if the start row was
+                # never written (start-time metering failure).
                 try:
+                    from sqlalchemy import update as _sa_update
+
                     from backend.models.schema import CallLog
 
                     started = state.call_start or datetime_cls.now(timezone_utc)
-                    await db.rollback()  # clear any failed tx before logging
-                    db.add(
-                        CallLog(
-                            branch_id=state.branch_id,
-                            call_type=state.call_type or "inbound",
-                            caller_last4=(state.patient_phone or "")[-4:] or None,
-                            answered=True,
-                            started_at=started,
-                            duration_seconds=max(
-                                0,
-                                int(
-                                    (datetime_cls.now(timezone_utc) - started).total_seconds()
-                                ),
-                            ),
-                            booking_made=state.token_confirmed,
-                        )
+                    duration = max(
+                        0,
+                        int((datetime_cls.now(timezone_utc) - started).total_seconds()),
                     )
+                    await db.rollback()  # clear any failed tx before logging
+                    if state.call_log_id is not None:
+                        await db.execute(
+                            _sa_update(CallLog)
+                            .where(CallLog.id == state.call_log_id)
+                            .values(
+                                duration_seconds=duration,
+                                booking_made=state.token_confirmed,
+                            )
+                        )
+                    else:
+                        db.add(
+                            CallLog(
+                                branch_id=state.branch_id,
+                                call_type=state.call_type or "inbound",
+                                caller_last4=(state.patient_phone or "")[-4:] or None,
+                                answered=True,
+                                started_at=started,
+                                duration_seconds=duration,
+                                booking_made=state.token_confirmed,
+                            )
+                        )
                     await db.commit()
                 except Exception as e:
                     logger.warning("call_log_write_failed: %s", e)

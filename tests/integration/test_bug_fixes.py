@@ -18,6 +18,7 @@ Bug 1: LLM-orchestrated reschedules kept cancelling without booking (or
        booking on the new date and the old one cancelled; impossible date ->
        old booking untouched.
 """
+import uuid
 from datetime import date, time, timedelta
 
 import pytest
@@ -208,6 +209,13 @@ async def test_cancelled_token_number_never_reissued(clinic, db, redis):
     assert second["success"]
     assert second["token_number"] == 2
 
+    # TD-020: a patient self-cancel is recorded as cancelled_by_patient (not
+    # cancelled_by_clinic) so analytics + rebook framing can tell them apart.
+    tok = (
+        await db.execute(select(Token).where(Token.id == uuid.UUID(confirmed["token_id"])))
+    ).scalar_one()
+    assert tok.status == "cancelled_by_patient"
+
 
 # â”€â”€ Bug 1: reschedule is atomic â€” never leaves two confirmed bookings â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -295,20 +303,21 @@ async def test_find_bookings_includes_recent_cancelled(clinic, db, redis):
     )
     assert confirmed["success"]
 
-    state = SessionState(session_id="t4")
-    state.branch_id = branch.id
-    state.patient_phone = "+919666444411"
-    state.token_confirmed = True  # allow the cancel
-    agent = VachanamAgent(
-        instructions="t", state=state, db=db, room=None,
-        calendar_service=None, meta_service=NullMeta(), transfer_to="",
-    )
-    assert (await agent._do_cancel(confirmed["token_id"]))["success"]
+    # Simulate a CLINIC cascade-cancel (doctor leave) — the rebook scenario.
+    # (A patient self-cancel via _do_cancel is now cancelled_by_patient and is
+    # deliberately NOT rebook context — TD-020.)
+    from backend.models.schema import Token
+    from sqlalchemy import select as _select, and_ as _and
+
+    _tok = (
+        await db.execute(_select(Token).where(Token.id == uuid.UUID(confirmed["token_id"])))
+    ).scalar_one()
+    _tok.status = "cancelled_by_clinic"
+    await db.commit()
 
     # find_my_bookings is a FunctionTool; exercise the underlying query the
     # same way: cancelled_by_clinic within 7 days must be returned.
-    from backend.models.schema import Token
-    from sqlalchemy import select as _select, and_ as _and
+    today_local = day  # branch tz == local in tests
 
     today_local = day  # branch tz == local in tests
     rows = (

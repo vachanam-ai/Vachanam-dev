@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     admin_phone: str = ""
     log_level: str = "debug"
+    # Conservative minute estimate applied to a call whose worker died before
+    # finalizing the CallLog row (TD-027/F6). Near the 4-min call target.
+    stale_call_minutes_estimate: int = 3
 
     # Rate limiting (spec §6.5)
     # Comma-separated list of IP addresses that bypass per-endpoint rate limits.
@@ -59,6 +62,10 @@ class Settings(BaseSettings):
 
     # Voice agent (Pipecat)
     public_url: str = "http://localhost:7860"
+    # Raw flag. NEVER read this directly to decide whether to record — use the
+    # recording_allowed property, which hard-disables recording in production
+    # regardless of the flag (memory: no-voice-recording; the env override is
+    # TESTING-ONLY and must never reach a paying clinic). DPDP consent.
     recording_enabled: bool = False
     max_call_duration_seconds: int = 0  # 0 = unlimited; non-zero wraps call at N seconds (Solo plan billing cap)
 
@@ -96,6 +103,13 @@ class Settings(BaseSettings):
         could leave it on, turning phone/email 'verification' self-attesting
         (bug-bounty M8). Production always wins, regardless of the flag."""
         return self.otp_dev_echo and self.app_env != "production"
+
+    @property
+    def recording_allowed(self) -> bool:
+        """Whether call recording may happen. HARD-OFF in production regardless
+        of recording_enabled (memory: no-voice-recording — the env flag is a
+        TESTING-ONLY override and must never reach a paying clinic). DPDP."""
+        return self.recording_enabled and self.app_env != "production"
 
     @property
     def voice_plane_configured(self) -> bool:

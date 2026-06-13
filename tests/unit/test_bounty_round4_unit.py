@@ -71,6 +71,16 @@ async def test_otp_send_throttled_per_destination(monkeypatch, redis):
     assert sends["n"] == 1
 
 
+def test_recording_hard_off_in_production():
+    """No-voice-recording: production never records even if the flag is on."""
+    prod = Settings(app_env="production", recording_enabled=True)
+    assert prod.recording_allowed is False
+    dev = Settings(app_env="development", recording_enabled=True)
+    assert dev.recording_allowed is True
+    off = Settings(app_env="development", recording_enabled=False)
+    assert off.recording_allowed is False
+
+
 def test_confirmed_at_is_timezone_aware():
     """G13: Token.confirmed_at is written tz-aware (no naive utcnow into a tz column)."""
     import inspect

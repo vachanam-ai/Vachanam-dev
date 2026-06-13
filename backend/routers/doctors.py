@@ -196,6 +196,7 @@ async def _maybe_upsert_recurring_cal_event(
     doc: Doctor,
     branch: Branch,
     db: AsyncSession,
+    old_calendar_id: str | None = None,
 ) -> None:
     """Best-effort: create/update recurring clinic-hours Calendar event.
 
@@ -203,6 +204,11 @@ async def _maybe_upsert_recurring_cal_event(
     available (doctor or branch level) — clinics expect each doctor's hours
     visible in the calendar regardless of token/appointment booking. Any
     exception is caught and logged — never raises (spec §5.2 constraint 4).
+
+    TD-023: when the effective calendar CHANGES, the stored recurring event id
+    belongs to the OLD calendar — PATCHing it against the new calendar 404s and
+    the old calendar keeps a stale hours block. So on a calendar change we delete
+    the old event from the old calendar and create a fresh one on the new.
     """
     cal_id = doc.google_calendar_id or branch.google_calendar_id
     if not cal_id:
@@ -214,6 +220,20 @@ async def _maybe_upsert_recurring_cal_event(
             branch_id=str(branch.id),
         )
         return
+
+    # Calendar moved? Drop the stale event from the OLD calendar and create new.
+    existing_event_id = doc.calendar_event_id_recurring
+    if old_calendar_id and old_calendar_id != cal_id and existing_event_id:
+        try:
+            await GoogleCalendarService().delete_event(old_calendar_id, existing_event_id)
+            logger.info(
+                "recurring_cal_event_moved_deleted_old",
+                doctor_id=str(doc.id), old_calendar=old_calendar_id[-12:],
+            )
+        except Exception as _del_exc:
+            logger.warning("recurring_cal_old_delete_failed", error=str(_del_exc))
+        existing_event_id = None  # force a fresh create on the new calendar
+
     try:
         svc = GoogleCalendarService()
         event_id = await svc.upsert_doctor_hours_event(
@@ -222,7 +242,7 @@ async def _maybe_upsert_recurring_cal_event(
             working_hours_start=doc.working_hours_start,
             working_hours_end=doc.working_hours_end,
             available_weekdays=doc.available_weekdays or [0, 1, 2, 3, 4, 5, 6],
-            existing_event_id=doc.calendar_event_id_recurring,
+            existing_event_id=existing_event_id,
         )
         doc.calendar_event_id_recurring = event_id
         await db.commit()
@@ -442,6 +462,9 @@ async def update_doctor(
         or "booking_type" in changed
         or "google_calendar_id" in changed
     )
+    # TD-023: remember the OLD effective calendar so the recurring-event upsert
+    # can move the hours block off it when the calendar id changes.
+    old_effective_cal = doc.google_calendar_id or branch.google_calendar_id
 
     # Apply scalar fields; parse time strings
     for field, value in changed.items():
@@ -474,9 +497,12 @@ async def update_doctor(
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
 
-    # Best-effort: re-sync recurring Cal event if relevant fields changed
+    # Best-effort: re-sync recurring Cal event if relevant fields changed.
+    # Pass the old calendar so a calendar change moves the hours block (TD-023).
     if hours_weekdays_changed:
-        await _maybe_upsert_recurring_cal_event(doc, branch, db)
+        await _maybe_upsert_recurring_cal_event(
+            doc, branch, db, old_calendar_id=old_effective_cal
+        )
 
     return _doctor_to_out(doc)
 

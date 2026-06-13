@@ -89,7 +89,7 @@ def build_system_prompt(
         )
 
     recording_sentence = ""
-    if _cfg.settings.recording_enabled:
+    if _cfg.settings.recording_allowed:
         recording_sentence = (
             "\n  Recording: "
             "ఈ కాల్ నాణ్యత మెరుగుదల కోసం రికార్డ్ చేయబడుతుంది."

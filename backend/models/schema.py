@@ -214,8 +214,13 @@ class Token(Base):
         nullable=False,
     )
     # Status lifecycle: confirmed → attended | no_show | cancelled_by_clinic
+    # (clinic cascade / doctor leave) | cancelled_by_patient (self-cancel on call)
     status: Mapped[str] = mapped_column(
-        Enum("confirmed", "attended", "no_show", "cancelled_by_clinic", name="token_status"),
+        Enum(
+            "confirmed", "attended", "no_show",
+            "cancelled_by_clinic", "cancelled_by_patient",
+            name="token_status",
+        ),
         default="confirmed",
         nullable=False,
     )

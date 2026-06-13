@@ -279,7 +279,7 @@ async def _update_status(
         raise HTTPException(status_code=500, detail="Database error")
     if not token:
         raise HTTPException(status_code=404, detail="Token not found")
-    if token.status in ("attended", "no_show", "cancelled_by_clinic"):
+    if token.status in ("attended", "no_show", "cancelled_by_clinic", "cancelled_by_patient"):
         raise HTTPException(status_code=409, detail=f"Already {token.status}")
 
     token.status = new_status

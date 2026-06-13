@@ -41,3 +41,7 @@ class SessionState:
 
     # Logging
     session_id: str | None = None
+
+    # Durable metering: CallLog row inserted at call start (TD-027/F6) so a
+    # killed worker that never runs the shutdown callback still leaves a record.
+    call_log_id: UUID | None = None

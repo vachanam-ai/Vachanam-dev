@@ -1,6 +1,26 @@
 # Vachanam — Status (single source of truth)
 
-**Last updated:** 2026-06-06 (Phase 1 code complete, blocked on Vobiz KYC)
+> **2026-06-13 — CURRENT TRUTH (everything below this block is historical and stale).**
+>
+> **All code phases are built**: voice agent (LiveKit), backend (auth, queue, doctors,
+> availability, branches/settings, analytics, admin console, payments+webhook), jobs
+> (calendar writer, reminders, cascade rebook, trial pause, stale-call reconcile),
+> React PWA (login, queue, walk-in, doctor schedule, settings, admin, availability),
+> and the full DPDP/security layer. **Test suite: ~400 passing.**
+>
+> **Launch status:** code-complete; blocked only on external accounts + one real-call
+> validation. See **[`docs/GO_LIVE.md`](GO_LIVE.md)** for the exact split of what's done
+> vs what Vinay must do (Razorpay live, Vobiz/LiveKit wiring, secrets, deploy, test call).
+>
+> Recent work history: **[`docs/FIXLOG.md`](FIXLOG.md)** (#1-94) and **[`docs/TECH_DEBT.md`](TECH_DEBT.md)**.
+> Five bug-bounty rounds + a go-live sprint closed payments billing, metering durability,
+> cancel-status split, calendar resync, recording hard-off, non-root containers.
+>
+> Alembic head: `j6cancelpatient2026`.
+
+---
+
+**Last updated:** 2026-06-06 (Phase 1 code complete, blocked on Vobiz KYC) — STALE, see block above
 **Active phase:** Phase 1 — Voice Agent Core (code complete, pending real-call validation)
 **Reliability posture:** MVP-launch (~99.4% uptime target). Phase 11 deferred until volume / outage / customer trigger fires. See [`docs/phases/11-reliability-hardening/CLAUDE.md`](phases/11-reliability-hardening/CLAUDE.md).
 

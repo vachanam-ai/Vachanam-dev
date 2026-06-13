@@ -37,6 +37,13 @@ _CSP_DIRECTIVE = (
     "font-src 'self' https://fonts.gstatic.com; "
     "object-src 'none'; "
     "base-uri 'self'; "
+    # frame-ancestors blocks framing at the CSP level (modern equivalent of
+    # X-Frame-Options, which some browsers now ignore). upgrade-insecure-requests
+    # rewrites any stray http:// sub-resource to https. Both are pure additions —
+    # no legitimate request is blocked (G15 partial; the stricter img-src/style-src
+    # tightening is deferred pending a frontend render check — see docs/GO_LIVE.md).
+    "frame-ancestors 'none'; "
+    "upgrade-insecure-requests; "
     "form-action 'self'"
 )
 

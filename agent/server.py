@@ -290,7 +290,7 @@ async def answer(
     """
     # Read settings fresh per request (not at module import time) so that
     # monkeypatch in tests can override them reliably.
-    recording_enabled: bool = _cfg.settings.recording_enabled
+    recording_enabled: bool = _cfg.settings.recording_allowed
     public_url: str = _cfg.settings.public_url
 
     # ── Detect call direction from form body ──────────────────────────────────
@@ -468,7 +468,7 @@ async def recording_finished(
 
     Privacy: CallSid is opaque and safe to log in full; no phone numbers here.
     """
-    recording_enabled: bool = _cfg.settings.recording_enabled
+    recording_enabled: bool = _cfg.settings.recording_allowed
     duration_seconds: Optional[int] = None
     if duration is not None:
         try:
@@ -515,7 +515,7 @@ async def recording_ready(
 
     Vobiz auth headers are sent but NEVER logged (auth_id only, not token).
     """
-    recording_enabled: bool = _cfg.settings.recording_enabled
+    recording_enabled: bool = _cfg.settings.recording_allowed
 
     # ── Guard: path traversal — validate CallSid before any filesystem use ──
     if not CallSid or not _CALL_SID_RE.match(CallSid):

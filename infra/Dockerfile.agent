@@ -12,6 +12,10 @@ RUN pip install --no-cache-dir -r /app/agent/requirements.txt
 COPY agent/ /app/agent/
 COPY backend/ /app/backend/
 
+# TD-014: drop root. ffmpeg + uvicorn need no privileged access at runtime.
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser /app
+USER appuser
+
 ENV PYTHONUNBUFFERED=1
 EXPOSE 7860
 

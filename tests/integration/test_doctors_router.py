@@ -389,6 +389,54 @@ async def test_patch_doctor_working_hours_triggers_recurring_cal_upsert(
     mock_instance.upsert_doctor_hours_event.assert_called_once()
 
 
+async def test_patch_doctor_calendar_change_moves_recurring_event(
+    client, db: AsyncSession, clinic, org_admin_jwt
+):
+    """TD-023: changing a doctor's calendar_id deletes the stale hours event
+    from the OLD calendar and creates a fresh one on the NEW (no PATCH-404)."""
+    create_r = await client.post(
+        f"/doctors/{clinic['branch_id']}",
+        json={
+            "name": "Dr Move", "booking_type": "token",
+            "google_calendar_id": "old-cal@group.calendar.google.com",
+            "working_hours_start": "09:00", "working_hours_end": "13:00",
+            "available_weekdays": [0, 1, 2, 3, 4],
+        },
+        headers=_auth(org_admin_jwt),
+    )
+    assert create_r.status_code == 201, create_r.text
+    doctor_id = create_r.json()["id"]
+
+    # Pretend the recurring event was created on the OLD calendar.
+    doc = (
+        await db.execute(select(Doctor).where(Doctor.id == uuid.UUID(doctor_id)))
+    ).scalar_one()
+    doc.calendar_event_id_recurring = "evt_old_cal"
+    await db.commit()
+
+    with patch("backend.routers.doctors.GoogleCalendarService") as mock_cls:
+        inst = mock_cls.return_value
+        inst.delete_event = AsyncMock(return_value=None)
+        inst.upsert_doctor_hours_event = AsyncMock(return_value="evt_new_cal")
+
+        patch_r = await client.patch(
+            f"/doctors/{clinic['branch_id']}/{doctor_id}",
+            json={
+                "name": "Dr Move", "booking_type": "token",
+                "google_calendar_id": "new-cal@group.calendar.google.com",
+            },
+            headers=_auth(org_admin_jwt),
+        )
+    assert patch_r.status_code == 200, patch_r.text
+    # Old event deleted from the OLD calendar...
+    inst.delete_event.assert_awaited_once_with(
+        "old-cal@group.calendar.google.com", "evt_old_cal"
+    )
+    # ...and the upsert created fresh (existing_event_id=None, not the stale id).
+    _, kwargs = inst.upsert_doctor_hours_event.call_args
+    assert kwargs["existing_event_id"] is None
+
+
 @pytest.mark.asyncio
 async def test_patch_appointment_doctor_does_not_trigger_recurring_event(
     client,

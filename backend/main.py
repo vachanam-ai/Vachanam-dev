@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI):
     if got:
         from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
         from backend.jobs.calendar_writer import requeue_stale_in_progress
+        from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
         from backend.jobs.trial_pause import run_trial_pause
 
@@ -108,6 +109,11 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(
             run_trial_pause, IntervalTrigger(hours=6),
             id="trial_pause", replace_existing=True,
+        )
+        # TD-027/F6: reconcile call-metering rows stranded by a crashed worker.
+        scheduler.add_job(
+            run_finalize_stale_calls, IntervalTrigger(minutes=30),
+            id="finalize_stale_calls", replace_existing=True,
         )
         scheduler.start()
         logger.info("scheduler_started_as_leader")

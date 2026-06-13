@@ -148,7 +148,7 @@ async def analytics_overview(
                 booked=sum(c.get(s, 0) for s in ACTIVE),
                 attended=attended,
                 no_show=no_show,
-                cancelled=c.get("cancelled_by_clinic", 0),
+                cancelled=c.get("cancelled_by_clinic", 0) + c.get("cancelled_by_patient", 0),
                 show_rate=_show_rate(attended, no_show),
             )
         )

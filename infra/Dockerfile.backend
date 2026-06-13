@@ -13,6 +13,11 @@ COPY backend/ backend/
 COPY alembic/ alembic/
 COPY alembic.ini .
 
+# TD-014: run as an unprivileged user, not root. A container escape from a
+# root process is far more dangerous than from a non-root one.
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser /app
+USER appuser
+
 EXPOSE 8000
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
