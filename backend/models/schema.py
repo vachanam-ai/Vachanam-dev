@@ -314,6 +314,11 @@ class CallLog(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     booking_made: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Telephony provider's call UUID (Vobiz). The CDR sync job is the
+    # AUTHORITATIVE source of minutes — independent of the agent process, so a
+    # dropped/crashed/locally-run call is still billed. Unique → idempotent
+    # upsert across repeated syncs. NULL for agent-written rows.
+    provider_call_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
 
 
 class FollowupTask(Base):

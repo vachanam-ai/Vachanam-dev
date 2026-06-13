@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
         from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
         from backend.jobs.trial_pause import run_trial_pause
+        from backend.jobs.vobiz_cdr_sync import run_vobiz_cdr_sync
 
         scheduler = AsyncIOScheduler()
         scheduler.add_job(
@@ -115,6 +116,13 @@ async def lifespan(app: FastAPI):
             run_finalize_stale_calls, IntervalTrigger(minutes=30),
             id="finalize_stale_calls", replace_existing=True,
         )
+        # Authoritative call/minute metering from Vobiz CDRs (agent-independent).
+        # Only scheduled when Vobiz creds are present.
+        if settings.vobiz_auth_id and settings.vobiz_auth_token:
+            scheduler.add_job(
+                run_vobiz_cdr_sync, IntervalTrigger(minutes=3),
+                id="vobiz_cdr_sync", replace_existing=True,
+            )
         scheduler.start()
         logger.info("scheduler_started_as_leader")
     else:

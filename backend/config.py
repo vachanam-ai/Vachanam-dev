@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     vobiz_did_number: str = ""
     vobiz_auth_id: str = ""
     vobiz_auth_token: str = ""
+    vobiz_api_base: str = "https://api.vobiz.ai/api/v1"
+    # The Vobiz CDR sync job is the AUTHORITATIVE source of calls + minutes
+    # (agent-independent). The agent's own CallLog writes are OFF by default to
+    # avoid double-counting; flip on only in environments with no Vobiz CDR.
+    agent_call_log_enabled: bool = False
 
     # LiveKit voice control plane. The agent reads its own local .env, but the
     # backend's outbound-call jobs (reminders, cascade rebook) also need these;
