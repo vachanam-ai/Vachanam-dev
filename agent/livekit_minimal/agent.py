@@ -1094,7 +1094,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 target_language_code="te-IN",
                 pace=1.3,
             ),
-            vad=silero.VAD.load(),
+            vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
         )
         await gate_session.start(
             room=ctx.room,
@@ -1257,7 +1257,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 target_language_code="te-IN",
                 pace=1.3,
             ),
-            vad=silero.VAD.load(),
+            vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             preemptive_generation=True,
             min_endpointing_delay=0.4,
             max_endpointing_delay=3.0,
@@ -1436,10 +1436,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             ctx.add_shutdown_callback(lambda: _cap_task.cancel())
 
 
+def _prewarm(proc) -> None:
+    """Load the Silero VAD model ONCE per worker process (latency fix).
+
+    silero.VAD.load() was called inside every call's AgentSession setup, adding
+    its init cost (~hundreds of ms) to each call's startup before the greeting.
+    Loading it here, once, and reusing it across all calls removes that from the
+    per-call path. Standard LiveKit pattern.
+    """
+    proc.userdata["vad"] = silero.VAD.load()
+
+
 if __name__ == "__main__":
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=_prewarm,
             agent_name=AGENT_NAME,
         )
     )
