@@ -52,10 +52,23 @@ async def issue_code(channel: str, dest: str) -> str | None:
     sent = await _send(channel, dest, code)
     logger.info("otp_issued", channel=channel, dest=_mask(dest), sent=sent)
     # Dev convenience: surface the code so signup is testable without a provider.
-    # NEVER in production (otp_echo_enabled forces off there — bug-bounty M8).
-    if not sent and settings.otp_echo_enabled:
+    # FAIL CLOSED (bounce F3): only echo when (a) echo is enabled (dev/test, never
+    # prod), AND (b) NO provider is configured for this channel. Previously a
+    # transient provider failure in any non-prod env (e.g. staging) echoed the
+    # real code, letting an attacker self-verify arbitrary phone/email. A
+    # configured-but-failing provider must NOT leak the code — return None.
+    if settings.otp_echo_enabled and not _provider_configured(channel):
         return code
     return None
+
+
+def _provider_configured(channel: str) -> bool:
+    """True if a real send provider is configured for this channel."""
+    if channel == "sms":
+        return bool(settings.msg91_auth_key)
+    if channel == "email":
+        return bool(settings.smtp_host)
+    return False
 
 
 async def verify_code(channel: str, dest: str, code: str) -> bool:

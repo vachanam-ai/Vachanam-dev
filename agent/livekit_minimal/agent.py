@@ -940,8 +940,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # fallback is only safe while one clinic exists; with multiple clinics a
     # missing SIP attribute must never route a call to the wrong tenant, so we
     # log loudly for monitoring.
+    did_from_fallback = False
     if not did:
         did = os.getenv("VOBIZ_OUTBOUND_NUMBER", "") or settings.vobiz_did_number
+        did_from_fallback = True
         logger.warning(
             "did_fallback_used room=%s — SIP trunkPhoneNumber missing; "
             "verify dispatch rule passes attributes (multi-tenant risk)",
@@ -969,6 +971,27 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except ValueError:
             logger.error("outbound_branch_id_invalid: %s", meta.get("branch_id"))
     if not branches:
+        # RULE 5 guard (bounce F4): the DID came from a fallback, not the actual
+        # dialed number. Resolving a branch from it is only safe when exactly one
+        # clinic exists — with two clinics the fallback DID would serve caller A
+        # the tenant context of clinic B (whose attribute was dropped). If more
+        # than one branch exists, refuse rather than risk a cross-tenant leak.
+        if did_from_fallback:
+            from sqlalchemy import func as _func
+
+            total_branches = (
+                await db.execute(select(_func.count()).select_from(Branch))
+            ).scalar_one()
+            if total_branches != 1:
+                logger.error(
+                    "did_fallback_refused matches=%d branches — multi-tenant, "
+                    "cannot resolve tenant without dialed DID; aborting call",
+                    total_branches,
+                )
+                await db.close()
+                ctx.shutdown()
+                return
+
         # Normalize the dialed DID to the same canonical form Settings stores
         # (bug-bounty M11) — a format difference (spaces, missing +91) otherwise
         # fails the match and aborts every inbound call to that clinic.
@@ -1317,12 +1340,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # SOLO-PLAN CALL CAP (pricing table: "4-min AI call cap"). The Pipecat
         # watchdog (TD-009) was lost in the LiveKit port — solo calls ran
         # unbounded. Warn 10s before the cap, then close politely AT the cap.
-        # Only solo; clinic/multi are flat-minute plans with no per-call cap.
         # Default 240s for solo even when the env var is 0/unset (bug-bounty T2 —
         # the cap shipped disabled-by-default). A non-zero env value overrides.
+        #
+        # ABSOLUTE SAFETY CEILING (bounce F16): clinic/multi have no per-call
+        # plan cap, but a stuck call still burns Vobiz+LiveKit+Sarvam minutes
+        # (~₹1.49/min) forever. Worse, if plan resolution failed above, a SOLO
+        # clinic mis-defaults to "clinic" and dodges its 240s cap. So every call
+        # gets a ceiling: solo → 240s, everyone else → ABSOLUTE_CAP. A real call
+        # finishes in ~4 min; the ceiling only ever fires on a hung session.
         SOLO_CAP_DEFAULT = 240
-        cap = settings.max_call_duration_seconds or SOLO_CAP_DEFAULT
-        if state.plan == "solo" and cap and cap > 15:
+        ABSOLUTE_CAP_DEFAULT = 900  # 15 min — never hits a legitimate call
+        if state.plan == "solo":
+            cap = settings.max_call_duration_seconds or SOLO_CAP_DEFAULT
+        else:
+            cap = ABSOLUTE_CAP_DEFAULT
+        if cap and cap > 15:
 
             async def _solo_cap_watchdog() -> None:
                 try:

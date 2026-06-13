@@ -127,9 +127,13 @@ async def _count_tokens(db, doctor_id, branch_id, day) -> int:
 
 
 async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db, redis):
-    branch, doc = clinic["branch"], clinic["token_doc"]
+    # SLOT doctor: calendar write is part of the booking (token doctors skip it
+    # entirely — bounce F2). A transient calendar failure must retry the WRITE
+    # only and leave exactly ONE token row, not a duplicate per retry.
+    branch, doc = clinic["branch"], clinic["slot_doc"]
     day = _tomorrow()
-    assigned = await assign_token(doc.id, branch.id, day, db)
+    appt = time(10, 0)
+    assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=appt)
     assert assigned["success"]
 
     cal = FlakyCalendar(failures=2)  # fails twice, succeeds third time
@@ -138,12 +142,12 @@ async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db,
         branch_id=branch.id,
         patient_name="Retry Proof",
         patient_phone="+919666444428",
-        complaint="fever",
+        complaint="skin",
         booking_date=day,
         token_number=assigned["token_number"],
         followup_consent=False,
         patient_age=30,
-        appointment_time=None,
+        appointment_time=appt,
         source="voice",
         db=db,
         calendar_service=cal,

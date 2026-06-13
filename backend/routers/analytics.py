@@ -292,7 +292,7 @@ async def analytics_overview(
         await db.execute(
             select(Organization.plan)
             .join(Branch, Branch.org_id == Organization.id)
-            .where(Branch.id == branch_id)
+            .where(Branch.id == branch_uuid)
         )
     ).scalar_one_or_none() or "clinic"
     included = PLAN_MINUTES.get(plan, 2100)

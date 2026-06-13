@@ -830,34 +830,45 @@ async def confirm_booking(
     # backstop; on a true concurrent collision the agent wrapper rolls back and
     # returns booking_failed (the patient retries) — data stays consistent.
 
-    # 3. Google Calendar (MUST succeed — raises if fails; booking aborts)
+    # Re-fetch doctor + branch and capture names NOW before the session closes —
+    # the WhatsApp confirmation and audit row below need them for ALL booking
+    # types.
     result = await db.execute(
         select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
     )
     doctor = result.scalar_one()
     result = await db.execute(select(Branch).where(Branch.id == branch_id))
     branch = result.scalar_one()
-
-    # Capture SQLAlchemy values NOW before session closes
     doctor_name = doctor.name
     doctor_calendar_id = doctor.google_calendar_id
     branch_calendar_id = branch.google_calendar_id
     branch_name = branch.name
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
-    async def _calendar_write() -> str:
-        return await calendar_service.create_booking_event(
-            calendar_id=doctor_calendar_id or branch_calendar_id,
-            patient_name=patient_name,
-            patient_phone=patient_phone[-4:] if patient_phone else "unknown",
-            token_number=token_number,
-            booking_date=booking_date,
-            appointment_time=appointment_time,
-            doctor_name=doctor_name,
-        )
+    # 3. Google Calendar.
+    # TOKEN doctors do NOT get a per-patient event (spec §6.5 / bounce F2): they
+    # run on a recurring all-day availability block created at doctor setup. A
+    # token clinic without any Google Calendar configured must still be able to
+    # book by voice — the most common plan. Writing here would (a) raise
+    # CalendarNotConfiguredError and abort the booking, and (b) when a calendar
+    # IS set, create an unwanted per-patient event. So calendar write is part of
+    # the booking only for SLOT (appointment) doctors.
+    event_id = None
+    if doctor.booking_type != "token":
 
-    event_id = await _calendar_write()
-    token.google_calendar_event_id = event_id
+        @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+        async def _calendar_write() -> str:
+            return await calendar_service.create_booking_event(
+                calendar_id=doctor_calendar_id or branch_calendar_id,
+                patient_name=patient_name,
+                patient_phone=patient_phone[-4:] if patient_phone else "unknown",
+                token_number=token_number,
+                booking_date=booking_date,
+                appointment_time=appointment_time,
+                doctor_name=doctor_name,
+            )
+
+        event_id = await _calendar_write()
+        token.google_calendar_event_id = event_id
 
     await db.commit()
 

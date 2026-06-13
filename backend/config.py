@@ -31,7 +31,10 @@ class Settings(BaseSettings):
 
     # Auth
     jwt_secret: str
-    jwt_expire_hours: int = 24
+    # 8h hard expiry — matches the documented auth contract (auth_middleware
+    # docstring) and bounds the blast radius of an XSS-exfiltrated localStorage
+    # token (bounce F7). Was 24h (config drift). Override via env if needed.
+    jwt_expire_hours: int = 8
 
     # Payment
     razorpay_key_id: str = ""
