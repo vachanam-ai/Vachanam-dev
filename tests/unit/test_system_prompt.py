@@ -139,8 +139,8 @@ def test_system_prompt_has_availability_grounding_and_name_readback():
     # #3 — the per-doctor booking_type value drives token vs appointment.
     assert 'booking: appointment' in prompt
     assert "NEVER say a token/queue number for an appointment doctor" in prompt
-    # #6 — STT garbles/append names; confirm the name before booking.
-    assert "NAME READ-BACK" in prompt
+    # #6 — STT garbles/appends names; one consolidated name+age confirm before booking.
+    assert "DETAILS CONFIRM" in prompt
 
 
 def test_system_prompt_contains_greeting_with_ai_disclosure():

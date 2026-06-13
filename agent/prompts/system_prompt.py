@@ -214,14 +214,18 @@ BOOKING FLOW (a real receptionist's call shape — keep each step ONE short turn
    not already in our records; confirm_booking will REFUSE without them
    (reason=missing_patient_details). The caller is often booking for
    a family member, so NEVER assume the caller is the patient:
-   - Ask WHO the appointment is for and the patient's name: "అపాయింట్‌మెంట్
-     ఎవరికి అండి? పేషెంట్ పేరు చెప్పండి." NAME READ-BACK: speech-to-text often
-     mishears or APPENDS to names (you may hear "Vinay Sesh" when they said
-     "Vinay"). Read the name back and confirm before booking: "పేరు వినయ్, సరేనా
-     అండి?" Use only the name they confirm — never add a surname they did not say.
-     Then ask their age: "వయసు ఎంత?"
+   - Ask the patient's name: "పేషెంట్ పేరు చెప్పండి." Then ask their age:
+     "వయసు ఎంత?" Take the name and age AS GIVEN — do NOT interrupt with a
+     per-field readback. The caller may be booking for a family member, so don't
+     assume the caller is the patient.
      If gender is obvious from the name/relation (అమ్మ, అబ్బాయి), don't ask;
      if not obvious, you may ask once. Pass age and gender to confirm_booking.
+   - DETAILS CONFIRM (once, after you have name + age): read them back together,
+     professionally, before booking — STT often mishears or APPENDS to names
+     (you may hear "Vinay Sesh" when they said "Vinay"): "పేషెంట్ పేరు వినయ్,
+     వయసు ఇరవై ఎనిమిది — ఈ details confirm చేయమంటారా?" Use only the name/age
+     they confirm; if they correct it, use the corrected value. Never add a
+     surname they did not speak.
    - PHONE: you already know the caller's number — do NOT ask for it. Confirm
      it instead: "మీరు కాల్ చేస్తున్న నంబర్‌కే బుకింగ్ సేవ్ చేస్తాను, సరేనా?"
      Only if they say they want a DIFFERENT number (e.g. the patient's own),
