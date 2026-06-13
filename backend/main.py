@@ -61,38 +61,68 @@ async def lifespan(app: FastAPI):
     logger.info("vachanam_starting", env=settings.app_env, base_url=settings.base_url)
     await init_rate_limiter()
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        run_calendar_writer,
-        IntervalTrigger(seconds=30),
-        id="calendar_writer",
-        replace_existing=True,
-    )
-    from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
+    # LEADER ELECTION (bug-bounty M1): every uvicorn worker / Render instance
+    # runs its own lifespan, so without a guard N schedulers fire the SAME tick
+    # and double-dispatch reminder/rebook calls and calendar writes. A Postgres
+    # session-level advisory lock makes exactly one process the scheduler
+    # leader; the lock auto-releases if that process dies (another then wins).
+    scheduler = None
+    leader_conn = None
+    SCHED_LOCK_KEY = 0x7661636861  # "vacha"
+    try:
+        import backend.database as _db_module
 
-    scheduler.add_job(
-        run_pre_appt_reminders,
-        IntervalTrigger(seconds=60),
-        id="pre_appt_reminder",
-        replace_existing=True,
-    )
-    from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
+        leader_conn = await _db_module.engine.raw_connection()
+        got = await leader_conn.driver_connection.fetchval(
+            "SELECT pg_try_advisory_lock($1)", SCHED_LOCK_KEY
+        )
+    except Exception as e:
+        got = False
+        logger.warning("scheduler_leader_lock_failed", error=str(e))
 
-    scheduler.add_job(
-        run_cascade_rebook_calls,
-        IntervalTrigger(seconds=60),
-        id="cascade_rebook_caller",
-        replace_existing=True,
-    )
-    scheduler.start()
-    logger.info(
-        "scheduler_started",
-        jobs=["calendar_writer", "pre_appt_reminder", "cascade_rebook_caller"],
-    )
+    if got:
+        from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
+        from backend.jobs.calendar_writer import requeue_stale_in_progress
+        from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
+        from backend.jobs.trial_pause import run_trial_pause
+
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(
+            run_calendar_writer, IntervalTrigger(seconds=30),
+            id="calendar_writer", replace_existing=True,
+        )
+        # M2: requeue tasks stranded in_progress by a crash (every 5 min).
+        scheduler.add_job(
+            requeue_stale_in_progress, IntervalTrigger(seconds=300),
+            id="calendar_requeue_stale", replace_existing=True,
+        )
+        scheduler.add_job(
+            run_pre_appt_reminders, IntervalTrigger(seconds=60),
+            id="pre_appt_reminder", replace_existing=True,
+        )
+        scheduler.add_job(
+            run_cascade_rebook_calls, IntervalTrigger(seconds=60),
+            id="cascade_rebook_caller", replace_existing=True,
+        )
+        # H5: pause expired trials once a day.
+        scheduler.add_job(
+            run_trial_pause, IntervalTrigger(hours=6),
+            id="trial_pause", replace_existing=True,
+        )
+        scheduler.start()
+        logger.info("scheduler_started_as_leader")
+    else:
+        logger.info("scheduler_skipped_not_leader")
 
     yield
 
-    scheduler.shutdown(wait=False)
+    if scheduler is not None:
+        scheduler.shutdown(wait=False)
+    if leader_conn is not None:
+        try:
+            await leader_conn.close()  # releases the advisory lock
+        except Exception:
+            pass
     await close_rate_limiter()
     logger.info("vachanam_shutdown")
 

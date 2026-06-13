@@ -64,6 +64,14 @@ class Settings(BaseSettings):
     vobiz_auth_id: str = ""
     vobiz_auth_token: str = ""
 
+    # LiveKit voice control plane. The agent reads its own local .env, but the
+    # backend's outbound-call jobs (reminders, cascade rebook) also need these;
+    # without them those jobs silently no-op (bug-bounty M15).
+    livekit_url: str = ""
+    livekit_api_key: str = ""
+    livekit_api_secret: str = ""
+    outbound_trunk_id: str = ""
+
     # OTP verification (signup). When no provider is configured (dev), the code
     # is logged and returned in the API response so the flow is testable.
     msg91_auth_key: str = ""          # SMS provider (MSG91) — India default
@@ -77,6 +85,24 @@ class Settings(BaseSettings):
     otp_dev_echo: bool = True         # dev only: return code in response
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+
+    @property
+    def otp_echo_enabled(self) -> bool:
+        """OTP code may be echoed in API responses ONLY outside production.
+        otp_dev_echo defaults True and a prod deploy following .env.example
+        could leave it on, turning phone/email 'verification' self-attesting
+        (bug-bounty M8). Production always wins, regardless of the flag."""
+        return self.otp_dev_echo and self.app_env != "production"
+
+    @property
+    def voice_plane_configured(self) -> bool:
+        """True when LiveKit creds are present so outbound jobs can dial."""
+        import os
+
+        return bool(
+            (self.livekit_url or os.getenv("LIVEKIT_URL"))
+            and (self.livekit_api_key or os.getenv("LIVEKIT_API_KEY"))
+        )
 
 
 settings = Settings()

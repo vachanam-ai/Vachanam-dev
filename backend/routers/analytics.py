@@ -241,10 +241,18 @@ async def analytics_overview(
     ).all()
 
     # â”€â”€ Calls (answered) per day + bookings made on calls â”€â”€
+    # M13: bucket calls by BRANCH-LOCAL day, not UTC. func.date() on a
+    # timestamptz truncates in the session (UTC) tz, so IST calls 00:00-05:30
+    # landed on the previous day's point and disagreed with the booking series
+    # (which uses _branch_today). timezone(tz, ts) converts to local first.
+    _tzname = (
+        await db.execute(select(Branch.timezone).where(Branch.id == branch_uuid))
+    ).scalar_one_or_none() or "Asia/Kolkata"
+    _call_day = func.date(func.timezone(_tzname, CallLog.started_at))
     call_rows = (
         await db.execute(
             select(
-                func.date(CallLog.started_at),
+                _call_day,
                 func.count(),
                 func.sum(cast(CallLog.booking_made, Integer)),
             )
@@ -252,10 +260,10 @@ async def analytics_overview(
                 and_(
                     CallLog.branch_id == branch_uuid,  # Rule 1
                     CallLog.answered.is_(True),
-                    func.date(CallLog.started_at) >= start,
+                    _call_day >= start,
                 )
             )
-            .group_by(func.date(CallLog.started_at))
+            .group_by(_call_day)
         )
     ).all()
     calls_by_day = {d: (n, int(b or 0)) for d, n, b in call_rows}
@@ -275,7 +283,7 @@ async def analytics_overview(
             select(func.coalesce(func.sum(CallLog.duration_seconds), 0)).where(
                 and_(
                     CallLog.branch_id == branch_uuid,
-                    func.date(CallLog.started_at) >= month_start,
+                    _call_day >= month_start,  # branch-local day (M13)
                 )
             )
         )

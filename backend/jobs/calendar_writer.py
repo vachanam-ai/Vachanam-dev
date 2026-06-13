@@ -231,3 +231,31 @@ async def run_calendar_writer() -> None:
         svc = GoogleCalendarService()
         for task in tasks:
             await _process_one_task(db, task, svc)
+
+
+async def requeue_stale_in_progress() -> None:
+    """M2: requeue tasks stranded 'in_progress' by a crash.
+
+    _process_one_task commits status='in_progress' before the calendar call;
+    if the process dies there, the row never returns to 'pending' and the
+    poll skips it forever — the booking's calendar event is silently never
+    written/deleted. Any in_progress row untouched for >5 min is reset to
+    pending so the normal poll picks it up again (the calendar ops are
+    idempotent enough: create yields a fresh event, delete 404s as success).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(CalendarWriteTask).where(
+                    CalendarWriteTask.status == "in_progress",
+                    CalendarWriteTask.updated_at < cutoff,
+                )
+            )
+        ).scalars().all()
+        for t in rows:
+            t.status = "pending"
+            t.next_attempt_at = datetime.now(timezone.utc)
+        if rows:
+            await db.commit()
+            logger.warning("calendar_requeued_stale", count=len(rows))

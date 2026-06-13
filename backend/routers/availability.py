@@ -7,7 +7,7 @@ Endpoints:
            Body: {date_from, date_to, reason}
            Action: marks doctor unavailable, cascade-cancels existing tokens,
                    schedules cascade_rebook followup tasks.
-           Role: org_admin only.
+           Role: staff (receptionist + org_admin).
            Rate: 10 req/min per user (availability_post_limit).
 
   GET    /availability/{branch_id}/{doctor_id}?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -15,8 +15,10 @@ Endpoints:
            Role: receptionist + org_admin.
 
   DELETE /availability/{branch_id}/{doctor_id}/{date}
-           Removes a single unavailability date row.
-           Role: org_admin only.
+           Removes a single unavailability date row (undo a fat-fingered leave).
+           Role: staff — whoever can mark leave can undo the marking. (Already
+           cancelled tokens are not auto-restored; undo only stops further
+           confusion and reopens the slot for new bookings.)
 
   GET    /availability/{branch_id}/{doctor_id}/affected?from=YYYY-MM-DD&to=YYYY-MM-DD
            Preflight: returns count + list of confirmed tokens that WOULD be cancelled.
@@ -219,6 +221,21 @@ async def mark_unavailable(
         doctor_uuid = uuid.UUID(doctor_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    # M10: never cascade a PAST date — that cancels yesterday's already-done
+    # bookings and schedules rebook calls about a day that's gone, while today's
+    # real bookings for an absent doctor stay live. "Today" in the branch tz.
+    from backend.routers.queue import _branch_today
+
+    branch_today = await _branch_today(branch_uuid, db)
+    if body.date_to < branch_today:
+        raise HTTPException(
+            status_code=422, detail="Cannot mark leave for a date already in the past"
+        )
+    # L3: bound the range — date_from=2026..date_to=2126 would INSERT ~36,500
+    # rows in one transaction (authenticated-staff DoS / table spam).
+    if (body.date_to - body.date_from).days > 365:
+        raise HTTPException(status_code=422, detail="Leave range cannot exceed 365 days")
 
     # Verify doctor belongs to this branch (Rule 1 ownership check)
     doctor_result = await db.execute(
@@ -463,7 +480,7 @@ async def remove_unavailability(
     date_str: str,
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
-    _admin: CurrentUser = Depends(_require_org_admin),
+    _staff: CurrentUser = Depends(_require_staff),  # L9: same role can undo
     db: AsyncSession = Depends(get_db),
 ) -> None:
     """Remove a single unavailability date row.

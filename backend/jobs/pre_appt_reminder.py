@@ -52,8 +52,11 @@ def appointment_in_window(
 
 
 async def run_pre_appt_reminders() -> None:
-    if not (os.getenv("LIVEKIT_URL") and os.getenv("LIVEKIT_API_KEY")):
-        return  # voice control plane not configured on this deployment
+    from backend.config import settings as _settings
+
+    if not _settings.voice_plane_configured:
+        logger.warning("pre_appt_reminder_skipped_no_voice_plane")  # M15
+        return
 
     async with _db_module.AsyncSessionLocal() as db:
         branches = (await db.execute(select(Branch))).scalars().all()

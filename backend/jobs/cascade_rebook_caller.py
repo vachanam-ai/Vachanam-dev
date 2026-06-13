@@ -33,8 +33,13 @@ BATCH_LIMIT = 10  # per run — keeps concurrent outbound calls bounded
 
 
 async def run_cascade_rebook_calls() -> None:
-    if not (os.getenv("LIVEKIT_URL") and os.getenv("LIVEKIT_API_KEY")):
-        return  # voice control plane not configured on this deployment
+    from backend.config import settings as _settings
+
+    if not _settings.voice_plane_configured:
+        # M15: warn (not silent) — a Render deploy missing LIVEKIT_* would
+        # otherwise drop doctor-leave callbacks with no signal at all.
+        logger.warning("cascade_rebook_skipped_no_voice_plane")
+        return
 
     now = datetime.now(timezone.utc)
     async with _db_module.AsyncSessionLocal() as db:
@@ -62,14 +67,14 @@ async def run_cascade_rebook_calls() -> None:
                 task.status = "unreachable"  # nothing to dial
                 await db.commit()
                 continue
-            task.status = "in_progress"
             task.attempt_count += 1
             task.scheduled_at = now + timedelta(minutes=RETRY_BACKOFF_MIN)
             if task.attempt_count >= task.max_attempts:
-                # Last try fires now; if the agent never confirms a rebook the
-                # task simply stops being retried (status stays in_progress as
-                # a breadcrumb for the dashboard).
-                pass
+                # Last try fires now; mark unreachable so the dashboard stops
+                # showing it as a perpetual "in progress" follow-up (L1).
+                task.status = "unreachable"
+            else:
+                task.status = "in_progress"
             await db.commit()
             await _dispatch_rebook_call(task, patient, doctor, token, branch)
 

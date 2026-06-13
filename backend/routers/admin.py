@@ -316,7 +316,15 @@ async def admin_overview(
     """The business of Vachanam in one payload: per-clinic usage/limits/money,
     platform totals, month-over-month growth, payment history. super_admin
     only; org-level aggregates only — no patient data crosses this boundary."""
-    now = datetime.now(timezone.utc)
+    # Month boundaries in IST (M12): every Vachanam clinic is India-based, and
+    # bookings/minutes are metered branch-local. A UTC boundary would shift the
+    # whole platform's monthly metering 5.5h around the 1st. Compare against
+    # CallLog.started_at (stored tz-aware) — the comparison itself is correct
+    # regardless of column tz; only the boundary instant must be IST midnight.
+    from zoneinfo import ZoneInfo as _ZoneInfo
+
+    _IST = _ZoneInfo("Asia/Kolkata")
+    now = datetime.now(_IST)
     this_month = _month_start(now)
     prev_month = _month_start(this_month - timedelta(days=1))
     six_months_ago = _month_start(this_month - timedelta(days=160))
@@ -358,7 +366,9 @@ async def admin_overview(
             if oid is None:
                 continue
             mins = (dur or 0) / 60.0
-            mkey = started_at.strftime("%Y-%m")
+            # bucket by IST calendar month/day, not the stored UTC instant
+            started_ist = started_at.astimezone(_IST)
+            mkey = started_ist.strftime("%Y-%m")
             month_minutes[mkey] = month_minutes.get(mkey, 0.0) + mins
             if started_at >= this_month:
                 org_min_this[oid] = org_min_this.get(oid, 0.0) + mins
@@ -367,7 +377,7 @@ async def admin_overview(
                     org_bookings_this[oid] = org_bookings_this.get(oid, 0) + 1
             elif started_at >= prev_month:
                 org_min_prev[oid] = org_min_prev.get(oid, 0.0) + mins
-            if started_at.date() == today:
+            if started_ist.date() == today:
                 calls_today += 1
 
         minutes_all_time = (

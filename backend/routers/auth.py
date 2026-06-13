@@ -18,6 +18,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 import backend.services.audit_service as _audit_svc
 from backend.config import settings
@@ -325,9 +326,19 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
     # a strong, Google-authenticated identity — no extra OTP friction
     # (decision: Vinay 2026-06-11). Phone is still format-validated above.
     if not google_sub:
-        if not body.phone_otp or not await otp_service.verify_code("sms", phone, body.phone_otp):
+        # M7: a channel already verified on a previous attempt counts. Without
+        # this, if the email code was wrong the phone code (consumed first) was
+        # already burned, and the retry dead-ended on "Phone not verified" with
+        # no way forward. verify_code OR the persisted is_verified flag passes.
+        phone_ok = (
+            body.phone_otp and await otp_service.verify_code("sms", phone, body.phone_otp)
+        ) or await otp_service.is_verified("sms", phone)
+        if not phone_ok:
             raise HTTPException(status_code=403, detail="Phone not verified — enter the SMS code")
-        if not body.email_otp or not await otp_service.verify_code("email", email, body.email_otp):
+        email_ok = (
+            body.email_otp and await otp_service.verify_code("email", email, body.email_otp)
+        ) or await otp_service.is_verified("email", email)
+        if not email_ok:
             raise HTTPException(status_code=403, detail="Email not verified — enter the email code")
 
     async with AsyncSessionLocal() as db:
@@ -372,7 +383,16 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             password_hash=_hash_password(body.password) if body.password else None,
         )
         db.add(user)
-        await db.commit()
+        try:
+            await db.commit()
+        except IntegrityError:
+            # M9: two concurrent registers with the same email both pass the
+            # SELECT above; one loses the unique constraint race. Return the
+            # same 409 the sequential path gives, not a 500.
+            await db.rollback()
+            raise HTTPException(
+                status_code=409, detail="Account already exists — sign in instead"
+            )
         await db.refresh(user)
 
         user_id = user.id

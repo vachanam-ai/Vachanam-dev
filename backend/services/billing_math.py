@@ -59,15 +59,34 @@ def minutes_exhausted(plan: str, minutes_used: float) -> bool:
     return inc > 0 and minutes_used >= inc
 
 
-def call_blocked(status: str, plan: str, hard_block_on_exhaust: bool, minutes_used: float) -> str | None:
+def call_blocked(
+    status: str,
+    plan: str,
+    hard_block_on_exhaust: bool,
+    minutes_used: float,
+    trial_ends_at=None,
+) -> str | None:
     """Why an incoming call for this org must NOT be served, or None.
 
-    Returns 'paused' | 'cancelled' | 'minutes_exhausted' | None. The voice
-    agent must still ANSWER and speak one polite line (RULE 8 — never dead
-    air), then hang up.
+    Returns 'paused' | 'cancelled' | 'trial_expired' | 'minutes_exhausted'
+    | None. The voice agent must still ANSWER and speak one polite line
+    (RULE 8 — never dead air), then hang up.
+
+    trial_expired is defense-in-depth: the daily trial_pause job flips status
+    to 'paused', but if that job hasn't run yet an expired trial must not keep
+    getting free AI service (~Rs1.49/min cost to Vachanam).
     """
     if status in ("paused", "cancelled"):
         return status
+    if status == "trial" and trial_ends_at is not None:
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        ends = trial_ends_at
+        if ends.tzinfo is None:
+            ends = ends.replace(tzinfo=timezone.utc)
+        if ends < now:
+            return "trial_expired"
     if hard_block_on_exhaust and minutes_exhausted(plan, minutes_used):
         return "minutes_exhausted"
     return None

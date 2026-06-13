@@ -65,7 +65,7 @@ from agent.prompts.system_prompt import (  # noqa: E402
 # booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
-from agent.services.telugu_dates import telugu_date  # noqa: E402
+from agent.services.telugu_dates import telugu_date, telugu_time  # noqa: E402
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
@@ -602,8 +602,10 @@ class VachanamAgent(Agent):
             )
         except Exception as e:
             logger.error("reschedule_confirm_failed: %s", e)
+            await self._release_hold(assigned)  # RULE 3: don't leak the new hold
             return {"success": False, "step": "confirm", "error": "booking_failed"}
         if not confirmed.get("success"):
+            await self._release_hold(assigned)  # RULE 3: dup guard / capacity etc.
             return {"success": False, "step": "confirm", **confirmed}
         self._state.token_confirmed = True
         self._state.token_number = confirmed.get("token_number") or assigned["token_number"]
@@ -639,6 +641,30 @@ class VachanamAgent(Agent):
                 "reschedules prefer the reschedule_booking tool."
             )
         return await self._do_cancel(token_id)
+
+    @staticmethod
+    async def _release_hold(assigned: dict) -> None:
+        """RULE 3: DECR a slot hold that won't become a booking.
+
+        _do_reschedule calls the module-level assign_token directly (not the
+        wrapper), so state.token_redis_key is never set and the shutdown
+        cleanup can't release it. A failed confirm after a successful assign
+        would leave the slot 'full' until TTL — including for the patient's own
+        retry seconds later. Token-doctor holds are NOT decremented (the
+        counter is the queue sequence — same rule as _do_cancel)."""
+        key = assigned.get("redis_key") or ""
+        # only slot holds carry an appointment_time; token holds must not DECR
+        if not key.startswith("slot:"):
+            return
+        try:
+            r = aioredis.from_url(settings.redis_url, decode_responses=True)
+            try:
+                if int(await r.get(key) or 0) > 0:
+                    await r.decr(key)
+            finally:
+                await r.aclose()
+        except Exception as e:
+            logger.warning("reschedule_hold_release_failed: %s", e)
 
     async def _do_cancel(self, token_id: str) -> dict:
         """Shared cancel core (no guards) — used by cancel_booking and
@@ -705,10 +731,23 @@ class VachanamAgent(Agent):
 
         if token.google_calendar_event_id and self._calendar is not None:
             try:
-                result = await self._db.execute(
-                    select(Branch).where(Branch.id == self._state.branch_id)
-                )
-                cal_id = result.scalar_one().google_calendar_id
+                # Delete from the SAME calendar create used: doctor's personal
+                # calendar first, branch calendar as fallback. Deleting only
+                # from the branch calendar left ghost events on every doctor
+                # who had a personal calendar (404 silently treated as success).
+                doc_cal = (
+                    await self._db.execute(
+                        select(Doctor.google_calendar_id).where(Doctor.id == token.doctor_id)
+                    )
+                ).scalar_one_or_none()
+                branch_cal = (
+                    await self._db.execute(
+                        select(Branch.google_calendar_id).where(
+                            Branch.id == self._state.branch_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                cal_id = doc_cal or branch_cal
                 if cal_id:
                     await self._calendar.delete_event(cal_id, token.google_calendar_event_id)
             except Exception as e:
@@ -890,10 +929,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         except ValueError:
             logger.error("outbound_branch_id_invalid: %s", meta.get("branch_id"))
     if not branches:
+        # Normalize the dialed DID to the same canonical form Settings stores
+        # (bug-bounty M11) — a format difference (spaces, missing +91) otherwise
+        # fails the match and aborts every inbound call to that clinic.
+        from backend.services.validators import normalize_did
+
+        did_norm = normalize_did(did)
         # .first() not .one_or_none(): a DB-level partial-unique index guarantees at
         # most one branch per DID, but if that invariant were ever violated we must
         # NOT crash the call — and must NOT silently serve an ambiguous tenant.
-        result = await db.execute(select(Branch).where(Branch.did_number == did).limit(2))
+        result = await db.execute(
+            select(Branch)
+            .where(Branch.did_number.in_([did, did_norm]))
+            .limit(2)
+        )
         branches = result.scalars().all()
     if len(branches) != 1:
         logger.error(
@@ -906,20 +955,32 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         return
     branch = branches[0]
 
-    # Super-admin service gate: paused/cancelled org, or hard-block with the
-    # month's minutes exhausted -> answer, speak ONE line, hang up (RULE 8).
+    # Super-admin service gate: paused/cancelled org, expired trial, or
+    # hard-block with the month's minutes exhausted -> answer, speak ONE line,
+    # hang up (RULE 8). Also captures the org plan for the call-duration cap.
     blocked_reason = None
+    org_plan = "clinic"
     try:
+        from zoneinfo import ZoneInfo as _ZoneInfo
+
         from backend.models.schema import CallLog, Organization
-        from backend.services.billing_math import call_blocked, included_minutes
+        from backend.services.billing_math import call_blocked
 
         org = (
             await db.execute(select(Organization).where(Organization.id == branch.org_id))
         ).scalar_one_or_none()
         if org is not None:
+            org_plan = org.plan or "clinic"
             used_min = 0.0
             if getattr(org, "hard_block_on_exhaust", False):
-                month_start = datetime_cls.now(timezone_utc).replace(
+                # Month boundary in the BRANCH timezone, not server UTC —
+                # otherwise IST calls 00:00-05:30 on the 1st meter into the
+                # previous month and the hard-block trigger shifts 5.5h.
+                try:
+                    now_branch = datetime_cls.now(_ZoneInfo(branch.timezone or "Asia/Kolkata"))
+                except Exception:
+                    now_branch = datetime_cls.now(_ZoneInfo("Asia/Kolkata"))
+                month_start = now_branch.replace(
                     day=1, hour=0, minute=0, second=0, microsecond=0
                 )
                 from sqlalchemy import func as _func
@@ -939,7 +1000,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ).scalar_one()
                 used_min = secs / 60.0
             blocked_reason = call_blocked(
-                org.status, org.plan, bool(getattr(org, "hard_block_on_exhaust", False)), used_min
+                org.status,
+                org.plan,
+                bool(getattr(org, "hard_block_on_exhaust", False)),
+                used_min,
+                trial_ends_at=getattr(org, "trial_ends_at", None),
             )
     except Exception as e:  # gate must never kill a call — fail open
         logger.warning("service_gate_check_failed: %s", e)
@@ -984,6 +1049,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         tts_voice = getattr(branch, "tts_voice", None) or "rupali"
         state.branch_id = branch_id
         state.emergency_contact = emergency_contact
+        state.plan = org_plan  # was always "clinic" — solo cap could never fire
 
         result = await db.execute(
             select(Doctor).where(
@@ -1171,13 +1237,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         # RULE 6: single short opening utterance, sanitized.
         if is_reminder:
+            # L6: speak the time in Telugu words, not raw "16:30".
+            _appt_raw = meta.get("appointment_time", "")
+            try:
+                _spoken_time = telugu_time(time_cls.fromisoformat(_appt_raw))
+            except (ValueError, TypeError):
+                _spoken_time = _appt_raw
             await session.say(
                 sanitize_for_tts(
                     REMINDER_GREETING.format(
                         patient=meta.get("patient_name", ""),
                         clinic=branch_name,
                         doctor=meta.get("doctor_name", ""),
-                        time=meta.get("appointment_time", ""),
+                        time=_spoken_time,
                     )
                 )
             )
@@ -1201,6 +1273,44 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await session.say(
                 sanitize_for_tts(DISCLOSURE_GREETING.format(clinic=branch_name))
             )
+
+        # SOLO-PLAN CALL CAP (pricing table: "4-min AI call cap"). The Pipecat
+        # watchdog (TD-009) was lost in the LiveKit port — solo calls ran
+        # unbounded. Warn 10s before the cap, then close politely AT the cap.
+        # Only solo; clinic/multi are flat-minute plans with no per-call cap.
+        cap = settings.max_call_duration_seconds
+        if state.plan == "solo" and cap and cap > 15:
+
+            async def _solo_cap_watchdog() -> None:
+                try:
+                    await asyncio.sleep(cap - 10)
+                    if not state.solo_warning_sent:
+                        state.solo_warning_sent = True
+                        await session.say(
+                            sanitize_for_tts(
+                                "క్షమించండి, మన సమయం అయిపోతోంది. మీ బుకింగ్ "
+                                "ఖరారు చేద్దాం."
+                            )
+                        )
+                    await asyncio.sleep(10)
+                    await session.say(
+                        sanitize_for_tts("ధన్యవాదాలు అండి, ఉంటాను!")
+                    )
+                    try:
+                        await session.current_speech.wait_for_playout()
+                    except Exception:
+                        pass
+                    lkapi = api.LiveKitAPI()
+                    await lkapi.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+                    await lkapi.aclose()
+                    logger.info("solo_cap_reached room=%s cap=%ds", ctx.room.name, cap)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning("solo_cap_watchdog_failed: %s", e)
+
+            _cap_task = asyncio.create_task(_solo_cap_watchdog())
+            ctx.add_shutdown_callback(lambda: _cap_task.cancel())
 
 
 if __name__ == "__main__":

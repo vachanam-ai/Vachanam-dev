@@ -347,7 +347,25 @@ async def create_walkin(
 
     await assert_branch_access(current_user, branch_id, db)
     branch_uuid = uuid.UUID(branch_id)
-    doctor_uuid = uuid.UUID(body.doctor_id)
+    try:
+        doctor_uuid = uuid.UUID(body.doctor_id)  # L8: 400 not 500 on garbage
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid doctor_id format")
+
+    # M3: normalize the receptionist-typed phone to E.164, same as the voice
+    # path. Raw "98480 12345" fragments the patient record AND breaks the voice
+    # agent's last-10-digit lookup (FIXLOG #35 symptom via the desk).
+    norm_phone = None
+    if body.patient_phone:
+        from backend.services.validators import normalize_indian_phone
+
+        try:
+            norm_phone = normalize_indian_phone(body.patient_phone)
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="patient_phone must be a 10-digit Indian mobile"
+            )
+
     today = await _branch_today(branch_uuid, db)  # branch tz, not server UTC
 
     # Doctor must belong to THIS branch and be active (Rule 1)
@@ -369,6 +387,39 @@ async def create_walkin(
     if doctor.booking_type == "appointment" and appt_time is None:
         raise HTTPException(status_code=422, detail="appointment_time required for this doctor")
 
+    # M4: match patient on (phone, name) — phone alone attaches a family
+    # member's walk-in to whoever was created first (FIXLOG #9 for the desk).
+    wanted = body.patient_name.strip().lower()
+    patient = None
+    if norm_phone:
+        same_phone = (
+            await db.execute(
+                select(Patient).where(
+                    Patient.branch_id == branch_uuid, Patient.phone == norm_phone
+                )
+            )
+        ).scalars().all()
+        patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
+
+    # M5a: duplicate guard — same patient + doctor + today already confirmed.
+    if patient is not None:
+        existing = (
+            await db.execute(
+                select(Token).where(
+                    Token.branch_id == branch_uuid,
+                    Token.doctor_id == doctor_uuid,
+                    Token.date == today,
+                    Token.patient_id == patient.id,
+                    Token.status == "confirmed",
+                )
+            )
+        ).scalars().first()
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{patient.name} already has a booking with this doctor today",
+            )
+
     assignment = await _assign_token(
         doctor_id=doctor_uuid,
         branch_id=branch_uuid,
@@ -378,41 +429,54 @@ async def create_walkin(
     )
     if not assignment.get("success"):
         reason = assignment.get("reason", "unavailable")
-        status = 409 if reason in ("full", "slot_taken") else 422
+        status = 409 if reason in ("full", "slot_taken", "slot_full") else 422
         raise HTTPException(status_code=status, detail=f"Could not book: {reason}")
 
-    # Patient: reuse by (branch, phone) when phone given; else fresh row (Rule 1)
-    patient = None
-    if body.patient_phone:
-        result = await db.execute(
-            select(Patient).where(
-                Patient.branch_id == branch_uuid, Patient.phone == body.patient_phone
+    # M5b: from here a Redis hold exists — any failure must release it or the
+    # slot/token is burned until TTL.
+    try:
+        if patient is None:
+            patient = Patient(
+                branch_id=branch_uuid, name=body.patient_name, phone=norm_phone
             )
-        )
-        patient = result.scalars().first()
-    if patient is None:
-        patient = Patient(
-            branch_id=branch_uuid, name=body.patient_name, phone=body.patient_phone
-        )
-        db.add(patient)
-        await db.flush()
+            db.add(patient)
+            await db.flush()
 
-    token = Token(
-        branch_id=branch_uuid,
-        doctor_id=doctor_uuid,
-        patient_id=patient.id,
-        date=today,
-        token_number=assignment.get("token_number"),
-        appointment_time=appt_time,
-        source="walk_in",
-        status="confirmed",
-        is_urgent=body.is_urgent,
-        confirmed_at=datetime.now(timezone.utc),
-        marked_by_user_id=uuid.UUID(current_user.user_id),
-    )
-    db.add(token)
-    await db.commit()
-    await db.refresh(token)
+        token = Token(
+            branch_id=branch_uuid,
+            doctor_id=doctor_uuid,
+            patient_id=patient.id,
+            date=today,
+            token_number=assignment.get("token_number"),
+            appointment_time=appt_time,
+            source="walk_in",
+            status="confirmed",
+            is_urgent=body.is_urgent,
+            confirmed_at=datetime.now(timezone.utc),
+            marked_by_user_id=uuid.UUID(current_user.user_id),
+        )
+        db.add(token)
+        await db.commit()
+        await db.refresh(token)
+    except Exception:
+        await db.rollback()
+        # release the slot hold (token-doctor counter is a sequence — never DECR)
+        key = assignment.get("redis_key") or ""
+        if key.startswith("slot:"):
+            import redis.asyncio as _aioredis
+
+            from backend.config import settings as _settings
+
+            try:
+                _r = _aioredis.from_url(_settings.redis_url, decode_responses=True)
+                try:
+                    if int(await _r.get(key) or 0) > 0:
+                        await _r.decr(key)
+                finally:
+                    await _r.aclose()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail="Could not save walk-in")
 
     # Hybrid calendar write — never fails the walk-in (Rule 4 handled inside)
     result = await db.execute(select(Doctor).where(Doctor.id == doctor_uuid))

@@ -10,10 +10,14 @@ def test_config_has_new_keys():
     assert hasattr(settings, "vobiz_auth_token")
 
 
-def test_config_drops_livekit_keys():
-    assert not hasattr(settings, "livekit_url")
-    assert not hasattr(settings, "livekit_api_key")
-    assert not hasattr(settings, "livekit_api_secret")
+def test_config_has_livekit_keys():
+    # Reversed 2026-06-13 (bug-bounty M15): the backend's outbound-call jobs
+    # (reminders, cascade rebook) need LiveKit creds too — previously they
+    # lived only in the agent's local .env and the jobs silently no-opped.
+    assert hasattr(settings, "livekit_url")
+    assert hasattr(settings, "livekit_api_key")
+    assert hasattr(settings, "livekit_api_secret")
+    assert hasattr(settings, "outbound_trunk_id")
 
 
 def test_config_drops_vobiz_sip_keys():

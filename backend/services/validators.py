@@ -38,6 +38,31 @@ def normalize_indian_phone(raw: str) -> str:
     return f"+91{cleaned}"
 
 
+def normalize_did(raw: str) -> str:
+    """Canonical E.164 form for a clinic DID, used on BOTH write and the
+    agent's inbound branch lookup so a format difference can never make a
+    real call fail branch resolution (bug-bounty M11).
+
+    Strips spaces/dashes/parens; keeps a leading +; adds +91 for a bare
+    10-digit number. Unlike normalize_indian_phone this also accepts
+    landline-style DIDs (it does not enforce the 6-9 mobile rule) — a DID is
+    whatever the carrier assigned. Returns the cleaned string unchanged if it
+    can't confidently canonicalize, so it never rejects a valid-but-unusual DID.
+    """
+    if not raw:
+        return raw
+    cleaned = _PHONE_STRIP.sub("", raw.strip())
+    if cleaned.startswith("+"):
+        return cleaned
+    if cleaned.startswith("91") and len(cleaned) == 12:
+        return f"+{cleaned}"
+    if cleaned.startswith("0") and len(cleaned) == 11:
+        return f"+91{cleaned[1:]}"
+    if len(cleaned) == 10 and cleaned.isdigit():
+        return f"+91{cleaned}"
+    return cleaned
+
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 

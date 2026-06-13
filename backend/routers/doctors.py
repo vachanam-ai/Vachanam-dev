@@ -108,6 +108,7 @@ class DoctorOut(BaseModel):
 
     id: str
     branch_id: str
+    user_id: Optional[str]  # L4: lets the doctor-role UI match its own card
     name: str
     specialization: Optional[str]
     booking_type: str
@@ -159,6 +160,7 @@ def _doctor_to_out(doc: Doctor) -> DoctorOut:
     return DoctorOut(
         id=str(doc.id),
         branch_id=str(doc.branch_id),
+        user_id=str(doc.user_id) if doc.user_id else None,
         name=doc.name,
         specialization=doc.specialization,
         booking_type=doc.booking_type,

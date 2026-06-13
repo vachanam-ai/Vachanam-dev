@@ -122,6 +122,7 @@ async def cascade_for_unavailability(
             "doctor_id": t.doctor_id,
             "patient_id": t.patient_id,
             "date": t.date,
+            "appointment_time": t.appointment_time,
             "google_calendar_event_id": t.google_calendar_event_id,
         }
         for t in tokens_to_cancel
@@ -162,6 +163,32 @@ async def cascade_for_unavailability(
         followups_scheduled_count += 1
 
     await db.commit()
+
+    # M14: release the Redis slot keys for cancelled SLOT-doctor tokens. The
+    # DB count drops to 0 but check_availability uses max(redis, db); if the
+    # org_admin later REMOVES the unavailability, those slots would still read
+    # "full" until each key's TTL. Token-doctor counters are NEVER decremented
+    # (the counter is the queue sequence — same rule as the agent's _do_cancel).
+    slot_snaps = [s for s in token_snapshots if s["appointment_time"] is not None]
+    if slot_snaps:
+        try:
+            import redis.asyncio as _aioredis
+
+            from backend.config import settings as _settings
+
+            _r = _aioredis.from_url(_settings.redis_url, decode_responses=True)
+            try:
+                for s in slot_snaps:
+                    key = (
+                        f"slot:{s['doctor_id']}:{s['branch_id']}:{s['date']}:"
+                        f"{s['appointment_time'].strftime('%H%M')}"
+                    )
+                    if int(await _r.get(key) or 0) > 0:
+                        await _r.decr(key)
+            finally:
+                await _r.aclose()
+        except Exception as exc:
+            logger.warning("cascade_redis_release_failed", error=str(exc))
 
     cancelled_count = len(token_snapshots)
 
@@ -217,7 +244,15 @@ async def cascade_for_unavailability(
             branch_id=str(branch_id),
             error=str(exc),
         )
-        # Best-effort failure — cascade itself already committed; do not re-raise
+        # Best-effort failure — cascade itself already committed; do not re-raise.
+        # But alert: these calendar-delete tasks are now lost, so the cancelled
+        # appointments stay as ghost events on Google Calendar with no retry (L2).
+        try:
+            from backend.services.admin_alert import alert_admin
+
+            await alert_admin("cascade_calendar_enqueue_lost", branch_id=branch_id)
+        except Exception:
+            pass
 
     return {
         "unavailable_dates": unavailable_dates_count,

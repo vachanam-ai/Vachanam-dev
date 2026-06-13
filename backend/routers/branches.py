@@ -192,7 +192,10 @@ async def update_branch_settings(
     # clinic could intercept another clinic's calls. Reject a DID already owned
     # by a different branch. (DPDP cross-tenant breach prevention.)
     if body.did_number is not None and body.did_number.strip():
-        new_did = body.did_number.strip()
+        from backend.services.validators import normalize_did
+
+        new_did = normalize_did(body.did_number)  # M11: canonical E.164
+        body.did_number = new_did  # so the setattr loop below stores the clean form
         clash = (
             await db.execute(
                 select(Branch).where(

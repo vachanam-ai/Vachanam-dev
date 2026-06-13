@@ -52,7 +52,8 @@ async def issue_code(channel: str, dest: str) -> str | None:
     sent = await _send(channel, dest, code)
     logger.info("otp_issued", channel=channel, dest=_mask(dest), sent=sent)
     # Dev convenience: surface the code so signup is testable without a provider.
-    if not sent and settings.otp_dev_echo:
+    # NEVER in production (otp_echo_enabled forces off there — bug-bounty M8).
+    if not sent and settings.otp_echo_enabled:
         return code
     return None
 

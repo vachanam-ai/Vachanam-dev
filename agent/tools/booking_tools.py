@@ -291,7 +291,24 @@ async def check_availability(
     if doctor.booking_type == "token":
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
         async with _redis() as r:
-            current = int(await r.get(redis_key) or 0)
+            redis_current = int(await r.get(redis_key) or 0)
+        # DB confirmed count closes the Redis-restart hole for the token path
+        # too (slot path already did this — FIXLOG #14). After an Upstash
+        # eviction the key reads 0 while N tokens are confirmed in the DB;
+        # trusting Redis alone would re-issue token 1.
+        db_confirmed = (
+            await db.execute(
+                select(func.count()).select_from(Token).where(
+                    and_(
+                        Token.branch_id == branch_id,
+                        Token.doctor_id == doctor_id,
+                        Token.date == booking_date,
+                        Token.status == "confirmed",
+                    )
+                )
+            )
+        ).scalar_one()
+        current = max(redis_current, db_confirmed)
         limit = doctor.daily_token_limit or 50
         if current >= limit:
             next_day = booking_date + timedelta(days=1)
@@ -430,7 +447,27 @@ async def assign_token(
         midnight = datetime.combine(booking_date + timedelta(days=1), time(0, 0))
         ttl_seconds = int((midnight - datetime.now()).total_seconds()) + 7200
 
+        # Floor the counter against the DB confirmed count BEFORE incrementing
+        # (Redis-restart safety, FIXLOG #14 for the token path). If the key was
+        # evicted while N tokens are confirmed, INCR-from-0 would hand out a
+        # number already in use; seed the key forward so the next number is N+1.
+        db_confirmed = (
+            await db.execute(
+                select(func.count()).select_from(Token).where(
+                    and_(
+                        Token.branch_id == branch_id,
+                        Token.doctor_id == doctor_id,
+                        Token.date == booking_date,
+                        Token.status == "confirmed",
+                    )
+                )
+            )
+        ).scalar_one()
+
         async with _redis() as r:
+            cur = int(await r.get(redis_key) or 0)
+            if db_confirmed > cur:
+                await r.set(redis_key, db_confirmed)  # seed forward, no number reuse
             token_number = await r.incr(redis_key)
             await r.expire(redis_key, max(ttl_seconds, 7200))
 
@@ -473,6 +510,21 @@ async def assign_token(
         hours_block = _outside_working_hours(doctor, appointment_time)
         if hours_block:
             return hours_block
+
+        # M6: never book a same-day slot that has already passed. check_availability
+        # filters past slots but nothing forces it to run first, and the walk-in
+        # UI lists all slots — a 09:00 booking made at 17:00 gets a calendar
+        # event in the past and no reminder.
+        now_b = await _branch_now(branch_id, db)
+        if booking_date == now_b.date() and appointment_time <= now_b.time():
+            return {
+                "success": False,
+                "reason": "past_slot",
+                "instruction": (
+                    f"{appointment_time.strftime('%I:%M %p').lstrip('0')} today has "
+                    "already passed. Offer the next available future slot."
+                ),
+            }
 
         # Requested time must sit on the doctor's slot grid (e.g. hours from
         # 9:00 every 30min -> 16:00 valid, 16:10 not). Snap is the agent's job;
@@ -692,6 +744,54 @@ async def confirm_booking(
             "instruction": "Patient already has a confirmed booking that day — "
             "tell them their existing booking instead of creating another.",
         }
+
+    # 1c. CAPACITY RE-CHECK (Rule 2 — the persistence-layer tripwire).
+    # assign_token's Redis gate only protects callers who actually CALLED
+    # assign_token. The LLM has repeatedly skipped mandated steps (FIXLOG
+    # #19/#32/#33/#36); if it jumps straight to confirm_booking, every Redis
+    # capacity guard is bypassed and two patients land in one full slot. There
+    # is no DB unique constraint to catch it, so we re-verify here, in the same
+    # transaction as the insert, counting only CONFIRMED rows in the DB
+    # (source of truth) and excluding the booking being replaced on reschedule.
+    bookable_block = await doctor_bookable(doctor, branch_id, booking_date, db)
+    if bookable_block:
+        return {"success": False, "reason": "not_bookable", "instruction": bookable_block}
+
+    cap_filters = [
+        Token.branch_id == branch_id,
+        Token.doctor_id == doctor_id,
+        Token.date == booking_date,
+        Token.status == "confirmed",
+    ]
+    if exclude_token_id is not None:
+        cap_filters.append(Token.id != exclude_token_id)
+    if doctor.booking_type == "token":
+        confirmed_count = (
+            await db.execute(select(func.count()).select_from(Token).where(and_(*cap_filters)))
+        ).scalar_one()
+        if confirmed_count >= (doctor.daily_token_limit or 50):
+            return {
+                "success": False,
+                "reason": "full",
+                "instruction": f"{doctor.name} is fully booked that day. Offer another day.",
+            }
+    else:  # slot doctor — per-slot occupancy
+        slot_confirmed = (
+            await db.execute(
+                select(func.count()).select_from(Token).where(
+                    and_(*cap_filters, Token.appointment_time == appointment_time)
+                )
+            )
+        ).scalar_one()
+        if slot_confirmed >= (doctor.max_concurrent_per_slot or 1):
+            return {
+                "success": False,
+                "reason": "slot_full",
+                "instruction": (
+                    f"That time with {doctor.name} is already taken. Run "
+                    "check_availability and offer the nearest free slot."
+                ),
+            }
 
     # 2. Create token record
     token = Token(
