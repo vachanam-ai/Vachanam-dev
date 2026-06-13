@@ -1256,16 +1256,37 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 speaker=tts_voice,  # clinic-selected (branches.tts_voice, default rupali)
                 target_language_code="te-IN",
                 pace=1.3,
+                # LATENCY: start emitting audio after a SMALL buffer instead of
+                # waiting for 50 chars (default) — cuts time-to-first-audio so the
+                # agent begins speaking sooner after the LLM's first tokens.
+                min_buffer_size=10,
             ),
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             preemptive_generation=True,
             min_endpointing_delay=0.4,
-            max_endpointing_delay=3.0,
+            # LATENCY: was 3.0 — the upper bound the turn-detector can wait after
+            # the patient stops before committing the turn. 3s is a long tail on
+            # every turn; 1.5s still tolerates natural pauses on a phone call.
+            max_endpointing_delay=1.5,
         )
 
+        # Per-turn latency breakdown so the 7s "stop speaking -> agent speaks"
+        # gap is attributable to a stage (STT finalize / LLM TTFT / TTS TTFB /
+        # end-of-utterance delay) instead of guessed. log_metrics keeps the
+        # existing structured line; the extra line surfaces the key numbers.
         @session.on("metrics_collected")
         def _on_metrics(ev: MetricsCollectedEvent) -> None:
             metrics.log_metrics(ev.metrics)
+            m = ev.metrics
+            tn = type(m).__name__
+            if tn == "EOUMetrics":
+                logger.info("lat_eou end_of_utterance_delay=%.2fs", getattr(m, "end_of_utterance_delay", 0.0))
+            elif tn == "LLMMetrics":
+                logger.info("lat_llm ttft=%.2fs", getattr(m, "ttft", 0.0))
+            elif tn == "TTSMetrics":
+                logger.info("lat_tts ttfb=%.2fs", getattr(m, "ttfb", 0.0))
+            elif tn == "STTMetrics":
+                logger.info("lat_stt duration=%.2fs", getattr(m, "duration", 0.0))
 
         # RULE 3: release a held-but-unconfirmed token when the call ends.
         # Also closes the long-lived DB session (entrypoint returns while the
