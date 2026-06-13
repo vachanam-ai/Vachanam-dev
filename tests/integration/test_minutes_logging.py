@@ -79,3 +79,29 @@ async def test_logged_call_minutes_show_on_dashboard(branch, client, db):
     minutes = r.json()["minutes"]
     assert minutes["used"] == 7          # 420s // 60
     assert minutes["included"] == 100    # solo plan allowance
+
+
+async def test_heartbeat_duration_shows_without_clean_shutdown(branch, client, db):
+    """The metering heartbeat updates duration mid-call — so a DROPPED/broken
+    call (no clean-shutdown finalize) still logs minutes on the dashboard."""
+    from agent.livekit_minimal.agent import update_call_duration
+
+    # Agent wrote a start-row at duration 0 (call still 'in progress').
+    now = datetime.now(timezone.utc)
+    row = CallLog(branch_id=branch["bid"], call_type="inbound", answered=True,
+                  started_at=now, duration_seconds=0, booking_made=False)
+    db.add(row)
+    await db.commit()
+    rid = row.id
+
+    # Heartbeat fires (call still live; no shutdown ran yet) → writes elapsed.
+    await update_call_duration(rid, 200)
+
+    bid = branch["branch_id"]
+    r = await client.get(
+        "/analytics/overview",
+        params={"branch_id": bid, "days": 14},
+        headers={"Authorization": f"Bearer {_owner_jwt(branch['org_id'], bid)}"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["minutes"]["used"] == 3   # 200s // 60 — logged without shutdown

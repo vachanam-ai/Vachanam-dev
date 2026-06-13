@@ -198,6 +198,21 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     )
 
 
+async def update_call_duration(call_log_id, seconds: int) -> None:
+    """Set a CallLog row's duration in its own short-lived session (metering
+    heartbeat). Separate session because the call's main `db` is busy with the
+    booking flow and an async session is not safe for concurrent use."""
+    from sqlalchemy import update as _u
+
+    from backend.models.schema import CallLog as _CL
+
+    async with AsyncSessionLocal() as s:
+        await s.execute(
+            _u(_CL).where(_CL.id == call_log_id).values(duration_seconds=int(seconds))
+        )
+        await s.commit()
+
+
 async def _routing_llm_call(messages: list) -> str:
     """Plain-text LLM call used by route_to_doctor (Gemini -> OpenAI fallback)."""
     combined = "\n".join(m["content"] for m in messages)
@@ -1142,6 +1157,33 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             state.call_log_id = _start_row.id
         except Exception as _e:
             logger.warning("call_log_start_write_failed: %s", _e)
+
+        # METERING HEARTBEAT: update the row's duration every 15s during the call
+        # in its OWN short-lived session (the main `db` is busy with the booking
+        # flow — an async session is not safe for concurrent use). This is what
+        # makes minutes show even when the call DROPS or the worker dies before
+        # the clean-shutdown finalize runs (the exact "minutes not logged" bug on
+        # broken/local calls). The shutdown callback still writes the precise
+        # final duration; this just guarantees a near-current value meanwhile.
+        _hb_call_log_id = state.call_log_id
+        _hb_start = state.call_start or datetime_cls.now(timezone_utc)
+
+        async def _meter_heartbeat() -> None:
+            while True:
+                await asyncio.sleep(15)
+                try:
+                    dur = max(
+                        0, int((datetime_cls.now(timezone_utc) - _hb_start).total_seconds())
+                    )
+                    await update_call_duration(_hb_call_log_id, dur)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _hbe:
+                    logger.warning("meter_heartbeat_failed: %s", _hbe)
+
+        if state.call_log_id is not None:
+            _hb_task = asyncio.create_task(_meter_heartbeat())
+            ctx.add_shutdown_callback(lambda: _hb_task.cancel())
             try:
                 await db.rollback()
             except Exception:
