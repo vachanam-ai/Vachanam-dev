@@ -65,14 +65,25 @@ def normalize_did(raw: str) -> str:
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# RFC 2606 reserved example/test domains — syntactically valid but NEVER a real
+# clinic's address. Reject so placeholder/junk signups (e.g. xyz@example.com)
+# can't create a trial account.
+_RESERVED_EMAIL_DOMAINS = {
+    "example.com", "example.org", "example.net", "example.edu",
+    "test.com", "test.org", "email.com", "domain.com",
+}
+
 
 def normalize_email(raw: str) -> str:
-    """Lowercase + trim a syntactically valid email, else raise."""
+    """Lowercase + trim a syntactically valid, non-reserved email, else raise."""
     if not raw:
         raise ValueError("Email is required")
     email = raw.strip().lower()
     if not _EMAIL_RE.match(email) or ".." in email:
         raise ValueError("Enter a valid email address")
+    domain = email.rsplit("@", 1)[-1]
+    if domain in _RESERVED_EMAIL_DOMAINS:
+        raise ValueError("Enter your real clinic email — example/test domains aren't allowed")
     return email
 
 

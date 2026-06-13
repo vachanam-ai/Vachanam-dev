@@ -31,7 +31,9 @@ async def client(redis):
 
 
 def _unique_email():
-    return f"clinic-{uuid.uuid4().hex[:8]}@example.com"
+    # NOT a reserved RFC-2606 domain (example.com/test.com are rejected at
+    # signup now — placeholder/junk addresses can't open a trial).
+    return f"clinic-{uuid.uuid4().hex[:8]}@realclinic.in"
 
 
 # ── Validation: garbage is rejected at /request-otp and /register ───────────

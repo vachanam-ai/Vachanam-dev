@@ -196,7 +196,7 @@ export default function Register() {
               </Field>
               <Field label="Phone" err={fieldErr("phone")}>
                 <input className="field" value={form.phone} onChange={set("phone")}
-                  onBlur={blur("phone")} placeholder="8096007554" inputMode="tel" />
+                  onBlur={blur("phone")} placeholder="98765 43210" inputMode="tel" />
               </Field>
             </div>
             <Field label="Email" err={fieldErr("email")}>

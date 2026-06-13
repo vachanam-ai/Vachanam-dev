@@ -129,6 +129,20 @@ def test_system_prompt_contains_step0_header():
     assert "STEP 0" in prompt
 
 
+def test_system_prompt_has_availability_grounding_and_name_readback():
+    """Guard the fixes for the live-call bugs: never invent hours, map the
+    booking_type value to token-vs-time, and read the patient name back."""
+    prompt = _make_prompt()
+    # #4 — never fabricate hours / lunch breaks; examples are format-only.
+    assert "NEVER add a lunch break" in prompt
+    assert "FORMAT samples only" in prompt
+    # #3 — the per-doctor booking_type value drives token vs appointment.
+    assert 'booking: appointment' in prompt
+    assert "NEVER say a token/queue number for an appointment doctor" in prompt
+    # #6 — STT garbles/append names; confirm the name before booking.
+    assert "NAME READ-BACK" in prompt
+
+
 def test_system_prompt_contains_greeting_with_ai_disclosure():
     """STEP 0 embeds the spoken greeting; 'AI అసిస్టెంట్' is the DPDP s.5
     disclosure that must always be in it (greeting reworded 2026-06-11)."""

@@ -61,7 +61,7 @@ def test_invalid_phones_rejected(raw):
     [
         ("vinayrongala2002@gmail.com", "vinayrongala2002@gmail.com"),
         ("  Vinay@Clinic.IN ", "vinay@clinic.in"),
-        ("apple@example.com", "apple@example.com"),  # valid format — accepted
+        ("apple@realclinic.in", "apple@realclinic.in"),
     ],
 )
 def test_valid_emails(raw, expected):
@@ -70,7 +70,11 @@ def test_valid_emails(raw, expected):
 
 @pytest.mark.parametrize(
     "raw",
-    ["", "notanemail", "a@b", "a@@b.com", "a b@c.com", "x@y..com", "@nope.com", "nope@"],
+    [
+        "", "notanemail", "a@b", "a@@b.com", "a b@c.com", "x@y..com", "@nope.com", "nope@",
+        # RFC 2606 reserved example/test domains — never a real clinic.
+        "xyz@example.com", "x@example.org", "a@test.com",
+    ],
 )
 def test_invalid_emails_rejected(raw):
     with pytest.raises(ValueError):
