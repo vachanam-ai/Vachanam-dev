@@ -51,7 +51,10 @@ unless marked otherwise. External items are blocking — the software cannot do 
 - [ ] **Google**: `google-service-account.json` on the API host; each clinic shares its
   calendar with the service account (the Settings page guides this + "Test connection").
 - [ ] **Neon / Upstash**: prod Postgres + Redis → `DATABASE_URL`, `REDIS_URL`.
-- [ ] **MSG91 (SMS) or SMTP (email)**: OTP provider for signup verification.
+- [ ] **MSG91 (SMS)** — `MSG91_AUTH_KEY` + approved `MSG91_SENDER_ID`. **HARD-REQUIRED
+  in production**: signup verification is **mobile-only** (decision 2026-06-14). With no
+  SMS provider in prod the code is neither sent nor echoed → **nobody can sign up**.
+  Email OTP is retired; SMTP is optional (transactional email only, not signup).
 
 ## D. Vinay — deploy + infra
 
