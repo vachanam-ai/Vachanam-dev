@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # Used in backend/middleware/rate_limit.py _EndpointRateLimiter.
     rate_limit_bypass_ips: str = ""
 
+    # Number of TRUSTED reverse-proxy hops in front of the app (iter1 #6). In
+    # prod the chain is Cloudflare -> Render, i.e. 2 hops, so the real client IP
+    # is the LAST entry minus (hops-1) from the right of X-Forwarded-For. We never
+    # trust XFF[0] (fully client-spoofable) nor the bare proxy socket IP. Set to 0
+    # when there is NO proxy (direct connections) to use the socket peer as-is.
+    trusted_proxy_hops: int = 2
+
     # Voice agent (Pipecat)
     public_url: str = "http://localhost:7860"
     # Raw flag. NEVER read this directly to decide whether to record — use the

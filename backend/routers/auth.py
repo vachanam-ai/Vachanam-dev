@@ -32,6 +32,7 @@ from backend.middleware.auth_middleware import (
 from backend.middleware.rate_limit import (
     auth_google_limit,
     check_ip_blocklist,
+    client_ip as _client_ip,
     default_limit,
     record_failed_login,
 )
@@ -69,7 +70,7 @@ async def google_login(request: Request, body: GoogleLoginRequest) -> TokenRespo
       - user.login.failure on Google token rejection (success=False, email allowed
         per spec §8.2 exception for forensics)
     """
-    client_ip = request.client.host if request.client else "127.0.0.1"
+    client_ip = _client_ip(request)  # iter1 #6: proxy-aware trusted client IP
     user_agent = request.headers.get("user-agent")
 
     if not settings.google_oauth_client_id:
@@ -279,7 +280,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         validate_password,
     )
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)  # iter1 #6: proxy-aware trusted client IP
     await check_ip_blocklist(request)
 
     # ── Validate shape BEFORE any DB work (clear 422s, no garbage accepted) ──
@@ -421,7 +422,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
 async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
     """Email + password sign-in. Same blocklist + failed-login accounting as
     the Google path (5 failures/IP → 1h block)."""
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)  # iter1 #6: proxy-aware trusted client IP
     await check_ip_blocklist(request)
 
     email = body.email.strip().lower()
@@ -474,7 +475,7 @@ async def request_otp(request: Request, body: OtpRequest) -> OtpResponse:
     from backend.services import otp_service
     from backend.services.validators import normalize_email, normalize_indian_phone
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)  # iter1 #6: proxy-aware trusted client IP
     await check_ip_blocklist(request)
 
     sent: list[str] = []

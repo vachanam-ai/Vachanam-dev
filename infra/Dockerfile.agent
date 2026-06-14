@@ -6,17 +6,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
-COPY agent/requirements.txt /app/agent/requirements.txt
-RUN pip install --no-cache-dir -r /app/agent/requirements.txt
+# The voice brain is the LiveKit Agents worker. Install its deps plus the shared
+# backend deps (SQLAlchemy/redis/google-calendar/structlog) that agent.tools and
+# agent.session_state import. The retired Pipecat path's agent/requirements.txt is
+# intentionally NOT installed anymore (no HTTP app server deps at runtime).
+COPY agent/livekit_minimal/requirements.txt /app/agent/livekit_minimal/requirements.txt
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir \
+      -r /app/agent/livekit_minimal/requirements.txt \
+      -r /app/backend/requirements.txt
 
 COPY agent/ /app/agent/
 COPY backend/ /app/backend/
 
-# TD-014: drop root. ffmpeg + uvicorn need no privileged access at runtime.
+# TD-014: drop root. ffmpeg + the worker need no privileged access at runtime.
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser /app
 USER appuser
 
 ENV PYTHONUNBUFFERED=1
-EXPOSE 7860
 
-CMD ["uvicorn", "agent.server:app", "--host", "0.0.0.0", "--port", "7860"]
+# The real voice brain is the LiveKit Agents worker (agent/livekit_minimal/agent.py).
+# It dials OUT to LiveKit Cloud and registers as a worker — it has NO inbound HTTP
+# port (the retired Pipecat/Vobiz HTTP app was deleted in iter1). `start` is the
+# run-app subcommand exposed by agents.cli.run_app at the module __main__. A
+# process-level check (fly.agent.toml) covers liveness — no HTTP endpoint to probe.
+CMD ["python", "-m", "agent.livekit_minimal.agent", "start"]

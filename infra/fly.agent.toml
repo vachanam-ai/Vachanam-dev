@@ -8,13 +8,16 @@ primary_region = "bom"  # Mumbai — lowest latency for India
   APP_ENV = "production"
   LOG_LEVEL = "info"
 
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = false   # voice agent must never cold-start
-  auto_start_machines = true
-  min_machines_running = 1
+# The LiveKit worker dials OUT to LiveKit Cloud and registers as a worker; it
+# serves NO inbound HTTP (the old http_service internal_port=8080 pointed at the
+# retired Pipecat/Vobiz uvicorn app — finding #32). The machine must stay warm
+# (a voice agent must never cold-start) so we keep it always-running and let Fly's
+# default process check cover liveness — there is no HTTP endpoint to probe.
+[deploy]
+  strategy = "rolling"
 
+# No [http_service]: this process has no listening socket. Keep exactly one
+# machine running at all times; never auto-stop on idle.
 [[vm]]
   cpu_kind = "shared"
   cpus = 2

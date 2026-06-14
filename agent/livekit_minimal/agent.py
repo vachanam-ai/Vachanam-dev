@@ -85,6 +85,18 @@ logger = logging.getLogger("vachanam-agent")
 
 AGENT_NAME = "vachanam-agent"
 
+# iter1 #11/#19: bounds at the confirm_booking tool boundary. The LLM-supplied
+# free-text fields are untrusted — mirror the walk-in desk Field max_lengths
+# (queue.py: name<=120, complaint<=500) and clamp the age range so a prompt-
+# injected / hallucinated value can't write garbage or oversized rows. The
+# family-booking cap stops a hijacked/looping model mass-booking under one
+# caller-ID in a single call.
+MAX_PATIENT_NAME_LEN = 120
+MAX_COMPLAINT_LEN = 500
+MIN_PATIENT_AGE = 0
+MAX_PATIENT_AGE = 120
+MAX_DIFFERENT_PERSON_BOOKINGS_PER_CALL = 2
+
 # Service-blocked utterances (org paused by super-admin, or hard-block after
 # minutes exhausted). RULE 8: the call is ANSWERED and gets one coherent
 # sentence — never dead air, never endless ringing.
@@ -477,7 +489,51 @@ class VachanamAgent(Agent):
         if self._calendar is None:
             logger.error("confirm_booking_no_calendar_service")
             return {"success": False, "error": "booking_system_unavailable"}
-        phone = patient_phone or self._state.patient_phone
+
+        # iter1 #11/#19: bound the untrusted, LLM-supplied free-text/numeric
+        # fields at the tool boundary (mirror the walk-in desk Field limits).
+        patient_name = (patient_name or "").strip()
+        if not patient_name:
+            raise ToolError("patient_name is required.")
+        if len(patient_name) > MAX_PATIENT_NAME_LEN:
+            raise ToolError(
+                f"patient_name too long (max {MAX_PATIENT_NAME_LEN} chars)."
+            )
+        complaint = (complaint or "").strip()
+        if len(complaint) > MAX_COMPLAINT_LEN:
+            raise ToolError(f"complaint too long (max {MAX_COMPLAINT_LEN} chars).")
+        if patient_age is not None and not (
+            MIN_PATIENT_AGE <= patient_age <= MAX_PATIENT_AGE
+        ):
+            raise ToolError(
+                f"patient_age out of range ({MIN_PATIENT_AGE}-{MAX_PATIENT_AGE})."
+            )
+
+        # iter1 #11: phone defaults to the VERIFIED caller-ID. Only honor an
+        # LLM-passed override when different_person=True (an explicit family
+        # booking for someone else); a caller's own booking is ALWAYS attributed
+        # to the number they dialed from, never an LLM-asserted phone.
+        if different_person and patient_phone:
+            phone = patient_phone
+        else:
+            phone = self._state.patient_phone
+
+        # iter1 #11: cap family bookings per call so a hijacked/looping model
+        # can't mass-book different people under one caller-ID.
+        if different_person and (
+            self._state.different_person_bookings
+            >= MAX_DIFFERENT_PERSON_BOOKINGS_PER_CALL
+        ):
+            logger.warning(
+                "different_person_booking_cap_hit count=%d session=%s",
+                self._state.different_person_bookings,
+                self._state.session_id,
+            )
+            raise ToolError(
+                "Too many separate family bookings on one call. Please call "
+                "again for additional family members."
+            )
+
         resolved = await self._resolve_doctor_id(doctor_id)
         parsed_date = self._parse_date(booking_date)
         parsed_time = self._parse_time(appointment_time)
@@ -535,6 +591,9 @@ class VachanamAgent(Agent):
         if result.get("success"):
             self._state.token_confirmed = True
             self._state.patient_name = patient_name
+            if different_person:
+                # iter1 #11: count only CONFIRMED family bookings toward the cap.
+                self._state.different_person_bookings += 1
             if self._state.followup_task_id:
                 # Cascade-rebook call achieved its goal — stop the retry loop.
                 await self._complete_followup_task("rebooked_on_call")
@@ -1108,6 +1167,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # hang up (RULE 8). Also captures the org plan for the call-duration cap.
     blocked_reason = None
     org_plan = "clinic"
+    # iter1 #23: the gate must FAIL CLOSED for known terminal states. We record
+    # the org's last-known status the moment we read it; if a LATER step in this
+    # block raises (e.g. the minutes-sum query), the except handler refuses the
+    # call when that status is paused/cancelled — a billing/DB hiccup must not
+    # grant free service to an org the owner has already shut off. Genuinely
+    # transient/unknown lookups (org row not even read yet) still fail open so a
+    # blip never hangs up on a paying, active clinic.
+    last_known_status: str | None = None
     try:
         from zoneinfo import ZoneInfo as _ZoneInfo
 
@@ -1118,6 +1185,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await db.execute(select(Organization).where(Organization.id == branch.org_id))
         ).scalar_one_or_none()
         if org is not None:
+            last_known_status = (org.status or "").lower()
             org_plan = org.plan or "clinic"
             used_min = 0.0
             if getattr(org, "hard_block_on_exhaust", False):
@@ -1154,8 +1222,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 used_min,
                 trial_ends_at=getattr(org, "trial_ends_at", None),
             )
-    except Exception as e:  # gate must never kill a call — fail open
-        logger.warning("service_gate_check_failed: %s", e)
+    except Exception as e:
+        # iter1 #23: fail CLOSED for a known terminal status, fail OPEN otherwise.
+        # If we already learned the org is paused/cancelled/suspended, a downstream
+        # error must NOT let the call through (free service to a shut-off org).
+        blocked_reason = _gate_failure_blocked_reason(last_known_status)
+        if blocked_reason:
+            logger.warning(
+                "service_gate_check_failed_failing_closed status=%s err=%s",
+                last_known_status,
+                e,
+            )
+        else:
+            logger.warning("service_gate_check_failed_failing_open: %s", e)
 
     if blocked_reason:
         logger.warning(
@@ -1595,6 +1674,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
             _cap_task = asyncio.create_task(_solo_cap_watchdog())
             ctx.add_shutdown_callback(lambda: _cap_task.cancel())
+
+
+_TERMINAL_ORG_STATES = frozenset({"paused", "cancelled", "suspended"})
+
+
+def _gate_failure_blocked_reason(last_known_status: str | None) -> str | None:
+    """iter1 #23: decide how the service gate behaves when its check RAISES.
+
+    Fail CLOSED (return a blocked reason) for a known terminal org status —
+    paused/cancelled/suspended — so a billing/DB error can't grant free service
+    to an org the owner already shut off. Fail OPEN (return None) for any other
+    or unknown status, so a transient blip never hangs up on an active clinic.
+    """
+    status = (last_known_status or "").lower()
+    if status in _TERMINAL_ORG_STATES:
+        return f"service_{status}"
+    return None
 
 
 def _prewarm(proc) -> None:

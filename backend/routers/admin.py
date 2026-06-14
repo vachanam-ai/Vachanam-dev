@@ -102,10 +102,16 @@ async def add_owner(
         else:
             password_hash = None
             if body.password:
-                if len(body.password) < 8:
-                    from fastapi import HTTPException
+                # iter1 #16: a super_admin (keys to the kingdom) must clear the
+                # SAME password bar as staff/owner signup — not a bare len>=8.
+                from fastapi import HTTPException
 
-                    raise HTTPException(status_code=422, detail="Password must be 8+ characters")
+                from backend.services.validators import validate_password
+
+                try:
+                    validate_password(body.password)
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
                 from backend.routers.auth import _hash_password
 
                 password_hash = _hash_password(body.password)

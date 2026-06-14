@@ -51,6 +51,28 @@ def _extract_org_id(notes: dict | None) -> _uuid.UUID | None:
         return None
 
 
+def _trusted_org_id_for_order(order_id: str) -> _uuid.UUID | None:
+    """Resolve the org_id for audit attribution from the TRUSTED Razorpay order.
+
+    iter1 #5: /verify-payment is unauthenticated (the HMAC signature is the auth),
+    so it must NOT attribute the audit row to a client-supplied notes.org_id — a
+    caller could forge `notes` to mis-attribute (or hide) a verification. The order
+    was created server-side with notes.org_id = current_user.org_id (see
+    create_order), so we fetch the order back from Razorpay and read ITS notes.
+    Best-effort: any failure (creds unset, network, unknown order) → None, never
+    raises; org_id is attribution metadata, not a gate on the signature check.
+    """
+    if not order_id:
+        return None
+    try:
+        client = _get_client()
+        order = client.order.fetch(order_id)
+    except Exception as e:  # noqa: BLE001 — attribution is best-effort
+        logger.warning("razorpay_order_fetch_failed", order_id=order_id, error=str(e))
+        return None
+    return _extract_org_id(order.get("notes") if isinstance(order, dict) else None)
+
+
 def _get_client() -> razorpay.Client:
     if not settings.razorpay_key_id or not settings.razorpay_key_secret:
         raise HTTPException(status_code=500, detail="Razorpay credentials not configured")
@@ -74,7 +96,9 @@ class VerifyPaymentRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
-    notes: dict | None = None  # optional — pass org_id here for audit attribution
+    # Accepted for backward compat but IGNORED for attribution (iter1 #5): org_id
+    # is resolved from the trusted server-created Razorpay order, never from here.
+    notes: dict | None = None
 
 
 class VerifyPaymentResponse(BaseModel):
@@ -160,7 +184,9 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
     """
     client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
-    org_id = _extract_org_id(req.notes)
+    # iter1 #5: derive org_id from the TRUSTED server-created order, NOT from the
+    # client-supplied req.notes (which is forgeable on this unauthenticated route).
+    org_id = _trusted_org_id_for_order(req.razorpay_order_id)
 
     if not settings.razorpay_key_secret:
         raise HTTPException(status_code=500, detail="Razorpay credentials not configured")

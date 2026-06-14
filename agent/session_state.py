@@ -27,6 +27,10 @@ class SessionState:
     # Consent and follow-ups
     followup_consent: bool = False
 
+    # iter1 #11: count of "different_person" (family) bookings confirmed on THIS
+    # call. Capped so a hijacked/looping LLM can't mass-book under one caller-ID.
+    different_person_bookings: int = 0
+
     # Call type and rebook context
     call_type: str = "inbound_booking"  # inbound_booking | reminder | cascade_rebook
     is_rebook: bool = False

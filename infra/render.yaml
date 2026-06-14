@@ -61,7 +61,7 @@ services:
       - key: JWT_SECRET
         sync: false
       - key: JWT_EXPIRE_HOURS
-        value: "24"
+        value: "8"
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET

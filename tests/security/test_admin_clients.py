@@ -82,3 +82,29 @@ async def test_clients_lists_registered_orgs(client, db):
     assert row["days_left"] is not None and 0 <= row["days_left"] <= 10
     # No patient PII fields present on the row
     assert "patient" not in str(row).lower()
+
+
+@pytest.mark.asyncio
+async def test_add_owner_weak_password_rejected(client, db):
+    """iter1 #16: creating a super_admin with a weak password must be rejected by
+    the shared validate_password (all-numeric here), not the old bare len>=8 check.
+    """
+    email = f"newowner-{uuid.uuid4().hex[:6]}@vachanam.in"
+    r = await client.post(
+        "/admin/owners",
+        headers={"Authorization": f"Bearer {_jwt()}"},
+        json={"email": email, "name": "Weak Owner", "password": "12345678"},
+    )
+    assert r.status_code == 422, r.text
+
+
+@pytest.mark.asyncio
+async def test_add_owner_strong_password_accepted(client, db):
+    """A password that clears validate_password creates the owner (201)."""
+    email = f"newowner-{uuid.uuid4().hex[:6]}@vachanam.in"
+    r = await client.post(
+        "/admin/owners",
+        headers={"Authorization": f"Bearer {_jwt()}"},
+        json={"email": email, "name": "Strong Owner", "password": "Str0ngPass99"},
+    )
+    assert r.status_code == 201, r.text

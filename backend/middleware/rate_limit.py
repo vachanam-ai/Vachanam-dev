@@ -136,6 +136,48 @@ async def close_rate_limiter() -> None:
     logger.info("rate_limiter_closed")
 
 
+# ── Trusted client IP resolution (iter1 #6) ───────────────────────────────
+#
+# All security counters (rate-limit key, IP blocklist, failed-login throttle)
+# MUST key on the REAL client IP. Behind Cloudflare + Render, request.client.host
+# is the proxy socket — every client shares it, so a single abuser would throttle
+# everyone (and the blocklist would ban the proxy). Conversely, blindly trusting
+# X-Forwarded-For[0] lets a client spoof any IP (evading bans / framing others).
+#
+# Rule: trust exactly `settings.trusted_proxy_hops` proxies. Each well-behaved
+# proxy APPENDS the address it saw to XFF, so the real client is the entry
+# `hops` positions from the right (xff[-hops]). If XFF is absent/too short to
+# satisfy the configured hops, fall back to the socket peer (no spoofable header
+# to trust). With hops=0 (no proxy) we always use the socket peer.
+
+def client_ip(request: Request) -> str:
+    """Resolve the trusted client IP, honoring a fixed number of proxy hops.
+
+    Never returns the raw spoofable XFF[0] and never the bare proxy socket when a
+    correctly-sized XFF chain is present. See module note above for the rule.
+    """
+    from backend.config import settings as _s
+
+    peer = request.client.host if request.client else "127.0.0.1"
+    hops = getattr(_s, "trusted_proxy_hops", 0) or 0
+    if hops <= 0:
+        return peer
+
+    xff = request.headers.get("x-forwarded-for") or request.headers.get(
+        "X-Forwarded-For"
+    )
+    if not xff:
+        return peer  # no proxy header — trust the socket peer
+    parts = [p.strip() for p in xff.split(",") if p.strip()]
+    if len(parts) < hops:
+        # Chain shorter than the trusted hop count → header can't be trusted as
+        # configured; fall back to the socket peer rather than a spoofable entry.
+        return peer
+    # The entry `hops` from the right is the address the OUTERMOST trusted proxy
+    # observed — i.e. the real client. parts[-hops] (never parts[0]).
+    return parts[-hops]
+
+
 # ── Key function (spec §6.2) ─────────────────────────────────────────────
 
 async def user_or_ip_key(request: Request) -> str:
@@ -160,11 +202,8 @@ async def user_or_ip_key(request: Request) -> str:
         except Exception:
             pass  # fall through to IP keying
 
-    if request.client:
-        host = request.client.host
-    else:
-        host = "127.0.0.1"
-    return f"ip:{host}"
+    # iter1 #6: key on the trusted client IP (proxy-aware), not the bare socket.
+    return f"ip:{client_ip(request)}"
 
 
 # ── Redis-backed bucket factory ──────────────────────────────────────────
@@ -258,11 +297,11 @@ def _make_endpoint_limiter(times: int, seconds: int):
         # exists for structural tests (test_settings_exposes_rate_limit_bypass_ips_field)
         # and documents the contract; the actual runtime value is read here.
         import os
-        client_ip = request.client.host if request.client else "127.0.0.1"
+        ip = client_ip(request)  # iter1 #6: proxy-aware trusted client IP
         raw = os.environ.get("RATE_LIMIT_BYPASS_IPS", "") or ""
         if raw:
-            bypass_set: set[str] = {ip.strip() for ip in raw.split(",") if ip.strip()}
-            if client_ip in bypass_set:
+            bypass_set: set[str] = {b.strip() for b in raw.split(",") if b.strip()}
+            if ip in bypass_set:
                 return  # trusted IP — no counting
 
         key = await user_or_ip_key(request)
@@ -344,7 +383,7 @@ async def check_ip_blocklist(request: Request) -> None:
     Must be added to /auth/google BEFORE the rate limiter runs so that
     a blocked IP gets 403 (permanent block) not 429 (transient throttle).
     """
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    if await is_ip_blocked(client_ip):
-        logger.warning("blocked_ip_rejected", ip=client_ip)
+    ip = client_ip(request)  # iter1 #6: proxy-aware trusted client IP
+    if await is_ip_blocked(ip):
+        logger.warning("blocked_ip_rejected", ip=ip)
         raise HTTPException(status_code=403, detail="IP address blocked due to repeated failures")

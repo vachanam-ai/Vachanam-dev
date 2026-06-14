@@ -537,3 +537,69 @@ async def test_user_or_ip_key_falls_back_to_ip_on_bad_jwt():
         f"Malformed JWT must fall back to IP keying, got {key!r}. "
         "Spec §6.2 wraps decode in try/except for this reason."
     )
+
+
+# ── iter1 #6: trusted X-Forwarded-For client IP resolution ────────────────
+
+
+def _req(headers: dict, peer: str):
+    from unittest.mock import MagicMock
+
+    req = MagicMock()
+    req.headers = headers
+    req.client.host = peer
+    return req
+
+
+def test_client_ip_spoofed_xff_zero_is_ignored(monkeypatch):
+    """A client-spoofed XFF[0] must NOT become the trusted IP. With 2 trusted
+    hops, the real client is the entry 2 from the right, never the leftmost."""
+    from backend.config import settings
+    from backend.middleware.rate_limit import client_ip
+
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2, raising=False)
+    # Attacker forges the leftmost entry; Cloudflare appended the REAL client
+    # (1.2.3.4), then Render saw Cloudflare. peer is the proxy socket.
+    req = _req(
+        {"x-forwarded-for": "9.9.9.9, 1.2.3.4, 172.16.0.5"}, peer="172.16.0.5"
+    )
+    ip = client_ip(req)
+    assert ip == "1.2.3.4", f"must pick the hop-2 client, not spoofed XFF[0], got {ip}"
+    assert ip != "9.9.9.9"
+
+
+def test_client_ip_falls_back_to_peer_without_xff(monkeypatch):
+    from backend.config import settings
+    from backend.middleware.rate_limit import client_ip
+
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2, raising=False)
+    req = _req({}, peer="203.0.113.7")
+    assert client_ip(req) == "203.0.113.7"
+
+
+def test_client_ip_short_chain_falls_back_to_peer(monkeypatch):
+    """If the XFF chain is shorter than the trusted hop count it can't be trusted
+    as configured — use the socket peer, never a spoofable entry."""
+    from backend.config import settings
+    from backend.middleware.rate_limit import client_ip
+
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2, raising=False)
+    req = _req({"x-forwarded-for": "9.9.9.9"}, peer="172.16.0.5")
+    assert client_ip(req) == "172.16.0.5"
+
+
+def test_client_ip_no_proxy_uses_peer(monkeypatch):
+    """hops=0 (no proxy in front) always uses the socket peer, ignoring XFF."""
+    from backend.config import settings
+    from backend.middleware.rate_limit import client_ip
+
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 0, raising=False)
+    req = _req({"x-forwarded-for": "9.9.9.9, 1.2.3.4"}, peer="198.51.100.2")
+    assert client_ip(req) == "198.51.100.2"
+
+
+def test_settings_exposes_trusted_proxy_hops_field():
+    from backend.config import settings
+
+    assert hasattr(settings, "trusted_proxy_hops")
+    assert isinstance(settings.trusted_proxy_hops, int)
