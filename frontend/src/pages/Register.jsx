@@ -124,16 +124,16 @@ export default function Register() {
     }
     setBusy(true);
     try {
-      const r = await requestOtp({ phone: form.phone, email: form.email });
+      const r = await requestOtp({ phone: form.phone });
       setStep("otp");
-      if (r.dev_phone_code || r.dev_email_code) {
-        setDevCodes({ phone: r.dev_phone_code, email: r.dev_email_code });
-        toast.info("Dev mode: codes shown below (no SMS/email provider configured)");
+      if (r.dev_phone_code) {
+        setDevCodes({ phone: r.dev_phone_code });
+        toast.info("Dev mode: code shown below (no SMS provider configured)");
       } else {
-        toast.success("Codes sent to your phone and email");
+        toast.success("Code sent to your phone");
       }
     } catch (e) {
-      toast.error(e?.response?.data?.detail ?? "Could not send codes");
+      toast.error(e?.response?.data?.detail ?? "Could not send code");
     } finally {
       setBusy(false);
     }
@@ -141,8 +141,8 @@ export default function Register() {
 
   const submit = async (e) => {
     e.preventDefault();
-    if (otp.phone.length !== 6 || otp.email.length !== 6) {
-      toast.error("Enter both 6-digit codes");
+    if (otp.phone.length !== 6) {
+      toast.error("Enter the 6-digit code");
       return;
     }
     setBusy(true);
@@ -154,8 +154,7 @@ export default function Register() {
         email: form.email.trim(),
         password: form.password,
         plan: form.plan,
-        phone_otp: otp.phone,
-        email_otp: otp.email
+        phone_otp: otp.phone
       });
       toast.success("Clinic created — 14-day trial started");
       navigate(roleHome(me.role), { replace: true });
@@ -179,7 +178,7 @@ export default function Register() {
         <p data-reveal className="mt-2 font-ui text-sm text-slate">
           {step === "details"
             ? "14 days free · 1,000 call minutes · no card needed"
-            : "Enter the 6-digit codes we sent to your phone and email."}
+            : "Enter the 6-digit code we sent to your phone."}
         </p>
 
         {step === "details" ? (
@@ -221,7 +220,7 @@ export default function Register() {
               </div>
             </div>
             <button className="btn-primary w-full py-3" disabled={busy}>
-              {busy ? "Sending codes…" : "Verify phone & email"}
+              {busy ? "Sending code…" : "Verify phone"}
             </button>
 
             {GOOGLE_CLIENT_ID && (
@@ -243,18 +242,13 @@ export default function Register() {
           <form data-reveal className="card mt-8 space-y-4 p-6" onSubmit={submit}>
             {devCodes && (
               <div className="rounded-xl border border-gold/60 bg-gold-soft p-3 font-ui text-sm text-gold-ink">
-                <p className="font-medium">Dev codes (no provider configured):</p>
-                <p>Phone: <b className="tabular-nums">{devCodes.phone ?? "—"}</b> · Email: <b className="tabular-nums">{devCodes.email ?? "—"}</b></p>
+                <p className="font-medium">Dev code (no provider configured):</p>
+                <p>Phone: <b className="tabular-nums">{devCodes.phone ?? "—"}</b></p>
               </div>
             )}
             <Field label={`SMS code → ${form.phone}`}>
               <input className="field tracking-[0.4em]" value={otp.phone} inputMode="numeric"
                 maxLength={6} onChange={(e) => setOtp((o) => ({ ...o, phone: e.target.value.replace(/\D/g, "") }))}
-                placeholder="······" />
-            </Field>
-            <Field label={`Email code → ${form.email}`}>
-              <input className="field tracking-[0.4em]" value={otp.email} inputMode="numeric"
-                maxLength={6} onChange={(e) => setOtp((o) => ({ ...o, email: e.target.value.replace(/\D/g, "") }))}
                 placeholder="······" />
             </Field>
             <button className="btn-primary w-full py-3" disabled={busy}>
@@ -265,7 +259,7 @@ export default function Register() {
             </button>
             <button type="button" className="w-full font-ui text-sm text-teal underline-offset-4 hover:underline"
               onClick={sendOtp}>
-              Resend codes
+              Resend code
             </button>
           </form>
         )}

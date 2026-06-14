@@ -322,24 +322,20 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
-    # ── OTP gate: password signups only. A verified Google ID token is already
-    # a strong, Google-authenticated identity — no extra OTP friction
-    # (decision: Vinay 2026-06-11). Phone is still format-validated above.
+    # ── OTP gate: MOBILE ONLY (decision: Vinay 2026-06-14). Phone is the
+    # verified channel; email is the login identity but is NOT OTP-verified
+    # (no email-OTP friction). A verified Google ID token skips OTP entirely —
+    # it is already a strong, Google-authenticated identity.
     if not google_sub:
         # M7: a channel already verified on a previous attempt counts. Without
-        # this, if the email code was wrong the phone code (consumed first) was
-        # already burned, and the retry dead-ended on "Phone not verified" with
-        # no way forward. verify_code OR the persisted is_verified flag passes.
+        # this, a wrong code on retry could burn the already-consumed phone code
+        # and dead-end on "Phone not verified". verify_code OR the persisted
+        # is_verified flag passes.
         phone_ok = (
             body.phone_otp and await otp_service.verify_code("sms", phone, body.phone_otp)
         ) or await otp_service.is_verified("sms", phone)
         if not phone_ok:
             raise HTTPException(status_code=403, detail="Phone not verified — enter the SMS code")
-        email_ok = (
-            body.email_otp and await otp_service.verify_code("email", email, body.email_otp)
-        ) or await otp_service.is_verified("email", email)
-        if not email_ok:
-            raise HTTPException(status_code=403, detail="Email not verified — enter the email code")
 
     async with AsyncSessionLocal() as db:
         existing = (

@@ -4,7 +4,8 @@ Proves the full funnel with Vinay's real sample data:
   vinayrongala2002@gmail.com / 8096007554
 
 Covers: garbage rejection (bad phone/email/password), OTP gate (no register
-without verified codes), wrong-code rejection, and a clean happy path that
+without a verified PHONE code — mobile-only, email is NOT OTP-verified;
+decision Vinay 2026-06-14), wrong-code rejection, and a clean happy path that
 creates an Organization + Branch + org_admin and returns a JWT.
 """
 import uuid
@@ -63,7 +64,6 @@ async def test_register_rejects_weak_password(client):
             "email": _unique_email(),
             "password": "1234567890",
             "phone_otp": "000000",
-            "email_otp": "000000",
         },
     )
     assert r.status_code == 422
@@ -82,7 +82,6 @@ async def test_register_rejects_bad_phone(client):
             "email": _unique_email(),
             "password": GOOD_PW,
             "phone_otp": "000000",
-            "email_otp": "000000",
         },
     )
     assert r.status_code == 422
@@ -94,7 +93,7 @@ async def test_register_rejects_bad_phone(client):
 @pytest.mark.asyncio
 async def test_register_blocked_without_otp(client):
     email = _unique_email()
-    # Valid details, but no/incorrect OTP -> 403
+    # Valid details, but wrong PHONE code -> 403 (mobile-only gate).
     r = await client.post(
         "/auth/register",
         json={
@@ -104,11 +103,34 @@ async def test_register_blocked_without_otp(client):
             "email": email,
             "password": GOOD_PW,
             "phone_otp": "111111",
-            "email_otp": "222222",
         },
     )
     assert r.status_code == 403
-    assert "verif" in r.json()["detail"].lower()
+    assert "phone not verified" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_register_needs_no_email_otp(client, db):
+    """Mobile-only: a verified PHONE code is sufficient; email is never
+    OTP-challenged (decision Vinay 2026-06-14)."""
+    email = _unique_email()
+    codes = (
+        await client.post("/auth/request-otp", json={"phone": REAL_PHONE})
+    ).json()
+    assert codes["sent"] == ["sms"]
+    reg = await client.post(
+        "/auth/register",
+        json={
+            "clinic_name": "Mobile Only Clinic",
+            "owner_name": "Tester",
+            "phone": REAL_PHONE,
+            "email": email,
+            "password": GOOD_PW,
+            "phone_otp": codes["dev_phone_code"],
+            # NO email_otp supplied — must still succeed.
+        },
+    )
+    assert reg.status_code == 201, reg.text
 
 
 # ── Happy path: request OTP (dev echoes codes) -> register -> JWT ───────────
@@ -119,14 +141,13 @@ async def test_full_signup_with_real_sample_data(client, db):
     email = _unique_email()
 
     otp = await client.post(
-        "/auth/request-otp", json={"phone": REAL_PHONE, "email": email}
+        "/auth/request-otp", json={"phone": REAL_PHONE}
     )
     assert otp.status_code == 200, otp.text
     codes = otp.json()
-    assert set(codes["sent"]) == {"sms", "email"}
+    assert codes["sent"] == ["sms"]
     phone_code = codes["dev_phone_code"]
-    email_code = codes["dev_email_code"]
-    assert phone_code and email_code, "dev echo must surface codes in test env"
+    assert phone_code, "dev echo must surface code in test env"
 
     reg = await client.post(
         "/auth/register",
@@ -138,7 +159,6 @@ async def test_full_signup_with_real_sample_data(client, db):
             "password": GOOD_PW,
             "plan": "clinic",
             "phone_otp": phone_code,
-            "email_otp": email_code,
         },
     )
     assert reg.status_code == 201, reg.text
@@ -165,7 +185,7 @@ async def test_otp_code_is_single_use(client, db):
     run (20+ ghost clinics on the admin console, 2026-06-12)."""
     email = _unique_email()
     codes = (
-        await client.post("/auth/request-otp", json={"phone": REAL_PHONE, "email": email})
+        await client.post("/auth/request-otp", json={"phone": REAL_PHONE})
     ).json()
 
     base = {
@@ -175,12 +195,14 @@ async def test_otp_code_is_single_use(client, db):
         "email": email,
         "password": GOOD_PW,
         "phone_otp": codes["dev_phone_code"],
-        "email_otp": codes["dev_email_code"],
     }
     first = await client.post("/auth/register", json=base)
     assert first.status_code == 201, first.text
 
-    # Same codes again (different email to dodge the duplicate-account 409) -> 403
-    base2 = dict(base, email=_unique_email())
+    # Replay the SAME code on a DIFFERENT, never-verified phone -> 403.
+    # (The first phone's is_verified flag persists by design — M7 retry safety —
+    # so we prove single-use by replaying onto a fresh number whose flag is unset.)
+    base2 = dict(base, email=_unique_email(), phone="9000012345")
     second = await client.post("/auth/register", json=base2)
     assert second.status_code == 403
+    assert "phone not verified" in second.json()["detail"].lower()
