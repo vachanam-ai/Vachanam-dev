@@ -103,6 +103,13 @@ DISCLOSURE_GREETING = (
     "మీకు ఏ విధంగా సహాయపడగలను?"
 )
 
+# Returning patient recognised by their calling number (RULE 1: branch-scoped
+# lookup; RULE 5: branch from the DID). Keeps the DPDP AI-assistant disclosure.
+KNOWN_CALLER_GREETING = (
+    "నమస్కారం {patient} గారు! {clinic} కి తిరిగి స్వాగతం. నేను క్లినిక్ AI "
+    "అసిస్టెంట్‌ని. ఏం సహాయం కావాలి అండి?"
+)
+
 # 15-minute pre-appointment reminder call (outbound, appointment-type only).
 REMINDER_GREETING = (
     "నమస్కారం {patient} గారు! ఇది {clinic} క్లినిక్ నుండి రిమైండర్ కాల్. "
@@ -115,6 +122,64 @@ REBOOK_GREETING = (
     "{date}న {doctor} గారు సెలవులో ఉండటం వల్ల మీ అపాయింట్‌మెంట్ క్యాన్సిల్ "
     "అయింది. క్షమించండి. వేరే రోజు బుక్ చేయమంటారా?"
 )
+
+def _build_caller_context(rows, today) -> tuple[str | None, str]:
+    """Identify an inbound caller from their existing bookings (RULE 1 already
+    applied — rows are branch-scoped via find_bookings_by_phone).
+
+    Returns (greeting_name, prompt_extra):
+      - greeting_name: the patient name to greet by, or None when the caller is
+        new OR several different patients share the number (don't reveal one).
+      - prompt_extra: caller-identity instructions injected into the system
+        prompt so the agent knows their FUTURE bookings up front and handles the
+        "wants a new booking but already has one" case without a tool round-trip.
+    """
+    confirmed = [
+        (t, d, p) for (t, d, p) in rows if t.status == "confirmed" and t.date >= today
+    ]
+    if not confirmed:
+        return None, ""  # new caller (or only clinic-cancelled) -> normal flow
+    names = {p.name.strip() for (_, _, p) in confirmed}
+    greeting_name = next(iter(names)) if len(names) == 1 else None
+    lines = []
+    for t, d, p in confirmed:
+        if t.appointment_time:
+            ref = f"time {t.appointment_time.strftime('%I:%M %p').lstrip('0')}"
+        else:
+            ref = f"token {t.token_number}"
+        lines.append(
+            f"  - token_id={t.id} | patient={p.name} | doctor={d.name} | "
+            f"date={t.date.isoformat()} | {ref} | type={d.booking_type}"
+        )
+    bookings_block = "\n".join(lines)
+    who = (
+        f" by name ({greeting_name})."
+        if greeting_name
+        else " (several patients share this number — ask which patient they mean "
+        "before acting on a specific booking)."
+    )
+    extra = (
+        "\n\nCALLER IDENTIFICATION (looked up by their phone BEFORE this call — "
+        "do NOT call find_my_bookings, you already have it):\n"
+        "This is an EXISTING patient. The greeting already welcomed them" + who + "\n"
+        "Ask their concern warmly. Speak all dates/times in Telugu words.\n"
+        "FUTURE booking(s) already on file for this number:\n"
+        f"{bookings_block}\n"
+        "HOW TO HANDLE THIS CALLER:\n"
+        "- Reschedule/cancel one of the above: use its token_id directly "
+        "(never re-ask their number).\n"
+        "- They ask for a NEW booking while a future booking above already "
+        "exists: do NOT silently create a second one. Tell them they already "
+        "have a booking on that date and time with that doctor, then ask ONE "
+        "question — reschedule that one, or a separate new booking? Follow their "
+        "choice: reschedule_booking(old token_id) to move it, or the normal "
+        "BOOKING FLOW for a genuinely separate booking (e.g. a family member — "
+        "pass different_person=true if same patient_phone+doctor+day).\n"
+        "- A clearly UNRELATED request (different doctor/concern): just book it "
+        "normally.\n"
+    )
+    return greeting_name, extra
+
 
 REBOOK_PROMPT_EXTRA = (
     "\n\nTHIS IS A CASCADE-REBOOK CALL (doctor went on leave; the patient's "
@@ -1228,6 +1293,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             "Never announce a date the patient didn't ask about."
         )
 
+        # CALLER IDENTIFICATION (requirement 2026-06-14): on a normal INBOUND
+        # call, look the caller up by their number BEFORE the greeting so we can
+        # welcome a returning patient by name and hand the agent their future
+        # bookings (new-vs-existing handling). Skip for outbound/reminder/rebook
+        # (those already know the patient from dispatch metadata). RULE 1: the
+        # lookup is branch-scoped; a failure must never block answering (RULE 8).
+        caller_greeting_name: str | None = None
+        caller_prompt_extra = ""
+        if not outbound_number and not is_reminder and not is_rebook_call and state.patient_phone:
+            try:
+                _caller_rows = await find_bookings_by_phone(
+                    state.branch_id, state.patient_phone, db
+                )
+                caller_greeting_name, caller_prompt_extra = _build_caller_context(
+                    _caller_rows, now_b.date()
+                )
+            except Exception as e:
+                logger.warning("caller_lookup_failed: %s", e)
+
         instructions = (
             build_system_prompt(
                 clinic_name=branch_name,
@@ -1237,6 +1321,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
             + date_context
             + BREVITY_OVERRIDE
+            + caller_prompt_extra
         )
         # Outbound calls carry the doctor in metadata — pre-select so tools
         # never fail with "Unknown doctor" no matter how the LLM names them.
@@ -1451,9 +1536,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
             )
         else:
-            await session.say(
-                sanitize_for_tts(DISCLOSURE_GREETING.format(clinic=branch_name))
-            )
+            # Returning patient → greet by name; new caller → standard greeting.
+            if caller_greeting_name:
+                _greeting = KNOWN_CALLER_GREETING.format(
+                    patient=caller_greeting_name, clinic=branch_name
+                )
+            else:
+                _greeting = DISCLOSURE_GREETING.format(clinic=branch_name)
+            await session.say(sanitize_for_tts(_greeting))
 
         # SOLO-PLAN CALL CAP (pricing table: "4-min AI call cap"). The Pipecat
         # watchdog (TD-009) was lost in the LiveKit port — solo calls ran
