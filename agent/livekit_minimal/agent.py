@@ -334,9 +334,11 @@ def _build_tts(tts_voice: str):
         speaker=tts_voice,  # clinic-selected (branches.tts_voice, default rupali)
         target_language_code="te-IN",
         pace=1.3,
-        # LATENCY: start emitting audio after a SMALL buffer instead of waiting for
-        # 50 chars (default) — cuts time-to-first-audio.
-        min_buffer_size=10,
+        # LATENCY: smallest buffer the plugin allows (valid range 30-200; the old
+        # value 10 raises ValueError on this sarvam version and would crash every
+        # call on the default TTS path) — emits first audio sooner than the 50-char
+        # default, cutting time-to-first-audio.
+        min_buffer_size=30,
     )
 
 
