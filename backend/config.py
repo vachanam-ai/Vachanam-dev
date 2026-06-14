@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     # when there is NO proxy (direct connections) to use the socket peer as-is.
     trusted_proxy_hops: int = 2
 
+    # TTS provider trial (Vinay 2026-06-14): default "sarvam" keeps the existing
+    # Bulbul path untouched. Set tts_provider="smallest" to A/B the smallest.ai
+    # Waves voice (padmaja, Telugu) on a real call to the clinic DID — opt-in, so
+    # production is unaffected unless explicitly flipped. Needs smallest_api_key.
+    tts_provider: str = "sarvam"          # sarvam | smallest
+    smallest_api_key: str = ""
+    smallest_voice: str = "padmaja"       # Telugu voice on lightning_v3.1
+    smallest_model: str = "lightning_v3.1"
+
     # Voice agent (Pipecat)
     public_url: str = "http://localhost:7860"
     # Raw flag. NEVER read this directly to decide whether to record — use the

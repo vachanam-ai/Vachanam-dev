@@ -11,4 +11,7 @@ livekit-plugins-turn-detector>=1.5.16
 # GPT-4o-mini fallback LLM (imported in agent.py as livekit.plugins.openai) —
 # was missing here; would break the deployed image's import.
 livekit-plugins-openai>=1.5.16
+# smallest.ai Waves TTS — opt-in trial (TTS_PROVIDER=smallest, voice padmaja).
+# Lazy-imported in _build_tts; only loaded when the trial flag is on.
+livekit-plugins-smallestai>=1.5.18
 python-dotenv>=1.0.0
