@@ -79,9 +79,20 @@ body::after {
 .chip-danger { @apply chip bg-danger/10 text-danger; }
 
 .field {
-  @apply w-full rounded-xl border border-hairline bg-white px-3.5 py-2.5 font-ui text-ink
+  @apply w-full rounded-xl border border-hairline bg-white px-3.5 py-2.5 font-ui text-ink text-base
     placeholder:text-slate-light focus:border-teal-light focus:outline-none
     focus:ring-2 focus:ring-teal-light/25 transition;
+}
+
+/* iOS Safari zooms the page when a focused input's font is < 16px. Force a
+   16px minimum on every native control on small screens so focusing a field
+   never yanks the viewport. Desktop keeps the designed sizes. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 .label { @apply block text-xs font-medium uppercase tracking-[0.12em] text-slate mb-1.5 font-ui; }

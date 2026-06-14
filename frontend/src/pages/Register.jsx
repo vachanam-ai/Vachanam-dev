@@ -105,7 +105,8 @@ export default function Register() {
         theme: "outline",
         size: "large",
         shape: "pill",
-        width: 320,
+        // Cap to container width so the rendered iframe never overflows a phone.
+        width: Math.min(320, gsiRef.current.offsetWidth || 320),
         text: "signup_with"
       });
     };

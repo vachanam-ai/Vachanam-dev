@@ -46,7 +46,9 @@ export default function Login() {
         theme: "outline",
         size: "large",
         shape: "pill",
-        width: 320,
+        // Cap to the narrowest common phone content width (360px viewport minus
+        // padding) so the rendered iframe never forces horizontal scroll.
+        width: Math.min(320, gsiRef.current.offsetWidth || 320),
         text: "continue_with"
       });
     };
@@ -97,7 +99,7 @@ export default function Login() {
         </p>
       </section>
 
-      <section className="grid place-items-center p-8">
+      <section className="grid place-items-center p-6 sm:p-8">
         <div className="w-full max-w-sm">
           <Link to="/" data-reveal className="mb-8 block lg:hidden">
             <span className="font-brand text-3xl text-teal">Vachanam</span>
