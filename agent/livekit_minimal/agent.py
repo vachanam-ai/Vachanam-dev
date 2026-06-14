@@ -103,8 +103,8 @@ MAX_DIFFERENT_PERSON_BOOKINGS_PER_CALL = 2
 # minutes exhausted). RULE 8: the call is ANSWERED and gets one coherent
 # sentence — never dead air, never endless ringing.
 SERVICE_BLOCKED_UTTERANCE = (
-    "నమస్కారం! క్షమించండి, ఈ సేవ ప్రస్తుతం తాత్కాలికంగా అందుబాటులో లేదు. "
-    "దయచేసి క్లినిక్‌ని నేరుగా సంప్రదించండి. ధన్యవాదాలు."
+    "నమస్కారం అండి! క్షమించాలి, ఈ సర్వీస్ ప్రస్తుతానికి ఆగిపోయింది. "
+    "దయచేసి క్లినిక్‌కి డైరెక్ట్‌గా కాల్ చేయండి. థాంక్యూ."
 )
 
 # LATENCY/UX (Vinay 2026-06-14): route_to_doctor (routing LLM + DB) and
@@ -117,10 +117,10 @@ SERVICE_BLOCKED_UTTERANCE = (
 # ⚠ TELUGU NATURALNESS: these are everyday spoken lines, but they need a native
 # Hyderabad ear to confirm they don't sound stiff — flagged for Vinay to validate.
 _LOOKUP_FILLERS = (
-    "ఒక్క నిమిషం, చూస్తాను అండి.",        # one minute, I'll check
-    "ఒక్క క్షణం ఆగండి, చూస్తున్నాను.",     # hold a moment, I'm checking
-    "చూస్తాను అండి, ఒక్క సెకను.",          # I'll check, one second
-    "సరే అండి, ఒక్కసారి చూస్తాను.",        # okay, let me have a look
+    "ఒక్క నిమిషం అండి, చెక్ చేస్తాను.",       # one minute, I'll check
+    "ఒక్క సెకండ్ అండి, చూస్తున్నాను.",        # hold a moment, I'm checking
+    "చూసి చెప్తానండి, ఒక్క నిమిషం.",          # I'll check, one second
+    "సరేనండి, ఒక్కసారి సిస్టమ్‌లో చూస్తాను.",  # let me look in the system
 )
 
 
@@ -141,28 +141,28 @@ def _say_lookup_filler(context) -> None:
 # asks it when taking details) — better DPDP practice AND a warmer opening.
 # Wording per Vinay 2026-06-11.
 DISCLOSURE_GREETING = (
-    "నమస్కారం! {clinic} కి స్వాగతం. నేను క్లినిక్ AI అసిస్టెంట్‌ని. "
-    "మీకు ఏ విధంగా సహాయపడగలను?"
+    "నమస్కారం అండి, {clinic} కి స్వాగతం. నేను క్లినిక్ AI అసిస్టెంట్‌ని. "
+    "మీకు ఎలా హెల్ప్ చేయాలండి?"
 )
 
 # Returning patient recognised by their calling number (RULE 1: branch-scoped
 # lookup; RULE 5: branch from the DID). Keeps the DPDP AI-assistant disclosure.
 KNOWN_CALLER_GREETING = (
-    "నమస్కారం {patient} గారు! {clinic} కి తిరిగి స్వాగతం. నేను క్లినిక్ AI "
-    "అసిస్టెంట్‌ని. ఏం సహాయం కావాలి అండి?"
+    "నమస్కారం {patient} గారు! {clinic} కి వెల్‌కమ్ బ్యాక్ అండి. నేను క్లినిక్ AI "
+    "అసిస్టెంట్‌ని. చెప్పండి, ఏం హెల్ప్ కావాలండి?"
 )
 
 # 15-minute pre-appointment reminder call (outbound, appointment-type only).
 REMINDER_GREETING = (
-    "నమస్కారం {patient} గారు! ఇది {clinic} క్లినిక్ నుండి రిమైండర్ కాల్. "
-    "ఈరోజు {time}కి {doctor} గారితో మీ అపాయింట్‌మెంట్ ఉంది. మీరు వస్తున్నారా?"
+    "నమస్కారం {patient} గారు! {clinic} క్లినిక్ నుంచి అపాయింట్‌మెంట్ రిమైండర్ కాల్ అండి. "
+    "ఈరోజు {time}కి {doctor} గారితో మీ బుకింగ్ ఉంది. వస్తున్నారు కదండీ?"
 )
 
 # Doctor-leave cascade rebook call (outbound). Apologise, rebook, retain.
 REBOOK_GREETING = (
-    "నమస్కారం {patient} గారు! {clinic} క్లినిక్ నుండి కాల్ చేస్తున్నాము. "
-    "{date}న {doctor} గారు సెలవులో ఉండటం వల్ల మీ అపాయింట్‌మెంట్ క్యాన్సిల్ "
-    "అయింది. క్షమించండి. వేరే రోజు బుక్ చేయమంటారా?"
+    "నమస్కారం {patient} గారు, {clinic} క్లినిక్ నుంచి కాల్ చేస్తున్నామండి. "
+    "చిన్న రిక్వెస్ట్, {date}న {doctor} గారు అవైలబుల్‌గా లేరు. అందుకని మీ "
+    "అపాయింట్‌మెంట్ కాన్సిల్ అయింది, ఏమనుకోవద్దు. వేరే డేట్ చూసి బుక్ చేయమంటారా?"
 )
 
 def _build_caller_context(rows, today) -> tuple[str | None, str]:
@@ -274,9 +274,9 @@ REMINDER_PROMPT_EXTRA = (
 # Appended AFTER the shared production prompt — phone replies must be terse.
 # Long replies were costing 10-16s of TTS audio per turn on top of LLM time.
 BREVITY_OVERRIDE = (
-    "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి రిప్లై గరిష్టంగా "
-    "రెండు చిన్న వాక్యాలు (మొత్తం ~15 పదాలు). లిస్ట్‌లు, వివరణలు, రిపీట్‌లు వద్దు. "
-    "డిస్క్లోజర్ మళ్ళీ చెప్పవద్దు. ఒక ప్రశ్న మాత్రమే ఒకసారి అడగండి."
+    "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి ఆన్సర్ చాలా చిన్నగా, "
+    "ఒకటి లేదా రెండు ముక్కల్లో ఉండాలి. డిస్క్లోజర్ మళ్ళీ చెప్పొద్దు. "
+    "ఒకసారి ఒకే ఒక్క ప్రశ్న అడుగు."
 )
 
 
@@ -1717,13 +1717,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         state.solo_warning_sent = True
                         await session.say(
                             sanitize_for_tts(
-                                "క్షమించండి, మన సమయం అయిపోతోంది. మీ బుకింగ్ "
-                                "ఖరారు చేద్దాం."
+                                "ఆగండండి, టైమ్ అయిపోతోంది. మీ బుకింగ్ "
+                                "త్వరగా కన్ఫర్మ్ చేద్దామా?"
                             )
                         )
                     await asyncio.sleep(10)
                     await session.say(
-                        sanitize_for_tts("ధన్యవాదాలు అండి, ఉంటాను!")
+                        sanitize_for_tts("థాంక్యూ అండి, ఉంటాను మరి!")
                     )
                     try:
                         await session.current_speech.wait_for_playout()

@@ -1,5 +1,10 @@
 # Telugu lines review — flag & rewrite
 
+> **STATUS: Vinay's versions APPLIED 2026-06-15** (A1–A13 + B1–B23). Two copy-paste
+> corruptions were corrected on the way in: **B6** `समस्या` (Devanagari) → `సమస్య`;
+> **B7** `検మించాలండి` (Japanese `検`) → `క్షమించాలండి`. The tables below are the
+> ORIGINAL prompts for reference — to change a line again, just say which # + new text.
+
 Every Telugu line the agent speaks. **Fill the "Your natural version" column** for any
 that sound robotic; leave blank to keep. I'll apply your versions verbatim at the exact
 `file:line`. `{clinic}` / `{patient}` / `{doctor}` / `{time}` / `{date}` are filled at runtime — keep them.
