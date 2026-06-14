@@ -305,43 +305,6 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     )
 
 
-def _build_tts(tts_voice: str):
-    """Build the TTS for the session. Default = Sarvam Bulbul (unchanged). Opt-in
-    smallest.ai Waves trial (Vinay 2026-06-14): set TTS_PROVIDER=smallest +
-    SMALLEST_API_KEY to hear the padmaja Telugu voice on a real call to the clinic
-    DID. The provider switch is fail-safe — if smallest is selected but its key is
-    missing or the plugin can't load, we fall back to Sarvam so a call NEVER fails
-    over a TTS-trial misconfig (RULE 8)."""
-    if settings.tts_provider == "smallest" and settings.smallest_api_key:
-        try:
-            from livekit.plugins import smallestai
-
-            logger.info("tts_provider_smallest voice=%s model=%s",
-                        settings.smallest_voice, settings.smallest_model)
-            return smallestai.TTS(
-                api_key=settings.smallest_api_key,
-                model=settings.smallest_model,   # lightning_v3.1 (has padmaja)
-                voice_id=settings.smallest_voice,  # padmaja (Telugu)
-                language="te",
-                sample_rate=24000,
-            )
-        except Exception as e:
-            logger.error("tts_smallest_init_failed, using sarvam: %s", e)
-
-    return sarvam.TTS(
-        api_key=settings.sarvam_api_key,
-        model="bulbul:v3",
-        speaker=tts_voice,  # clinic-selected (branches.tts_voice, default rupali)
-        target_language_code="te-IN",
-        pace=1.3,
-        # LATENCY: smallest buffer the plugin allows (valid range 30-200; the old
-        # value 10 raises ValueError on this sarvam version and would crash every
-        # call on the default TTS path) — emits first audio sooner than the 50-char
-        # default, cutting time-to-first-audio.
-        min_buffer_size=30,
-    )
-
-
 async def update_call_duration(call_log_id, seconds: int) -> None:
     """Set a CallLog row's duration in its own short-lived session (metering
     heartbeat). Separate session because the call's main `db` is busy with the
@@ -1528,7 +1491,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
             ),
             llm=_build_fallback_llm(),
-            tts=_build_tts(tts_voice),
+            tts=sarvam.TTS(
+                api_key=settings.sarvam_api_key,
+                model="bulbul:v3",
+                speaker=tts_voice,  # clinic-selected (branches.tts_voice, default rupali)
+                target_language_code="te-IN",
+                pace=1.3,
+                # LATENCY: emit first audio sooner than the 50-char default, cutting
+                # time-to-first-audio. Valid range 30-200; the old value 10 raised
+                # ValueError on this sarvam version and crashed every call.
+                min_buffer_size=30,
+            ),
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             # LATENCY (biggest network-independent win): a SEMANTIC turn detector.
             # Without it, turn-end was decided by VAD silence alone, forcing a long

@@ -1,5 +1,0 @@
-# Isolated TTS comparison sandbox — NEVER commit the API key or generated audio.
-.env
-out/
-*.wav
-*.mp3

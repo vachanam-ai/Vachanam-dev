@@ -67,4 +67,4 @@ Two groups:
 
 **Notes:**
 - A1 vs A2 are inconsistent — A1 is formal ("సహాయపడగలను"), A2 is casual ("ఏం సహాయం కావాలి అండి"). Likely you'll want both casual.
-- Part of "robotic" is the **voice itself** (Sarvam vs smallest.ai padmaja) + pace, not just words — judge that separately from the WAVs.
+- Part of "robotic" is the **voice itself** (Sarvam Bulbul speaker + pace 1.3), not just words — judge that separately. (smallest.ai trial removed 2026-06-15 on Vinay's instruction; TTS is sarvam-only.)
