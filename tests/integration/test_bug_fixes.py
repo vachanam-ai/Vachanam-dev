@@ -645,3 +645,85 @@ async def test_assign_token_refuses_unconfigured_schedule(clinic, db, redis):
     result = await assign_token(bare.id, branch.id, _tomorrow(), db, appointment_time=time(3, 0))
     assert result["success"] is False
     assert result["reason"] == "schedule_not_configured"
+
+
+# ── 2026-06-14 fixes (Vinay live test) ──────────────────────────────────────
+
+
+async def test_slot_hold_ttl_is_bounded_not_until_appointment(clinic, db, redis):
+    """Issue 2/6: a SLOT hold must expire shortly (bounded), NOT survive until
+    the appointment + 2h. A future-dated hold that outlived the call falsely
+    blocked the slot for hours/days and made a real cancel unable to free it.
+    Proven by: the Redis slot key TTL is <= SLOT_HOLD_TTL_SECONDS even for a
+    slot booked weeks out."""
+    from agent.tools.booking_tools import SLOT_HOLD_TTL_SECONDS
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    far_day = date.today() + timedelta(days=30)
+    while far_day.weekday() == 6:  # land on a working weekday
+        far_day += timedelta(days=1)
+    appt = time(10, 0)
+
+    assigned = await assign_token(doc.id, branch.id, far_day, db, appointment_time=appt)
+    assert assigned["success"], assigned
+
+    slot_key = f"slot:{doc.id}:{branch.id}:{far_day}:{appt.strftime('%H%M')}"
+    ttl = await redis.ttl(slot_key)
+    # Old bug: ttl ≈ (30 days) + 2h. Fixed: a fixed short bound.
+    assert 0 < ttl <= SLOT_HOLD_TTL_SECONDS, f"hold TTL {ttl}s not bounded"
+
+
+async def test_confirm_booking_announces_time_only_for_appointment_doctor(clinic, db, redis):
+    """Issue 4: appointment doctors must NEVER have a token number announced.
+    confirm_booking returns announce='time_only' so the agent can't slip."""
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    appt = time(11, 0)
+    assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=appt)
+    assert assigned["success"], assigned
+    result = await confirm_booking(
+        doctor_id=doc.id,
+        branch_id=branch.id,
+        patient_name="Appt Patient",
+        patient_phone="+919666444428",
+        complaint="skin",
+        booking_date=day,
+        token_number=assigned["token_number"],
+        followup_consent=False,
+        patient_age=30,
+        appointment_time=appt,
+        source="voice",
+        db=db,
+        calendar_service=FlakyCalendar(failures=0),
+        meta_service=NullMeta(),
+    )
+    assert result["success"], result
+    assert result["announce"] == "time_only"
+    assert result["booking_type"] == "appointment"
+
+
+async def test_confirm_booking_announces_token_number_for_token_doctor(clinic, db, redis):
+    """Issue 4 (other side): token doctors SHOULD announce the queue number."""
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db)
+    assert assigned["success"], assigned
+    result = await confirm_booking(
+        doctor_id=doc.id,
+        branch_id=branch.id,
+        patient_name="Token Patient",
+        patient_phone="+919666444429",
+        complaint="fever",
+        booking_date=day,
+        token_number=assigned["token_number"],
+        followup_consent=False,
+        patient_age=40,
+        appointment_time=None,  # token doctor has no clock time
+        source="voice",
+        db=db,
+        calendar_service=FlakyCalendar(failures=0),
+        meta_service=NullMeta(),
+    )
+    assert result["success"], result
+    assert result["announce"] == "token_number"
+    assert result["booking_type"] == "token"

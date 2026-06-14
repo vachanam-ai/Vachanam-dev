@@ -16,6 +16,17 @@ from backend.services.audit_service import write_audit_row
 
 logger = structlog.get_logger()
 
+# A SLOT hold is the atomic gate between assign_token and confirm_booking. It
+# only needs to outlive the CALL — once confirm writes the Token row, the DB
+# (status='confirmed') is the authoritative occupancy source for both
+# check_availability and assign_token, so the Redis key is redundant after that.
+# Bounding the hold to a fixed short window (not slot_time+2h, which kept a hold
+# for a future-dated slot alive for hours/days) means a hold leaked by a dropped
+# call self-heals in minutes instead of falsely blocking the slot until the
+# appointment. 15 min comfortably exceeds any single call (Solo cap is 4 min).
+# Token holds are NOT affected — that counter is the all-day queue sequence.
+SLOT_HOLD_TTL_SECONDS = 900
+
 
 def _redis():
     """Create a fresh Redis client. Use as `async with _redis() as r:`.
@@ -564,12 +575,14 @@ async def assign_token(
             return {"success": False, "reason": "full"}
 
         slot_key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{appointment_time.strftime('%H%M')}"
-        slot_dt = datetime.combine(booking_date, appointment_time)
-        ttl_seconds = int((slot_dt - datetime.now()).total_seconds()) + 7200
 
         async with _redis() as r:
             slot_count = await r.incr(slot_key)
-            await r.expire(slot_key, max(ttl_seconds, 7200))
+            # Bounded hold TTL (see SLOT_HOLD_TTL_SECONDS): outlive the call, not
+            # the wait until the appointment. DB confirmed rows are the lasting
+            # source of truth, so a leaked hold self-heals fast instead of
+            # falsely blocking the slot for hours.
+            await r.expire(slot_key, SLOT_HOLD_TTL_SECONDS)
 
             if max(slot_count, db_confirmed + 1) > max_per_slot:
                 await r.decr(slot_key)  # rollback
@@ -915,7 +928,23 @@ async def confirm_booking(
         except Exception as e:
             logger.error("whatsapp_confirmation_failed", error=str(e), token_id=str(token.id))
 
-    return {"success": True, "token_id": str(token.id)}
+    # Tell the LLM, unambiguously, what to SAY — the prompt rule alone has been
+    # ignored (a queue number spoken for an appointment doctor). For appointment
+    # doctors the internal token_number means nothing to the patient: confirm the
+    # DATE + TIME only, never a token/queue number.
+    is_token = doctor.booking_type == "token"
+    return {
+        "success": True,
+        "token_id": str(token.id),
+        "booking_type": doctor.booking_type,
+        "announce": "token_number" if is_token else "time_only",
+        "instruction": (
+            "Token doctor — tell the patient their TOKEN NUMBER (queue place)."
+            if is_token
+            else "Appointment doctor — confirm only the DATE and TIME. Do NOT "
+            "say any token or queue number."
+        ),
+    }
 
 
 def _phone_digits(phone: str | None) -> str:
