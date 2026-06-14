@@ -4,4 +4,11 @@ livekit-plugins-sarvam>=1.5.17
 livekit-plugins-google>=1.5.17
 livekit-plugins-silero>=1.5.16
 livekit-plugins-noise-cancellation>=0.2.5
+# Semantic end-of-turn detection (latency: commit the turn on a complete
+# utterance instead of waiting out VAD silence). Model weights are downloaded
+# at build time in Dockerfile.agent via `agents download-files`.
+livekit-plugins-turn-detector>=1.5.16
+# GPT-4o-mini fallback LLM (imported in agent.py as livekit.plugins.openai) —
+# was missing here; would break the deployed image's import.
+livekit-plugins-openai>=1.5.16
 python-dotenv>=1.0.0

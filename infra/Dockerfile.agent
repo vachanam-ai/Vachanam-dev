@@ -25,6 +25,13 @@ USER appuser
 
 ENV PYTHONUNBUFFERED=1
 
+# Bake the inference model weights (Silero VAD + the multilingual semantic
+# turn detector) into the image so the FIRST call doesn't pay a runtime
+# download. Runs as appuser so the model cache lands in this user's home and is
+# readable at runtime. Needs the same env the worker imports (it only resolves
+# plugin model files here, no network calls to our APIs).
+RUN python -m agent.livekit_minimal.agent download-files
+
 # The real voice brain is the LiveKit Agents worker (agent/livekit_minimal/agent.py).
 # It dials OUT to LiveKit Cloud and registers as a worker — it has NO inbound HTTP
 # port (the retired Pipecat/Vobiz HTTP app was deleted in iter1). `start` is the

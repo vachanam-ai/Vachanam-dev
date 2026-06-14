@@ -53,6 +53,7 @@ from livekit.agents import (  # noqa: E402
 )
 from livekit.agents import llm as lk_llm  # noqa: E402
 from livekit.plugins import google, noise_cancellation, openai, sarvam, silero  # noqa: E402
+from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
 import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
@@ -1471,12 +1472,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 min_buffer_size=10,
             ),
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
+            # LATENCY (biggest network-independent win): a SEMANTIC turn detector.
+            # Without it, turn-end was decided by VAD silence alone, forcing a long
+            # max_endpointing_delay so the patient isn't cut off mid-sentence. The
+            # model commits the turn as soon as the utterance is grammatically
+            # complete (often 200-400ms), letting the silence timers drop below.
+            # Prewarmed once per process in _prewarm (no per-call load cost).
+            turn_detection=ctx.proc.userdata.get("turn_detector") or MultilingualModel(),
             preemptive_generation=True,
-            min_endpointing_delay=0.4,
-            # LATENCY: was 3.0 — the upper bound the turn-detector can wait after
-            # the patient stops before committing the turn. 3s is a long tail on
-            # every turn; 1.5s still tolerates natural pauses on a phone call.
-            max_endpointing_delay=1.5,
+            # With the semantic turn detector backstopping, the silence timers can
+            # shrink: the detector fires on a complete utterance; these only catch
+            # the case where it's unsure. min 0.4->0.2, max 1.5->1.0.
+            min_endpointing_delay=0.2,
+            max_endpointing_delay=1.0,
         )
 
         # Per-turn latency breakdown so the 7s "stop speaking -> agent speaks"
@@ -1699,9 +1707,11 @@ def _prewarm(proc) -> None:
     silero.VAD.load() was called inside every call's AgentSession setup, adding
     its init cost (~hundreds of ms) to each call's startup before the greeting.
     Loading it here, once, and reusing it across all calls removes that from the
-    per-call path. Standard LiveKit pattern.
+    per-call path. Standard LiveKit pattern. The semantic turn detector is loaded
+    the same way — its weights are heavy to init per call.
     """
     proc.userdata["vad"] = silero.VAD.load()
+    proc.userdata["turn_detector"] = MultilingualModel()
 
 
 if __name__ == "__main__":
