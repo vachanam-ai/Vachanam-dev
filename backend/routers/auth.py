@@ -215,13 +215,11 @@ async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
 class RegisterRequest(BaseModel):
     clinic_name: str
     owner_name: str
-    phone: str
     email: str | None = None
     password: str | None = None
     id_token: str | None = None  # Google alternative to email+password
     plan: str = "clinic"         # solo | clinic | multi
-    phone_otp: str | None = None
-    email_otp: str | None = None
+    email_otp: str | None = None  # email-OTP verification (Vinay 2026-06-15)
 
 
 class LoginRequest(BaseModel):
@@ -276,7 +274,6 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
     from backend.services import otp_service
     from backend.services.validators import (
         normalize_email,
-        normalize_indian_phone,
         validate_password,
     )
 
@@ -288,10 +285,6 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         raise HTTPException(status_code=422, detail="Clinic name is required")
     if not body.owner_name.strip():
         raise HTTPException(status_code=422, detail="Your name is required")
-    try:
-        phone = normalize_indian_phone(body.phone)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
     if body.plan not in ("solo", "clinic", "multi"):
         raise HTTPException(status_code=422, detail="Invalid plan")
 
@@ -323,20 +316,21 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
-    # ── OTP gate: MOBILE ONLY (decision: Vinay 2026-06-14). Phone is the
-    # verified channel; email is the login identity but is NOT OTP-verified
-    # (no email-OTP friction). A verified Google ID token skips OTP entirely —
-    # it is already a strong, Google-authenticated identity.
+    # ── OTP gate: EMAIL ONLY (decision: Vinay 2026-06-15, reverses the
+    # 2026-06-14 mobile-only choice). Email is now both the login identity AND
+    # the verified channel; mobile is no longer collected at signup. A verified
+    # Google ID token skips OTP entirely — it is already a strong, Google-
+    # authenticated identity.
     if not google_sub:
         # M7: a channel already verified on a previous attempt counts. Without
-        # this, a wrong code on retry could burn the already-consumed phone code
-        # and dead-end on "Phone not verified". verify_code OR the persisted
+        # this, a wrong code on retry could burn the already-consumed email code
+        # and dead-end on "Email not verified". verify_code OR the persisted
         # is_verified flag passes.
-        phone_ok = (
-            body.phone_otp and await otp_service.verify_code("sms", phone, body.phone_otp)
-        ) or await otp_service.is_verified("sms", phone)
-        if not phone_ok:
-            raise HTTPException(status_code=403, detail="Phone not verified — enter the SMS code")
+        email_ok = (
+            body.email_otp and await otp_service.verify_code("email", email, body.email_otp)
+        ) or await otp_service.is_verified("email", email)
+        if not email_ok:
+            raise HTTPException(status_code=403, detail="Email not verified — enter the code we emailed you")
 
     async with AsyncSessionLocal() as db:
         existing = (
@@ -349,7 +343,10 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
 
         org = Organization(
             name=body.clinic_name.strip(),
-            owner_phone=phone,
+            # Mobile is no longer collected at signup (email-only, Vinay
+            # 2026-06-15). owner_phone is NOT NULL, so seed it empty; the owner
+            # fills the real clinic phone + emergency contact later in Settings.
+            owner_phone="",
             owner_email=email,
             plan=body.plan,
             status="trial",
@@ -364,7 +361,8 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             # WhatsApp wiring is MVP2 — unique placeholder satisfies the NOT NULL
             # constraint until a real number is connected during onboarding.
             whatsapp_number=f"pending-{_uuid.uuid4().hex[:12]}",
-            emergency_contact=phone,
+            # emergency_contact is set during onboarding/Settings (no phone at signup).
+            emergency_contact=None,
         )
         db.add(branch)
         await db.flush()
@@ -373,7 +371,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             org_id=org.id,
             email=email,
             name=body.owner_name.strip(),
-            phone=phone,
+            phone=None,
             role="org_admin",
             branch_ids=[str(branch.id)],
             google_sub=google_sub,

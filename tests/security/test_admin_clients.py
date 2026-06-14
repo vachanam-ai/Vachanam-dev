@@ -105,6 +105,6 @@ async def test_add_owner_strong_password_accepted(client, db):
     r = await client.post(
         "/admin/owners",
         headers={"Authorization": f"Bearer {_jwt()}"},
-        json={"email": email, "name": "Strong Owner", "password": "Str0ngPass99"},
+        json={"email": email, "name": "Strong Owner", "password": "Str0ngPass@99"},
     )
     assert r.status_code == 201, r.text

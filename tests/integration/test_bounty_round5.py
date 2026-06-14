@@ -83,7 +83,7 @@ async def test_doctor_role_login_without_match_rejected(clinic, client):
     r = await client.post(
         f"/branches/{bid}/staff", headers=_auth(owner),
         json={"name": "Dr Ghost", "email": f"ghost-{uuid.uuid4().hex[:6]}@d.test",
-              "password": "GoodPass123", "role": "doctor"},
+              "password": "GoodPass@123", "role": "doctor"},
     )
     assert r.status_code == 422, r.text
 
@@ -104,7 +104,7 @@ async def test_doctor_role_login_links_to_doctor(clinic, client, db):
 
     st = await client.post(
         f"/branches/{bid}/staff", headers=_auth(owner),
-        json={"name": "Dr Asha", "email": email, "password": "GoodPass123",
+        json={"name": "Dr Asha", "email": email, "password": "GoodPass@123",
               "role": "doctor"},
     )
     assert st.status_code == 201, st.text

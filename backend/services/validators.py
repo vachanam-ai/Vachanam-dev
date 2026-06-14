@@ -88,15 +88,18 @@ def normalize_email(raw: str) -> str:
 
 
 def validate_password(password: str) -> None:
-    """Enforce a sane minimum: 8+ chars, at least one letter and one digit,
-    not all-numeric, not a known-common password. Raises ValueError on failure."""
+    """Enforce password strength (Vinay 2026-06-15, matches the signup UI
+    checklist): 8+ chars, at least one lowercase, one uppercase, one digit, and
+    one special character; not a known-common password. Raises ValueError."""
     if not password or len(password) < 8:
         raise ValueError("Password must be at least 8 characters")
     if password.lower() in _COMMON_PASSWORDS:
         raise ValueError("That password is too common — choose something less guessable")
-    if not re.search(r"[A-Za-z]", password):
-        raise ValueError("Password must include at least one letter")
+    if not re.search(r"[a-z]", password):
+        raise ValueError("Password must include at least one lowercase letter")
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("Password must include at least one uppercase letter")
     if not re.search(r"\d", password):
         raise ValueError("Password must include at least one number")
-    if password.isdigit():
-        raise ValueError("Password cannot be only numbers")
+    if not re.search(r"[^A-Za-z0-9]", password):
+        raise ValueError("Password must include at least one special character")

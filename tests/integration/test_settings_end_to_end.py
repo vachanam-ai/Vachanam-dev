@@ -153,12 +153,12 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
         f"/branches/{bid}/staff",
         headers=_auth(owner),
         json={"name": "Reception", "email": recep_email,
-              "password": "DeskPass123", "role": "receptionist"},
+              "password": "DeskPass@123", "role": "receptionist"},
     )
     assert st.status_code == 201, st.text
 
     login = await client.post(
-        "/auth/login", json={"email": recep_email, "password": "DeskPass123"}
+        "/auth/login", json={"email": recep_email, "password": "DeskPass@123"}
     )
     assert login.status_code == 200, login.text
     recep_token = login.json()["access_token"]

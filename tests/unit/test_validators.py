@@ -84,7 +84,8 @@ def test_invalid_emails_rejected(raw):
 # ── Password ───────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("pw", ["Clinic2024", "srinivas7", "Dental@99", "abcd1234x"])
+# Must satisfy: 8+, lowercase, uppercase, digit, special char (Vinay 2026-06-15).
+@pytest.mark.parametrize("pw", ["Dental@99x", "Clinic#2024", "Str0ng!pass", "Aa1$aaaa"])
 def test_strong_passwords_pass(pw):
     validate_password(pw)  # no raise
 
@@ -93,12 +94,15 @@ def test_strong_passwords_pass(pw):
     "pw",
     [
         "",              # empty
-        "short1",        # < 8
+        "short1!",       # < 8
         "1234567890",    # all numbers (the one Vinay flagged)
         "00000000",      # all numbers + common
         "password",      # no digit + common
-        "abcdefgh",      # no digit
-        "12345678",      # common all-numeric
+        "abcdefgh",      # no digit/upper/special
+        "Clinic2024",    # no special char
+        "clinic@2024",   # no uppercase
+        "CLINIC@2024",   # no lowercase
+        "Clinicabc@",    # no digit
         "qwerty123",     # common
     ],
 )
