@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import sys
 from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
 from datetime import timezone as _tz
@@ -105,6 +106,34 @@ SERVICE_BLOCKED_UTTERANCE = (
     "నమస్కారం! క్షమించండి, ఈ సేవ ప్రస్తుతం తాత్కాలికంగా అందుబాటులో లేదు. "
     "దయచేసి క్లినిక్‌ని నేరుగా సంప్రదించండి. ధన్యవాదాలు."
 )
+
+# LATENCY/UX (Vinay 2026-06-14): route_to_doctor (routing LLM + DB) and
+# check_availability (DB) take a beat. With no word the caller hears dead air and
+# thinks the line dropped. A real receptionist fills it — "one moment, I'm
+# checking". session.say() is non-blocking (returns a handle, plays in the
+# background), so the filler covers the gap WHILE the tool does its work;
+# add_to_chat_ctx=False keeps it out of the LLM turn history. Short + varied so it
+# sounds human, not canned.
+# ⚠ TELUGU NATURALNESS: these are everyday spoken lines, but they need a native
+# Hyderabad ear to confirm they don't sound stiff — flagged for Vinay to validate.
+_LOOKUP_FILLERS = (
+    "ఒక్క నిమిషం, చూస్తాను అండి.",        # one minute, I'll check
+    "ఒక్క క్షణం ఆగండి, చూస్తున్నాను.",     # hold a moment, I'm checking
+    "చూస్తాను అండి, ఒక్క సెకను.",          # I'll check, one second
+    "సరే అండి, ఒక్కసారి చూస్తాను.",        # okay, let me have a look
+)
+
+
+def _say_lookup_filler(context) -> None:
+    """Speak a short 'let me check' filler over the dead air while a lookup tool
+    runs. Non-blocking and fully guarded — it must NEVER affect the booking."""
+    try:
+        context.session.say(
+            sanitize_for_tts(random.choice(_LOOKUP_FILLERS)),
+            add_to_chat_ctx=False,
+        )
+    except Exception as e:
+        logger.debug("lookup_filler_skipped: %s", e)
 
 # Professional welcome + DPDP s.5 AI disclosure in ONE short Telugu utterance.
 # "AI అసిస్టెంట్" must stay (DPDP — caller must know it's not a human). The
@@ -404,6 +433,7 @@ class VachanamAgent(Agent):
         """Match the patient's stated health complaint to the right doctor.
         Call once the patient has described their problem. Pass the complaint
         exactly as spoken."""
+        _say_lookup_filler(context)  # cover the routing-LLM/DB beat (no dead air)
         self._state.complaint = complaint
         result = await route_to_doctor(
             complaint=complaint,
@@ -429,6 +459,7 @@ class VachanamAgent(Agent):
     ) -> dict:
         """Check whether the doctor has capacity on a date (YYYY-MM-DD).
         Optional query_start/query_end are HH:MM strings for slot doctors."""
+        _say_lookup_filler(context)  # cover the DB lookup beat (no dead air)
         resolved = await self._resolve_doctor_id(doctor_id)
         availability = await check_availability(
             doctor_id=resolved,
