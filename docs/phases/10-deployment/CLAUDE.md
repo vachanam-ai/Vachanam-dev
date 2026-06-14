@@ -114,7 +114,7 @@ Seed yourself as the first admin user via psql.
 ## After Phase 10
 
 Vachanam is live. Focus shifts to:
-- Sales (first 5 paying clinics in Hyderabad)
+- Sales (first 5 paying clinics across India)
 - Watch metrics: call answer rate, booking conversion %, churn
 - Iterate on weak points found in real usage
 - Post-MVP backlog: full TYPE_1/TYPE_2 emergency classification, CSV exports, multi-language UI for receptionist, scheduled migration to Postgres 17, separate read replica, Datadog when budget allows.

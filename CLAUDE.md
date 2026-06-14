@@ -30,7 +30,7 @@ Founder: Vinay Rongala, Hyderabad, India.
 Domain: vachanam.in | Email: hello@vachanam.in
 
 ### The Problem
-A clinic in Hyderabad gets 20–80 patient calls per day. The receptionist
+A clinic in India gets 20–80 patient calls per day. The receptionist
 manually answers each call, writes in a register, and misses 20–30% of
 calls when busy. Each missed call = ₹300–500 lost consultation. At 10
 missed calls/day that is ₹3,000–5,000 lost revenue daily.

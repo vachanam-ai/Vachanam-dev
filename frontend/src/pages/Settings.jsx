@@ -191,7 +191,7 @@ export default function Settings() {
           </div>
           <div>
             <label className="label">City</label>
-            <input className="field" value={form.city} onChange={set("city")} placeholder="Hyderabad" />
+            <input className="field" value={form.city} onChange={set("city")} placeholder="City" />
           </div>
           <div className="sm:col-span-2">
             <label className="label">Address</label>

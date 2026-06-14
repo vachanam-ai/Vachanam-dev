@@ -95,7 +95,7 @@ export default function Login() {
           </p>
         </div>
         <p data-reveal className="relative font-ui text-xs text-teal-pale/60">
-          vachanam.in · Hyderabad, India
+          vachanam.in · India
         </p>
       </section>
 

@@ -12,13 +12,13 @@ Vachanam is an AI-powered telephone appointment booking service for Indian clini
 
 ## Who It Serves
 
-Primary: clinic owners and their receptionists in Hyderabad, India — specifically small-to-mid-sized clinics with one to six doctors receiving 20–80 inbound patient calls per day. Secondary: the patients themselves, who get instant confirmation and a WhatsApp reminder instead of a busy signal. Vinay Rongala (founder) sells directly to clinic owners; the receptionist and doctors use the system through WhatsApp commands and a mobile PWA without needing any training.
+Primary: clinic owners and their receptionists across India — specifically small-to-mid-sized clinics with one to six doctors receiving 20–80 inbound patient calls per day. Secondary: the patients themselves, who get instant confirmation and a WhatsApp reminder instead of a busy signal. Vinay Rongala (founder) sells directly to clinic owners; the receptionist and doctors use the system through WhatsApp commands and a mobile PWA without needing any training.
 
 ---
 
 ## Why It Exists
 
-A typical Hyderabad clinic misses 20–30% of inbound calls when the receptionist is busy. Each missed call is a lost consultation worth ₹300–500. At 10 missed calls per day that is ₹3,000–5,000 of lost revenue daily — recurring, invisible, and fixable. Existing scheduling software requires patients to use an app or website; Indian patients call. Vachanam meets patients where they are (a phone call), speaks their language (Telugu), and requires zero behavior change from either the patient or the doctor.
+A typical Indian clinic misses 20–30% of inbound calls when the receptionist is busy. Each missed call is a lost consultation worth ₹300–500. At 10 missed calls per day that is ₹3,000–5,000 of lost revenue daily — recurring, invisible, and fixable. Existing scheduling software requires patients to use an app or website; Indian patients call. Vachanam meets patients where they are (a phone call), speaks their language (Telugu), and requires zero behavior change from either the patient or the doctor.
 
 ---
 

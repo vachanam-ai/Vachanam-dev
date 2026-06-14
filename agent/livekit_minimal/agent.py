@@ -115,7 +115,7 @@ SERVICE_BLOCKED_UTTERANCE = (
 # add_to_chat_ctx=False keeps it out of the LLM turn history. Short + varied so it
 # sounds human, not canned.
 # ⚠ TELUGU NATURALNESS: these are everyday spoken lines, but they need a native
-# Hyderabad ear to confirm they don't sound stiff — flagged for Vinay to validate.
+# speaker's ear to confirm they don't sound stiff — flagged for Vinay to validate.
 _LOOKUP_FILLERS = (
     "ఒక్క నిమిషం అండి, చెక్ చేస్తాను.",       # one minute, I'll check
     "ఒక్క సెకండ్ అండి, చూస్తున్నాను.",        # hold a moment, I'm checking

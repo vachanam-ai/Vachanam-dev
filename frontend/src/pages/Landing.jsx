@@ -242,7 +242,7 @@ export default function Landing() {
         </h2>
         <p className="mt-3 font-ui text-teal-pale/85">
           <a href="mailto:hello@vachanam.in" className="underline-offset-4 hover:underline">hello@vachanam.in</a>
-          {" · "}Hyderabad, India
+          {" · "}India
         </p>
         <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
           <Link to="/register" className="btn-gold inline-flex px-8 py-3">Start free trial</Link>
