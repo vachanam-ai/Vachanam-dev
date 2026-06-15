@@ -24,6 +24,16 @@ router = APIRouter()
 # Sarvam Bulbul v3 speakers offered to clinics (curated 2026-06-11 by Vinay)
 ALLOWED_VOICES = ["rupali", "simran", "kavya", "ishita", "shreya", "suhani"]
 
+# Voice-agent languages a clinic can pick (single source of truth: agent.i18n).
+from agent.i18n import LANGUAGES as _LANGUAGES  # noqa: E402
+
+ALLOWED_LANGUAGES = list(_LANGUAGES.keys())
+# For the Settings dropdown: code + English name + endonym.
+LANGUAGE_OPTIONS = [
+    {"code": c, "name": cfg.name, "native_name": cfg.native_name}
+    for c, cfg in _LANGUAGES.items()
+]
+
 
 class BranchSettings(BaseModel):
     branch_id: str
@@ -32,10 +42,12 @@ class BranchSettings(BaseModel):
     city: str | None = None
     clinic_phone: str | None = None
     tts_voice: str
+    language: str = "te"
     did_number: str | None
     emergency_contact: str | None
     google_calendar_id: str | None = None
     allowed_voices: list[str]
+    allowed_languages: list[dict] = []
     doctors_count: int = 0
     staff_count: int = 0
     did_wired: bool | None = None  # set on PATCH when DID trunk sync runs
@@ -63,10 +75,12 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         city=branch.city,
         clinic_phone=getattr(branch, "clinic_phone", None),
         tts_voice=getattr(branch, "tts_voice", "rupali"),
+        language=getattr(branch, "language", "te") or "te",
         did_number=branch.did_number,
         emergency_contact=branch.emergency_contact,
         google_calendar_id=branch.google_calendar_id,
         allowed_voices=ALLOWED_VOICES,
+        allowed_languages=LANGUAGE_OPTIONS,
         doctors_count=doctors_count,
         staff_count=staff_count,
         did_wired=did_wired,
@@ -75,6 +89,7 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
 
 class VoiceUpdate(BaseModel):
     tts_voice: str
+    language: str | None = None  # optional: also set the clinic's spoken language
 
 
 @router.get(
@@ -115,6 +130,8 @@ async def update_branch_voice(
         raise HTTPException(status_code=403, detail="Only the clinic owner can change the voice")
     if body.tts_voice not in ALLOWED_VOICES:
         raise HTTPException(status_code=422, detail=f"Voice must be one of {ALLOWED_VOICES}")
+    if body.language is not None and body.language not in ALLOWED_LANGUAGES:
+        raise HTTPException(status_code=422, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
 
     result = await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
     branch = result.scalar_one_or_none()
@@ -122,13 +139,17 @@ async def update_branch_voice(
         raise HTTPException(status_code=404, detail="Branch not found")
 
     branch.tts_voice = body.tts_voice
+    if body.language is not None:
+        branch.language = body.language
     await db.commit()
 
     request.state.audit_resource_id = branch_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
 
-    logger.info("branch_voice_changed", branch_id=branch_id, voice=body.tts_voice)
+    logger.info(
+        "branch_voice_changed", branch_id=branch_id, voice=body.tts_voice, language=body.language
+    )
     return await _settings_payload(db, branch, branch_id)
 
 

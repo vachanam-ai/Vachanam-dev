@@ -73,8 +73,10 @@ export const fetchBranchSettings = (branchId) =>
   api.get(`/branches/${branchId}/settings`).then((r) => r.data);
 export const updateBranchSettings = (branchId, payload) =>
   api.patch(`/branches/${branchId}/settings`, payload).then((r) => r.data);
-export const setBranchVoice = (branchId, tts_voice) =>
-  api.patch(`/branches/${branchId}/voice`, { tts_voice }).then((r) => r.data);
+export const setBranchVoice = (branchId, tts_voice, language) =>
+  api
+    .patch(`/branches/${branchId}/voice`, language == null ? { tts_voice } : { tts_voice, language })
+    .then((r) => r.data);
 export const testCalendar = (branchId) =>
   api.post(`/branches/${branchId}/calendar-test`).then((r) => r.data);
 export const fetchStaff = (branchId) =>

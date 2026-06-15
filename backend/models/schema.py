@@ -63,6 +63,11 @@ class Branch(Base):
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))
     # Sarvam Bulbul speaker for this clinic's voice agent (clinic-selectable)
     tts_voice: Mapped[str] = mapped_column(String(32), default="rupali", server_default="rupali")
+    # Spoken language for this clinic's voice agent (clinic-selectable). Drives
+    # the Sarvam STT/TTS language codes AND the per-language spoken lines +
+    # system-prompt directive. Short code (te/hi/ta/kn/ml/mr/bn/or); see
+    # agent/i18n/languages.py. Default Telugu — the launch market.
+    language: Mapped[str] = mapped_column(String(8), default="te", server_default="te", nullable=False)
     timezone: Mapped[str] = mapped_column(String(50), default="Asia/Kolkata")
     status: Mapped[str] = mapped_column(
         Enum("active", "inactive", name="branch_status"),

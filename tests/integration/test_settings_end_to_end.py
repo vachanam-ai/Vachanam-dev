@@ -123,6 +123,25 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     g = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
     assert g.status_code == 200
     assert g.json()["did_number"] == normalize_did(DID)
+    # Language defaults to Telugu and the dropdown options are surfaced.
+    assert g.json()["language"] == "te"
+    assert any(o["code"] == "ta" for o in g.json()["allowed_languages"])
+
+    # Owner switches the clinic to Tamil via the voice PATCH (carries tts_voice).
+    lp = await client.patch(
+        f"/branches/{bid}/voice",
+        headers=_auth(owner),
+        json={"tts_voice": g.json()["tts_voice"], "language": "ta"},
+    )
+    assert lp.status_code == 200, lp.text
+    assert lp.json()["language"] == "ta"
+    # An unknown language code is rejected, not silently stored.
+    bad = await client.patch(
+        f"/branches/{bid}/voice",
+        headers=_auth(owner),
+        json={"tts_voice": g.json()["tts_voice"], "language": "zz"},
+    )
+    assert bad.status_code == 422
 
     # ── 2. The agent's inbound DID->branch resolution finds THIS branch only ──
     did_norm = normalize_did(DID)

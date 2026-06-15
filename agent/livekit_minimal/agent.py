@@ -59,6 +59,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa
 import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
+from agent.i18n import get_lang, get_lines  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_system_prompt,
@@ -99,71 +100,39 @@ MIN_PATIENT_AGE = 0
 MAX_PATIENT_AGE = 120
 MAX_DIFFERENT_PERSON_BOOKINGS_PER_CALL = 2
 
-# Service-blocked utterances (org paused by super-admin, or hard-block after
-# minutes exhausted). RULE 8: the call is ANSWERED and gets one coherent
-# sentence — never dead air, never endless ringing.
-SERVICE_BLOCKED_UTTERANCE = (
-    "నమస్కారం అండి! క్షమించాలి, ఈ సర్వీస్ ప్రస్తుతానికి ఆగిపోయింది. "
-    "దయచేసి క్లినిక్‌కి డైరెక్ట్‌గా కాల్ చేయండి. థాంక్యూ."
-)
+# Spoken hardcoded lines (greetings, fillers, service-blocked, reminder/rebook,
+# caps) now live per-language in agent/i18n/lines.py and are resolved per call
+# from Branch.language. The Telugu set there is Vinay's validated reference.
 
 # LATENCY/UX (Vinay 2026-06-14): route_to_doctor (routing LLM + DB) and
 # check_availability (DB) take a beat. With no word the caller hears dead air and
 # thinks the line dropped. A real receptionist fills it — "one moment, I'm
-# checking". session.say() is non-blocking (returns a handle, plays in the
-# background), so the filler covers the gap WHILE the tool does its work;
-# add_to_chat_ctx=False keeps it out of the LLM turn history. Short + varied so it
-# sounds human, not canned.
-# ⚠ TELUGU NATURALNESS: these are everyday spoken lines, but they need a native
-# speaker's ear to confirm they don't sound stiff — flagged for Vinay to validate.
-_LOOKUP_FILLERS = (
-    "ఒక్క నిమిషం అండి, చెక్ చేస్తాను.",       # one minute, I'll check
-    "ఒక్క సెకండ్ అండి, చూస్తున్నాను.",        # hold a moment, I'm checking
-    "చూసి చెప్తానండి, ఒక్క నిమిషం.",          # I'll check, one second
-    "సరేనండి, ఒక్కసారి సిస్టమ్‌లో చూస్తాను.",  # let me look in the system
-)
+# checking". session.say() is non-blocking, so the filler covers the gap WHILE
+# the tool runs; add_to_chat_ctx=False keeps it out of the LLM turn history.
+# The clinic's language fillers ride on the session's userdata (set at session
+# build); this Telugu set is the fallback if userdata is ever missing.
+_FALLBACK_FILLERS = get_lines("te").fillers
 
 
 def _say_lookup_filler(context) -> None:
     """Speak a short 'let me check' filler over the dead air while a lookup tool
-    runs. Non-blocking and fully guarded — it must NEVER affect the booking."""
+    runs. Picks the clinic-language fillers off the session userdata (falls back
+    to Telugu). Non-blocking and fully guarded — it must NEVER affect booking."""
     try:
+        fillers = None
+        sess = getattr(context, "session", None)
+        ud = getattr(sess, "userdata", None)
+        if ud is None:
+            ud = getattr(context, "userdata", None)
+        if isinstance(ud, dict):
+            fillers = ud.get("fillers")
         context.session.say(
-            sanitize_for_tts(random.choice(_LOOKUP_FILLERS)),
+            sanitize_for_tts(random.choice(fillers or _FALLBACK_FILLERS)),
             add_to_chat_ctx=False,
         )
     except Exception as e:
         logger.debug("lookup_filler_skipped: %s", e)
 
-# Professional welcome + DPDP s.5 AI disclosure in ONE short Telugu utterance.
-# "AI అసిస్టెంట్" must stay (DPDP — caller must know it's not a human). The
-# name/phone collection notice moved to the point of collection (booking flow
-# asks it when taking details) — better DPDP practice AND a warmer opening.
-# Wording per Vinay 2026-06-11.
-DISCLOSURE_GREETING = (
-    "నమస్కారం అండి, {clinic} కి స్వాగతం. నేను క్లినిక్ AI అసిస్టెంట్‌ని. "
-    "మీకు ఎలా హెల్ప్ చేయాలండి?"
-)
-
-# Returning patient recognised by their calling number (RULE 1: branch-scoped
-# lookup; RULE 5: branch from the DID). Keeps the DPDP AI-assistant disclosure.
-KNOWN_CALLER_GREETING = (
-    "నమస్కారం {patient} గారు! {clinic} కి వెల్‌కమ్ బ్యాక్ అండి. నేను క్లినిక్ AI "
-    "అసిస్టెంట్‌ని. చెప్పండి, ఏం హెల్ప్ కావాలండి?"
-)
-
-# 15-minute pre-appointment reminder call (outbound, appointment-type only).
-REMINDER_GREETING = (
-    "నమస్కారం {patient} గారు! {clinic} క్లినిక్ నుంచి అపాయింట్‌మెంట్ రిమైండర్ కాల్ అండి. "
-    "ఈరోజు {time}కి {doctor} గారితో మీ బుకింగ్ ఉంది. వస్తున్నారు కదండీ?"
-)
-
-# Doctor-leave cascade rebook call (outbound). Apologise, rebook, retain.
-REBOOK_GREETING = (
-    "నమస్కారం {patient} గారు, {clinic} క్లినిక్ నుంచి కాల్ చేస్తున్నామండి. "
-    "చిన్న రిక్వెస్ట్, {date}న {doctor} గారు అవైలబుల్‌గా లేరు. అందుకని మీ "
-    "అపాయింట్‌మెంట్ కాన్సిల్ అయింది, ఏమనుకోవద్దు. వేరే డేట్ చూసి బుక్ చేయమంటారా?"
-)
 
 def _build_caller_context(rows, today) -> tuple[str | None, str]:
     """Identify an inbound caller from their existing bookings (RULE 1 already
@@ -271,13 +240,6 @@ REMINDER_PROMPT_EXTRA = (
     "negotiation rules. Keep every reply to two short sentences."
 )
 
-# Appended AFTER the shared production prompt — phone replies must be terse.
-# Long replies were costing 10-16s of TTS audio per turn on top of LLM time.
-BREVITY_OVERRIDE = (
-    "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి ఆన్సర్ చాలా చిన్నగా, "
-    "ఒకటి లేదా రెండు ముక్కల్లో ఉండాలి. డిస్క్లోజర్ మళ్ళీ చెప్పొద్దు. "
-    "ఒకసారి ఒకే ఒక్క ప్రశ్న అడుగు."
-)
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
@@ -1194,6 +1156,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         return
     branch = branches[0]
 
+    # Per-clinic voice language (Branch.language → Sarvam STT/TTS codes + the
+    # spoken lines + system-prompt directive). Resolved ONCE here so both the
+    # service-gate path and the main call path speak the clinic's language.
+    # get_lang/get_lines fall back to Telugu for None/unknown/legacy rows, so a
+    # bad value can never break a live call (RULE 8).
+    lang_code = getattr(branch, "language", None) or "te"
+    lang_cfg = get_lang(lang_code)
+    lines = get_lines(lang_code)
+
     # Super-admin service gate: paused/cancelled org, expired trial, or
     # hard-block with the month's minutes exhausted -> answer, speak ONE line,
     # hang up (RULE 8). Also captures the org plan for the call-duration cap.
@@ -1276,13 +1247,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             did[-4:],
         )
         gate_session = AgentSession(
-            stt=sarvam.STT(api_key=settings.sarvam_api_key, model="saaras:v3", language="te-IN"),
+            stt=sarvam.STT(api_key=settings.sarvam_api_key, model="saaras:v3", language=lang_cfg.stt_code),
             llm=_build_fallback_llm(),
             tts=sarvam.TTS(
                 api_key=settings.sarvam_api_key,
                 model="bulbul:v3",
                 speaker=getattr(branch, "tts_voice", None) or "rupali",
-                target_language_code="te-IN",
+                target_language_code=lang_cfg.tts_code,
                 pace=1.3,
             ),
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
@@ -1291,7 +1262,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             room=ctx.room,
             agent=Agent(instructions="Say nothing. The call is being ended."),
         )
-        await gate_session.say(sanitize_for_tts(SERVICE_BLOCKED_UTTERANCE))
+        await gate_session.say(sanitize_for_tts(lines.service_blocked))
         await asyncio.sleep(1.0)  # let the tail of the audio flush
         try:
             lkapi = api.LiveKitAPI()
@@ -1429,9 +1400,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 doctors=doctor_contexts,
                 emergency_contact=emergency_contact,
                 plan=state.plan or "clinic",
+                language=lang_code,
             )
             + date_context
-            + BREVITY_OVERRIDE
+            + lines.brevity
             + caller_prompt_extra
         )
         # Outbound calls carry the doctor in metadata — pre-select so tools
@@ -1484,10 +1456,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
 
         session = AgentSession(
+            # Per-clinic spoken-language fillers ride here so _say_lookup_filler
+            # speaks the clinic's language (falls back to Telugu).
+            userdata={"fillers": lines.fillers, "language": lang_code},
             stt=sarvam.STT(
                 api_key=settings.sarvam_api_key,
                 model="saaras:v3",
-                language="te-IN",
+                language=lang_cfg.stt_code,
                 flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
             ),
             llm=_build_fallback_llm(),
@@ -1495,7 +1470,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 api_key=settings.sarvam_api_key,
                 model="bulbul:v3",
                 speaker=tts_voice,  # clinic-selected (branches.tts_voice, default rupali)
-                target_language_code="te-IN",
+                target_language_code=lang_cfg.tts_code,
                 pace=1.3,
                 # LATENCY: emit first audio sooner than the 50-char default, cutting
                 # time-to-first-audio. Valid range 30-200; the old value 10 raised
@@ -1621,15 +1596,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         # RULE 6: single short opening utterance, sanitized.
         if is_reminder:
-            # L6: speak the time in Telugu words, not raw "16:30".
+            # Raw "16:30" gets read digit-by-digit by TTS. For Telugu speak it in
+            # Telugu words; for other languages a clean "04:30 PM" reads naturally
+            # (Telugu number-words inside e.g. a Hindi sentence would be wrong).
             _appt_raw = meta.get("appointment_time", "")
             try:
-                _spoken_time = telugu_time(time_cls.fromisoformat(_appt_raw))
+                _t = time_cls.fromisoformat(_appt_raw)
+                _spoken_time = telugu_time(_t) if lang_code == "te" else _t.strftime("%I:%M %p").lstrip("0")
             except (ValueError, TypeError):
                 _spoken_time = _appt_raw
             await session.say(
                 sanitize_for_tts(
-                    REMINDER_GREETING.format(
+                    lines.reminder_greeting.format(
                         patient=meta.get("patient_name", ""),
                         clinic=branch_name,
                         doctor=meta.get("doctor_name", ""),
@@ -1638,14 +1616,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
             )
         elif is_rebook_call:
-            # ISO date would be read digit-by-digit by TTS — speak it in Telugu.
+            # ISO date would be read digit-by-digit by TTS. Telugu → Telugu words;
+            # other languages → a readable "12 June" (loan month name reads fine).
+            _raw_date = meta.get("cancelled_date", "")
             try:
-                spoken_date = telugu_date(date_cls.fromisoformat(meta.get("cancelled_date", "")))
+                _d = date_cls.fromisoformat(_raw_date)
+                spoken_date = telugu_date(_d) if lang_code == "te" else _d.strftime("%d %B").lstrip("0")
             except ValueError:
-                spoken_date = meta.get("cancelled_date", "")
+                spoken_date = _raw_date
             await session.say(
                 sanitize_for_tts(
-                    REBOOK_GREETING.format(
+                    lines.rebook_greeting.format(
                         patient=meta.get("patient_name", ""),
                         clinic=branch_name,
                         doctor=meta.get("doctor_name", ""),
@@ -1656,11 +1637,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         else:
             # Returning patient → greet by name; new caller → standard greeting.
             if caller_greeting_name:
-                _greeting = KNOWN_CALLER_GREETING.format(
+                _greeting = lines.known_caller_greeting.format(
                     patient=caller_greeting_name, clinic=branch_name
                 )
             else:
-                _greeting = DISCLOSURE_GREETING.format(clinic=branch_name)
+                _greeting = lines.disclosure_greeting.format(clinic=branch_name)
             await session.say(sanitize_for_tts(_greeting))
 
         # SOLO-PLAN CALL CAP (pricing table: "4-min AI call cap"). The Pipecat
@@ -1688,15 +1669,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     await asyncio.sleep(cap - 10)
                     if not state.solo_warning_sent:
                         state.solo_warning_sent = True
-                        await session.say(
-                            sanitize_for_tts(
-                                "ఆగండండి, టైమ్ అయిపోతోంది. మీ బుకింగ్ "
-                                "త్వరగా కన్ఫర్మ్ చేద్దామా?"
-                            )
-                        )
+                        await session.say(sanitize_for_tts(lines.cap_warning))
                     await asyncio.sleep(10)
                     await session.say(
-                        sanitize_for_tts("థాంక్యూ అండి, ఉంటాను మరి!")
+                        sanitize_for_tts(lines.cap_goodbye)
                     )
                     try:
                         await session.current_speech.wait_for_playout()

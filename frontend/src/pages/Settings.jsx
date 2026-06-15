@@ -109,6 +109,17 @@ export default function Settings() {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change voice")
   });
 
+  const language = useMutation({
+    // The voice PATCH requires tts_voice, so resend the current voice with the new language.
+    mutationFn: (lang) => setBranchVoice(branchId, data?.tts_voice ?? "rupali", lang),
+    onSuccess: (d) => {
+      qc.setQueryData(["branch-settings", branchId], d);
+      const opt = (d.allowed_languages ?? []).find((l) => l.code === d.language);
+      toast.success(`Language set to ${opt?.name ?? d.language}`);
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change language")
+  });
+
   const calTest = useMutation({
     mutationFn: () => testCalendar(branchId),
     onSuccess: (r) => {
@@ -292,7 +303,28 @@ export default function Settings() {
         </InfoBox>
       </Section>
 
-      {/* 5 — Voice */}
+      {/* 5 — Language */}
+      <Section id="language" title="Agent language"
+        sub="The language the AI speaks and understands on calls. Applies from the next call.">
+        <select
+          className="field"
+          value={data?.language ?? "te"}
+          onChange={(e) => language.mutate(e.target.value)}
+          disabled={language.isPending}
+        >
+          {(data?.allowed_languages ?? []).map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.native_name} ({l.name})
+            </option>
+          ))}
+        </select>
+        <p className="mt-2 font-ui text-xs text-slate">
+          Each language has its own AI flow. Telugu is fully tuned; other languages are a first
+          pass and being refined.
+        </p>
+      </Section>
+
+      {/* 6 — Voice */}
       <Section id="voice" title="Agent voice" sub="The voice patients hear. Applies from the next call.">
         <VoicePicker value={data?.tts_voice} onSelect={(v) => voice.mutate(v)} />
       </Section>

@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import backend.config as _cfg
+from agent.i18n import get_lang
 
 
 @dataclass
@@ -63,8 +64,33 @@ def build_system_prompt(
     plan: str,
     is_rebook: bool = False,
     cancelled_date: str | None = None,
+    language: str = "te",
 ) -> str:
-    """Build the Telugu system prompt for a specific clinic's voice agent."""
+    """Build the system prompt for a specific clinic's voice agent.
+
+    `language` is the clinic's Branch.language code (te/hi/ta/kn/ml/mr/bn/or).
+    The instruction logic is language-agnostic; a PRIMARY LANGUAGE directive at
+    the top tells the model which language to SPEAK. The example phrases below
+    are written in Telugu as STYLE references — for a non-Telugu clinic the model
+    produces the natural equivalent in the target language. For Telugu clinics
+    (the default) the prompt is unchanged from before.
+    """
+    lang = get_lang(language)
+    # Telugu is the reference language the examples are written in. For any other
+    # language, prepend a hard directive so every spoken word is in that language.
+    if lang.code == "te":
+        language_directive = ""
+    else:
+        language_directive = (
+            f"PRIMARY LANGUAGE — OVERRIDES EVERYTHING BELOW: You speak {lang.name} "
+            f"({lang.script} script) only. Every word you say out loud must be natural, "
+            f"everyday spoken {lang.name} in {lang.script} script — never romanized, "
+            f"never Telugu. Many example phrases below are written in Telugu script as "
+            f"STYLE references only (tone, length, warmth); reproduce the EQUIVALENT "
+            f"natural {lang.name}, not the Telugu words. Keep common English loanwords "
+            f"(appointment, token, doctor, time, slot) as people say them. If the caller "
+            f"switches fully to another language, mirror them.\n\n"
+        )
 
     doctor_list = "\n".join(
         f"  - {d.name} ({d.specialization}), keywords: {', '.join(d.routing_keywords)}, "
@@ -95,8 +121,8 @@ def build_system_prompt(
             "క్వాలిటీ కోసం ఈ కాల్ రికార్డ్ అవుతుంది."
         )
 
-    return f"""You are Vachanam, an AI appointment booking assistant for {clinic_name}.
-You speak Telugu. You also understand Hindi and English mixed with Telugu (code-switching is normal).
+    return f"""{language_directive}You are Vachanam, an AI appointment booking assistant for {clinic_name}.
+You speak {lang.name}. You also understand Hindi and English mixed with {lang.name} (code-switching is normal).
 You are warm, professional, and efficient. You never give medical advice or diagnoses.
 
 HARD RULES — these override everything else. Breaking one is a serious failure:
