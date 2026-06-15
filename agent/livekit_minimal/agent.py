@@ -1494,7 +1494,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # model commits the turn as soon as the utterance is grammatically
             # complete (often 200-400ms), letting the silence timers drop below.
             # Prewarmed once per process in _prewarm (no per-call load cost).
-            turn_detection=ctx.proc.userdata.get("turn_detector") or MultilingualModel(),
+            # Built here (not prewarm): livekit-agents 1.6 binds the model to the
+            # job's inference executor, which only exists inside the entrypoint.
+            turn_detection=MultilingualModel(),
             preemptive_generation=True,
             # With the semantic turn detector backstopping, the silence timers can
             # shrink: the detector fires on a complete utterance; these only catch
@@ -1724,11 +1726,16 @@ def _prewarm(proc) -> None:
     silero.VAD.load() was called inside every call's AgentSession setup, adding
     its init cost (~hundreds of ms) to each call's startup before the greeting.
     Loading it here, once, and reusing it across all calls removes that from the
-    per-call path. Standard LiveKit pattern. The semantic turn detector is loaded
-    the same way — its weights are heavy to init per call.
+    per-call path. Standard LiveKit pattern.
+
+    NOTE: the semantic turn detector (MultilingualModel) is NOT prewarmed here.
+    livekit-agents 1.6 binds it to the job's inference executor at construction,
+    which only exists inside a job entrypoint — building it in prewarm raises
+    "no job context found". It is constructed in the AgentSession instead (the
+    inference runs in the shared worker inference executor, so the per-call cost
+    is just a lightweight handle, not the model weights).
     """
     proc.userdata["vad"] = silero.VAD.load()
-    proc.userdata["turn_detector"] = MultilingualModel()
 
 
 if __name__ == "__main__":
