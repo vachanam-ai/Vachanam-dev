@@ -35,24 +35,23 @@ from dotenv import load_dotenv
 
 load_dotenv(_REPO_ROOT / ".env")
 
-# Validate required env vars before touching DB
+# CLI defaults (used only when _seed is called without explicit overrides).
+# NOTE: do NOT sys.exit() at import — that breaks importing _seed in tests.
+# The CLI path (main) validates these before seeding.
 _VOBIZ_DID_NUMBER = os.getenv("VOBIZ_DID_NUMBER", "")
-if not _VOBIZ_DID_NUMBER:
-    print(
-        "ERROR: VOBIZ_DID_NUMBER is not set. "
-        "Add it to .env before running seed_phase1.py.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
 _ADMIN_PHONE = os.getenv("ADMIN_PHONE", "")
-if not _ADMIN_PHONE:
-    print(
-        "ERROR: ADMIN_PHONE is not set. "
-        "Add it to .env before running seed_phase1.py.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+
+
+def _require_cli_env() -> None:
+    """Validate env required by the CLI seed run (not by tests, which pass
+    explicit values to _seed)."""
+    missing = [n for n, v in (("VOBIZ_DID_NUMBER", _VOBIZ_DID_NUMBER), ("ADMIN_PHONE", _ADMIN_PHONE)) if not v]
+    if missing:
+        print(
+            f"ERROR: {', '.join(missing)} not set. Add to .env before running seed_phase1.py.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # Import backend modules AFTER .env is loaded so settings reads the right values
@@ -174,6 +173,7 @@ async def _seed(
 
 
 async def main() -> None:
+    _require_cli_env()
     async with AsyncSessionLocal() as session:
         await _seed(session)
 
