@@ -1,6 +1,19 @@
 # Vachanam — Status (single source of truth)
 
-> **2026-06-13 — CURRENT TRUTH (everything below this block is historical and stale).**
+> **2026-06-15 — LATEST.** This session: (1) removed the smallest.ai TTS trial →
+> **Sarvam-only**; (2) **signup reworked to email + password + EMAIL OTP**, mobile
+> dropped, password now needs lower+upper+digit+special (matches the new image);
+> (3) **market repositioned Hyderabad → all-India** (legal jurisdiction kept);
+> (4) favicon updated; (5) **multilingual voice agent** — a clinic picks its
+> language in Settings (te/hi/ta/kn/ml/mr/bn/or); `Branch.language` drives Sarvam
+> STT/TTS codes + per-language spoken lines (`agent/i18n`) + a PRIMARY-LANGUAGE
+> prompt directive. **Telugu validated; the other 7 are first-pass, flagged**
+> (`docs/multilingual_lines_review.md`). **Alembic head now `l8lang2026`** (run
+> `alembic upgrade head` before deploy — adds `branches.language`). Test suite:
+> **440 passing** (2 pre-existing seed_phase1 env failures unrelated). FIXLOG #122–125.
+> OPEN: Vobiz sub-accounts per DID for concurrency (raised, not yet designed).
+>
+> **2026-06-13 — (everything below this block is historical and stale).**
 >
 > **All code phases are built**: voice agent (LiveKit), backend (auth, queue, doctors,
 > availability, branches/settings, analytics, admin console, payments+webhook), jobs
