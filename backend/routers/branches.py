@@ -6,7 +6,7 @@ Currently: voice selection for the clinic's AI agent.
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,8 +21,9 @@ from backend.services.audit_service import audit
 logger = structlog.get_logger()
 router = APIRouter()
 
-# Sarvam Bulbul v3 speakers offered to clinics (curated 2026-06-11 by Vinay)
-ALLOWED_VOICES = ["rupali", "simran", "kavya", "ishita", "shreya", "suhani"]
+# TTS voices come from the smallest.ai catalog (GET /branches/{id}/voices) +
+# any cloned voice — no static list. A clinic's chosen voice_id lives in
+# branches.tts_voice (NULL → the language's default smallest voice).
 
 # Voice-agent languages a clinic can pick (single source of truth: agent.i18n).
 from agent.i18n import LANGUAGES as _LANGUAGES  # noqa: E402
@@ -41,12 +42,11 @@ class BranchSettings(BaseModel):
     address: str | None = None
     city: str | None = None
     clinic_phone: str | None = None
-    tts_voice: str
+    tts_voice: str | None = None   # smallest.ai voice_id; NULL → language default
     language: str = "te"
     did_number: str | None
     emergency_contact: str | None
     google_calendar_id: str | None = None
-    allowed_voices: list[str]
     allowed_languages: list[dict] = []
     doctors_count: int = 0
     staff_count: int = 0
@@ -74,12 +74,11 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         address=branch.address,
         city=branch.city,
         clinic_phone=getattr(branch, "clinic_phone", None),
-        tts_voice=getattr(branch, "tts_voice", "rupali"),
+        tts_voice=getattr(branch, "tts_voice", None),
         language=getattr(branch, "language", "te") or "te",
         did_number=branch.did_number,
         emergency_contact=branch.emergency_contact,
         google_calendar_id=branch.google_calendar_id,
-        allowed_voices=ALLOWED_VOICES,
         allowed_languages=LANGUAGE_OPTIONS,
         doctors_count=doctors_count,
         staff_count=staff_count,
@@ -87,9 +86,17 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
     )
 
 
+import re as _re
+
+# A smallest.ai voice_id (catalog like "padmaja" or a cloned "voice_..."): letters,
+# digits, _ and -, 1-64 chars. The picker only offers catalog/cloned ids; this is
+# just a sanity guard (the full catalog is dynamic, so we don't whitelist names).
+_VOICE_ID_RE = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class VoiceUpdate(BaseModel):
-    tts_voice: str
-    language: str | None = None  # optional: also set the clinic's spoken language
+    tts_voice: str | None = None   # smallest voice_id (omit to change language only)
+    language: str | None = None    # optional: also set the clinic's spoken language
 
 
 @router.get(
@@ -128,17 +135,20 @@ async def update_branch_voice(
     await assert_branch_access(current_user, branch_id, db)
     if current_user.role not in ("org_admin",):
         raise HTTPException(status_code=403, detail="Only the clinic owner can change the voice")
-    if body.tts_voice not in ALLOWED_VOICES:
-        raise HTTPException(status_code=422, detail=f"Voice must be one of {ALLOWED_VOICES}")
+    if body.tts_voice is not None and not _VOICE_ID_RE.match(body.tts_voice):
+        raise HTTPException(status_code=422, detail="Invalid voice id")
     if body.language is not None and body.language not in ALLOWED_LANGUAGES:
         raise HTTPException(status_code=422, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
+    if body.tts_voice is None and body.language is None:
+        raise HTTPException(status_code=422, detail="Provide a voice or a language")
 
     result = await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
     branch = result.scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    branch.tts_voice = body.tts_voice
+    if body.tts_voice is not None:
+        branch.tts_voice = body.tts_voice
     if body.language is not None:
         branch.language = body.language
     await db.commit()
@@ -150,6 +160,131 @@ async def update_branch_voice(
     logger.info(
         "branch_voice_changed", branch_id=branch_id, voice=body.tts_voice, language=body.language
     )
+    return await _settings_payload(db, branch, branch_id)
+
+
+# ── smallest.ai voice catalog + voice cloning ───────────────────────────────
+
+# Voice-clone sample: a 5-15s clip. Cap the upload so a huge file can't OOM the
+# worker (RULE: bound untrusted input).
+_MAX_CLONE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+@router.get("/{branch_id}/voices", dependencies=[Depends(queue_today_limit)])
+async def list_branch_voices(
+    branch_id: str,
+    request: Request,
+    language: str | None = None,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """smallest.ai voice catalog for the Settings picker, filtered to the clinic's
+    language (or an explicit ?language=). Includes which voice is current."""
+    await assert_branch_access(current_user, branch_id, db)
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    lang = (language or getattr(branch, "language", None) or "te").lower()
+
+    from backend.services import smallest_voice
+
+    try:
+        voices = smallest_voice.list_voices(lang)
+    except smallest_voice.VoiceServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"language": lang, "current": getattr(branch, "tts_voice", None), "voices": voices}
+
+
+@router.post(
+    "/{branch_id}/voice-clone",
+    response_model=BranchSettings,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.voice_cloned", resource_type="branch")
+async def clone_branch_voice(
+    branch_id: str,
+    request: Request,
+    display_name: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BranchSettings:
+    """Clone a voice from an uploaded sample and set it as the clinic's voice.
+    org_admin only. The cloned voice_id is stored on this branch (tenant-scoped)."""
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can clone a voice")
+    if not display_name.strip():
+        raise HTTPException(status_code=422, detail="A voice name is required")
+
+    audio = await file.read()
+    if not audio:
+        raise HTTPException(status_code=422, detail="Empty audio file")
+    if len(audio) > _MAX_CLONE_BYTES:
+        raise HTTPException(status_code=413, detail="Audio sample too large (max 10 MB)")
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    from backend.services import smallest_voice
+
+    try:
+        voice_id = smallest_voice.clone_voice(
+            display_name.strip(), file.filename or "sample.wav", audio
+        )
+    except smallest_voice.VoiceServiceError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    branch.tts_voice = voice_id
+    await db.commit()
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("branch_voice_cloned", branch_id=branch_id, voice_id=voice_id)
+    return await _settings_payload(db, branch, branch_id)
+
+
+@router.delete(
+    "/{branch_id}/voice-clone",
+    response_model=BranchSettings,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.voice_clone_deleted", resource_type="branch")
+async def delete_branch_voice_clone(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BranchSettings:
+    """Remove the clinic's cloned voice (delete it at smallest.ai best-effort and
+    clear it locally so the agent falls back to the language default). org_admin only."""
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can remove the voice")
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    current = getattr(branch, "tts_voice", None)
+    if current:
+        from backend.services import smallest_voice
+
+        smallest_voice.delete_cloned_voice(current)  # best-effort, never raises out
+    branch.tts_voice = None  # → agent uses the language's default voice
+    await db.commit()
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("branch_voice_clone_deleted", branch_id=branch_id)
     return await _settings_payload(db, branch, branch_id)
 
 

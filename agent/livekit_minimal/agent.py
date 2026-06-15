@@ -53,7 +53,7 @@ from livekit.agents import (  # noqa: E402
     metrics,
 )
 from livekit.agents import llm as lk_llm  # noqa: E402
-from livekit.plugins import google, noise_cancellation, openai, sarvam, silero  # noqa: E402
+from livekit.plugins import google, noise_cancellation, openai, sarvam, silero, smallestai  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
 import redis.asyncio as aioredis  # noqa: E402
@@ -1253,12 +1253,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         gate_session = AgentSession(
             stt=sarvam.STT(api_key=settings.sarvam_api_key, model="saaras:v3", language=lang_cfg.stt_code),
             llm=_build_fallback_llm(),
-            tts=sarvam.TTS(
-                api_key=settings.sarvam_api_key,
-                model="bulbul:v3",
-                speaker=getattr(branch, "tts_voice", None) or "rupali",
-                target_language_code=lang_cfg.tts_code,
-                pace=1.3,
+            # TTS = smallest.ai Waves (STT stays Sarvam Saaras). voice falls back
+            # to the language's default smallest voice when the clinic hasn't set one.
+            tts=smallestai.TTS(
+                api_key=settings.smallest_api_key,
+                model=settings.smallest_model,
+                voice_id=(getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice,
+                language=lang_cfg.tts_code,
+                sample_rate=settings.smallest_sample_rate,
+                output_format="pcm",
             ),
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
         )
@@ -1280,7 +1283,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if True:  # noqa: SIM108 — preserves indentation of the call-setup block
         branch_id, branch_name = branch.id, branch.name
         emergency_contact = branch.emergency_contact or ""
-        tts_voice = getattr(branch, "tts_voice", None) or "rupali"
+        # smallest.ai voice_id (clinic-chosen or cloned); fall back to the
+        # language's default smallest voice when unset (TTS provider = smallest).
+        tts_voice = (getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice
         state.branch_id = branch_id
         state.emergency_contact = emergency_contact
         state.plan = org_plan  # was always "clinic" — solo cap could never fire
@@ -1470,16 +1475,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
             ),
             llm=_build_fallback_llm(),
-            tts=sarvam.TTS(
-                api_key=settings.sarvam_api_key,
-                model="bulbul:v3",
-                speaker=tts_voice,  # clinic-selected (branches.tts_voice, default rupali)
-                target_language_code=lang_cfg.tts_code,
-                pace=1.3,
-                # LATENCY: emit first audio sooner than the 50-char default, cutting
-                # time-to-first-audio. Valid range 30-200; the old value 10 raised
-                # ValueError on this sarvam version and crashed every call.
-                min_buffer_size=30,
+            # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
+            # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
+            # (or a cloned voice); language is the clinic's short code (smallest uses
+            # the same te/hi/ta/... codes). output_format pcm streams to LiveKit.
+            tts=smallestai.TTS(
+                api_key=settings.smallest_api_key,
+                model=settings.smallest_model,
+                voice_id=tts_voice,
+                language=lang_cfg.tts_code,
+                sample_rate=settings.smallest_sample_rate,
+                output_format="pcm",
             ),
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             # LATENCY (biggest network-independent win): a SEMANTIC turn detector.

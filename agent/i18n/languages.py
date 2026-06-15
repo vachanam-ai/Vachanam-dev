@@ -17,20 +17,31 @@ class LangConfig:
     name: str          # English name, used in the system prompt directive
     native_name: str   # endonym, shown in the Settings dropdown
     script: str        # script name, used in the system prompt directive
-    stt_code: str      # Sarvam Saaras language=
-    tts_code: str      # Sarvam Bulbul target_language_code=
+    stt_code: str      # Sarvam Saaras language= (STT)
+    tts_code: str      # smallest.ai Waves `language` (TTS) — short code, same as `code`
+    default_voice: str  # smallest.ai voice_id when the clinic hasn't chosen one
+
+    @property
+    def tts_lang(self) -> str:
+        """smallest.ai TTS language code. smallest uses the same short codes as
+        our internal keys (te/hi/ta/kn/ml/mr/bn/or), so this is just `code`."""
+        return self.tts_code
 
 
-# Telugu first (reference/default), then the rest of the MVP language set.
+# TTS = smallest.ai Waves Lightning v3.1. Language codes match smallest's short
+# codes exactly (verified against GET /lightning-v3.1/get_voices, 2026-06-15).
+# Default voices picked from the live catalog: `padmaja` covers the Dravidian
+# pool (te/ta/kn/ml); `niharika` covers hi/mr/bn/or. STT stays Sarvam Saaras
+# (the *-IN codes). Telugu first (reference/default).
 LANGUAGES: dict[str, LangConfig] = {
-    "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te-IN"),
-    "hi": LangConfig("hi", "Hindi", "हिन्दी", "Devanagari", "hi-IN", "hi-IN"),
-    "ta": LangConfig("ta", "Tamil", "தமிழ்", "Tamil", "ta-IN", "ta-IN"),
-    "kn": LangConfig("kn", "Kannada", "ಕನ್ನಡ", "Kannada", "kn-IN", "kn-IN"),
-    "ml": LangConfig("ml", "Malayalam", "മലയാളം", "Malayalam", "ml-IN", "ml-IN"),
-    "mr": LangConfig("mr", "Marathi", "मराठी", "Devanagari", "mr-IN", "mr-IN"),
-    "bn": LangConfig("bn", "Bengali", "বাংলা", "Bengali", "bn-IN", "bn-IN"),
-    "or": LangConfig("or", "Odia", "ଓଡ଼ିଆ", "Odia", "od-IN", "od-IN"),
+    "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "padmaja"),
+    "hi": LangConfig("hi", "Hindi", "हिन्दी", "Devanagari", "hi-IN", "hi", "niharika"),
+    "ta": LangConfig("ta", "Tamil", "தமிழ்", "Tamil", "ta-IN", "ta", "padmaja"),
+    "kn": LangConfig("kn", "Kannada", "ಕನ್ನಡ", "Kannada", "kn-IN", "kn", "padmaja"),
+    "ml": LangConfig("ml", "Malayalam", "മലയാളം", "Malayalam", "ml-IN", "ml", "padmaja"),
+    "mr": LangConfig("mr", "Marathi", "मराठी", "Devanagari", "mr-IN", "mr", "niharika"),
+    "bn": LangConfig("bn", "Bengali", "বাংলা", "Bengali", "bn-IN", "bn", "niharika"),
+    "or": LangConfig("or", "Odia", "ଓଡ଼ିଆ", "Odia", "od-IN", "or", "niharika"),
 }
 
 DEFAULT_LANG = "te"

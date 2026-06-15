@@ -73,10 +73,28 @@ export const fetchBranchSettings = (branchId) =>
   api.get(`/branches/${branchId}/settings`).then((r) => r.data);
 export const updateBranchSettings = (branchId, payload) =>
   api.patch(`/branches/${branchId}/settings`, payload).then((r) => r.data);
-export const setBranchVoice = (branchId, tts_voice, language) =>
+export const setBranchVoice = (branchId, tts_voice, language) => {
+  const body = {};
+  if (tts_voice != null) body.tts_voice = tts_voice;
+  if (language != null) body.language = language;
+  return api.patch(`/branches/${branchId}/voice`, body).then((r) => r.data);
+};
+export const getBranchVoices = (branchId, language) =>
   api
-    .patch(`/branches/${branchId}/voice`, language == null ? { tts_voice } : { tts_voice, language })
+    .get(`/branches/${branchId}/voices`, { params: language ? { language } : {} })
     .then((r) => r.data);
+export const cloneBranchVoice = (branchId, displayName, file) => {
+  const fd = new FormData();
+  fd.append("display_name", displayName);
+  fd.append("file", file);
+  return api
+    .post(`/branches/${branchId}/voice-clone`, fd, {
+      headers: { "Content-Type": "multipart/form-data" }
+    })
+    .then((r) => r.data);
+};
+export const deleteBranchVoiceClone = (branchId) =>
+  api.delete(`/branches/${branchId}/voice-clone`).then((r) => r.data);
 export const testCalendar = (branchId) =>
   api.post(`/branches/${branchId}/calendar-test`).then((r) => r.data);
 export const fetchStaff = (branchId) =>

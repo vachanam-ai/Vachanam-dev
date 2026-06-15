@@ -131,7 +131,7 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     lp = await client.patch(
         f"/branches/{bid}/voice",
         headers=_auth(owner),
-        json={"tts_voice": g.json()["tts_voice"], "language": "ta"},
+        json={"tts_voice": "padmaja", "language": "ta"},
     )
     assert lp.status_code == 200, lp.text
     assert lp.json()["language"] == "ta"
@@ -139,7 +139,7 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     bad = await client.patch(
         f"/branches/{bid}/voice",
         headers=_auth(owner),
-        json={"tts_voice": g.json()["tts_voice"], "language": "zz"},
+        json={"tts_voice": "padmaja", "language": "zz"},
     )
     assert bad.status_code == 422
 

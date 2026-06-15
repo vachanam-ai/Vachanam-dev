@@ -32,12 +32,15 @@ def test_registry_covers_mvp_languages():
     assert EXPECTED <= set(LANGUAGES)
 
 
-def test_sarvam_codes_correct():
-    # Telugu/Tamil use ISO-ish *-IN; Odia's Sarvam code is od-IN (not or-IN).
+def test_stt_tts_codes_correct():
+    # STT = Sarvam Saaras (*-IN, Odia is od-IN). TTS = smallest.ai (short codes,
+    # Odia is or). Each language also has a default smallest voice.
     assert get_lang("te").stt_code == "te-IN"
-    assert get_lang("te").tts_code == "te-IN"
-    assert get_lang("or").tts_code == "od-IN"
-    assert get_lang("or").stt_code == "od-IN"
+    assert get_lang("te").tts_code == "te"          # smallest short code
+    assert get_lang("or").stt_code == "od-IN"        # Sarvam Odia
+    assert get_lang("or").tts_code == "or"           # smallest Odia
+    assert get_lang("te").default_voice == "padmaja"
+    assert get_lang("hi").default_voice == "niharika"
 
 
 @pytest.mark.parametrize("bad", [None, "", "zz", "EN", "  ", "klingon"])

@@ -3,9 +3,18 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # AI
-    sarvam_api_key: str
+    sarvam_api_key: str           # Sarvam Saaras v3 — STT only now
     openai_api_key: str
     gemini_api_key: str
+
+    # TTS — smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15,
+    # Vinay). voice_id is per-clinic (branches.tts_voice) incl cloned voices;
+    # language is the clinic's Branch.language code (smallest uses the same short
+    # codes te/hi/ta/kn/ml/mr/bn/or). Used by the agent (livekit smallestai
+    # plugin) AND voice cloning (smallest SDK). https://docs.smallest.ai/waves
+    smallest_api_key: str = ""
+    smallest_model: str = "lightning_v3.1"
+    smallest_sample_rate: int = 24000
 
     # WhatsApp
     meta_access_token: str = ""

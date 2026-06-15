@@ -1,6 +1,8 @@
 livekit-agents>=1.5.16
 livekit-api>=1.1.0
-livekit-plugins-sarvam>=1.5.17
+livekit-plugins-sarvam>=1.5.17          # STT (Saaras v3) only
+# TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
+livekit-plugins-smallestai>=1.5.18
 livekit-plugins-google>=1.5.17
 livekit-plugins-silero>=1.5.16
 livekit-plugins-noise-cancellation>=0.2.5

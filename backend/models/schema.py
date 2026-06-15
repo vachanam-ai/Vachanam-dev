@@ -73,8 +73,11 @@ class Branch(Base):
     outbound_trunk_id: Mapped[str | None] = mapped_column(String(255))  # per-clinic LiveKit outbound trunk
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))
-    # Sarvam Bulbul speaker for this clinic's voice agent (clinic-selectable)
-    tts_voice: Mapped[str] = mapped_column(String(32), default="rupali", server_default="rupali")
+    # smallest.ai Waves voice_id for this clinic's agent (clinic-selectable; can
+    # be a cloned voice). NULL → the agent uses the language's default smallest
+    # voice (agent/i18n). Nullable + widened from the old Sarvam-speaker column
+    # (TTS provider switched Sarvam Bulbul → smallest.ai 2026-06-15).
+    tts_voice: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Spoken language for this clinic's voice agent (clinic-selectable). Drives
     # the Sarvam STT/TTS language codes AND the per-language spoken lines +
     # system-prompt directive. Short code (te/hi/ta/kn/ml/mr/bn/or); see

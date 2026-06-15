@@ -1,16 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   addStaff,
+  cloneBranchVoice,
+  deleteBranchVoiceClone,
   fetchBranchSettings,
   fetchStaff,
+  getBranchVoices,
   setBranchVoice,
   testCalendar,
   updateBranchSettings
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
-import VoicePicker from "../components/VoicePicker.jsx";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 
@@ -110,14 +112,42 @@ export default function Settings() {
   });
 
   const language = useMutation({
-    // The voice PATCH requires tts_voice, so resend the current voice with the new language.
-    mutationFn: (lang) => setBranchVoice(branchId, data?.tts_voice ?? "rupali", lang),
+    mutationFn: (lang) => setBranchVoice(branchId, null, lang),
     onSuccess: (d) => {
       qc.setQueryData(["branch-settings", branchId], d);
       const opt = (d.allowed_languages ?? []).find((l) => l.code === d.language);
       toast.success(`Language set to ${opt?.name ?? d.language}`);
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change language")
+  });
+
+  // smallest.ai voice catalog for the clinic's language (drives the picker).
+  const voices = useQuery({
+    queryKey: ["branch-voices", branchId, data?.language],
+    queryFn: () => getBranchVoices(branchId, data?.language),
+    enabled: !!branchId && !!data,
+    staleTime: 5 * 60 * 1000
+  });
+
+  const cloneFileRef = useRef(null);
+  const [cloneName, setCloneName] = useState("");
+  const clone = useMutation({
+    mutationFn: ({ name, file }) => cloneBranchVoice(branchId, name, file),
+    onSuccess: (d) => {
+      qc.setQueryData(["branch-settings", branchId], d);
+      setCloneName("");
+      if (cloneFileRef.current) cloneFileRef.current.value = "";
+      toast.success("Voice cloned and set as the clinic voice");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Voice cloning failed")
+  });
+  const removeClone = useMutation({
+    mutationFn: () => deleteBranchVoiceClone(branchId),
+    onSuccess: (d) => {
+      qc.setQueryData(["branch-settings", branchId], d);
+      toast.success("Reverted to the default voice");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove voice")
   });
 
   const calTest = useMutation({
@@ -325,8 +355,68 @@ export default function Settings() {
       </Section>
 
       {/* 6 — Voice */}
-      <Section id="voice" title="Agent voice" sub="The voice patients hear. Applies from the next call.">
-        <VoicePicker value={data?.tts_voice} onSelect={(v) => voice.mutate(v)} />
+      <Section id="voice" title="Agent voice"
+        sub="The smallest.ai voice patients hear. Pick one, or clone your own. Applies from the next call.">
+        {data?.tts_voice?.startsWith("voice_") ? (
+          <div className="mb-3 flex items-center justify-between rounded-xl bg-teal-mint/40 p-3">
+            <p className="font-ui text-sm">
+              Using your <strong>cloned voice</strong>.
+            </p>
+            <button type="button" className="btn-ghost min-h-[44px]"
+              onClick={() => removeClone.mutate()} disabled={removeClone.isPending}>
+              Use a standard voice
+            </button>
+          </div>
+        ) : (
+          <select
+            className="field"
+            value={data?.tts_voice ?? ""}
+            onChange={(e) => voice.mutate(e.target.value)}
+            disabled={voice.isPending || voices.isLoading}
+          >
+            <option value="">Default voice for this language</option>
+            {(voices.data?.voices ?? []).map((v) => (
+              <option key={v.voice_id} value={v.voice_id}>
+                {v.display_name}{v.gender ? ` · ${v.gender}` : ""}
+              </option>
+            ))}
+          </select>
+        )}
+        {voices.isError && (
+          <p className="mt-2 font-ui text-xs text-danger">
+            Couldn’t load voices from smallest.ai — check the API key.
+          </p>
+        )}
+
+        {/* Voice cloning */}
+        <div className="mt-4 rounded-xl border border-hairline p-4">
+          <p className="font-ui text-sm font-medium">Clone a voice</p>
+          <p className="mt-1 font-ui text-xs text-slate">
+            Upload a clear 5–15 second sample (WAV/MP3). The AI will speak in that voice.
+          </p>
+          <div className="mt-3 space-y-2">
+            <input
+              className="field"
+              placeholder="Voice name (e.g. Dr Srinivas)"
+              value={cloneName}
+              onChange={(e) => setCloneName(e.target.value)}
+            />
+            <input ref={cloneFileRef} type="file" accept="audio/*" className="field" />
+            <button
+              type="button"
+              className="btn-primary w-full min-h-[44px]"
+              disabled={clone.isPending}
+              onClick={() => {
+                const file = cloneFileRef.current?.files?.[0];
+                if (!cloneName.trim()) return toast.error("Give the voice a name");
+                if (!file) return toast.error("Choose an audio sample");
+                clone.mutate({ name: cloneName.trim(), file });
+              }}
+            >
+              {clone.isPending ? "Cloning…" : "Clone & use this voice"}
+            </button>
+          </div>
+        </div>
       </Section>
 
       {/* 6 — Team */}

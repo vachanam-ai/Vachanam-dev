@@ -1,5 +1,16 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-06-15 (late) — TTS PROVIDER SWITCH.** Replaced Sarvam Bulbul TTS with
+> **smallest.ai Waves Lightning v3.1** (STT stays Sarvam Saaras). Per-clinic voice
+> from the smallest catalog (`GET /branches/{id}/voices`) + **voice cloning**
+> (`POST/DELETE /branches/{id}/voice-clone`, org_admin). smallest's language codes
+> match our `Branch.language` codes (all 8 incl Bengali+Odia verified live).
+> `branches.tts_voice` is now a nullable smallest voice_id (NULL→language default
+> voice: padmaja for te/ta/kn/ml, niharika for hi/mr/bn/or). **Alembic head now
+> `n10smallestvoice2026`.** Needs `SMALLEST_API_KEY`. 445 tests pass. ⚠ live voice
+> cloning UNVERIFIED — SDK clone path is server-deprecated (TD-027); TTS + catalog
+> are live-proven. ROTATE the smallest key (pasted in chat). FIXLOG #127.
+>
 > **2026-06-15 — LATEST.** This session: (1) removed the smallest.ai TTS trial →
 > **Sarvam-only**; (2) **signup reworked to email + password + EMAIL OTP**, mobile
 > dropped, password now needs lower+upper+digit+special (matches the new image);
