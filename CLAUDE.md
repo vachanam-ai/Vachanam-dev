@@ -64,7 +64,7 @@ Calendar + PWA + Razorpay (WhatsApp deferred to MVP2 — see memory).
 Free trial: 14 days, no card, 1,000 min. Day 12 Razorpay link via WhatsApp;
 day 14 pause if unpaid. Trial cost absorbed: ~₹2,675.
 
-Margins at design volume: 44–49%. Full per-plan math in docs/_legacy/ if needed.
+Margins at design volume: 44–49%.
 
 ---
 
@@ -156,5 +156,6 @@ REDIS_URL, JWT, Razorpay, app config). Keep it in sync with
 3. `docs/ROADMAP.md` + `docs/phases/` — plan; `docs/CHANGELOG.md` — decision history
 4. `docs/superpowers/specs|plans/` — active feature specs and task plans
 
-Historical only (do not treat as current): `docs/_legacy/`, root PHASE_*.md
-references, `docs/vachanam-progress.md`, pre-2026-06 audits.
+Historical only (do not treat as current): pre-2026-06 audits, closed
+TECH_DEBT rows, CHANGELOG/FIXLOG history. (The `docs/_legacy/` archive and the
+retired Pipecat specs were deleted 2026-06-15 — recover from git if ever needed.)
