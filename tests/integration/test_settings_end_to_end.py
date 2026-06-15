@@ -143,6 +143,33 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     )
     assert bad.status_code == 422
 
+    # Per-clinic Vobiz sub-account: owner stores creds; the SIP password is
+    # encrypted at rest and NEVER echoed back.
+    tp = await client.patch(
+        f"/branches/{bid}/telephony",
+        headers=_auth(owner),
+        json={
+            "vobiz_subaccount_id": "sub_madhapur",
+            "vobiz_sip_username": "madhapur_user",
+            "vobiz_sip_password": "sup3r-secret-sip",
+            "outbound_trunk_id": "ST_madhapur",
+        },
+    )
+    assert tp.status_code == 200, tp.text
+    body_tp = tp.json()
+    assert body_tp["has_sip_password"] is True
+    assert "sup3r-secret-sip" not in tp.text  # secret never returned
+    assert body_tp["outbound_trunk_id"] == "ST_madhapur"
+    # The DB column holds CIPHERTEXT, not the plaintext password.
+    row = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(bid)))
+    ).scalar_one()
+    assert row.vobiz_sip_password_enc and row.vobiz_sip_password_enc != "sup3r-secret-sip"
+    assert row.vobiz_subaccount_id == "sub_madhapur"
+    # That stored trunk is what an outbound call would dial through.
+    from backend.services.telephony import branch_outbound_trunk_id
+    assert branch_outbound_trunk_id(row) == "ST_madhapur"
+
     # ── 2. The agent's inbound DID->branch resolution finds THIS branch only ──
     did_norm = normalize_did(DID)
     rows = (

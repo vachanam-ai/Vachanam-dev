@@ -8,10 +8,15 @@
 > language in Settings (te/hi/ta/kn/ml/mr/bn/or); `Branch.language` drives Sarvam
 > STT/TTS codes + per-language spoken lines (`agent/i18n`) + a PRIMARY-LANGUAGE
 > prompt directive. **Telugu validated; the other 7 are first-pass, flagged**
-> (`docs/multilingual_lines_review.md`). **Alembic head now `l8lang2026`** (run
-> `alembic upgrade head` before deploy — adds `branches.language`). Test suite:
-> **440 passing** (2 pre-existing seed_phase1 env failures unrelated). FIXLOG #122–125.
-> OPEN: Vobiz sub-accounts per DID for concurrency (raised, not yet designed).
+> (`docs/multilingual_lines_review.md`). Also built the **per-clinic Vobiz
+> sub-account credential seam** (concurrency isolation): per-branch SIP creds
+> (encrypted at rest) + per-clinic outbound trunk + `/branches/{id}/telephony`;
+> outbound jobs/agent dial the per-clinic trunk, falling back to the global
+> account. Needs **`FIELD_ENCRYPTION_KEY`** in prod. ⚠ Vobiz-API auto-provisioning
+> of sub-accounts deferred (partner-API capability TBD — TECH_DEBT); creds manual.
+> **Alembic head now `m9subacct2026`** (run `alembic upgrade head` before deploy —
+> adds `branches.language` + the Vobiz sub-account columns). Test suite:
+> **446 passing** (2 pre-existing seed_phase1 env failures unrelated). FIXLOG #122–126.
 >
 > **2026-06-13 — (everything below this block is historical and stale).**
 >

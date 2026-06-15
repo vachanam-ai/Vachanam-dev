@@ -1029,10 +1029,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
         try:
+            # Per-clinic Vobiz sub-account: the dispatching job stamps this
+            # branch's outbound trunk into the metadata. Fall back to the global
+            # trunk so single-account clinics keep working unchanged.
+            _out_trunk = meta.get("outbound_trunk_id") or os.getenv("OUTBOUND_TRUNK_ID", "")
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
-                    sip_trunk_id=os.getenv("OUTBOUND_TRUNK_ID", ""),
+                    sip_trunk_id=_out_trunk,
                     sip_call_to=outbound_number,
                     participant_identity=f"sip_{outbound_number}",
                     wait_until_answered=True,

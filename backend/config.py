@@ -76,11 +76,16 @@ class Settings(BaseSettings):
     recording_enabled: bool = False
     max_call_duration_seconds: int = 0  # 0 = unlimited; non-zero wraps call at N seconds (Solo plan billing cap)
 
-    # Telephony (Vobiz Partner API + WebSocket)
+    # Telephony (Vobiz Partner API + WebSocket). These are the GLOBAL fallback
+    # account; per-clinic Vobiz sub-accounts (concurrency isolation) override them
+    # via Branch.vobiz_* columns when set. See backend/services/telephony.py.
     vobiz_did_number: str = ""
     vobiz_auth_id: str = ""
     vobiz_auth_token: str = ""
     vobiz_api_base: str = "https://api.vobiz.ai/api/v1"
+    # Fernet key (urlsafe-base64 32 bytes) encrypting secrets at rest — per-branch
+    # SIP passwords. REQUIRED in production; dev/test derive one from jwt_secret.
+    field_encryption_key: str = ""
     # The Vobiz CDR sync job is the AUTHORITATIVE source of calls + minutes
     # (agent-independent). The agent's own CallLog writes are OFF by default to
     # avoid double-counting; flip on only in environments with no Vobiz CDR.

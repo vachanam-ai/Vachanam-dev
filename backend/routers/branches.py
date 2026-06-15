@@ -153,6 +153,112 @@ async def update_branch_voice(
     return await _settings_payload(db, branch, branch_id)
 
 
+# ── Per-clinic Vobiz sub-account (concurrency isolation) ────────────────────
+
+
+class TelephonyUpdate(BaseModel):
+    vobiz_subaccount_id: str | None = None
+    vobiz_sip_username: str | None = None
+    vobiz_sip_password: str | None = None  # plaintext IN; stored encrypted at rest
+    vobiz_sip_domain: str | None = None
+    outbound_trunk_id: str | None = None
+
+
+class TelephonySettings(BaseModel):
+    """Non-secret view of a branch's telephony config. The SIP password is NEVER
+    returned — only whether one is set."""
+    vobiz_subaccount_id: str | None = None
+    vobiz_sip_username: str | None = None
+    vobiz_sip_domain: str | None = None
+    outbound_trunk_id: str | None = None
+    has_sip_password: bool = False
+
+
+def _telephony_payload(branch: Branch) -> TelephonySettings:
+    return TelephonySettings(
+        vobiz_subaccount_id=getattr(branch, "vobiz_subaccount_id", None),
+        vobiz_sip_username=getattr(branch, "vobiz_sip_username", None),
+        vobiz_sip_domain=getattr(branch, "vobiz_sip_domain", None),
+        outbound_trunk_id=getattr(branch, "outbound_trunk_id", None),
+        has_sip_password=bool(getattr(branch, "vobiz_sip_password_enc", None)),
+    )
+
+
+@router.get(
+    "/{branch_id}/telephony",
+    response_model=TelephonySettings,
+    dependencies=[Depends(queue_today_limit)],
+)
+async def get_branch_telephony(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelephonySettings:
+    """The branch's Vobiz sub-account config (no secret). org_admin only."""
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can view telephony settings")
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return _telephony_payload(branch)
+
+
+@router.patch(
+    "/{branch_id}/telephony",
+    response_model=TelephonySettings,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.telephony_changed", resource_type="branch")
+async def update_branch_telephony(
+    branch_id: str,
+    body: TelephonyUpdate,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TelephonySettings:
+    """Set a clinic's Vobiz sub-account credentials for concurrency isolation.
+    The SIP password is encrypted at rest (DPDP/RULE 9) — never stored plaintext.
+    org_admin only. Only provided fields are updated; omit a field to leave it."""
+    from backend.services.crypto import encrypt_secret
+
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can change telephony settings")
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    for field in ("vobiz_subaccount_id", "vobiz_sip_username", "vobiz_sip_domain", "outbound_trunk_id"):
+        val = getattr(body, field)
+        if val is not None:
+            setattr(branch, field, val.strip() or None)
+    if body.vobiz_sip_password is not None:
+        # Empty string clears the stored secret; otherwise store the ciphertext.
+        branch.vobiz_sip_password_enc = (
+            encrypt_secret(body.vobiz_sip_password) if body.vobiz_sip_password else None
+        )
+    await db.commit()
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+
+    logger.info(
+        "branch_telephony_changed",
+        branch_id=branch_id,
+        subaccount=bool(branch.vobiz_subaccount_id),
+        has_password=bool(branch.vobiz_sip_password_enc),
+    )
+    return _telephony_payload(branch)
+
+
 # ── Clinic details, calendar, team management (org_admin) ───────────────────
 
 

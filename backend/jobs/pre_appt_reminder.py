@@ -20,6 +20,7 @@ from sqlalchemy import and_, select
 
 import backend.database as _db_module
 from backend.models.schema import Branch, Doctor, Patient, Token
+from backend.services.telephony import branch_outbound_trunk_id
 
 load_dotenv()
 
@@ -115,6 +116,9 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                         {
                             "call_type": "reminder",
                             "branch_id": str(branch.id),  # outbound: no dialed DID
+                            # Per-clinic Vobiz sub-account outbound trunk (falls
+                            # back to the global trunk when not configured).
+                            "outbound_trunk_id": branch_outbound_trunk_id(branch),
                             "phone_number": patient.phone,
                             "token_id": str(token.id),
                             "patient_name": patient.name,

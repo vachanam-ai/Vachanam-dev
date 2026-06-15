@@ -59,6 +59,18 @@ class Branch(Base):
     # clinic_phone: the clinic's existing patient-facing number (forwards to the DID)
     clinic_phone: Mapped[str | None] = mapped_column(String(20))
     vobiz_did_id: Mapped[str | None] = mapped_column(String(255))
+    # Per-clinic Vobiz SUB-ACCOUNT (concurrency isolation: each clinic gets its
+    # own channel pool + CDRs + billing instead of sharing one global account).
+    # When vobiz_subaccount_id is set, the agent/outbound jobs use these creds +
+    # outbound_trunk_id instead of the global settings.vobiz_*. The SIP password
+    # is encrypted at rest (DPDP/RULE 9) — never store it plaintext; use
+    # backend/services/crypto.py. All nullable → existing single-account branches
+    # keep working unchanged (telephony.py falls back to the global account).
+    vobiz_subaccount_id: Mapped[str | None] = mapped_column(String(128))
+    vobiz_sip_username: Mapped[str | None] = mapped_column(String(128))
+    vobiz_sip_password_enc: Mapped[str | None] = mapped_column(Text)  # Fernet token
+    vobiz_sip_domain: Mapped[str | None] = mapped_column(String(255))
+    outbound_trunk_id: Mapped[str | None] = mapped_column(String(255))  # per-clinic LiveKit outbound trunk
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))
     # Sarvam Bulbul speaker for this clinic's voice agent (clinic-selectable)

@@ -22,6 +22,7 @@ from sqlalchemy import and_, select
 
 import backend.database as _db_module
 from backend.models.schema import Branch, Doctor, FollowupTask, Patient, Token
+from backend.services.telephony import branch_outbound_trunk_id
 
 load_dotenv()
 
@@ -97,6 +98,9 @@ async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
                             # dialed DID, so the branch must travel in metadata
                             # or a multi-clinic deploy resolves the wrong tenant.
                             "branch_id": str(task.branch_id),
+                            # Per-clinic Vobiz sub-account outbound trunk (falls
+                            # back to the global trunk when not configured).
+                            "outbound_trunk_id": branch_outbound_trunk_id(branch),
                             "phone_number": patient.phone,
                             "followup_task_id": str(task.id),
                             "patient_name": patient.name,
