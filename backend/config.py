@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     # when there is NO proxy (direct connections) to use the socket peer as-is.
     trusted_proxy_hops: int = 2
 
-    # Voice agent (Pipecat)
+    # Voice agent (LiveKit)
     public_url: str = "http://localhost:7860"
     # Raw flag. NEVER read this directly to decide whether to record — use the
     # recording_allowed property, which hard-disables recording in production

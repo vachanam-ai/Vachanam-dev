@@ -113,8 +113,8 @@ jobs:
       - name: Install backend dependencies
         run: pip install --no-cache-dir -r backend/requirements.txt
 
-      - name: Install agent dependencies
-        run: pip install --no-cache-dir -r agent/requirements.txt
+      - name: Install agent dependencies (LiveKit)
+        run: pip install --no-cache-dir -r agent/livekit_minimal/requirements.txt
 
       - name: Run Alembic migrations
         run: alembic upgrade head
