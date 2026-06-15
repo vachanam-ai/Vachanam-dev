@@ -16,6 +16,21 @@ import { useAuth } from "../hooks/useAuth.jsx";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 
+// Static fallback for the language dropdown — the set is fixed metadata
+// (mirrors agent/i18n/languages.py). Used when the API response omits
+// allowed_languages (e.g. an older/not-yet-restarted backend) so the picker
+// never renders empty. The backend still validates the chosen code on PATCH.
+const LANGUAGES = [
+  { code: "te", name: "Telugu", native_name: "తెలుగు" },
+  { code: "hi", name: "Hindi", native_name: "हिन्दी" },
+  { code: "ta", name: "Tamil", native_name: "தமிழ்" },
+  { code: "kn", name: "Kannada", native_name: "ಕನ್ನಡ" },
+  { code: "ml", name: "Malayalam", native_name: "മലയാളം" },
+  { code: "mr", name: "Marathi", native_name: "मराठी" },
+  { code: "bn", name: "Bengali", native_name: "বাংলা" },
+  { code: "or", name: "Odia", native_name: "ଓଡ଼ିଆ" }
+];
+
 /* Setup checklist derived from live data — the owner's map through onboarding. */
 function checklist(data, calOk) {
   return [
@@ -115,7 +130,9 @@ export default function Settings() {
     mutationFn: (lang) => setBranchVoice(branchId, null, lang),
     onSuccess: (d) => {
       qc.setQueryData(["branch-settings", branchId], d);
-      const opt = (d.allowed_languages ?? []).find((l) => l.code === d.language);
+      const opt = (d.allowed_languages?.length ? d.allowed_languages : LANGUAGES).find(
+        (l) => l.code === d.language
+      );
       toast.success(`Language set to ${opt?.name ?? d.language}`);
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change language")
@@ -342,7 +359,7 @@ export default function Settings() {
           onChange={(e) => language.mutate(e.target.value)}
           disabled={language.isPending}
         >
-          {(data?.allowed_languages ?? []).map((l) => (
+          {(data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES).map((l) => (
             <option key={l.code} value={l.code}>
               {l.native_name} ({l.name})
             </option>
