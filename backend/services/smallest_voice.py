@@ -42,7 +42,11 @@ def _waves():
 
 def list_voices(language: str | None = None) -> list[dict]:
     """Catalog of smallest.ai voices, optionally filtered to a language code
-    (te/hi/ta/kn/ml/mr/bn/or). Returns [{voice_id, display_name, gender, languages}]."""
+    (te/hi/ta/kn/ml/mr/bn/or). Returns [{voice_id, display_name, gender, languages}].
+
+    smallest tags each voice with the FULL language name ("telugu", "hindi"), not
+    the short code, so we translate the code → name via the i18n registry before
+    matching (passing "te" directly would match nothing)."""
     try:
         resp = _waves().get_voices(model=_VOICES_MODEL)
     except VoiceServiceError:
@@ -50,12 +54,19 @@ def list_voices(language: str | None = None) -> list[dict]:
     except Exception as e:  # noqa: BLE001 — SDK raises ApiError; normalize it
         logger.error("smallest_list_voices_failed", error=str(e)[:200])
         raise VoiceServiceError("Could not load voices from smallest.ai")
+
+    # Short code → full language name (e.g. "te" → "telugu") to match the tags.
+    target = ""
+    code = (language or "").lower().strip()
+    if code:
+        from agent.i18n import get_lang
+
+        target = get_lang(code).name.lower()
     out: list[dict] = []
-    lang = (language or "").lower().strip()
     for v in getattr(resp, "voices", None) or []:
         tags = getattr(v, "tags", None)
         langs = [str(x).lower() for x in (getattr(tags, "language", None) or [])]
-        if lang and lang not in langs:
+        if target and target not in langs:
             continue
         out.append(
             {

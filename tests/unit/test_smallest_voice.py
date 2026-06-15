@@ -46,7 +46,9 @@ def fake_waves(monkeypatch):
 
 
 def test_list_voices_filters_by_language(fake_waves):
-    te = sv.list_voices("te" and "telugu")  # service lowercases + matches tag
+    # Pass the short code "te"; the service translates it to the full name
+    # "telugu" (which is how smallest tags voices) before matching.
+    te = sv.list_voices("te")
     ids = [v["voice_id"] for v in te]
     assert "padmaja" in ids and "niharika" not in ids and "avery" not in ids
 
