@@ -78,6 +78,12 @@ class Branch(Base):
     # voice (agent/i18n). Nullable + widened from the old Sarvam-speaker column
     # (TTS provider switched Sarvam Bulbul → smallest.ai 2026-06-15).
     tts_voice: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Cloned smallest.ai voices registered to this clinic: list of
+    # {"voice_id","name","language"}. A clinic clones a voice in the smallest.ai
+    # dashboard, then registers the returned voice_id here so it shows in the
+    # Settings voice picker for that language and can be selected as tts_voice.
+    # Tenant-scoped (RULE 1) — a clinic only ever sees its own clones.
+    cloned_voices: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     # Spoken language for this clinic's voice agent (clinic-selectable). Drives
     # the Sarvam STT/TTS language codes AND the per-language spoken lines +
     # system-prompt directive. Short code (te/hi/ta/kn/ml/mr/bn/or); see

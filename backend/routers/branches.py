@@ -191,10 +191,117 @@ async def list_branch_voices(
     from backend.services import smallest_voice
 
     try:
-        voices = smallest_voice.list_voices(lang)
+        catalog = smallest_voice.list_voices(lang)
     except smallest_voice.VoiceServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    return {"language": lang, "current": getattr(branch, "tts_voice", None), "voices": voices}
+
+    # Prepend this clinic's registered cloned voices for this language (tenant-
+    # scoped) so they're selectable in the picker, tagged cloned=true.
+    cloned = [
+        {
+            "voice_id": cv.get("voice_id"),
+            "display_name": cv.get("name") or cv.get("voice_id"),
+            "gender": None,
+            "languages": [lang],
+            "cloned": True,
+        }
+        for cv in (getattr(branch, "cloned_voices", None) or [])
+        if (cv.get("language") or "").lower() == lang and cv.get("voice_id")
+    ]
+    return {
+        "language": lang,
+        "current": getattr(branch, "tts_voice", None),
+        "voices": cloned + catalog,
+    }
+
+
+class ClonedVoiceRegister(BaseModel):
+    voice_id: str          # the smallest "voice_..." id from the dashboard clone
+    name: str              # label shown in the picker (e.g. "Dr Vinay")
+    language: str          # which language it speaks (te/hi/...)
+    set_current: bool = True  # also make it the agent's voice now
+
+
+@router.post(
+    "/{branch_id}/cloned-voices",
+    response_model=BranchSettings,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.cloned_voice_registered", resource_type="branch")
+async def register_cloned_voice(
+    branch_id: str,
+    body: ClonedVoiceRegister,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BranchSettings:
+    """Register a smallest.ai cloned voice (created in the dashboard) so it shows
+    in the picker for its language and can be the agent's voice. org_admin only."""
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can add a voice")
+    if not _VOICE_ID_RE.match(body.voice_id or ""):
+        raise HTTPException(status_code=422, detail="Invalid voice id")
+    if not body.name.strip():
+        raise HTTPException(status_code=422, detail="A voice name is required")
+    if body.language not in ALLOWED_LANGUAGES:
+        raise HTTPException(status_code=422, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    lst = [c for c in (branch.cloned_voices or []) if c.get("voice_id") != body.voice_id]
+    lst.append({"voice_id": body.voice_id, "name": body.name.strip(), "language": body.language})
+    branch.cloned_voices = lst  # reassign so SQLAlchemy detects the JSONB change
+    if body.set_current:
+        branch.tts_voice = body.voice_id
+        branch.language = body.language
+    await db.commit()
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("cloned_voice_registered", branch_id=branch_id, voice_id=body.voice_id, language=body.language)
+    return await _settings_payload(db, branch, branch_id)
+
+
+@router.delete(
+    "/{branch_id}/cloned-voices/{voice_id}",
+    response_model=BranchSettings,
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.cloned_voice_removed", resource_type="branch")
+async def unregister_cloned_voice(
+    branch_id: str,
+    voice_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BranchSettings:
+    """Remove a registered cloned voice. If it was the agent's voice, fall back to
+    the language default. org_admin only."""
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can remove a voice")
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    branch.cloned_voices = [c for c in (branch.cloned_voices or []) if c.get("voice_id") != voice_id]
+    if branch.tts_voice == voice_id:
+        branch.tts_voice = None  # → agent uses the language default
+    await db.commit()
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("cloned_voice_removed", branch_id=branch_id, voice_id=voice_id)
+    return await _settings_payload(db, branch, branch_id)
 
 
 @router.post(

@@ -170,6 +170,23 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     from backend.services.telephony import branch_outbound_trunk_id
     assert branch_outbound_trunk_id(row) == "ST_madhapur"
 
+    # Cloned voice: register a dashboard voice_id → it becomes the agent voice
+    # and shows in the picker tagged cloned (catalog mocked, no live smallest call).
+    with patch("backend.services.smallest_voice.list_voices", return_value=[{"voice_id": "padmaja", "display_name": "Padmaja"}]):
+        reg = await client.post(
+            f"/branches/{bid}/cloned-voices",
+            headers=_auth(owner),
+            json={"voice_id": "voice_abc123", "name": "Dr Vinay", "language": "te"},
+        )
+        assert reg.status_code == 200, reg.text
+        assert reg.json()["tts_voice"] == "voice_abc123"  # set as current
+        vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
+        picker = vs.json()["voices"]
+        assert picker[0]["voice_id"] == "voice_abc123" and picker[0]["cloned"] is True
+        # Remove it → falls back to the language default (tts_voice cleared).
+        rm = await client.delete(f"/branches/{bid}/cloned-voices/voice_abc123", headers=_auth(owner))
+        assert rm.status_code == 200 and rm.json()["tts_voice"] is None
+
     # ── 2. The agent's inbound DID->branch resolution finds THIS branch only ──
     did_norm = normalize_did(DID)
     rows = (

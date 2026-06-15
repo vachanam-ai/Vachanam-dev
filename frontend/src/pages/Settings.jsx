@@ -3,11 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   addStaff,
-  cloneBranchVoice,
-  deleteBranchVoiceClone,
   fetchBranchSettings,
   fetchStaff,
   getBranchVoices,
+  registerClonedVoice,
+  removeClonedVoice,
   setBranchVoice,
   testCalendar,
   updateBranchSettings
@@ -146,23 +146,32 @@ export default function Settings() {
     staleTime: 5 * 60 * 1000
   });
 
-  const cloneFileRef = useRef(null);
+  // Register a cloned voice by its smallest.ai id (created in the dashboard).
+  const [cloneId, setCloneId] = useState("");
   const [cloneName, setCloneName] = useState("");
-  const clone = useMutation({
-    mutationFn: ({ name, file }) => cloneBranchVoice(branchId, name, file),
+  const registerClone = useMutation({
+    mutationFn: () =>
+      registerClonedVoice(branchId, {
+        voice_id: cloneId.trim(),
+        name: cloneName.trim(),
+        language: data?.language ?? "te",
+        set_current: true
+      }),
     onSuccess: (d) => {
       qc.setQueryData(["branch-settings", branchId], d);
+      qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
+      setCloneId("");
       setCloneName("");
-      if (cloneFileRef.current) cloneFileRef.current.value = "";
-      toast.success("Voice cloned and set as the clinic voice");
+      toast.success("Cloned voice added and set as the clinic voice");
     },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Voice cloning failed")
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not add voice")
   });
-  const removeClone = useMutation({
-    mutationFn: () => deleteBranchVoiceClone(branchId),
+  const removeRegistered = useMutation({
+    mutationFn: (vid) => removeClonedVoice(branchId, vid),
     onSuccess: (d) => {
       qc.setQueryData(["branch-settings", branchId], d);
-      toast.success("Reverted to the default voice");
+      qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
+      toast.success("Voice removed");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove voice")
   });
@@ -374,63 +383,68 @@ export default function Settings() {
       {/* 6 — Voice */}
       <Section id="voice" title="Agent voice"
         sub="The smallest.ai voice patients hear. Pick one, or clone your own. Applies from the next call.">
-        {data?.tts_voice?.startsWith("voice_") ? (
-          <div className="mb-3 flex items-center justify-between rounded-xl bg-teal-mint/40 p-3">
-            <p className="font-ui text-sm">
-              Using your <strong>cloned voice</strong>.
-            </p>
-            <button type="button" className="btn-ghost min-h-[44px]"
-              onClick={() => removeClone.mutate()} disabled={removeClone.isPending}>
-              Use a standard voice
-            </button>
-          </div>
-        ) : (
-          <select
-            className="field"
-            value={data?.tts_voice ?? ""}
-            onChange={(e) => voice.mutate(e.target.value)}
-            disabled={voice.isPending || voices.isLoading}
-          >
-            <option value="">Default voice for this language</option>
-            {(voices.data?.voices ?? []).map((v) => (
-              <option key={v.voice_id} value={v.voice_id}>
-                {v.display_name}{v.gender ? ` · ${v.gender}` : ""}
-              </option>
-            ))}
-          </select>
-        )}
+        <select
+          className="field"
+          value={data?.tts_voice ?? ""}
+          onChange={(e) => voice.mutate(e.target.value)}
+          disabled={voice.isPending || voices.isLoading}
+        >
+          <option value="">Default voice for this language</option>
+          {(voices.data?.voices ?? []).map((v) => (
+            <option key={v.voice_id} value={v.voice_id}>
+              {v.display_name}
+              {v.cloned ? " · your cloned voice" : v.gender ? ` · ${v.gender}` : ""}
+            </option>
+          ))}
+        </select>
         {voices.isError && (
           <p className="mt-2 font-ui text-xs text-danger">
             Couldn’t load voices from smallest.ai — check the API key.
           </p>
         )}
 
-        {/* Voice cloning */}
+        {/* Registered cloned voices (remove) */}
+        {(voices.data?.voices ?? []).some((v) => v.cloned) && (
+          <div className="mt-3 space-y-1">
+            {(voices.data?.voices ?? [])
+              .filter((v) => v.cloned)
+              .map((v) => (
+                <div key={v.voice_id}
+                  className="flex items-center justify-between rounded-lg bg-teal-mint/40 px-3 py-2">
+                  <span className="font-ui text-sm">
+                    {v.display_name} <span className="text-xs text-slate">· cloned</span>
+                  </span>
+                  <button type="button"
+                    className="font-ui text-xs text-danger underline-offset-2 hover:underline"
+                    onClick={() => removeRegistered.mutate(v.voice_id)}
+                    disabled={removeRegistered.isPending}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+          </div>
+        )}
+
+        {/* Add a cloned voice by id */}
         <div className="mt-4 rounded-xl border border-hairline p-4">
-          <p className="font-ui text-sm font-medium">Clone a voice</p>
+          <p className="font-ui text-sm font-medium">Add a cloned voice</p>
           <p className="mt-1 font-ui text-xs text-slate">
-            Upload a clear 5–15 second sample (WAV/MP3). The AI will speak in that voice.
+            Clone a voice in your smallest.ai dashboard, then paste its voice ID here. It will
+            speak in the language selected above ({data?.language ?? "te"}).
           </p>
           <div className="mt-3 space-y-2">
-            <input
-              className="field"
-              placeholder="Voice name (e.g. Dr Srinivas)"
-              value={cloneName}
-              onChange={(e) => setCloneName(e.target.value)}
-            />
-            <input ref={cloneFileRef} type="file" accept="audio/*" className="field" />
-            <button
-              type="button"
-              className="btn-primary w-full min-h-[44px]"
-              disabled={clone.isPending}
+            <input className="field" placeholder="Voice name (e.g. Dr Vinay)"
+              value={cloneName} onChange={(e) => setCloneName(e.target.value)} />
+            <input className="field" placeholder="voice_…  (from smallest.ai)"
+              value={cloneId} onChange={(e) => setCloneId(e.target.value)} />
+            <button type="button" className="btn-primary w-full min-h-[44px]"
+              disabled={registerClone.isPending}
               onClick={() => {
-                const file = cloneFileRef.current?.files?.[0];
                 if (!cloneName.trim()) return toast.error("Give the voice a name");
-                if (!file) return toast.error("Choose an audio sample");
-                clone.mutate({ name: cloneName.trim(), file });
-              }}
-            >
-              {clone.isPending ? "Cloning…" : "Clone & use this voice"}
+                if (!cloneId.trim()) return toast.error("Paste the voice ID");
+                registerClone.mutate();
+              }}>
+              {registerClone.isPending ? "Adding…" : "Add & use this voice"}
             </button>
           </div>
         </div>
