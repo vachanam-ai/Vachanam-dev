@@ -175,19 +175,20 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Voices */}
+      {/* Languages */}
       <section id="voices" data-section className="border-y border-hairline bg-teal-mint/50 py-20">
         <div className="mx-auto max-w-6xl px-4">
-          <p data-item className="eyebrow">Pick your clinic&rsquo;s voice</p>
+          <p data-item className="eyebrow">Speaks your patients&rsquo; language</p>
           <h2 data-item className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-            Six voices. One sounds like your clinic.
+            Eight languages. One warm AI agent.
           </h2>
           <p data-item className="mt-3 max-w-2xl font-ui text-ink-soft">
-            Native Telugu, natural pace, warm tone. Tap to listen — your patients will hear
-            exactly this.
+            Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali, Odia — natural pace,
+            warm tone. Tap any to hear exactly what your patients will hear. Want your own
+            voice? Clinics can clone it.
           </p>
           <div data-item className="mt-8">
-            <VoicePicker selectable={false} />
+            <VoicePicker />
           </div>
         </div>
       </section>
