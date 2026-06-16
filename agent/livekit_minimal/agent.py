@@ -334,6 +334,69 @@ class VachanamAgent(Agent):
         self._meta = meta_service
         self._transfer_to = transfer_to
 
+    async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
+        """ECHO GUARD (self-talk loop). A phone line can bounce the agent's own
+        TTS back; Sarvam STT then transcribes it as if the CALLER said it, and
+        the agent answers itself — an endless self-talk loop (BVCTelephony AEC
+        does not always fully cancel carrier line echo). Drop a user turn that is
+        a near-verbatim echo of the agent's immediately preceding utterance.
+
+        Thresholds are deliberately strict (long text, ~85% match) so a REAL
+        patient turn is never discarded — a false negative (occasional echo slips
+        through) is far safer than a false positive (ignoring the patient)."""
+        try:
+            import difflib
+
+            norm_user = self._normalize_for_echo(self._message_text(new_message))
+            if len(norm_user) < 20:
+                return  # too short to be a confident full-sentence echo
+            last_agent = ""
+            for item in reversed(getattr(turn_ctx, "items", None) or []):
+                if getattr(item, "role", None) == "assistant":
+                    last_agent = self._message_text(item)
+                    break
+            norm_agent = self._normalize_for_echo(last_agent)
+            if len(norm_agent) < 20:
+                return
+            ratio = difflib.SequenceMatcher(None, norm_user, norm_agent).ratio()
+            if ratio >= 0.85 or (len(norm_user) >= 25 and norm_user in norm_agent):
+                from livekit.agents import StopResponse
+
+                logger.warning(
+                    "echo_turn_discarded ratio=%.2f len=%d branch_id=%s",
+                    ratio, len(norm_user), str(self._state.branch_id),
+                )
+                raise StopResponse()
+        except Exception as e:
+            # StopResponse is the intended control-flow signal — re-raise it.
+            from livekit.agents import StopResponse
+
+            if isinstance(e, StopResponse):
+                raise
+            # Any other error must NEVER swallow a real turn — let it through.
+            logger.warning("echo_guard_error: %s", e)
+
+    @staticmethod
+    def _message_text(m) -> str:
+        t = getattr(m, "text_content", None)
+        if isinstance(t, str) and t:
+            return t
+        c = getattr(m, "content", None)
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            return " ".join(x for x in c if isinstance(x, str))
+        return ""
+
+    @staticmethod
+    def _normalize_for_echo(s: str) -> str:
+        """Lowercase and strip whitespace + ASCII punctuation so spacing/STT
+        punctuation differences don't hide an echo. Script letters (Telugu etc.)
+        are preserved — only separators are removed."""
+        import re
+
+        return re.sub(r"[\s\W_]+", "", (s or "").lower())
+
     async def _resolve_doctor_id(self, doctor_id: str | None) -> UUID:
         """Never trust the LLM to echo a UUID. Accept a real UUID, else match a
         doctor name within this branch, else fall back to the doctor selected by
@@ -455,6 +518,24 @@ class VachanamAgent(Agent):
             self._state.token_held = True
             self._state.token_number = result["token_number"]
             self._state.token_redis_key = result["redis_key"]
+            # APPOINTMENT (schedule) doctors have NO patient-facing queue number —
+            # the returned token_number is an internal slot index. Surfacing it to
+            # the LLM is exactly how it gets spoken as a "token number" on schedule
+            # bookings (recurring live bug — FIXLOG #97/#103/#104). Prompt rules
+            # alone kept being ignored, so we never put the number in front of the
+            # model: it only receives the time it may read back. The real number
+            # stays in self._state.token_number for confirm_booking.
+            if result.get("booking_type") == "appointment":
+                return {
+                    "success": True,
+                    "booking_type": "appointment",
+                    "appointment_time": result.get("appointment_time"),
+                    "announce": "time_only",
+                    "instruction": (
+                        "Schedule doctor — confirm ONLY the date and time. NEVER "
+                        "say a token or queue number."
+                    ),
+                }
         return result
 
     @function_tool()

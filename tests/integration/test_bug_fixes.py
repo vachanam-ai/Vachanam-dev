@@ -727,3 +727,170 @@ async def test_confirm_booking_announces_token_number_for_token_doctor(clinic, d
     assert result["success"], result
     assert result["announce"] == "token_number"
     assert result["booking_type"] == "token"
+
+
+# ── 2026-06-16 fixes (Vinay live test) ──────────────────────────────────────
+
+
+async def test_cancelled_token_frees_seat_for_rebooking(clinic, db, redis):
+    """Fix (live): a cancelled/rescheduled token-doctor booking must FREE its
+    seat so the day can be rebooked, even at the daily limit. The old check
+    `token_number > limit` (monotonic counter) made every cancellation eat a
+    seat permanently — a full day stayed 'full' after cancellations. Capacity
+    is now the CONFIRMED-seat count; the number is still never reused (#24).
+    """
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    doc.daily_token_limit = 2  # tighten so 2 confirmed = full
+    await db.commit()
+    day = _tomorrow()
+
+    async def _book(name, phone):
+        a = await assign_token(doc.id, branch.id, day, db)
+        assert a["success"], a
+        c = await confirm_booking(
+            doctor_id=doc.id, branch_id=branch.id, patient_name=name,
+            patient_phone=phone, complaint="fever", booking_date=day,
+            token_number=a["token_number"], followup_consent=False, patient_age=30,
+            appointment_time=None, source="voice", db=db,
+            calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+        )
+        assert c["success"], c
+        return a["token_number"], c["token_id"]
+
+    n1, t1 = await _book("Seat One", "+919666444401")
+    n2, t2 = await _book("Seat Two", "+919666444402")
+    assert (n1, n2) == (1, 2)
+
+    # Day is full by seats. With the OLD bug a third assign returned full.
+    full = await assign_token(doc.id, branch.id, day, db)
+    assert full["success"] is False and full["reason"] == "full"
+
+    # Patient One cancels (frees a SEAT, NOT the number).
+    state = SessionState(session_id="seat")
+    state.branch_id = branch.id
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=None, meta_service=NullMeta(), transfer_to="",
+    )
+    assert (await agent._do_cancel(t1))["success"]
+
+    # Now rebooking must succeed — seat freed — and the number must be a fresh
+    # unique value (3), never the cancelled 1.
+    n3, _ = await _book("Seat Three", "+919666444403")
+    assert n3 == 3, "cancelled number must not be reused"
+
+    # Exactly two CONFIRMED seats remain (Two + Three); One is cancelled.
+    live = (
+        await db.execute(
+            select(func.count()).select_from(Token).where(
+                and_(
+                    Token.doctor_id == doc.id,
+                    Token.branch_id == branch.id,
+                    Token.date == day,
+                    Token.status == "confirmed",
+                )
+            )
+        )
+    ).scalar_one()
+    assert live == 2
+
+
+async def test_assign_token_wrapper_hides_queue_number_for_appointment_doctor(clinic, db, redis):
+    """Fix (live, recurring): the assign_token TOOL must never put a queue
+    number in front of the LLM for a schedule doctor — that internal slot index
+    is exactly what kept getting spoken as a 'token number' (FIXLOG #97/#103/
+    #104). The wrapper returns time_only + the time, no number; the real number
+    is kept server-side in state for confirm_booking."""
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    state = SessionState(session_id="hide")
+    state.branch_id = branch.id
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+        transfer_to="",
+    )
+    out = await agent.assign_token(
+        context=None, doctor_id=str(doc.id), booking_date=day.isoformat(),
+        appointment_time="11:00",
+    )
+    assert out["success"] is True
+    assert out["announce"] == "time_only"
+    assert out["appointment_time"] == "11:00"
+    assert "token_number" not in out  # the LLM never sees a queue number
+    # but the agent kept the real index for confirm_booking
+    assert state.token_number is not None
+    assert state.token_held is True
+
+
+async def test_assign_token_wrapper_keeps_queue_number_for_token_doctor(clinic, db, redis):
+    """The other side: for a TOKEN (walk-in) doctor the queue number IS the
+    patient-facing answer and must still reach the LLM."""
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    state = SessionState(session_id="keep")
+    state.branch_id = branch.id
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=None, meta_service=NullMeta(), transfer_to="",
+    )
+    out = await agent.assign_token(
+        context=None, doctor_id=str(doc.id), booking_date=day.isoformat(),
+    )
+    assert out["success"] is True
+    assert out["token_number"] == 1  # walk-in queue number surfaced
+    assert out.get("booking_type") == "token"
+
+
+class _EchoMsg:
+    def __init__(self, role, text):
+        self.role = role
+        self.text_content = text
+
+
+class _EchoCtx:
+    def __init__(self, items):
+        self.items = items
+
+
+def _echo_agent(clinic, db):
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    state = SessionState(session_id="echo")
+    state.branch_id = clinic["branch"].id
+    return VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=None, meta_service=NullMeta(), transfer_to="",
+    )
+
+
+async def test_echo_guard_discards_agents_own_words(clinic, db):
+    """Self-talk loop: the carrier echoes the agent's TTS back, STT transcribes
+    it as the caller, and the agent answers itself. A near-verbatim echo of the
+    agent's last utterance must be DROPPED (StopResponse)."""
+    from livekit.agents import StopResponse
+
+    agent = _echo_agent(clinic, db)
+    said = "రేపు మధ్యాహ్నం మూడున్నరకి మీ అపాయింట్‌మెంట్ కన్ఫర్మ్ అయిందండి"
+    ctx = _EchoCtx([_EchoMsg("assistant", said)])
+    with pytest.raises(StopResponse):
+        await agent.on_user_turn_completed(ctx, _EchoMsg("user", said))
+
+
+async def test_echo_guard_keeps_real_patient_turn(clinic, db):
+    """A genuine patient turn (different from what the agent said) must pass
+    through untouched — the guard must never silence a real caller."""
+    agent = _echo_agent(clinic, db)
+    ctx = _EchoCtx([_EchoMsg("assistant", "రేపు మధ్యాహ్నం మూడున్నరకి మీ అపాయింట్‌మెంట్ కన్ఫర్మ్ అయిందండి")])
+    # distinct, longer request
+    assert await agent.on_user_turn_completed(
+        ctx, _EchoMsg("user", "నాకు పంటి నొప్పి ఉంది, డెంటిస్ట్ అపాయింట్‌మెంట్ కావాలి అండి")
+    ) is None
+    # short confirmation is below the length floor → never dropped
+    assert await agent.on_user_turn_completed(ctx, _EchoMsg("user", "సరే అండి")) is None

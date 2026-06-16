@@ -124,5 +124,5 @@ When closing a future row, append here with this format:
 - **TD-021 (P2)** — urgent walk-in bypass: PRODUCT DECISION needed (bypass full queue vs remove flag).
 - **TD-022 (P3)** — cosmetic `if True:` de-indent in agent.py.
 - **TD-024 (P3)** — solo-cap watchdog grace mid-confirm.
-- **TD-026 (P2)** — token capacity frees same-day cancelled seats (needs 2-key design; bounded — daily reset).
+- **TD-026 (P3, mostly resolved 06-16 / FIXLOG #131)** — token capacity now frees cancelled/rescheduled seats by gating on the CONFIRMED-seat count, not the monotonic counter. Residual: daily_token_limit is advisory at assign (authoritative at confirm), so exact-simultaneous CONFIRMS can exceed it by a few (queue soft-cap, NOT a double-booking — numbers stay atomic+unique). Fully-atomic cap that also frees seats needs the 2-key design (monotonic number key + decrementable seats key); deferred until single-DID concurrency makes it matter.
 - **G15 (LOW)** — CSP img-src/style-src tightening pending a frontend render check.

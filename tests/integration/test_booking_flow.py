@@ -69,30 +69,57 @@ async def test_assign_token_returns_sequential_numbers(seeded_clinic, db, redis)
 
 
 async def test_assign_token_respects_daily_limit(seeded_clinic, db, redis):
+    """Capacity is the CONFIRMED-seat count, not the monotonic number counter.
+    Once daily_token_limit seats are CONFIRMED, assign_token refuses. A
+    cancelled/rescheduled token drops out of that count and frees its seat (see
+    test_bug_fixes.test_cancelled_token_frees_seat_for_rebooking) — the old
+    counter-based cap kept cancellations 'full' forever."""
+    from backend.models.schema import Patient, Token
+
     branch = seeded_clinic["branch"]
     doctor = seeded_clinic["doctor"]
+    doctor.daily_token_limit = 3
     today = date.today() + timedelta(days=2)
 
-    for _ in range(20):
-        await assign_token(doctor.id, branch.id, today, db)
+    p = Patient(branch_id=branch.id, name="Filler", phone="+919666444400", age=30)
+    db.add(p)
+    await db.flush()
+    for n in range(1, 4):  # 3 CONFIRMED seats == the limit
+        db.add(Token(
+            branch_id=branch.id, doctor_id=doctor.id, patient_id=p.id,
+            date=today, token_number=n, status="confirmed", source="voice",
+        ))
+    await db.commit()
 
     result = await assign_token(doctor.id, branch.id, today, db)
     assert result["success"] is False
     assert result["reason"] == "full"
 
 
-async def test_token_rollback_on_full(seeded_clinic, db, redis):
-    """After a 'full' rejection, the Redis counter must not have incremented."""
+async def test_token_full_does_not_advance_counter(seeded_clinic, db, redis):
+    """A 'full' rejection (confirmed seats == limit) returns BEFORE touching
+    Redis, so the monotonic number counter is left untouched (no spurious
+    INCR/DECR — the counter only ever advances on a real assignment)."""
+    from backend.models.schema import Patient, Token
+
     branch = seeded_clinic["branch"]
     doctor = seeded_clinic["doctor"]
+    doctor.daily_token_limit = 2
     today = date.today() + timedelta(days=3)
 
-    for _ in range(20):
-        await assign_token(doctor.id, branch.id, today, db)
+    p = Patient(branch_id=branch.id, name="Filler2", phone="+919666444401", age=30)
+    db.add(p)
+    await db.flush()
+    for n in range(1, 3):  # 2 CONFIRMED seats == the limit
+        db.add(Token(
+            branch_id=branch.id, doctor_id=doctor.id, patient_id=p.id,
+            date=today, token_number=n, status="confirmed", source="voice",
+        ))
+    await db.commit()
 
-    counter_before = int(await redis.get(f"token:{doctor.id}:{branch.id}:{today}") or 0)
-
-    await assign_token(doctor.id, branch.id, today, db)  # 21st — should fail + DECR
-
-    counter_after = int(await redis.get(f"token:{doctor.id}:{branch.id}:{today}") or 0)
-    assert counter_after == counter_before  # DECR rolled it back
+    key = f"token:{doctor.id}:{branch.id}:{today}"
+    counter_before = int(await redis.get(key) or 0)
+    result = await assign_token(doctor.id, branch.id, today, db)  # should fail full
+    assert result["success"] is False and result["reason"] == "full"
+    counter_after = int(await redis.get(key) or 0)
+    assert counter_after == counter_before  # counter never moved

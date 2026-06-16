@@ -360,14 +360,22 @@ async def check_availability(
                 )
             )
         ).scalar_one()
-        current = max(redis_current, db_confirmed)
         limit = doctor.daily_token_limit or 50
-        if current >= limit:
+        # CAPACITY = CONFIRMED seats, not the monotonic counter. A token that was
+        # cancelled or rescheduled away frees its SEAT (the day can be rebooked),
+        # even though its NUMBER is never reused (the counter only ever climbs —
+        # FIXLOG #24). Using max(redis, db) for the limit check made every
+        # cancellation permanently eat a seat, so a clinic with a few reschedules
+        # showed "fully booked" while seats were actually free.
+        if db_confirmed >= limit:
             next_day = booking_date + timedelta(days=1)
             return f"Doctor is fully booked on {booking_date.strftime('%d %B')}. Next available date is {next_day.strftime('%d %B')}."
+        # The NEXT queue number is the monotonic counter+1 (unique, never reused);
+        # it can sit above the seat count after cancellations — that is correct.
+        next_number = max(redis_current, db_confirmed) + 1
         return (
-            f"Doctor has {current} patients booked on {booking_date.strftime('%d %B')}. "
-            f"You will be token number {current + 1}."
+            f"Doctor has {db_confirmed} patients booked on {booking_date.strftime('%d %B')}. "
+            f"You will be token number {next_number}."
         )
 
     # Appointment type — compute available ranges
@@ -516,17 +524,23 @@ async def assign_token(
             )
         ).scalar_one()
 
+        # CAPACITY is measured by CONFIRMED seats, NOT the monotonic counter.
+        # A cancelled/rescheduled token frees its seat (the day can be rebooked)
+        # while its NUMBER is never reused — the counter only climbs (FIXLOG #24).
+        # The old `token_number > limit` rollback let cancellations permanently
+        # consume capacity: 30 issued / 30 limit read "full" even after 10 were
+        # cancelled. confirm_booking's confirmed-count re-check (RULE 2 tripwire)
+        # is the race-authoritative gate, so this seat check can be advisory.
+        limit = doctor.daily_token_limit or 50
+        if db_confirmed >= limit:
+            return {"success": False, "reason": "full"}
+
         async with _redis() as r:
             cur = int(await r.get(redis_key) or 0)
             if db_confirmed > cur:
                 await r.set(redis_key, db_confirmed)  # seed forward, no number reuse
             token_number = await r.incr(redis_key)
             await r.expire(redis_key, max(ttl_seconds, 7200))
-
-            limit = doctor.daily_token_limit or 50
-            if token_number > limit:
-                await r.decr(redis_key)  # rollback — only valid rollback use
-                return {"success": False, "reason": "full"}
 
         logger.info(
             "token_assigned",
@@ -535,7 +549,12 @@ async def assign_token(
             token=token_number,
             date=str(booking_date),
         )
-        return {"success": True, "token_number": token_number, "redis_key": redis_key}
+        return {
+            "success": True,
+            "token_number": token_number,
+            "redis_key": redis_key,
+            "booking_type": "token",
+        }
 
     else:  # appointment type
         if not appointment_time:
@@ -641,6 +660,7 @@ async def assign_token(
             "token_number": slot_count,
             "redis_key": slot_key,
             "appointment_time": appointment_time.strftime("%H:%M"),
+            "booking_type": "appointment",
         }
 
 
