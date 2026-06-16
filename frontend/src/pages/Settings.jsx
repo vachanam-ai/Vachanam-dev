@@ -425,29 +425,39 @@ export default function Settings() {
           </div>
         )}
 
-        {/* Add a cloned voice by id */}
-        <div className="mt-4 rounded-xl border border-hairline p-4">
-          <p className="font-ui text-sm font-medium">Add a cloned voice</p>
-          <p className="mt-1 font-ui text-xs text-slate">
-            Clone a voice in your smallest.ai dashboard, then paste its voice ID here. It will
-            speak in the language selected above ({data?.language ?? "te"}).
-          </p>
-          <div className="mt-3 space-y-2">
-            <input className="field" placeholder="Voice name (e.g. Dr Vinay)"
-              value={cloneName} onChange={(e) => setCloneName(e.target.value)} />
-            <input className="field" placeholder="voice_…  (from smallest.ai)"
-              value={cloneId} onChange={(e) => setCloneId(e.target.value)} />
-            <button type="button" className="btn-primary w-full min-h-[44px]"
-              disabled={registerClone.isPending}
-              onClick={() => {
-                if (!cloneName.trim()) return toast.error("Give the voice a name");
-                if (!cloneId.trim()) return toast.error("Paste the voice ID");
-                registerClone.mutate();
-              }}>
-              {registerClone.isPending ? "Adding…" : "Add & use this voice"}
-            </button>
+        {/* Add a cloned voice by id — Clinic/Multi only */}
+        {data?.voice_cloning_allowed ? (
+          <div className="mt-4 rounded-xl border border-hairline p-4">
+            <p className="font-ui text-sm font-medium">Add a cloned voice</p>
+            <p className="mt-1 font-ui text-xs text-slate">
+              Clone a voice in your smallest.ai dashboard, then paste its voice ID here. It will
+              speak in the language selected above ({data?.language ?? "te"}).
+            </p>
+            <div className="mt-3 space-y-2">
+              <input className="field" placeholder="Voice name (e.g. Dr Vinay)"
+                value={cloneName} onChange={(e) => setCloneName(e.target.value)} />
+              <input className="field" placeholder="voice_…  (from smallest.ai)"
+                value={cloneId} onChange={(e) => setCloneId(e.target.value)} />
+              <button type="button" className="btn-primary w-full min-h-[44px]"
+                disabled={registerClone.isPending}
+                onClick={() => {
+                  if (!cloneName.trim()) return toast.error("Give the voice a name");
+                  if (!cloneId.trim()) return toast.error("Paste the voice ID");
+                  registerClone.mutate();
+                }}>
+                {registerClone.isPending ? "Adding…" : "Add & use this voice"}
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="mt-4 rounded-xl border border-hairline bg-teal-mint/30 p-4">
+            <p className="font-ui text-sm font-medium">Clone your own voice</p>
+            <p className="mt-1 font-ui text-xs text-slate">
+              Voice cloning is available on the <strong>Clinic</strong> and <strong>Multi</strong> plans.
+              Upgrade to make the agent speak in your clinic&rsquo;s own cloned voice.
+            </p>
+          </div>
+        )}
       </Section>
 
       {/* 6 — Team */}
