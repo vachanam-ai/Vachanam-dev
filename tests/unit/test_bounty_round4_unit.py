@@ -65,6 +65,57 @@ async def test_otp_echoed_when_no_provider(monkeypatch, redis):
     assert out is not None and len(out) == 6
 
 
+def test_email_provider_configured_via_resend(monkeypatch):
+    """Resend counts as a configured email provider (so OTP no longer dev-echoes)."""
+    monkeypatch.setattr(settings, "smtp_host", "", raising=False)
+    monkeypatch.setattr(settings, "resend_api_key", "", raising=False)
+    assert otp_service._provider_configured("email") is False
+    monkeypatch.setattr(settings, "resend_api_key", "re_test", raising=False)
+    assert otp_service._provider_configured("email") is True
+
+
+@pytest.mark.asyncio
+async def test_send_email_uses_resend_when_keyed(monkeypatch):
+    """When resend_api_key is set, _send_email POSTs to the Resend API and
+    returns True on a 2xx — SMTP is not touched."""
+    monkeypatch.setattr(settings, "resend_api_key", "re_test", raising=False)
+    monkeypatch.setattr(settings, "resend_from", "Vachanam <noreply@vachanam.in>", raising=False)
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        text = "{}"
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return _Resp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    ok = await otp_service._send_email("user@example.com", "123456")
+    assert ok is True
+    assert captured["url"] == "https://api.resend.com/emails"
+    assert captured["headers"]["Authorization"] == "Bearer re_test"
+    assert captured["json"]["to"] == ["user@example.com"]
+    assert "123456" in captured["json"]["text"]
+    # the OTP subject must not leak the code
+    assert "123456" not in captured["json"]["subject"]
+
+
 @pytest.mark.asyncio
 async def test_otp_send_throttled_per_destination(monkeypatch, redis):
     """G16: with a provider wired, a 2nd send to the same dest within 60s is throttled."""

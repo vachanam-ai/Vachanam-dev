@@ -82,7 +82,7 @@ def _provider_configured(channel: str) -> bool:
     if channel == "sms":
         return bool(settings.msg91_auth_key)
     if channel == "email":
-        return bool(settings.smtp_host)
+        return bool(settings.resend_api_key or settings.smtp_host)
     return False
 
 
@@ -156,7 +156,39 @@ async def _send_sms(phone: str, code: str) -> bool:
         return False
 
 
+async def _send_email_resend(email: str, code: str) -> bool:
+    """Send the OTP via Resend's HTTP API. from-domain must be verified in Resend."""
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                json={
+                    "from": settings.resend_from,
+                    "to": [email],
+                    "subject": "Your Vachanam verification code",
+                    "text": (
+                        f"Your Vachanam verification code is {code}. "
+                        "It expires in 10 minutes. If you did not request this, ignore this email."
+                    ),
+                },
+            )
+            ok = r.status_code in (200, 201)
+            if not ok:
+                logger.error("otp_email_resend_failed", status=r.status_code, body=r.text[:200])
+            return ok
+    except Exception as e:
+        logger.error("otp_email_resend_error", error=str(e))
+        return False
+
+
 async def _send_email(email: str, code: str) -> bool:
+    # Prefer Resend (HTTP API) when configured — more reliable from cloud hosts
+    # than raw SMTP. Falls back to SMTP when only smtp_host is set.
+    if settings.resend_api_key:
+        return await _send_email_resend(email, code)
     if not settings.smtp_host:
         return False
     try:

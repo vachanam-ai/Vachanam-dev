@@ -112,11 +112,16 @@ class Settings(BaseSettings):
     # is logged and returned in the API response so the flow is testable.
     msg91_auth_key: str = ""          # SMS provider (MSG91) — India default
     msg91_sender_id: str = "VCHNAM"
-    smtp_host: str = ""               # email OTP
+    smtp_host: str = ""               # email OTP — raw SMTP fallback
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = "hello@vachanam.in"
+    # Resend (preferred email provider — HTTP API, reliable from cloud hosts).
+    # When resend_api_key is set it is used over SMTP. from-address domain must be
+    # verified in Resend (vachanam.in).
+    resend_api_key: str = ""
+    resend_from: str = "Vachanam <noreply@vachanam.in>"
     otp_ttl_seconds: int = 600        # 10 minutes
     otp_dev_echo: bool = True         # dev only: return code in response
 
