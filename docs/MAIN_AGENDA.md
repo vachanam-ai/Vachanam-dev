@@ -73,6 +73,3 @@ Graphify version 0.8.30 was run in AST-only mode (code files; no LLM semantic pa
 - **`booking_tools.py` has 23 connections but no isolated unit test file imports it directly.** The 4 booking tool functions are only exercised through `tests/integration/test_booking_flow.py`. If a tool function's behaviour changes, the only signal is a full integration test failure — no fast-feedback unit test exists.
 
 - **`test_rate_limit.py` ranks 8th in degree (25) despite all 13 tests being intentionally RED.** The tests already reference `config.py` and `jose` — the implementation wire-points are pre-mapped. This confirms Phase 4.5 Task 5 can land without structural refactoring; it is purely an additive implementation task.
-
-Full graph data: `docs/_artifacts/graphify-output/ast-graph.json`
-Full graph report: `docs/_artifacts/graphify-output/GRAPH_REPORT.md`

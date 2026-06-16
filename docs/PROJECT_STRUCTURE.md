@@ -76,7 +76,7 @@ Owner: `voice-agent-engineer`. Runs on Fly.io Mumbai. Connects to LiveKit + Sarv
 | `agent/bot.py` | working (live calls tested) | Pipecat 1.3.0 pipeline: Sarvam Saaras STT + Gemini 2.5 Flash (GPT-4o-mini fallback) + Sarvam Bulbul TTS (kavitha, Telugu script). Tool registration, token-rollback-on-disconnect, intent-based human transfer. Replaced `agent/agent.py` (LiveKit entrypoint, deleted). |
 | `agent/server.py` | working | FastAPI WS transport for Vobiz: `/answer` XML (inbound + outbound), `/ws` Pipecat bridge, transfer signal map, recording callback (testing-only). |
 | `agent/vobiz_minimal/` | frozen baseline | From-scratch Pipecat+Vobiz connector used to debug transport; reference only. |
-| `agent/livekit_minimal/` | working (in+out) | LiveKit v2 experiment: trunks + dispatch rule with agent dispatch (`setup_sip.py`), agent worker, outbound dispatch script. Quality comparison vs Pipecat pending. |
+| `agent/livekit_minimal/` | working (in+out) | Live LiveKit voice agent: SIP trunks + dispatch rule, agent worker. |
 | `agent/session_state.py` | working | Per-call state dataclass (branch_id, doctor_id, token_held, token_redis_key, language, etc.). |
 | `agent/requirements.txt` | working | Voice-agent Python pins (livekit-agents 1.5.9, livekit-plugins-sarvam, turn-detector, google-genai, openai, structlog, tenacity, asyncpg, redis). |
 | `agent/prompts/__init__.py` | placeholder | Package marker. |
@@ -273,8 +273,6 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/security/test_jwt.py` | tested (5/5) | Phase 4.5 Task 8. JWT edge cases (expiry, revocation, malformed). |
 | `tests/security/test_secrets_not_in_repo.py` | tested (1/1) | Phase 4.5 Task 16. Scans `git log --all -p` for 6 secret patterns (rzp_live_, sk-proj-, AIza..., JWT_SECRET=, META_ACCESS_TOKEN=, RAZORPAY_KEY_SECRET=). Allowlist mirrors .gitleaks.toml. Asserts zero real matches. |
 
-| `tests/_phase_4_5_acceptance.md` | working | Phase 4.5 Task 16b. Acceptance matrix mapping all 19 spec section 15 criteria to tests, manual verifications, or explicit deferrals. 2 BLOCKED on DPDP decisions (ref: `docs/compliance/dpdp-gap-analysis-2026-06-04.md`). |
-
 **Baseline (2026-06-04, Task 16):** `pytest tests/ -v` -> 133/133 pass + 1 skip against Docker Postgres 16 + Redis 7 + Python 3.14. Added 1/1 test_secrets_not_in_repo.py. Prior baseline (Task 9): 132/132 pass + 1 skip.
 
 ### 9.2 - Docs
@@ -298,16 +296,10 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `docs/phases/09-subscriptions-onboarding/CLAUDE.md` | scaffolded | Future phase doc. |
 | `docs/phases/10-deployment/CLAUDE.md` | scaffolded | Future phase doc. |
 | `docs/phases/11-reliability-hardening/CLAUDE.md` | scaffolded | DEFERRED — post-launch placeholder. |
-| `docs/superpowers/specs/2026-05-15-vachanam-complete-design.md` | working | Original complete design doc. |
 | `docs/superpowers/specs/2026-05-22-security-hardening-design.md` | working | Phase 4.5 spec; section 16 REVISIONS appended for fastapi-limiter + Cloudflare WAF + Render TLS corrections. |
-| `docs/superpowers/specs/2026-06-01-voice-call-flow-latency-design.md` | working | Voice flow spec implemented in commit `7adbbde`. |
-| `docs/superpowers/plans/2026-05-15-phase-0-1-voice-agent.md` | archived (kept) | Phase 0+1 historical plan. |
 | `docs/db/migration-log.md` | working | Migration-by-migration narrative. |
-| `docs/audits/2026-05-29-full-project-audit.md` | working | Full 10-specialist audit; produced TD-007..TD-013. |
 | `docs/MAIN_AGENDA.md` | working | One-page project highlight — what Vachanam is, who it serves, runtime flow, stack, current state, graphify findings. Created 2026-06-03. |
 | `docs/compliance/dpdp-gap-analysis-2026-06-04.md` | working | DPDP gap analysis comparing GPT's 13-point framework against our security spec. 9 sections: coverage matrix, confirmed items, MVP1 gaps, MVP2 gaps, out-of-scope corrections, ranked next-actions, spec amendments, launch checklist, DPDP Rules status note. Created 2026-06-04. |
-| `docs/_artifacts/graphify-output/ast-graph.json` | working | Graphify 0.8.30 AST-only graph — 402 nodes, 1006 edges across 46 code files. Not committed (see .gitignore). |
-| `docs/_artifacts/graphify-output/GRAPH_REPORT.md` | working | Human-readable graphify findings: god nodes, surprising connections, suggested queries. Created 2026-06-03. |
 | `.claude/agents/README.md` | working | Roster overview. |
 | `.claude/agents/AGILE.md` | working | Sprint cadence + DoR + DoD + caveman-narrow scope. |
 | `.claude/agents/QUALITY_BAR.md` | working | Senior-dev standards + process rules (mandatory dispatch + caveman-narrow + PROJECT_STRUCTURE live doc). |

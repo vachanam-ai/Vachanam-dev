@@ -124,7 +124,7 @@ Closed debts: TD-001, TD-002. Still open: TD-005, TD-014, TD-018, TD-020, TD-021
 
 ## ✅ FIX SPRINT COMPLETE — 2026-05-29
 
-Per [audit 2026-05-29](audits/2026-05-29-full-project-audit.md). Closed 7 tech debt items:
+Per the 2026-05-29 full-project audit (produced TD-007..TD-013). Closed 7 tech debt items:
 
 - ✅ TD-007 P0 — Replaced `_llm_with_fallback` with built-in `livekit.agents.llm.FallbackAdapter`
 - ✅ TD-008 P0 — `session.disconnect()` → `session.aclose()`

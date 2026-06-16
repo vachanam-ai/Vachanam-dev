@@ -116,7 +116,7 @@ data-lifecycle expectations + indexes don't expose data via SELECT performance s
 
 **Date:** 2026-06-09
 **Author:** database-engineer (sub-spec A Task 2)
-**Spec:** `docs/superpowers/specs/2026-06-08-calendar-and-receptionist-pwa-design.md` §3
+**Spec:** calendar-and-receptionist-pwa-design §3 (spec archived 2026-06-16 cleanup — see git history)
 
 **What:** Sub-spec A schema additions for Calendar + Receptionist PWA + RBAC.
 Seven logical groups of changes in a single migration (all additions — no drops):
