@@ -166,11 +166,12 @@ def test_system_prompt_has_availability_grounding_and_name_readback():
 
 
 def test_system_prompt_contains_greeting_with_ai_disclosure():
-    """STEP 0 embeds the spoken greeting; 'AI అసిస్టెంట్' is the DPDP s.5
-    disclosure that must always be in it (greeting reworded 2026-06-11)."""
+    """STEP 0 embeds the spoken greeting; the 'AI అసిస్టెంట్' self-identification
+    is the DPDP s.5 disclosure that must always be in it (greeting reworded to a
+    real receptionist register 2026-06-16 — the IVR-ish 'స్వాగతం' was dropped)."""
     prompt = _make_prompt()
-    assert "స్వాగతం" in prompt
-    assert "AI" in prompt
+    assert "AI అసిస్టెంట్" in prompt  # the disclosure itself, not any one greeting word
+    assert "మాట్లాడుతున్నాను" in prompt  # warm receptionist open
 
 
 def test_system_prompt_moves_collection_notice_to_point_of_collection():
