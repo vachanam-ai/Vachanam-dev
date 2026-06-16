@@ -7,30 +7,30 @@ const PLANS = [
   {
     name: "Solo",
     price: "₹1,999",
-    per: "/month + ₹3/min",
+    per: "/month + ₹5/min",
     tagline: "New clinics, one doctor",
-    points: ["1 AI phone number", "First 100 minutes free", "Telugu · Hindi · English", "Token booking + calendar", "Receptionist app"]
+    points: ["1 AI phone number", "First 100 minutes free", "8 Indian languages", "Token booking + calendar", "Receptionist app"]
   },
   {
     name: "Clinic",
-    price: "₹7,999",
-    per: "/month flat",
+    price: "₹9,999",
+    per: "/month + ₹5/min",
     tagline: "2–3 doctors, ~20 calls a day",
     popular: true,
-    points: ["2,100 minutes included", "Everything in Solo", "Slot + token doctors", "Follow-up calls", "Owner analytics"]
+    points: ["1,800 minutes included", "Everything in Solo", "Slot + token doctors", "Follow-up calls", "Owner analytics", "Extra branch ₹7,999/mo"]
   },
   {
     name: "Multi",
-    price: "₹16,999",
-    per: "/month flat",
+    price: "₹15,999",
+    per: "/month + ₹5/min",
     tagline: "Busy clinics, up to 6 doctors",
-    points: ["2 numbers · 2 branches", "4,200 minutes included", "Multi-doctor routing", "Priority support", "CSV exports"]
+    points: ["2 numbers · 2 branches", "3,600 minutes included", "Multi-doctor routing", "Priority support", "CSV exports", "Extra branch ₹7,999/mo"]
   }
 ];
 
 const STEPS = [
   ["Patient calls", "Your existing number forwards to your Vachanam AI line."],
-  ["AI answers in Telugu", "Understands the problem, matches the right doctor."],
+  ["AI answers in your language", "Understands the problem, matches the right doctor."],
   ["Token assigned", "Atomic numbering — two callers can never get the same token."],
   ["Everyone notified", "Calendar event created. Your front desk sees it instantly."]
 ];
@@ -93,7 +93,7 @@ export default function Landing() {
         />
         <div className="mx-auto grid max-w-6xl gap-12 px-4 py-20 lg:grid-cols-[1.15fr_1fr] lg:py-28">
           <div>
-            <p data-hero className="eyebrow">Telugu voice AI for clinics</p>
+            <p data-hero className="eyebrow">Indian-language voice AI for clinics</p>
             <h1 data-hero className="mt-4 font-display text-5xl font-semibold leading-[1.05] tracking-tight sm:text-6xl">
               Every missed call is a
               <span className="relative whitespace-nowrap">
@@ -103,9 +103,9 @@ export default function Landing() {
               We answer every one.
             </h1>
             <p data-hero className="mt-6 max-w-xl font-ui text-lg text-ink-soft">
-              Vachanam picks up your clinic&rsquo;s calls in natural Telugu, books the right
-              doctor, assigns the token, updates your calendar — in under four minutes,
-              around the clock.
+              Vachanam picks up your clinic&rsquo;s calls in natural Telugu and 7 more Indian
+              languages, books the right doctor, assigns the token, updates your calendar —
+              in under four minutes, around the clock.
             </p>
             <div data-hero className="mt-8 flex flex-wrap items-center gap-4">
               <a href="#pricing" className="btn-primary px-6 py-3">Start 14-day free trial</a>
@@ -119,21 +119,56 @@ export default function Landing() {
           {/* Live call vignette */}
           <div data-hero className="relative">
             <div className="card relative z-10 rotate-1 p-6">
-              <p className="eyebrow">Live call · 0:42</p>
-              <div className="mt-4 space-y-3 font-ui text-sm">
-                <p className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-tr-sm bg-teal px-4 py-2.5 text-white">
-                  పంటి నొప్పిగా ఉంది, రేపు రావచ్చా?
-                </p>
-                <p className="w-fit max-w-[85%] rounded-2xl rounded-tl-sm bg-teal-mint px-4 py-2.5">
-                  తప్పకుండా! రేపు ఉదయం డాక్టర్ శ్రీనివాస్ గారు చూస్తారు. మీ పేరు చెప్పగలరా?
-                </p>
-                <p className="ml-auto w-fit max-w-[85%] rounded-2xl rounded-tr-sm bg-teal px-4 py-2.5 text-white">
-                  లక్ష్మి అండి
-                </p>
-                <p className="w-fit max-w-[85%] rounded-2xl rounded-tl-sm bg-teal-mint px-4 py-2.5">
-                  లక్ష్మి గారు, మీ టోకెన్ నంబర్ <span className="numeral text-base">8</span>. రేపు ఉదయం వచ్చేయండి!
-                </p>
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal/60" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-teal" />
+                  </span>
+                  <span className="eyebrow">Live call</span>
+                </span>
+                <span className="numeral text-sm text-slate">0:42</span>
               </div>
+
+              <div className="mt-5 space-y-4 font-ui text-sm">
+                {[
+                  ["Patient", "“My tooth is hurting — can I come in tomorrow?”", false],
+                  ["Vachanam AI", "“Of course. Dr. Srinivas can see you tomorrow morning. May I have your name?”", true],
+                  ["Patient", "“Lakshmi.”", false],
+                  ["Vachanam AI", null, true],
+                ].map(([who, line, isAgent], i) => (
+                  <div key={i} className="flex gap-3">
+                    <span
+                      className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+                        isAgent ? "bg-teal text-white" : "bg-teal-mint text-teal-deep"
+                      }`}
+                    >
+                      {isAgent ? "AI" : "P"}
+                    </span>
+                    <div>
+                      <p
+                        className={`font-ui text-[11px] font-semibold uppercase tracking-wide ${
+                          isAgent ? "text-teal" : "text-slate"
+                        }`}
+                      >
+                        {who}
+                      </p>
+                      {line ? (
+                        <p className="mt-0.5 text-ink-soft">{line}</p>
+                      ) : (
+                        <p className="mt-0.5 text-ink-soft">
+                          “Thank you, Lakshmi. Your token number is{" "}
+                          <span className="numeral font-semibold text-teal-deep">8</span>. See you tomorrow morning!”
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <p className="mt-5 border-t border-hairline pt-3 font-ui text-[11px] text-slate">
+                A real booking call — spoken in Telugu, shown here in English.
+              </p>
             </div>
             <div className="card absolute -bottom-8 -left-6 z-20 -rotate-2 px-5 py-4">
               <p className="eyebrow">Token assigned</p>
@@ -231,7 +266,9 @@ export default function Landing() {
           ))}
         </div>
         <p data-item className="mt-6 text-center font-ui text-xs text-slate">
-          14-day trial · no card · 1,000 minutes · payment link arrives only when you&rsquo;re ready
+          14-day trial · no card · 500 minutes · payment link arrives only when you&rsquo;re ready
+          <br />
+          All prices exclude 18% GST.
         </p>
       </section>
 
