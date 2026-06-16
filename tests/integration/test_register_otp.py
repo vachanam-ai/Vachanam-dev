@@ -18,6 +18,20 @@ from backend.models.schema import Organization, User
 GOOD_PW = "Clinic@2024"
 
 
+@pytest.fixture(autouse=True)
+def _no_otp_provider(monkeypatch):
+    """These tests rely on the dev-echo OTP path (the code is returned by
+    /request-otp). Clear any real provider that a developer's local .env might
+    set (RESEND_API_KEY / SMTP_HOST / MSG91) so the suite is hermetic."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "resend_api_key", "", raising=False)
+    monkeypatch.setattr(settings, "smtp_host", "", raising=False)
+    monkeypatch.setattr(settings, "msg91_auth_key", "", raising=False)
+    monkeypatch.setattr(settings, "otp_dev_echo", True, raising=False)
+    monkeypatch.setattr(settings, "app_env", "development", raising=False)
+
+
 @pytest_asyncio.fixture
 async def client(redis):
     from backend.main import app

@@ -197,10 +197,41 @@ class Patient(Base):
     gender: Mapped[str | None] = mapped_column(String(10), nullable=True)
     followup_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # DPDP s.8(7) retention: set by the data_retention job when this patient's PII
+    # is erased (name/phone/age/gender cleared) after the retention window. NULL =
+    # still live. The booking rows survive (anonymised) for aggregate analytics.
+    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     branch: Mapped["Branch"] = relationship(back_populates="patients")
     tokens: Mapped[list["Token"]] = relationship(back_populates="patient")
     followup_tasks: Mapped[list["FollowupTask"]] = relationship(back_populates="patient")
+
+
+class Consent(Base):
+    """DPDP s.5 demonstrable-notice record. One row per call where the data-
+    processing disclosure (the AI-assistant greeting) was spoken to the caller,
+    so we can prove to the Data Protection Board that notice was served. Tenant-
+    scoped (branch_id). No medical data — only that notice was given, to which
+    number, and which notice version."""
+    __tablename__ = "consents"
+    __table_args__ = (Index("ix_consents_branch_phone", "branch_id", "patient_phone"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(String(64))
+    patient_phone: Mapped[str | None] = mapped_column(String(20))
+    consent_type: Mapped[str] = mapped_column(
+        Enum("data_processing", "followup", "recording", name="consent_type"),
+        default="data_processing", nullable=False,
+    )
+    notice_version: Mapped[str] = mapped_column(String(10), default="1.0", nullable=False)
+    method: Mapped[str] = mapped_column(
+        Enum("verbal", "written", "whatsapp", name="consent_method"),
+        default="verbal", nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Token(Base):

@@ -123,6 +123,10 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     resend_from: str = "Vachanam <noreply@vachanam.in>"
     otp_ttl_seconds: int = 600        # 10 minutes
+    # DPDP s.8(7) retention: erase a patient's PII this many days after their last
+    # appointment (default 2 years, matching the privacy policy's appointments
+    # retention). The anonymised booking rows survive for aggregate analytics.
+    patient_retention_days: int = 730
     otp_dev_echo: bool = True         # dev only: return code in response
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}

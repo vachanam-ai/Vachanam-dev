@@ -32,6 +32,7 @@ def test_render_yaml_jwt_expire_matches_config_default():
 def test_provider_configured_detects_keys(monkeypatch):
     monkeypatch.setattr(settings, "msg91_auth_key", "key", raising=False)
     monkeypatch.setattr(settings, "smtp_host", "", raising=False)
+    monkeypatch.setattr(settings, "resend_api_key", "", raising=False)
     assert otp_service._provider_configured("sms") is True
     assert otp_service._provider_configured("email") is False
     assert otp_service._provider_configured("bogus") is False

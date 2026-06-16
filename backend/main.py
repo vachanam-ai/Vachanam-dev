@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI):
     if got:
         from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
         from backend.jobs.calendar_writer import requeue_stale_in_progress
+        from backend.jobs.data_retention import run_data_retention
         from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
         from backend.jobs.trial_pause import run_trial_pause
@@ -115,6 +116,11 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(
             run_finalize_stale_calls, IntervalTrigger(minutes=30),
             id="finalize_stale_calls", replace_existing=True,
+        )
+        # DPDP s.8(7): erase patient PII past the retention window (daily).
+        scheduler.add_job(
+            run_data_retention, IntervalTrigger(hours=24),
+            id="data_retention", replace_existing=True,
         )
         # Authoritative call/minute metering from Vobiz CDRs (agent-independent).
         # Only scheduled when Vobiz creds are present.

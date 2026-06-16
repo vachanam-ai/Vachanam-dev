@@ -73,12 +73,14 @@ Vachanam uses the following sub-processors to deliver the service. By signing th
 
 | Sub-processor | What they process | Data location | Purpose |
 |---|---|---|---|
-| Sarvam AI | Voice audio (real-time speech-to-text and text-to-speech) | India | Convert patient speech to text and AI responses to speech during calls |
+| Sarvam AI | Voice audio (real-time speech-to-text only) | India | Convert patient speech to text during calls |
+| smallest.ai (Waves) | The agent's response text, including the patient's spoken name, converted to voice (text-to-speech) | Global | Convert the agent's responses to natural speech during calls |
 | Google (Calendar API) | Calendar events containing patient first name + last 4 digits of phone number | Global (Google Cloud) | Create appointment events on doctor's calendar |
 | Google (OAuth) | Staff email address | Global (Google Cloud) | Authenticate clinic staff login |
 | Google (Gemini 2.5 Flash) | Real-time conversation transcript | Global (Google Cloud) | Primary AI language model for understanding patient requests |
 | OpenAI (GPT-4o mini) | Real-time conversation transcript | Global (OpenAI) | Backup AI language model (used only when Gemini is unavailable) |
 | Razorpay | Clinic billing amount, clinic owner email | India | Process Clinic subscription payments |
+| Resend | Clinic staff / owner email address | Global (US) | Send one-time verification codes (email OTP) during staff signup |
 | Neon | All database records (patients, doctors, tokens, staff, audit log) | Singapore | Database hosting |
 | Upstash | Temporary token counters (daily booking counts only) | Mumbai, India | Prevent double-booking via atomic token assignment |
 | LiveKit | Audio routing metadata (no storage of call content) | Mumbai, India | Voice call infrastructure |

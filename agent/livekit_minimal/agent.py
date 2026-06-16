@@ -1737,6 +1737,27 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _greeting = lines.disclosure_greeting.format(clinic=branch_name)
             await session.say(sanitize_for_tts(_greeting))
 
+            # DPDP s.5 demonstrable notice: the greeting just spoken contains the
+            # AI-assistant / data-processing disclosure. Record that notice was
+            # served on this inbound call (own short-lived session — never touch
+            # the live call's DB session; fire-and-forget, must never break a call).
+            try:
+                import backend.database as _dbm
+                from backend.models.schema import Consent as _Consent
+
+                async with _dbm.AsyncSessionLocal() as _cdb:
+                    _cdb.add(_Consent(
+                        branch_id=state.branch_id,
+                        session_id=state.session_id,
+                        patient_phone=state.patient_phone,
+                        consent_type="data_processing",
+                        notice_version="1.0",
+                        method="verbal",
+                    ))
+                    await _cdb.commit()
+            except Exception as _ce:
+                logger.warning("consent_record_failed: %s", _ce)
+
         # SOLO-PLAN CALL CAP (pricing table: "4-min AI call cap"). The Pipecat
         # watchdog (TD-009) was lost in the LiveKit port — solo calls ran
         # unbounded. Warn 10s before the cap, then close politely AT the cap.
