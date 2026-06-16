@@ -17,13 +17,16 @@ class Plan:
 
 
 PLANS: dict[str, Plan] = {
-    "solo": Plan(1_999, 100, 3.0),
-    "clinic": Plan(7_999, 2_100, 3.0),
-    "multi": Plan(16_999, 4_200, 2.5),
+    "solo": Plan(1_999, 100, 5.0),
+    "clinic": Plan(9_999, 1_800, 5.0),
+    "multi": Plan(15_999, 3_600, 5.0),
 }
 
-# Vachanam's own cost floor (CLAUDE.md): variable per voice minute + DID rent.
-VARIABLE_COST_PER_MIN = 1.49
+# Vachanam's own VARIABLE cost floor (CLAUDE.md, 2026-06 repricing): per voice
+# minute (Vobiz + Sarvam STT + smallest.ai TTS + Gemini + LiveKit) + DID rent.
+# NOTE: this is VARIABLE only — it excludes fixed overhead (servers, salaries,
+# misc), which is amortised across total minutes and dominates at low volume.
+VARIABLE_COST_PER_MIN = 2.0
 DID_COST_PER_MONTH = 1_000
 
 

@@ -132,7 +132,7 @@ async def test_webhook_activates_subscription(client, db, org, monkeypatch):
         )
     ).scalar_one()
     assert bc.status == "paid"
-    assert bc.base_amount == 7999  # clinic plan price
+    assert bc.base_amount == 9999  # clinic plan price
 
 
 async def test_webhook_idempotent_on_redelivery(client, db, org, monkeypatch):

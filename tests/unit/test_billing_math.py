@@ -1,7 +1,7 @@
 """billing_math — the money numbers on the super-admin console must be right.
 
-Pricing is FINAL per CLAUDE.md: solo 1999/100min/Rs3, clinic 7999/2100/Rs3,
-multi 16999/4200/Rs2.50. Cost floor Rs1.49/min + Rs1000/DID/month.
+Pricing per CLAUDE.md (repriced 2026-06-16): solo 1999/100min/Rs5, clinic
+9999/1800/Rs5, multi 15999/3600/Rs5. Variable cost Rs2.0/min + Rs1000/DID/month.
 """
 from backend.services.billing_math import (
     PLANS,
@@ -16,20 +16,23 @@ from backend.services.billing_math import (
 def test_plan_table_matches_claude_md():
     assert PLANS["solo"].base_rupees == 1999
     assert PLANS["solo"].included_minutes == 100
-    assert PLANS["clinic"].base_rupees == 7999
-    assert PLANS["clinic"].included_minutes == 2100
-    assert PLANS["multi"].overage_per_min == 2.5
+    assert PLANS["solo"].overage_per_min == 5.0
+    assert PLANS["clinic"].base_rupees == 9999
+    assert PLANS["clinic"].included_minutes == 1800
+    assert PLANS["multi"].base_rupees == 15999
+    assert PLANS["multi"].included_minutes == 3600
+    assert PLANS["multi"].overage_per_min == 5.0
 
 
 def test_revenue_active_within_bucket_is_base_only():
-    assert month_revenue("clinic", "active", 2000) == 7999
+    assert month_revenue("clinic", "active", 1500) == 9999  # under the 1,800 bucket
 
 
 def test_revenue_overage_charged():
-    # clinic: 2100 included, 100 over at Rs3
-    assert month_revenue("clinic", "active", 2200) == 7999 + 300
-    # multi: Rs2.50 overage
-    assert month_revenue("multi", "active", 4204) == 16999 + 10.0
+    # clinic: 1,800 included, 200 over at Rs5
+    assert month_revenue("clinic", "active", 2000) == 9999 + 1000
+    # multi: 3,600 included, 100 over at Rs5
+    assert month_revenue("multi", "active", 3700) == 15999 + 500
 
 
 def test_trial_paused_cancelled_pay_nothing():
@@ -42,7 +45,7 @@ def test_unknown_plan_zero_revenue():
 
 
 def test_expense_minutes_plus_dids():
-    assert month_expense(1000, 2) == round(1000 * 1.49 + 2000, 2)
+    assert month_expense(1000, 2) == round(1000 * 2.0 + 2000, 2)
     assert month_expense(0, 1) == 1000  # DID rent even with zero usage
 
 
@@ -58,8 +61,8 @@ def test_call_blocked_matrix():
     # hard block off -> overage allowed, never blocked
     assert call_blocked("active", "clinic", False, 99999) is None
     # hard block on but bucket not exhausted
-    assert call_blocked("active", "clinic", True, 2099) is None
+    assert call_blocked("active", "clinic", True, 1799) is None
     # hard block on + exhausted
-    assert call_blocked("active", "clinic", True, 2100) == "minutes_exhausted"
+    assert call_blocked("active", "clinic", True, 1800) == "minutes_exhausted"
     # hard block applies to trial orgs too once their bucket is gone
     assert call_blocked("trial", "clinic", True, 5000) == "minutes_exhausted"

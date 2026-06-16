@@ -57,14 +57,25 @@ Calendar + PWA + Razorpay (WhatsApp deferred to MVP2 — see memory).
 
 | Plan | Price | Included | Key limits |
 |---|---|---|---|
-| **Solo** | ₹1,999/mo + ₹3/min | 1 DID, 100 free min/mo | 1 doctor, 4-min AI call cap |
-| **Clinic** ← most popular | ₹7,999/mo flat | 1 DID, 2,100 min/mo | 3 doctors, ₹3/min overage |
-| **Multi** | ₹16,999/mo flat | 2 DIDs, 4,200 min/mo | 6 doctors, ₹2.50/min overage, extra branch ₹7,999/mo |
+| **Solo** | ₹1,999/mo + ₹5/min | 1 DID, 100 free min/mo | 1 doctor, 4-min AI call cap |
+| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,800 min/mo | 3 doctors, extra branch ₹7,999/mo |
+| **Multi** | ₹15,999/mo + ₹5/min | 2 DIDs, 3,600 min/mo | 6 doctors, extra branch ₹7,999/mo |
 
-Free trial: 14 days, no card, 1,000 min. Day 12 Razorpay link via WhatsApp;
-day 14 pause if unpaid. Trial cost absorbed: ~₹2,675.
+Overage ₹5/min beyond included on every plan. Extra branch ₹7,999/mo (Clinic &
+Multi) — each extra branch is provisioned as a full new clinic (own DID, Vobiz
+sub-account, trunk, doctors, staff; nothing carries over — RULE 1 isolation).
 
-Margins at design volume: 44–49%.
+All prices are **exclusive of 18% GST** (shown as "+18% GST"; B2B clinics reclaim
+it via input credit).
+
+Free trial: 14 days, no card, 500 min. Day 12 Razorpay link; day 14 pause if
+unpaid. (Note: the 500-min trial cap is COPY only — not yet enforced in code;
+trial is time-based via trial_pause. Hard-cap is a TODO if abuse appears.)
+
+Cost (VARIABLE only): ~₹2.0/min (Vobiz + Sarvam + smallest.ai + Gemini + LiveKit)
++ ₹1,000/mo per DID. Fixed overhead (servers, salaries, misc) is separate and
+dominates at low volume. Variable gross margin at full use ≈ 54%; per-minute ≈ 60%.
+Repriced 2026-06-16 (Vinay) from the old 7,999/16,999 · ₹3/₹2.50 · 1.49 model.
 
 ---
 
