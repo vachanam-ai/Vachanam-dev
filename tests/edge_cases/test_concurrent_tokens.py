@@ -55,10 +55,18 @@ async def test_100_concurrent_callers_get_unique_sequential_tokens(concurrent_cl
     doctor = concurrent_clinic["doctor"]
     booking_date = date.today() + timedelta(days=5)
 
+    # Cap simultaneous OPEN sessions so the test never exceeds Postgres
+    # max_connections under NullPool (each session = a real connection). 100
+    # callers still race in waves of 25 — more than enough overlap to expose any
+    # non-atomic token assignment; the Redis INCR must still hand out unique
+    # sequential numbers regardless of how many run at once.
+    sem = asyncio.Semaphore(25)
+
     async def book_one_caller() -> dict:
         # Each coroutine MUST open its own AsyncSession — sharing is not concurrent-safe
-        async with AsyncSessionLocal() as session:
-            return await assign_token(doctor.id, branch.id, booking_date, session)
+        async with sem:
+            async with AsyncSessionLocal() as session:
+                return await assign_token(doctor.id, branch.id, booking_date, session)
 
     results = await asyncio.gather(*[book_one_caller() for _ in range(100)])
 

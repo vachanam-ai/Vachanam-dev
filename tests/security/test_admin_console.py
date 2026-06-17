@@ -199,7 +199,10 @@ async def test_org_controls_require_admin(client, biz_org):
 
 
 @pytest.mark.asyncio
-async def test_org_controls_bad_org_404(client):
+async def test_org_controls_bad_org_404(client, db):
+    # `db` ensures the schema exists for this function's event loop — the 404 path
+    # still queries `organizations`, so without it the table may be absent
+    # (depending on test ordering) and the endpoint 500s instead of 404ing.
     r = await client.post(
         f"/admin/orgs/{uuid.uuid4()}/status", json={"status": "paused"}, headers=_admin_headers()
     )

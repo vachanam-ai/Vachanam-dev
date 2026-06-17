@@ -10,6 +10,7 @@
 import pytest
 import pytest_asyncio
 import redis.asyncio as aioredis
+from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
 from backend.models.schema import Base
@@ -123,7 +124,15 @@ async def db():
     # Dispose the production-pointing module engine before we take over.
     await _db_module.engine.dispose()
 
-    engine = create_async_engine(settings.test_database_url, echo=False)
+    # NullPool: each session/connection is fresh and fully released on close, so
+    # overlapping sessions in one test (the fixture's session + an endpoint's
+    # get_db session + a job's session) never reuse one asyncpg connection across
+    # pytest-asyncio's function-scoped event loops. Without this, certain multi-file
+    # orderings tripped asyncpg "another operation is in progress" (a connection
+    # reused mid-flight). Tests that fan out many concurrent sessions (e.g. the
+    # 100-caller token race) gate their own concurrency with a semaphore so NullPool
+    # never opens more connections at once than Postgres max_connections allows.
+    engine = create_async_engine(settings.test_database_url, echo=False, poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
