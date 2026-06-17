@@ -16,6 +16,15 @@ const toBackend = {
 
 export default defineConfig({
   plugins: [react()],
+  // Vitest: jsdom so React components render to a DOM in tests; globals so
+  // describe/it/expect need no imports; setup wires @testing-library/jest-dom
+  // matchers. Scoped to src/**/*.test.jsx — never touches backend/python.
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test/setup.js"],
+    include: ["src/**/*.{test,spec}.{js,jsx}"]
+  },
   server: {
     port: 3000,
     proxy: {
