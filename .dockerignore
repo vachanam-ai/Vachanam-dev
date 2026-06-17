@@ -1,0 +1,32 @@
+# Keep secrets OUT of the image (the build context includes gitignored files —
+# without this, COPY agent/ would bake agent/livekit_minimal/.env into the image).
+.env
+**/.env
+*.env
+!.env.example
+google-service-account.json
+**/google-service-account.json
+*.pem
+*.key
+
+# Lean image: the agent worker only needs agent/ + backend/ code.
+.git
+.gitignore
+.github
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+node_modules/
+frontend/
+docs/
+tests/
+alembic/
+scripts/
+*.md
+*.ipynb
+.DS_Store
