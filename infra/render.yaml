@@ -5,6 +5,11 @@ services:
     plan: starter        # $7/month, always-on
     region: singapore    # closest to India in Render's network
     buildCommand: pip install -r backend/requirements.txt
+    # Run DB migrations ONCE before the new version goes live (not per-worker).
+    # Safe + idempotent: the Neon DB is stamped at the current head, so this is a
+    # no-op until a new migration ships, then it applies forward (TD-027: never
+    # an upgrade-from-base, which the broken early chain would fail).
+    preDeployCommand: alembic upgrade head
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 2
     healthCheckPath: /health
     envVars:
@@ -80,3 +85,26 @@ services:
         sync: false
       - key: ADMIN_PHONE
         sync: false
+      # REQUIRED in prod — Fernet key encrypting per-clinic Vobiz SIP passwords.
+      - key: FIELD_ENCRYPTION_KEY
+        sync: false
+      # smallest.ai TTS — backend needs it for voice cloning (clone endpoints).
+      - key: SMALLEST_API_KEY
+        sync: false
+      # Email OTP (preferred over SMTP). RESEND_FROM domain must be verified.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        value: Vachanam <noreply@vachanam.in>
+      - key: MSG91_AUTH_KEY
+        sync: false
+      # Real client IP behind Cloudflare + Render (2 proxy hops) — rate limiting.
+      - key: TRUSTED_PROXY_HOPS
+        value: "2"
+      # Feedback-loop transcript capture + DPDP retention windows.
+      - key: TRANSCRIPT_CAPTURE_ENABLED
+        value: "true"
+      - key: TRANSCRIPT_RETENTION_DAYS
+        value: "90"
+      - key: PATIENT_RETENTION_DAYS
+        value: "730"
