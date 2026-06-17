@@ -17,7 +17,10 @@ const NAV = {
     { to: "/settings", label: "Settings" }
   ],
   doctor: [{ to: "/my-schedule", label: "My Schedule" }],
-  super_admin: [{ to: "/admin", label: "Operations" }]
+  super_admin: [
+    { to: "/admin", label: "Operations" },
+    { to: "/admin/monitoring", label: "Monitoring" }
+  ]
 };
 
 const ROLE_LABEL = {

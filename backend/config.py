@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     # appointment (default 2 years, matching the privacy policy's appointments
     # retention). The anonymised booking rows survive for aggregate analytics.
     patient_retention_days: int = 730
+    # Feedback-loop capture. Transcripts can hold the caller's name/age/health
+    # complaint, so they are PII: captured only when enabled, phone-masked, tenant-
+    # scoped, and pruned after transcript_retention_days (text only — NOT audio,
+    # RULE 9). Default ON (the loop needs the corpus); set false to disable per
+    # deployment. Retention defaults to 90 days — long enough to score + learn from,
+    # short enough to minimise stored PII.
+    transcript_capture_enabled: bool = True
+    transcript_retention_days: int = 90
     otp_dev_echo: bool = True         # dev only: return code in response
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}

@@ -42,6 +42,11 @@ export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
 export const fetchAnalytics = (branchId, days = 14) =>
   api.get("/analytics/overview", { params: { branch_id: branchId, days } }).then((r) => r.data);
 
+export const fetchCallQuality = (branchId, days = 14) =>
+  api
+    .get("/analytics/call-quality", { params: { branch_id: branchId, days } })
+    .then((r) => r.data);
+
 // ── Queue (receptionist) ──
 export const fetchTodayQueue = (branchId) =>
   api.get(`/queue/${branchId}/today`).then((r) => r.data);
@@ -118,6 +123,8 @@ export const fetchOwners = () => api.get("/admin/owners").then((r) => r.data);
 export const addOwner = (payload) => api.post("/admin/owners", payload).then((r) => r.data);
 export const fetchClients = () => api.get("/admin/clients").then((r) => r.data);
 export const fetchAdminOverview = () => api.get("/admin/overview").then((r) => r.data);
+export const fetchAdminMonitoring = (days = 14) =>
+  api.get("/admin/monitoring", { params: { days } }).then((r) => r.data);
 export const setOrgStatus = (orgId, status) =>
   api.post(`/admin/orgs/${orgId}/status`, { status }).then((r) => r.data);
 export const setOrgPlan = (orgId, plan) =>

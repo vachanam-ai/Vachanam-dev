@@ -16,7 +16,15 @@ from sqlalchemy import select
 
 from backend.config import settings
 from backend.jobs.data_retention import ERASED_NAME, run_data_retention
-from backend.models.schema import Branch, Consent, Doctor, Organization, Patient, Token
+from backend.models.schema import (
+    Branch,
+    CallQuality,
+    Consent,
+    Doctor,
+    Organization,
+    Patient,
+    Token,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -111,6 +119,34 @@ async def test_retention_prunes_old_consents(clinic, db, monkeypatch):
     remaining = set((await db.execute(select(Consent.id))).scalars().all())
     assert new_id in remaining
     assert old_id not in remaining
+
+
+async def test_retention_nulls_old_transcript_keeps_outcome_row(clinic, db, monkeypatch):
+    """Transcripts are PII on the shorter transcript_retention clock: the text is
+    NULLED past the window but the (non-PII) outcome row survives for trends."""
+    monkeypatch.setattr(settings, "transcript_retention_days", 30, raising=False)
+    old = CallQuality(
+        branch_id=clinic["branch"].id, session_id="cq-old", language="te",
+        booking_made=True, turns=6, transcript="patient: ... / agent: ...",
+        created_at=datetime.now(timezone.utc) - timedelta(days=60),
+    )
+    recent = CallQuality(
+        branch_id=clinic["branch"].id, session_id="cq-new", language="te",
+        booking_made=True, turns=4, transcript="patient: hello / agent: hi",
+        created_at=datetime.now(timezone.utc) - timedelta(days=5),
+    )
+    db.add_all([old, recent])
+    await db.commit()
+    old_id, new_id = old.id, recent.id
+    await run_data_retention()
+    db.expire_all()
+    old_row = (await db.execute(select(CallQuality).where(CallQuality.id == old_id))).scalar_one()
+    new_row = (await db.execute(select(CallQuality).where(CallQuality.id == new_id))).scalar_one()
+    # outcome row kept, only the PII text dropped
+    assert old_row.transcript is None
+    assert old_row.booking_made is True and old_row.turns == 6
+    # recent transcript untouched
+    assert new_row.transcript == "patient: hello / agent: hi"
 
 
 async def test_consent_row_records_notice(clinic, db):

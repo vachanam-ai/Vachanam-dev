@@ -17,6 +17,7 @@ from backend.middleware.branch_guard import assert_branch_access
 from backend.models.schema import (
     Branch,
     CallLog,
+    CallQuality,
     Doctor,
     DoctorUnavailability,
     Organization,
@@ -93,6 +94,93 @@ class Overview(BaseModel):
 def _show_rate(attended: int, no_show: int) -> float | None:
     seen = attended + no_show
     return round(attended / seen, 3) if seen else None
+
+
+# ── Call quality (monitoring + feedback loop) ─────────────────────────────────
+# Aggregates over the call_quality capture table. Aggregates ONLY — never returns
+# the transcript text (PII stays internal for the eval/judge job). Rule 1: every
+# query filters branch_id; branch access asserted from the JWT.
+
+
+class FailRow(BaseModel):
+    reason: str
+    count: int
+
+
+class CallQualitySummary(BaseModel):
+    total_calls: int
+    booked: int
+    conversion_rate: float | None  # booked / total
+    abandoned: int                 # held a slot, never confirmed
+    abandon_rate: float | None
+    transfers: int                 # human-transfer requests
+    avg_turns: float | None        # patient turns per call
+    avg_duration_seconds: float | None
+    by_language: dict              # language -> calls
+    failures: list[FailRow]        # fail_reason breakdown (booked calls excluded)
+
+
+@router.get("/analytics/call-quality", response_model=CallQualitySummary)
+async def analytics_call_quality(
+    branch_id: str,
+    days: int = Query(default=14, ge=1, le=90),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    try:
+        branch_uuid = _uuid.UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid branch_id format")
+    await assert_branch_access(user, branch_id, db)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    base = and_(CallQuality.branch_id == branch_uuid, CallQuality.created_at >= cutoff)  # Rule 1
+
+    agg = (
+        await db.execute(
+            select(
+                func.count(),
+                func.coalesce(func.sum(cast(CallQuality.booking_made, Integer)), 0),
+                func.coalesce(func.sum(cast(CallQuality.booking_abandoned, Integer)), 0),
+                func.coalesce(func.sum(cast(CallQuality.transfer_requested, Integer)), 0),
+                func.avg(CallQuality.turns),
+                func.avg(CallQuality.duration_seconds),
+            ).where(base)
+        )
+    ).one()
+    total, booked, abandoned, transfers, avg_turns, avg_dur = agg
+    total = int(total or 0)
+
+    lang_rows = (
+        await db.execute(
+            select(CallQuality.language, func.count()).where(base).group_by(CallQuality.language)
+        )
+    ).all()
+
+    fail_rows = (
+        await db.execute(
+            select(CallQuality.fail_reason, func.count())
+            .where(and_(base, CallQuality.fail_reason.is_not(None)))
+            .group_by(CallQuality.fail_reason)
+            .order_by(func.count().desc())
+        )
+    ).all()
+
+    return CallQualitySummary(
+        total_calls=total,
+        booked=int(booked),
+        conversion_rate=round(int(booked) / total, 3) if total else None,
+        abandoned=int(abandoned),
+        abandon_rate=round(int(abandoned) / total, 3) if total else None,
+        transfers=int(transfers),
+        avg_turns=round(float(avg_turns), 1) if avg_turns is not None else None,
+        avg_duration_seconds=round(float(avg_dur), 1) if avg_dur is not None else None,
+        by_language={(lang or "unknown"): n for lang, n in lang_rows},
+        failures=[FailRow(reason=r, count=n) for r, n in fail_rows],
+    )
 
 
 @router.get("/analytics/overview", response_model=Overview)

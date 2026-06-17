@@ -256,3 +256,44 @@ def test_prompt_includes_transfer_trigger_instructions():
     # Must NOT instruct keyword-based transfer — LLM judges intent, not keywords
     assert "chest pain" not in prompt.lower()
     assert "heart attack" not in prompt.lower()
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# FIXLOG #139 — caller robustness: angry / abusive / shy / rambling / wrong-
+# number / clueless-referral callers, plus grounded clinic-address answers.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def test_system_prompt_has_difficult_caller_handling_section():
+    """The prompt must coach the agent through the full range of real callers —
+    not just the cooperative happy path (Vinay 2026-06-17)."""
+    prompt = _make_prompt()
+    assert "HANDLING DIFFERENT CALLERS" in prompt
+    # Each persona the agent must cope with is explicitly named.
+    for token in ("ANGRY", "ABUSE", "SHY", "RAMBLING", "WRONG NUMBER", "DOESN'T KNOW THE CLINIC"):
+        assert token in prompt, f"missing caller case: {token}"
+
+
+def test_system_prompt_never_retaliates_or_matches_anger():
+    """De-escalation discipline: the agent stays warm, never mirrors abuse."""
+    prompt = _make_prompt()
+    assert "Never match anger" in prompt
+    assert "Never insult back" in prompt
+    # Sustained pure-abuse with no booking intent → polite close, not retaliation.
+    assert "end_call" in prompt
+
+
+def test_system_prompt_address_grounded_when_provided():
+    """A real address is offered to the agent (so reference callers can be told
+    where the clinic is) but only to be spoken when asked."""
+    prompt = _make_prompt(clinic_address="12-3, MG Road, Hyderabad 500001")
+    assert "12-3, MG Road, Hyderabad 500001" in prompt
+    assert "CLINIC ADDRESS" in prompt
+
+
+def test_system_prompt_address_not_invented_when_absent():
+    """No address set → the agent is explicitly forbidden from inventing one
+    (HARD RULE 2 grounding), and the real address string is obviously absent."""
+    prompt = _make_prompt(clinic_address=None)
+    assert "CLINIC ADDRESS" in prompt
+    assert "do NOT invent an address" in prompt

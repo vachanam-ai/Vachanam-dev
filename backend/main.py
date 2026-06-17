@@ -81,6 +81,7 @@ async def lifespan(app: FastAPI):
         logger.warning("scheduler_leader_lock_failed", error=str(e))
 
     if got:
+        from backend.jobs.call_scoring import run_call_scoring
         from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
         from backend.jobs.calendar_writer import requeue_stale_in_progress
         from backend.jobs.data_retention import run_data_retention
@@ -121,6 +122,11 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(
             run_data_retention, IntervalTrigger(hours=24),
             id="data_retention", replace_existing=True,
+        )
+        # Feedback loop: LLM-as-judge scores captured transcripts (hourly batch).
+        scheduler.add_job(
+            run_call_scoring, IntervalTrigger(hours=1),
+            id="call_scoring", replace_existing=True,
         )
         # Authoritative call/minute metering from Vobiz CDRs (agent-independent).
         # Only scheduled when Vobiz creds are present.

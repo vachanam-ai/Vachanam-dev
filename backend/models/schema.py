@@ -378,6 +378,61 @@ class CallLog(Base):
     provider_call_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
 
 
+class CallQuality(Base):
+    """One agent-written record per voice call — the foundation of monitoring
+    (answer rate, booking conversion, abandonment, failure breakdown per clinic)
+    AND the feedback loop (eval corpus for LLM-as-judge + human review).
+
+    Written at call end REGARDLESS of agent_call_log_enabled, so it exists even
+    when Vobiz CDR is the billing writer (CallLog stays billing-only). Keyed by
+    session_id + branch_id; loosely linked to the metering row via call_log_id.
+
+    Two data classes, two retention rules:
+      - OUTCOME fields (language, duration, booking_made, fail_reason, turns, ...)
+        are NON-PII aggregates — kept long-term for trend analysis.
+      - `transcript` can hold the caller's spoken name/age/health complaint, so it
+        is PII (text only — NOT audio; RULE 9 keeps prod recording-free). Captured
+        only when settings.transcript_capture_enabled, phone digits MASKED before
+        storage, tenant-scoped (RULE 1), and NULLED by the data_retention job after
+        settings.transcript_retention_days while the outcome row survives."""
+    __tablename__ = "call_quality"
+    __table_args__ = (Index("ix_call_quality_branch_created", "branch_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # Soft link to the billing row; nullable + SET NULL so the quality record
+    # survives independently (CDR may write/replace its CallLog separately).
+    call_log_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("call_logs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    call_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    turns: Mapped[int] = mapped_column(Integer, default=0)  # patient conversation turns
+    booking_made: Mapped[bool] = mapped_column(Boolean, default=False)
+    booking_abandoned: Mapped[bool] = mapped_column(Boolean, default=False)  # held a slot, never confirmed
+    transfer_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    fail_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)  # None on a booked call
+    # Role-tagged, phone-masked conversation text ("patient: ... / agent: ...").
+    # NULL when capture is disabled or after the transcript-retention prune.
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── LLM-as-judge (feedback loop, written by the call_scoring job) ──────────
+    # DERIVED, non-PII: an automated quality read of the transcript. These survive
+    # the transcript prune (they hold no patient data) so trends outlive the text.
+    judge_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # overall 1-5
+    judge_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)     # issue-tag vocab
+    judge_summary: Mapped[str | None] = mapped_column(Text, nullable=True)   # 1-line, PII-FREE, INTERNAL only
+    judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class FollowupTask(Base):
     __tablename__ = "followup_tasks"
 

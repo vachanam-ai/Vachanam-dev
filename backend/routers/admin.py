@@ -629,3 +629,167 @@ async def set_org_hard_block(
             "org_hard_block_changed", org_id=org_id, enabled=body.enabled, by=current_user.email
         )
         return {"org_id": org_id, "hard_block_on_exhaust": body.enabled}
+
+
+# ── Platform monitoring + feedback loop (super_admin) ─────────────────────────
+# Cross-tenant AGGREGATES only: call volume, conversion/abandon/transfer rates,
+# LLM-judge scores, issue-tag frequencies, per-clinic rollup (clinic name +
+# operational metrics), daily trend. NEVER any patient data, transcript text, or
+# judge_summary — RULE 1 keeps super_admin out of clinic PII; only derived ops
+# data crosses this boundary.
+from fastapi import Query as _Query
+from sqlalchemy import Integer as _Integer
+from sqlalchemy import and_ as _and
+from sqlalchemy import cast as _cast
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.database import get_db
+
+
+class MonClinicRow(BaseModel):
+    name: str
+    calls: int
+    conversion_rate: float | None
+    abandon_rate: float | None
+    avg_judge_score: float | None
+
+
+class MonDay(BaseModel):
+    date: str
+    calls: int
+    booked: int
+
+
+class MonitoringOut(BaseModel):
+    days: int
+    total_calls: int
+    booked: int
+    conversion_rate: float | None
+    abandoned: int
+    abandon_rate: float | None
+    transfers: int
+    avg_turns: float | None
+    avg_duration_seconds: float | None
+    judged: int
+    avg_judge_score: float | None
+    by_language: dict
+    tag_frequencies: list[dict]   # [{tag, count}] across the platform
+    by_clinic: list[MonClinicRow]
+    daily: list[MonDay]
+
+
+@router.get("/monitoring", response_model=MonitoringOut)
+async def admin_monitoring(
+    request: Request,
+    days: int = _Query(default=14, ge=1, le=90),
+    current_user: CurrentUser = Depends(require_admin),
+    db: "AsyncSession" = Depends(get_db),
+    _rate_limit: None = Depends(default_limit),
+) -> MonitoringOut:
+    """Platform-wide call-quality + feedback-loop monitoring for super_admin.
+    Aggregates across ALL clinics. No patient PII, transcripts, or judge text."""
+    from sqlalchemy import func
+
+    from backend.models.schema import CallQuality
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    if True:
+        base = CallQuality.created_at >= cutoff
+
+        totals = (
+            await db.execute(
+                select(
+                    func.count(),
+                    func.coalesce(func.sum(_cast(CallQuality.booking_made, _Integer)), 0),
+                    func.coalesce(func.sum(_cast(CallQuality.booking_abandoned, _Integer)), 0),
+                    func.coalesce(func.sum(_cast(CallQuality.transfer_requested, _Integer)), 0),
+                    func.avg(CallQuality.turns),
+                    func.avg(CallQuality.duration_seconds),
+                    func.count(CallQuality.judge_score),
+                    func.avg(CallQuality.judge_score),
+                ).where(base)
+            )
+        ).one()
+        total, booked, abandoned, transfers, avg_turns, avg_dur, judged, avg_score = totals
+        total = int(total or 0)
+
+        lang_rows = (
+            await db.execute(
+                select(CallQuality.language, func.count()).where(base).group_by(CallQuality.language)
+            )
+        ).all()
+
+        # Per-clinic rollup (clinic NAME is org-level, not patient data).
+        clinic_rows = (
+            await db.execute(
+                select(
+                    Branch.name,
+                    func.count(),
+                    func.coalesce(func.sum(_cast(CallQuality.booking_made, _Integer)), 0),
+                    func.coalesce(func.sum(_cast(CallQuality.booking_abandoned, _Integer)), 0),
+                    func.avg(CallQuality.judge_score),
+                )
+                .join(Branch, Branch.id == CallQuality.branch_id)
+                .where(base)
+                .group_by(Branch.name)
+                .order_by(func.count().desc())
+            )
+        ).all()
+
+        # Issue-tag frequencies (JSON array column → count in Python; volumes are small).
+        tag_rows = (
+            await db.execute(
+                select(CallQuality.judge_tags).where(_and(base, CallQuality.judge_tags.is_not(None)))
+            )
+        ).scalars().all()
+        tag_counts: dict[str, int] = {}
+        for tags in tag_rows:
+            for t in (tags or []):
+                tag_counts[t] = tag_counts.get(t, 0) + 1
+
+        # Daily trend.
+        _day = func.date(CallQuality.created_at)
+        day_rows = (
+            await db.execute(
+                select(_day, func.count(), func.coalesce(func.sum(_cast(CallQuality.booking_made, _Integer)), 0))
+                .where(base)
+                .group_by(_day)
+            )
+        ).all()
+        by_day = {str(d): (int(n), int(b or 0)) for d, n, b in day_rows}
+        daily = []
+        for i in range(days):
+            d = (datetime.now(timezone.utc) - timedelta(days=days - 1 - i)).date().isoformat()
+            n, b = by_day.get(d, (0, 0))
+            daily.append(MonDay(date=d, calls=n, booked=b))
+
+    return MonitoringOut(
+        days=days,
+        total_calls=total,
+        booked=int(booked),
+        conversion_rate=round(int(booked) / total, 3) if total else None,
+        abandoned=int(abandoned),
+        abandon_rate=round(int(abandoned) / total, 3) if total else None,
+        transfers=int(transfers),
+        avg_turns=round(float(avg_turns), 1) if avg_turns is not None else None,
+        avg_duration_seconds=round(float(avg_dur), 1) if avg_dur is not None else None,
+        judged=int(judged or 0),
+        avg_judge_score=round(float(avg_score), 2) if avg_score is not None else None,
+        by_language={(l or "unknown"): n for l, n in lang_rows},
+        tag_frequencies=sorted(
+            [{"tag": t, "count": c} for t, c in tag_counts.items()],
+            key=lambda x: x["count"], reverse=True,
+        ),
+        by_clinic=[
+            MonClinicRow(
+                name=name,
+                calls=int(n),
+                conversion_rate=round(int(bk) / int(n), 3) if n else None,
+                abandon_rate=round(int(ab) / int(n), 3) if n else None,
+                avg_judge_score=round(float(sc), 2) if sc is not None else None,
+            )
+            for name, n, bk, ab, sc in clinic_rows
+        ],
+        daily=daily,
+    )

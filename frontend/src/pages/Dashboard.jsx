@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics, fetchTodayQueue } from "../api/client.js";
+import { fetchAnalytics, fetchCallQuality, fetchTodayQueue } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { countUp, revealStagger } from "../lib/motion.js";
 
@@ -13,6 +13,21 @@ function Hero({ label, value, sub, gold, suffix = "" }) {
     <div data-reveal className="card px-6 py-5">
       <p className="eyebrow">{label}</p>
       <p ref={ref} className={`numeral mt-1 text-5xl ${gold ? "text-gold-ink" : "text-teal-deep"}`}>0</p>
+      {sub && <p className="mt-1 font-ui text-xs text-slate">{sub}</p>}
+    </div>
+  );
+}
+
+/* Compact call-quality stat — smaller sibling of Hero, count-up on the value. */
+function QStat({ label, value, sub, suffix = "" }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    countUp(ref.current, value ?? 0, { duration: 1.0, suffix });
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="rounded-xl border border-hairline bg-white px-4 py-3">
+      <p className="eyebrow">{label}</p>
+      <p ref={ref} className="numeral mt-1 text-3xl text-teal-deep">0</p>
       {sub && <p className="mt-1 font-ui text-xs text-slate">{sub}</p>}
     </div>
   );
@@ -263,6 +278,12 @@ export default function Dashboard() {
     enabled: Boolean(branchId),
     refetchInterval: 120_000
   });
+  const { data: cq } = useQuery({
+    queryKey: ["call-quality", branchId, days],
+    queryFn: () => fetchCallQuality(branchId, days),
+    enabled: Boolean(branchId),
+    refetchInterval: 120_000
+  });
 
   useEffect(() => {
     if (queue) revealStagger(pageRef.current);
@@ -331,6 +352,48 @@ export default function Dashboard() {
           )}
           <Legend />
         </div>
+      </section>
+
+      {/* Call quality — how the AI receptionist is actually performing */}
+      <section data-reveal className="card overflow-hidden">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <h2 className="font-display text-lg font-semibold">Call quality · {days}d</h2>
+          <span className="font-ui text-xs text-slate">{cq?.total_calls ?? 0} calls</span>
+        </header>
+        {cq && cq.total_calls > 0 ? (
+          <div className="px-5 py-4 space-y-4">
+            <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
+              <QStat label="Booked" value={Math.round((cq.conversion_rate ?? 0) * 100)} suffix="%"
+                sub={`${cq.booked} of ${cq.total_calls}`} />
+              <QStat label="Abandoned" value={Math.round((cq.abandon_rate ?? 0) * 100)} suffix="%"
+                sub="held, never confirmed" />
+              <QStat label="Human asked" value={cq.transfers} sub="transfer requests" />
+              <QStat label="Avg turns" value={cq.avg_turns ?? 0} sub="patient replies/call" />
+              <QStat label="Avg length"
+                value={cq.avg_duration_seconds ? Math.round(cq.avg_duration_seconds) : 0}
+                suffix="s" sub="per call" />
+            </div>
+            {(cq.failures ?? []).length > 0 && (
+              <div>
+                <p className="font-ui text-xs uppercase tracking-wide text-slate mb-2">
+                  Why calls didn&rsquo;t book
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {cq.failures.map((f) => (
+                    <span key={f.reason}
+                      className="rounded-full bg-teal-pale px-3 py-1 font-ui text-xs text-slate">
+                      {f.reason.replace(/_/g, " ")} · {f.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="px-5 py-4 font-ui text-sm text-slate">
+            Call-quality insights appear after your first AI calls.
+          </p>
+        )}
       </section>
 
       {/* Doctors on leave — today highlighted; receptionist marks leave, owner sees it here */}

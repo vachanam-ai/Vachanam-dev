@@ -77,7 +77,7 @@ Vachanam uses the following sub-processors to deliver the service. By signing th
 | smallest.ai (Waves) | The agent's response text, including the patient's spoken name, converted to voice (text-to-speech) | Global | Convert the agent's responses to natural speech during calls |
 | Google (Calendar API) | Calendar events containing patient first name + last 4 digits of phone number | Global (Google Cloud) | Create appointment events on doctor's calendar |
 | Google (OAuth) | Staff email address | Global (Google Cloud) | Authenticate clinic staff login |
-| Google (Gemini 2.5 Flash) | Real-time conversation transcript | Global (Google Cloud) | Primary AI language model for understanding patient requests |
+| Google (Gemini 2.5 Flash) | Real-time conversation transcript | Global (Google Cloud) | Primary AI language model for understanding patient requests; also performs automated quality review (scoring) of call transcripts for service improvement — the stored output is non-identifying (a numeric score + issue tags, no patient data) |
 | OpenAI (GPT-4o mini) | Real-time conversation transcript | Global (OpenAI) | Backup AI language model (used only when Gemini is unavailable) |
 | Razorpay | Clinic billing amount, clinic owner email | India | Process Clinic subscription payments |
 | Resend | Clinic staff / owner email address | Global (US) | Send one-time verification codes (email OTP) during staff signup |

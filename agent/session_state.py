@@ -46,6 +46,11 @@ class SessionState:
     # Logging
     session_id: str | None = None
 
+    # Quality / feedback-loop signals (written to CallLog at call end).
+    language: str | None = None          # clinic voice language code
+    transfer_requested: bool = False     # set when request_human_transfer fires
+    fail_reason: str | None = None       # set by tools on a known miss (out_of_scope, no_slot, ...)
+
     # Durable metering: CallLog row inserted at call start (TD-027/F6) so a
     # killed worker that never runs the shutdown callback still leaves a record.
     call_log_id: UUID | None = None

@@ -11,6 +11,7 @@ import Availability from "./pages/Availability.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import DoctorSchedule from "./pages/DoctorSchedule.jsx";
 import Admin from "./pages/Admin.jsx";
+import Monitoring from "./pages/Monitoring.jsx";
 
 function FullScreenSpinner() {
   return (
@@ -103,6 +104,14 @@ export default function App() {
           element={
             <Protected roles={["super_admin"]}>
               <Admin />
+            </Protected>
+          }
+        />
+        <Route
+          path="/admin/monitoring"
+          element={
+            <Protected roles={["super_admin"]}>
+              <Monitoring />
             </Protected>
           }
         />

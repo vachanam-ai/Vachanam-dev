@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 import backend.database as _db_module
 from backend.config import settings
-from backend.models.schema import Consent, Patient, Token
+from backend.models.schema import CallQuality, Consent, Patient, Token
 
 logger = structlog.get_logger()
 
@@ -72,11 +72,24 @@ async def run_data_retention() -> None:
             Consent.__table__.delete().where(Consent.created_at < cutoff_dt)
         )
 
-        if stale or pruned.rowcount:
+        # Transcripts are PII on a SHORTER clock (transcript_retention_days, default
+        # 90): NULL the text but KEEP the outcome row (non-PII) for long-term trend
+        # analysis. Only rows that still have a transcript are touched (idempotent).
+        t_days = max(1, int(settings.transcript_retention_days))
+        t_cutoff = now - timedelta(days=t_days)
+        transcripts_pruned = await db.execute(
+            CallQuality.__table__.update()
+            .where(CallQuality.created_at < t_cutoff, CallQuality.transcript.is_not(None))
+            .values(transcript=None)
+        )
+
+        if stale or pruned.rowcount or transcripts_pruned.rowcount:
             await db.commit()
             logger.info(
                 "data_retention_run",
                 patients_erased=len(stale),
                 consents_pruned=int(pruned.rowcount or 0),
+                transcripts_pruned=int(transcripts_pruned.rowcount or 0),
                 retention_days=days,
+                transcript_retention_days=t_days,
             )

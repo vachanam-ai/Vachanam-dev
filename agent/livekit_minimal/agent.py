@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import random
+import re
 import sys
 from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
 from datetime import timezone as _tz
@@ -79,7 +80,7 @@ from agent.tools.booking_tools import (  # noqa: E402
     route_to_doctor,
 )
 from backend.config import settings  # noqa: E402
-from backend.database import AsyncSessionLocal  # noqa: E402
+from backend.database import AsyncSessionLocal, get_loop_engine  # noqa: E402
 from backend.models.schema import Branch, Doctor  # noqa: E402
 from backend.models.schema import Patient as _PatientModel  # noqa: E402
 
@@ -310,6 +311,58 @@ async def _routing_llm_call(messages: list) -> str:
             model="gpt-4o-mini", messages=messages, temperature=0
         )
         return resp.choices[0].message.content or ""
+
+
+_PHONE_DIGITS_RE = re.compile(r"\d{4,}")
+
+
+def _mask_pii_for_transcript(text: str) -> str:
+    """Best-effort PII reduction before a transcript is stored. Masks any run of
+    4+ consecutive digits (phone numbers, OTP-like sequences) to '[number]'.
+    NOTE: spoken digits transcribed as words ("nine six six...") are NOT masked —
+    this is reduction, not guarantee; the row is still tenant-scoped + retention-
+    pruned. Names/ages are left (needed to study STT mishears) but the whole row
+    is treated as PII (DPDP) and dropped on the transcript-retention schedule."""
+    return _PHONE_DIGITS_RE.sub("[number]", text or "")
+
+
+def _extract_call_record(session) -> tuple[int, str | None]:
+    """From the live session's chat history build (patient_turns, transcript).
+
+    Returns the count of patient (user) turns and a role-tagged, phone-masked
+    transcript string, or (0, None) if history is unavailable. Never raises —
+    transcript capture must never break call teardown."""
+    try:
+        history = getattr(session, "history", None)
+        items = getattr(history, "items", None) if history is not None else None
+        if not items:
+            return 0, None
+        lines_out: list[str] = []
+        patient_turns = 0
+        for it in items:
+            role = getattr(it, "role", None)
+            if role not in ("user", "assistant"):
+                continue  # skip system / tool items
+            # content may be a list of parts or a plain string across SDK versions
+            txt = getattr(it, "text_content", None)
+            if not txt:
+                content = getattr(it, "content", None)
+                if isinstance(content, str):
+                    txt = content
+                elif isinstance(content, (list, tuple)):
+                    txt = " ".join(str(c) for c in content if isinstance(c, str))
+            txt = (txt or "").strip()
+            if not txt:
+                continue
+            who = "patient" if role == "user" else "agent"
+            if role == "user":
+                patient_turns += 1
+            lines_out.append(f"{who}: {txt}")
+        if not lines_out:
+            return patient_turns, None
+        return patient_turns, _mask_pii_for_transcript("\n".join(lines_out))
+    except Exception:  # noqa: BLE001 — capture is best-effort, never fatal
+        return 0, None
 
 
 class VachanamAgent(Agent):
@@ -1074,6 +1127,7 @@ class VachanamAgent(Agent):
             reason[:60],
             self._transfer_to[-4:],
         )
+        self._state.transfer_requested = True  # quality signal (CallLog)
         try:
             lkapi = api.LiveKitAPI()
             await lkapi.sip.transfer_sip_participant(
@@ -1139,6 +1193,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     did = ""
     caller = outbound_number or ""
+
+    # LATENCY (measured 2026-06-17): every call runs on a FRESH event loop, so
+    # get_loop_engine() hands back a COLD pool — the first DB query of the call
+    # paid a ~1.8s TLS+auth handshake to Neon (cross-region), landing right
+    # before the greeting. Warm one connection NOW, concurrently with the SIP /
+    # participant wait below (already-dead time), so the pool is hot by the time
+    # branch resolution runs its first query. Fire-and-forget; never blocks or
+    # fails the call.
+    from sqlalchemy import text as _sql_text
+
+    async def _warm_db_pool() -> None:
+        try:
+            eng = get_loop_engine()
+            async with eng.connect() as _wc:
+                await _wc.execute(_sql_text("SELECT 1"))
+        except Exception as _we:  # noqa: BLE001 — warming is best-effort
+            logger.warning("db_pool_warm_failed: %s", _we)
+
+    _warm_task = asyncio.create_task(_warm_db_pool())
 
     # 1) The SIP leg is usually already in the room when the agent is dispatched.
     for p in ctx.room.remote_participants.values():
@@ -1289,14 +1362,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
                 from sqlalchemy import func as _func
 
-                branch_ids = (
-                    await db.execute(select(Branch.id).where(Branch.org_id == org.id))
-                ).scalars().all()
+                # LATENCY: one round-trip, not two. The org's branch ids are an
+                # in-DB scalar subquery instead of a separate SELECT-then-IN.
+                _org_branch_ids = select(Branch.id).where(Branch.org_id == org.id)
                 secs = (
                     await db.execute(
                         select(_func.coalesce(_func.sum(CallLog.duration_seconds), 0)).where(
                             and_(
-                                CallLog.branch_id.in_(branch_ids),
+                                CallLog.branch_id.in_(_org_branch_ids),
                                 CallLog.started_at >= month_start,
                             )
                         )
@@ -1370,6 +1443,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         state.branch_id = branch_id
         state.emergency_contact = emergency_contact
         state.plan = org_plan  # was always "clinic" — solo cap could never fire
+        state.language = lang_code  # quality/feedback signal (CallLog + transcript)
 
         # AGENT-SIDE METERING (TD-027/F6) — OFF by default. The Vobiz CDR sync
         # job is the authoritative, agent-independent source of calls + minutes
@@ -1491,6 +1565,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 emergency_contact=emergency_contact,
                 plan=state.plan or "clinic",
                 language=lang_code,
+                clinic_address=getattr(branch, "address", None),
             )
             + date_context
             + lines.brevity
@@ -1552,6 +1627,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             stt=sarvam.STT(
                 api_key=settings.sarvam_api_key,
                 model="saaras:v3",
+                # STRICT per-call clinic language (Vinay 2026-06-17): auto-detect
+                # ("unknown") was tried but rejected — shared words across Indian
+                # languages ("amma", numbers) make Sarvam mis-infer the language and
+                # degrade transcription. A true mid-call switch is also not feasible
+                # here (LiveKit session.stt is read-only — no hot-swap), so we keep
+                # one fixed language per call for reliable understanding.
                 language=lang_cfg.stt_code,
                 flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
             ),
@@ -1674,6 +1755,43 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         await db.commit()
                 except Exception as e:
                     logger.warning("call_log_write_failed: %s", e)
+
+                # CALL QUALITY + TRANSCRIPT (monitoring + feedback loop). Written
+                # for EVERY call, independent of agent_call_log_enabled (CallLog is
+                # billing; this is quality). Own try/except — must never break
+                # teardown or the RULE-3 token release above.
+                try:
+                    from backend.models.schema import CallQuality
+
+                    abandoned = bool(state.token_held and not state.token_confirmed)
+                    fail_reason = state.fail_reason or ("abandoned_hold" if abandoned else None)
+                    turns, transcript = _extract_call_record(session)
+                    if not settings.transcript_capture_enabled:
+                        transcript = None  # capture disabled → outcome only, no text
+                    await db.rollback()  # fresh tx (the CallLog write may have committed/failed)
+                    db.add(
+                        CallQuality(
+                            branch_id=state.branch_id,
+                            call_log_id=state.call_log_id,
+                            session_id=state.session_id,
+                            call_type=state.call_type or "inbound",
+                            language=state.language,
+                            duration_seconds=duration,
+                            turns=turns,
+                            booking_made=state.token_confirmed,
+                            booking_abandoned=abandoned,
+                            transfer_requested=state.transfer_requested,
+                            fail_reason=fail_reason,
+                            transcript=transcript,
+                        )
+                    )
+                    await db.commit()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("call_quality_write_failed: %s", e)
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
             finally:
                 await db.close()
 
