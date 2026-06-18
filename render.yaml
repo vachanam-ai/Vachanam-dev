@@ -39,17 +39,14 @@ services:
         value: ST_kcZDagvoGXMZ
       - key: OUTBOUND_TRUNK_ID
         value: ST_iYg89UWeyHPb
-      - key: VOBIZ_SIP_DOMAIN
-        sync: false
-      - key: VOBIZ_SIP_USERNAME
-        sync: false
-      - key: VOBIZ_SIP_PASSWORD
-        sync: false
+      # Global Vobiz fallback account (backend CDR sync = authoritative minutes/
+      # billing + outbound jobs). Names MUST match backend.config field names
+      # (vobiz_*); per-clinic sub-accounts override via Branch.vobiz_* columns.
       - key: VOBIZ_DID_NUMBER
         sync: false
-      - key: VOBIZ_PARTNER_AUTH_ID
+      - key: VOBIZ_AUTH_ID
         sync: false
-      - key: VOBIZ_PARTNER_AUTH_TOKEN
+      - key: VOBIZ_AUTH_TOKEN
         sync: false
       - key: META_ACCESS_TOKEN
         sync: false
