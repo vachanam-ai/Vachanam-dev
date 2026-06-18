@@ -48,7 +48,7 @@ unless marked otherwise. External items are blocking — the software cannot do 
   trunk + the dispatch rule (routes every inbound call → agent `vachanam-agent`,
   passing `sip.trunkPhoneNumber` — RULE 5) and prints `INBOUND_TRUNK_ID` /
   `DISPATCH_RULE_ID`. Set `INBOUND_TRUNK_ID` + `OUTBOUND_TRUNK_ID` on Render + Fly
-  (already in `infra/render.yaml`). Create the outbound trunk per sub-account with
+  (already in `render.yaml`). Create the outbound trunk per sub-account with
   `scripts/create_vobiz_outbound_trunk.py`.
 - [ ] **Vobiz** — per DID (the only manual external step): provision the DID, finish
   KYC (`is_verified`), and point the DID's **inbound destination** at this LiveKit

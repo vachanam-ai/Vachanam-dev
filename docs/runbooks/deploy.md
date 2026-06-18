@@ -19,7 +19,7 @@ Everything else (dashboard, payments) is not on the call path.
 
 ## 1. Backend → Render
 
-1. Render → New → Blueprint → point at the repo (`infra/render.yaml`).
+1. Render → New → Blueprint → point at the repo (auto-detects `render.yaml` at the repo root).
 2. Set every `sync: false` env var in the Render dashboard (secrets + `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `FIELD_ENCRYPTION_KEY`, `SMALLEST_API_KEY`, `RESEND_API_KEY`, `BASE_URL=https://api.vachanam.in`, `FRONTEND_URL=https://vachanam.in`, `ADMIN_PHONE`). Razorpay vars can wait (trial).
 3. Upload `google-service-account.json` as a **Secret File** at `/etc/secrets/google-service-account.json`.
 4. Deploy. `preDeployCommand` runs `alembic upgrade head` (no-op now; applies future migrations). Health check `/health`.

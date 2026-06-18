@@ -37,7 +37,7 @@ flyctl deploy
 
 ### 2. Backend → Render
 - Connect GitHub repo to Render
-- Auto-detects `infra/render.yaml`
+- Auto-detects `render.yaml` (repo root)
 - Add `google-service-account.json` as a Secret File mounted at `/etc/secrets/`
 - Fill all 25+ env vars in Render dashboard (use the `sync: false` keys from render.yaml as a checklist)
 

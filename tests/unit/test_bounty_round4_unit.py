@@ -17,13 +17,14 @@ def test_jwt_expire_default_is_8h():
 
 
 def test_render_yaml_jwt_expire_matches_config_default():
-    """iter1 #14: infra/render.yaml must not re-introduce the 24h drift — the
+    """iter1 #14: render.yaml must not re-introduce the 24h drift — the
     deployed JWT_EXPIRE_HOURS must equal the config default (8h). Guards against
-    the env value silently diverging from the documented contract again."""
+    the env value silently diverging from the documented contract again.
+    (render.yaml lives at repo root — Render auto-detects Blueprints only there.)"""
     import re
     from pathlib import Path
 
-    content = Path("infra/render.yaml").read_text(encoding="utf-8")
+    content = Path("render.yaml").read_text(encoding="utf-8")
     m = re.search(r"JWT_EXPIRE_HOURS\s*\n\s*value:\s*\"?(\d+)\"?", content)
     assert m, "JWT_EXPIRE_HOURS not found in render.yaml"
     assert int(m.group(1)) == Settings().jwt_expire_hours == 8

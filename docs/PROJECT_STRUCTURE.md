@@ -190,8 +190,8 @@ Owner: `devops-engineer`.
 |---|---|---|
 | `infra/Dockerfile.agent` | working | Voice-agent container (Fly.io bom Mumbai). **TD-014 open:** runs as root; fix before Phase 10. |
 | `infra/Dockerfile.backend` | working | Backend container (Render or local). **TD-014 open:** runs as root. |
-| `infra/fly.agent.toml` | scaffolded | Fly.io deploy config; not yet flown to production. |
-| `infra/render.yaml` | scaffolded | Render deploy config; not yet deployed. |
+| `infra/fly.agent.toml` | live | Fly.io agent deploy config; deployed to Mumbai 2026-06-18 (FIXLOG #145). |
+| `render.yaml` (repo root) | working | Render Blueprint for the backend API (root so Render auto-detects it). |
 
 ### 6.2 - GitHub CI / secret-scan / Dependabot
 
