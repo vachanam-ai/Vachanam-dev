@@ -10,11 +10,11 @@ services:
     plan: free           # was starter ($7/mo always-on) — flip back when scaling
     region: singapore    # closest to India in Render's network
     buildCommand: pip install -r backend/requirements.txt
-    # NOTE: preDeployCommand runs on PAID plans only — on `free` it is ignored, so
-    # migrations are NOT auto-applied. Neon is already stamped at head, so this is
-    # fine now; when a new migration ships, run `alembic upgrade head` manually
-    # (or move back to `starter`). (TD-027: never an upgrade-from-base.)
-    preDeployCommand: alembic upgrade head
+    # NOTE: no preDeployCommand — Render REJECTS it on `free` (paid-only feature).
+    # So migrations are NOT auto-applied. Neon is already stamped at head, so this
+    # is fine now; when a new migration ships, run `alembic upgrade head` manually
+    # (or move to `starter` and re-add `preDeployCommand: alembic upgrade head`).
+    # (TD-027: never an upgrade-from-base.)
     # 1 worker on free (512MB) — 2 would risk OOM. Bump with the plan.
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
