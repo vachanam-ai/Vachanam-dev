@@ -29,6 +29,16 @@ services:
         sync: false
       - key: LIVEKIT_API_SECRET
         sync: false
+      # LiveKit SIP routing handles (NOT secrets — plain resource IDs). The
+      # backend reads INBOUND_TRUNK_ID to auto-wire a saved DID into the inbound
+      # trunk (Settings → DID → sync_did_to_inbound_trunk); without it the wire
+      # silently no-ops and calls to that DID never reach the agent. OUTBOUND is
+      # the global fallback trunk for outbound jobs (reminders, cascade rebook).
+      # Recreate/rotate via scripts/setup_livekit_telephony.py.
+      - key: INBOUND_TRUNK_ID
+        value: ST_kcZDagvoGXMZ
+      - key: OUTBOUND_TRUNK_ID
+        value: ST_iYg89UWeyHPb
       - key: VOBIZ_SIP_DOMAIN
         sync: false
       - key: VOBIZ_SIP_USERNAME

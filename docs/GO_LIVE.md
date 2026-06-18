@@ -42,11 +42,22 @@ unless marked otherwise. External items are blocking — the software cannot do 
   plans → `RAZORPAY_PLAN_SOLO_ID` / `_CLINIC_ID` / `_MULTI_ID`; set a webhook secret
   → `RAZORPAY_WEBHOOK_SECRET`; **register the webhook URL** `https://<api>/api/razorpay-webhook`
   in the Razorpay dashboard for `order.paid` + `payment.captured` events.
-- [ ] **Vobiz**: provision a DID, finish KYC (`is_verified`), point the SIP trunk at
-  the LiveKit inbound endpoint.
-- [ ] **LiveKit (prod)**: create project; inbound + outbound trunks; a dispatch rule
-  that passes the `trunkPhoneNumber` attribute (RULE 5 depends on it) → `LIVEKIT_URL`,
-  `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `INBOUND_TRUNK_ID`, `OUTBOUND_TRUNK_ID`.
+- [ ] **LiveKit (prod)** — ONE-TIME global routing: set `LIVEKIT_URL` /
+  `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`, then run
+  `python -m scripts.setup_livekit_telephony`. It idempotently ensures the inbound
+  trunk + the dispatch rule (routes every inbound call → agent `vachanam-agent`,
+  passing `sip.trunkPhoneNumber` — RULE 5) and prints `INBOUND_TRUNK_ID` /
+  `DISPATCH_RULE_ID`. Set `INBOUND_TRUNK_ID` + `OUTBOUND_TRUNK_ID` on Render + Fly
+  (already in `infra/render.yaml`). Create the outbound trunk per sub-account with
+  `scripts/create_vobiz_outbound_trunk.py`.
+- [ ] **Vobiz** — per DID (the only manual external step): provision the DID, finish
+  KYC (`is_verified`), and point the DID's **inbound destination** at this LiveKit
+  project's SIP URI. Same URI for every DID — the clinic is resolved by the dialed
+  number, not by the route.
+- [ ] **Per-clinic onboarding is then automatic**: the owner pastes the DID in
+  Settings → the backend wires it into the inbound trunk (`sync_did_to_inbound_trunk`,
+  needs `INBOUND_TRUNK_ID` in the API env) and the UI shows "number is wired and live".
+  No LiveKit/script work per clinic.
 - [ ] **Sarvam / Gemini / OpenAI**: prod API keys with quota.
 - [ ] **Google**: `google-service-account.json` on the API host; each clinic shares its
   calendar with the service account (the Settings page guides this + "Test connection").
