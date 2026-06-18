@@ -1,0 +1,5 @@
+# Cloudflare Pages SPA fallback: BrowserRouter handles routes client-side, so any
+# deep link or hard reload (/admin/monitoring, /settings, …) must serve index.html
+# with a 200 (not a 404). API calls go cross-origin to the backend (VITE_API_URL),
+# not through this origin, so they are unaffected by this rule.
+/*    /index.html    200

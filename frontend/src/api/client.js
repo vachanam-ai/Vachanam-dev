@@ -6,7 +6,13 @@ export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t) => localStorage.setItem(TOKEN_KEY, t);
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
-export const api = axios.create({ timeout: 15000 });
+// In dev, VITE_API_URL is unset → baseURL "" → relative paths hit the Vite proxy
+// (/auth,/api,… → uvicorn:8000). In prod (Cloudflare Pages, a static CDN with no
+// backend on its origin) set VITE_API_URL to the API host (e.g.
+// https://api.vachanam.in) so calls go cross-origin to Render. CORS is allowed
+// there via the backend's FRONTEND_URL. Trailing slash trimmed to avoid “//path”.
+const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+export const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
 api.interceptors.request.use((config) => {
   const token = getToken();
