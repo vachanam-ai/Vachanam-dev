@@ -2,15 +2,21 @@ services:
   - type: web
     name: vachanam-backend
     runtime: python
-    plan: starter        # $7/month, always-on
+    # FREE to start: $0 but the service SPINS DOWN after ~15min idle and
+    # cold-starts (~50s) on the next request. This does NOT affect live calls /
+    # bookings — the Fly voice agent talks to Neon + LiveKit + Calendar directly,
+    # never through this backend; only the owner web dashboard/login/OTP pays the
+    # cold start. Upgrade to `starter` ($7/mo, always-on) before paying traffic.
+    plan: free           # was starter ($7/mo always-on) — flip back when scaling
     region: singapore    # closest to India in Render's network
     buildCommand: pip install -r backend/requirements.txt
-    # Run DB migrations ONCE before the new version goes live (not per-worker).
-    # Safe + idempotent: the Neon DB is stamped at the current head, so this is a
-    # no-op until a new migration ships, then it applies forward (TD-027: never
-    # an upgrade-from-base, which the broken early chain would fail).
+    # NOTE: preDeployCommand runs on PAID plans only — on `free` it is ignored, so
+    # migrations are NOT auto-applied. Neon is already stamped at head, so this is
+    # fine now; when a new migration ships, run `alembic upgrade head` manually
+    # (or move back to `starter`). (TD-027: never an upgrade-from-base.)
     preDeployCommand: alembic upgrade head
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 2
+    # 1 worker on free (512MB) — 2 would risk OOM. Bump with the plan.
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     envVars:
       - key: APP_ENV
