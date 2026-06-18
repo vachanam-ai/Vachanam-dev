@@ -2,7 +2,9 @@ app = "vachanam-agent"
 primary_region = "bom"  # Mumbai — lowest latency for India
 
 [build]
-  dockerfile = "infra/Dockerfile.agent"
+  # Relative to THIS config file's dir (infra/). Build context = CWD (repo root),
+  # so the Dockerfile's `COPY agent/`/`COPY backend/` still resolve.
+  dockerfile = "Dockerfile.agent"
 
 [env]
   APP_ENV = "production"
@@ -21,7 +23,10 @@ primary_region = "bom"  # Mumbai — lowest latency for India
 [[vm]]
   cpu_kind = "shared"
   cpus = 2
-  memory_mb = 1024
+  # 2 GB: LiveKit Agents 1.6 spawns a separate inference-executor process that
+  # preloads silero VAD + the multilingual turn-detector + warmup alongside the
+  # main worker. 1 GB OOM-killed that child at startup (DuplexClosed / PID gone).
+  memory_mb = 2048
 
 # Secrets (set via: fly secrets set KEY=VALUE)
 # SARVAM_API_KEY

@@ -30,7 +30,8 @@ ENV PYTHONUNBUFFERED=1
 # This step makes NO DB/network calls to our APIs (it only resolves plugin model
 # files), so dummy values are fine. Fly RUNTIME secrets OVERRIDE these — the REAL
 # values MUST be set via `fly secrets set` (see infra/fly.agent.toml).
-ENV OPENAI_API_KEY=build \
+ENV SARVAM_API_KEY=build \
+    OPENAI_API_KEY=build \
     GEMINI_API_KEY=build \
     DATABASE_URL=postgresql+asyncpg://build:build@localhost/build \
     REDIS_URL=redis://localhost:6379 \
