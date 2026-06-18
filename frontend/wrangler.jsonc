@@ -1,0 +1,13 @@
+{
+  // Cloudflare Workers Static Assets deploy for the Vachanam React SPA.
+  // No "main" = assets-only Worker (no server code): `wrangler deploy` just
+  // uploads ./dist. "single-page-application" serves index.html (200) for any
+  // unmatched path, so BrowserRouter deep links / hard reloads don't 404.
+  // The Workers Build runs from the "frontend" path, so ./dist resolves here.
+  "name": "vachanam",
+  "compatibility_date": "2025-06-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
