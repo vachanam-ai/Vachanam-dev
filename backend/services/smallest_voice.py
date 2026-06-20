@@ -86,8 +86,14 @@ def clone_voice(display_name: str, filename: str, audio_bytes: bytes) -> str:
     except VoiceServiceError:
         raise
     except Exception as e:  # noqa: BLE001
-        logger.error("smallest_clone_failed", error=str(e)[:200])
-        raise VoiceServiceError(f"Voice cloning failed: {str(e)[:160]}")
+        # Surface the smallest.ai REASON (the JSON body), not just the headers —
+        # the SDK ApiError str only shows headers, hiding WHY (audio too short,
+        # model deprecated, bad format, etc.). body/status_code carry the cause.
+        body = getattr(e, "body", None)
+        status = getattr(e, "status_code", None)
+        reason = str(body) if body else str(e)
+        logger.error("smallest_clone_failed", status=status, reason=str(reason)[:400])
+        raise VoiceServiceError(f"Voice cloning failed ({status}): {str(reason)[:200]}")
     voice_id = getattr(getattr(resp, "data", None), "voice_id", None)
     if not voice_id:
         raise VoiceServiceError("Clone succeeded but no voice_id was returned")

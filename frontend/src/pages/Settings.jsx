@@ -368,9 +368,8 @@ export default function Settings() {
           <p><strong>You buy it:</strong> purchase a DID on Vobiz (console.vobiz.ai), point it at our SIP endpoint
             (we send exact settings), then paste the number above.</p>
           <p className="pt-1"><strong>After saving:</strong> we wire it to the voice system automatically — you'll
-            see "number is wired and live". Then set call forwarding from{" "}
-            {form.clinic_phone || "your clinic phone"} to this number (*21*number# on most Indian carriers, or ask
-            your operator for "unconditional call forwarding").</p>
+            see "number is wired and live". Then set call forwarding from your clinic phone to this number
+            (*21*number# on most Indian carriers, or ask your operator for "unconditional call forwarding").</p>
         </InfoBox>
       </Section>
 
@@ -397,7 +396,7 @@ export default function Settings() {
 
       {/* 6 — Voice */}
       <Section id="voice" title="Agent voice"
-        sub="The smallest.ai voice patients hear. Pick one, or clone your own. Applies from the next call.">
+        sub={`Voices below are the best matches for your clinic language (${data?.language ?? "te"}). Pick one, or clone your own. Applies from the next call.`}>
         <select
           className="field"
           value={data?.tts_voice ?? ""}
@@ -409,6 +408,7 @@ export default function Settings() {
             <option key={v.voice_id} value={v.voice_id}>
               {v.display_name}
               {v.cloned ? " · your cloned voice" : v.gender ? ` · ${v.gender}` : ""}
+              {v.languages?.length ? ` · ${v.languages.join("/")}` : ""}
             </option>
           ))}
         </select>

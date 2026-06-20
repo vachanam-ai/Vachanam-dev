@@ -1248,6 +1248,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             ctx.room.name,
         )
     logger.info("call_started did=...%s caller=...%s", did[-4:], caller[-4:] if caller else "????")
+    # Pre-greeting latency anchor: measures answer -> first spoken word, to
+    # localise the "10s before it talks" complaint (setup vs session-connect).
+    import time as _perf
+    _t_answer = _perf.monotonic()
 
     state = SessionState(session_id=ctx.room.name)
     state.patient_phone = caller or None
@@ -1812,6 +1816,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         ctx.add_shutdown_callback(_cleanup_on_shutdown)
 
+        logger.info("lat_setup answer_to_session_start=%.2fs", _perf.monotonic() - _t_answer)
         await session.start(
             room=ctx.room,
             agent=vachanam_agent,
@@ -1819,6 +1824,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 noise_cancellation=noise_cancellation.BVCTelephony(),
             ),
         )
+        logger.info("lat_session_connect total_answer_to_ready=%.2fs", _perf.monotonic() - _t_answer)
 
         # RULE 6: single short opening utterance, sanitized.
         if is_reminder:
