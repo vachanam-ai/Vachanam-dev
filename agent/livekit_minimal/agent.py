@@ -63,6 +63,7 @@ from sqlalchemy import and_, select  # noqa: E402
 from agent.i18n import get_lang, get_lines  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
+    build_date_context,
     build_system_prompt,
 )
 # CalendarService (legacy-signature shim), NOT GoogleCalendarService —
@@ -77,6 +78,7 @@ from agent.tools.booking_tools import (  # noqa: E402
     check_availability,
     confirm_booking,
     find_bookings_by_phone,
+    recognize_caller_name,
     route_to_doctor,
 )
 from backend.config import settings  # noqa: E402
@@ -1530,14 +1532,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             now_b = datetime_cls.now(ZoneInfo(branch.timezone or "Asia/Kolkata"))
         except Exception:
             now_b = datetime_cls.now()
-        date_context = (
-            f"\n\nTODAY IS {now_b.strftime('%A, %d %B %Y')} "
-            f"({now_b.strftime('%Y-%m-%d')}), current time {now_b.strftime('%H:%M')}. "
-            "Resolve EVERY relative date from this — today/ఈరోజు, "
-            "tomorrow/రేపు, ఎల్లుండి (day after tomorrow), next Monday, etc. "
-            "Always pass booking_date as YYYY-MM-DD with the correct year. "
-            "Never announce a date the patient didn't ask about."
-        )
+        # Explicit date table (build_date_context) — LLM weekday math was
+        # off-by-one (booked Tuesday on Wednesday's date); now it looks up.
+        date_context = build_date_context(now_b)
 
         # CALLER IDENTIFICATION (requirement 2026-06-14): on a normal INBOUND
         # call, look the caller up by their number BEFORE the greeting so we can
@@ -1555,6 +1552,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 caller_greeting_name, caller_prompt_extra = _build_caller_context(
                     _caller_rows, now_b.date()
                 )
+                # No active booking gave a name, but the caller may be a past
+                # patient — recognise them by their stored Patient record so a
+                # returning caller is greeted by name even years later, not
+                # asked "who are you?". Only when nothing ambiguous is on file.
+                if caller_greeting_name is None and not caller_prompt_extra:
+                    _known = await recognize_caller_name(
+                        state.branch_id, state.patient_phone, db
+                    )
+                    if _known:
+                        caller_greeting_name = _known
+                        caller_prompt_extra = (
+                            "\n\nCALLER IDENTIFICATION: this number belongs to an "
+                            f"EXISTING patient, {_known}, with no upcoming booking. "
+                            "The greeting already welcomed them by name. Greet warmly, "
+                            "ask their concern, and proceed with the normal booking "
+                            "flow — do NOT ask for their name again unless they say "
+                            "the booking is for a different person."
+                        )
             except Exception as e:
                 logger.warning("caller_lookup_failed: %s", e)
 

@@ -1055,6 +1055,33 @@ async def find_bookings_by_phone(
     ]
 
 
+async def recognize_caller_name(
+    branch_id: UUID, phone: str | None, db: AsyncSession
+) -> str | None:
+    """The caller's stored name, matched on the LAST 10 DIGITS of their phone —
+    independent of any booking. find_bookings_by_phone only greets callers with
+    an UPCOMING booking, so a returning patient whose appointment is already
+    done got "who are you?". The Patient row persists, so recognition should too.
+
+    Returns the name only when exactly ONE distinct name is on file for that
+    number (RULE 1: branch-scoped). Several names (a shared family phone) → None,
+    so the agent asks instead of greeting the wrong person.
+    """
+    digits = _phone_digits(phone)
+    if len(digits) < 10:
+        return None
+    last10 = digits[-10:]
+    names = (
+        await db.execute(
+            select(Patient.name).where(
+                and_(Patient.branch_id == branch_id, Patient.phone.like(f"%{last10}"))
+            )
+        )
+    ).scalars().all()
+    distinct = {n.strip() for n in names if n and n.strip()}
+    return next(iter(distinct)) if len(distinct) == 1 else None
+
+
 def _generate_slots(start: time, end: time, duration_minutes: int) -> list[time]:
     slots = []
     current = datetime.combine(date.today(), start)

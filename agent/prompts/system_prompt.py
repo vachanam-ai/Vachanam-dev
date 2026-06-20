@@ -57,6 +57,36 @@ def build_disclosure_utterance() -> str:
     return DISCLOSURE_UTTERANCE
 
 
+def build_date_context(now_local) -> str:
+    """An EXPLICIT upcoming-date table for the system prompt.
+
+    LLMs reliably know today's date but are bad at weekday arithmetic ("what
+    date is next Tuesday") — Gemini was booking Tuesday on Wednesday's date. So
+    we hand it the next 8 days as a lookup table; the model never calculates a
+    weekday→date mapping itself. now_local must be branch-local (Asia/Kolkata).
+    """
+    from datetime import timedelta
+
+    today = now_local.date()
+    labels = {0: "today ", 1: "tomorrow "}
+    rows = [
+        f"  {labels.get(i, '')}{(today + timedelta(days=i)).strftime('%A')} "
+        f"= {(today + timedelta(days=i)).isoformat()}"
+        for i in range(8)
+    ]
+    table = "\n".join(rows)
+    return (
+        f"\n\nTODAY IS {now_local.strftime('%A, %d %B %Y')} ({today.isoformat()}), "
+        f"current time {now_local.strftime('%H:%M')}.\n"
+        "DATE LOOKUP — when the caller names a weekday, 'today', or 'tomorrow', "
+        "use the EXACT date from this list. NEVER calculate a date yourself:\n"
+        f"{table}\n"
+        "Always pass booking_date as YYYY-MM-DD copied from this list. For a date "
+        "further out than next week, count forward from the matching weekday above. "
+        "Never announce a date the patient didn't ask about."
+    )
+
+
 def build_system_prompt(
     clinic_name: str,
     doctors: list[DoctorContext],
