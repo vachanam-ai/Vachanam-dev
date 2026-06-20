@@ -51,29 +51,10 @@ class BranchSettings(BaseModel):
     doctors_count: int = 0
     staff_count: int = 0
     did_wired: bool | None = None  # set on PATCH when DID trunk sync runs
-    voice_cloning_allowed: bool = False  # Clinic/Multi feature gate (UI hint)
+    voice_cloning_allowed: bool = True  # included on every plan (UI hint)
 
 
-# Voice cloning is a paid up-sell — available only on the Clinic and Multi plans
-# (Solo cannot clone). Enforced server-side on both clone endpoints; also surfaced
-# in the settings payload so the UI can hide the form for Solo clinics.
-VOICE_CLONE_PLANS = ("clinic", "multi")
-
-
-async def _org_plan(db: AsyncSession, branch: Branch) -> str | None:
-    from backend.models.schema import Organization
-
-    return (
-        await db.execute(select(Organization.plan).where(Organization.id == branch.org_id))
-    ).scalar_one_or_none()
-
-
-async def _assert_voice_cloning_plan(db: AsyncSession, branch: Branch) -> None:
-    if (await _org_plan(db, branch)) not in VOICE_CLONE_PLANS:
-        raise HTTPException(
-            status_code=403,
-            detail="Voice cloning is available on the Clinic and Multi plans. Upgrade to clone a voice.",
-        )
+# Voice cloning is included on EVERY plan (Vinay 2026-06-20) — no plan gate.
 
 
 async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, did_wired: bool | None = None) -> BranchSettings:
@@ -106,7 +87,7 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         doctors_count=doctors_count,
         staff_count=staff_count,
         did_wired=did_wired,
-        voice_cloning_allowed=(await _org_plan(db, branch)) in VOICE_CLONE_PLANS,
+        voice_cloning_allowed=True,
     )
 
 
@@ -276,7 +257,6 @@ async def register_cloned_voice(
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
-    await _assert_voice_cloning_plan(db, branch)  # Clinic/Multi only
 
     lst = [c for c in (branch.cloned_voices or []) if c.get("voice_id") != body.voice_id]
     lst.append({"voice_id": body.voice_id, "name": body.name.strip(), "language": body.language})
@@ -362,7 +342,6 @@ async def clone_branch_voice(
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
-    await _assert_voice_cloning_plan(db, branch)  # Clinic/Multi only
 
     from backend.services import smallest_voice
 

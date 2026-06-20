@@ -1,6 +1,6 @@
-"""15-minute pre-appointment reminder calls (appointment-type doctors only).
+"""30-minute pre-appointment reminder calls (appointment-type doctors only).
 
-Every minute: find confirmed appointment tokens whose time is 14-17 minutes
+Every minute: find confirmed appointment tokens whose time is 28-31 minutes
 away (branch-local time), mark reminder_sent, and dispatch an outbound
 LiveKit agent call with reminder context in the metadata. The agent confirms
 attendance or rebooks the patient (retention) and cancels the old token.
@@ -27,8 +27,11 @@ load_dotenv()
 logger = structlog.get_logger()
 
 AGENT_NAME = "vachanam-agent"
-WINDOW_MIN = 14
-WINDOW_MAX = 17
+# Reminder fires ~30 min before the appointment (Vinay 2026-06-20). The 3-min
+# window (28-31) is wider than the 1-min scheduler tick, so no appointment falls
+# between ticks and gets skipped.
+WINDOW_MIN = 28
+WINDOW_MAX = 31
 
 
 def reminder_window(now_local: datetime) -> tuple[datetime, datetime]:

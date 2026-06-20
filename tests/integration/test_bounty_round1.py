@@ -125,12 +125,12 @@ def test_reminder_window_midnight_wrap():
     from backend.jobs.pre_appt_reminder import appointment_in_window, reminder_window
 
     tz = ZoneInfo("Asia/Kolkata")
-    # 23:50 — the 14-17 min window lands at 00:04-00:07 NEXT day
+    # 23:50 — the 28-31 min window lands at 00:18-00:21 NEXT day
     now = datetime(2026, 6, 12, 23, 50, tzinfo=tz)
     lo, hi = reminder_window(now)
     assert lo.date() != now.date() or hi.date() != now.date()  # crosses midnight
-    # appointment tomorrow 00:05 IS in the window (old time-only compare missed it)
-    assert appointment_in_window(date(2026, 6, 13), time(0, 5), lo, hi) is True
+    # appointment tomorrow 00:19 IS in the window (old time-only compare missed it)
+    assert appointment_in_window(date(2026, 6, 13), time(0, 19), lo, hi) is True
     # appointment today 23:55 is NOT (only 5 min away)
     assert appointment_in_window(date(2026, 6, 12), time(23, 55), lo, hi) is False
 
@@ -141,7 +141,8 @@ def test_reminder_window_normal_afternoon():
     tz = ZoneInfo("Asia/Kolkata")
     now = datetime(2026, 6, 12, 15, 45, tzinfo=tz)
     lo, hi = reminder_window(now)
-    assert appointment_in_window(date(2026, 6, 12), time(16, 0), lo, hi) is True
+    # 28-31 min window = 16:13-16:16
+    assert appointment_in_window(date(2026, 6, 12), time(16, 15), lo, hi) is True
     assert appointment_in_window(date(2026, 6, 12), time(16, 30), lo, hi) is False
     assert appointment_in_window(date(2026, 6, 12), None, lo, hi) is False
 

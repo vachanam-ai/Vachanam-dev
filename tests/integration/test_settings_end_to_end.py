@@ -247,9 +247,9 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     assert "Walkin Wanda" in q.text  # the booking is visible to reception
 
 
-async def test_voice_cloning_gated_to_clinic_and_multi_plans(client, db):
-    """Voice cloning is a paid up-sell — Solo cannot clone (403) and the settings
-    flag is False; Clinic/Multi can (the main E2E proves the clinic-plan path)."""
+async def test_voice_cloning_included_on_every_plan(client, db):
+    """Voice cloning is included on EVERY plan (Vinay 2026-06-20): a Solo clinic
+    sees voice_cloning_allowed True and can register a cloned voice (no 403)."""
     org = Organization(
         name="Solo Org", owner_phone="+919000777002",
         owner_email=f"solo-{uuid.uuid4().hex[:6]}@test.com", plan="solo", status="active",
@@ -267,12 +267,11 @@ async def test_voice_cloning_gated_to_clinic_and_multi_plans(client, db):
 
     g = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
     assert g.status_code == 200
-    assert g.json()["voice_cloning_allowed"] is False
+    assert g.json()["voice_cloning_allowed"] is True
 
     with patch("backend.services.smallest_voice.list_voices", return_value=[]):
         r = await client.post(
             f"/branches/{bid}/cloned-voices", headers=_auth(owner),
-            json={"voice_id": "voice_solo", "name": "Nope", "language": "te"},
+            json={"voice_id": "voice_solo", "name": "Solo Voice", "language": "te"},
         )
-    assert r.status_code == 403
-    assert "Clinic and Multi" in r.json()["detail"]
+    assert r.status_code == 200, r.text
