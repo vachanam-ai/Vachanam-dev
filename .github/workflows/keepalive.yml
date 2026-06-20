@@ -1,0 +1,19 @@
+# Keep the Render free-tier backend warm so its in-process APScheduler (30-min
+# reminders, cascade-rebook, call scoring, DPDP retention) keeps running. Free
+# services sleep after ~15 min idle; pinging /health every 10 min prevents that.
+# Free + no extra account. (UptimeRobot is a more punctual alternative — GitHub
+# cron can drift a few minutes under load, which 10-min spacing absorbs.)
+name: keep-render-warm
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      # A 200 wakes/keeps it warm; a slow cold-start still counts as activity,
+      # so never fail the job on a timeout.
+      - run: curl -fsS --max-time 90 https://vachanam-backend.onrender.com/health || true
