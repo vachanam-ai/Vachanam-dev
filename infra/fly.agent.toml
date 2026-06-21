@@ -22,11 +22,12 @@ primary_region = "bom"  # Mumbai — lowest latency for India
 # machine running at all times; never auto-stop on idle.
 [[vm]]
   cpu_kind = "shared"
-  cpus = 2
-  # 2 GB: LiveKit Agents 1.6 spawns a separate inference-executor process that
-  # preloads silero VAD + the multilingual turn-detector + warmup alongside the
-  # main worker. 1 GB OOM-killed that child at startup (DuplexClosed / PID gone).
-  memory_mb = 2048
+  # 4 CPU / 4 GB: on 2x/2GB the forked per-call job processes hung loading models
+  # and the supervisor killed them on init-timeout (exit -10), crash-looping so
+  # inbound calls couldn't be answered. More CPU = model load finishes inside the
+  # init timeout; more RAM = headroom for the inference executor + job processes.
+  cpus = 4
+  memory_mb = 4096
 
 # Secrets (set via: fly secrets set KEY=VALUE)
 # SARVAM_API_KEY

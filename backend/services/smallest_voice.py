@@ -79,24 +79,47 @@ def list_voices(language: str | None = None) -> list[dict]:
     return out
 
 
-def clone_voice(display_name: str, filename: str, audio_bytes: bytes) -> str:
-    """Instant voice clone from a short sample. Returns the new voice_id."""
+# smallest.ai waves API base (POST /waves/v1/voice-cloning clones onto v3.1).
+_WAVES_BASE = "https://api.smallest.ai"
+
+
+def clone_voice(display_name: str, filename: str, audio_bytes: bytes, language: str = "en") -> str:
+    """Instant voice clone (lightning-v3.1) from a short sample → new voice_id.
+
+    The SDK's add_voice clones onto the RETIRED lightning-large model (410
+    MODEL_DEPRECATED, and the result returns an empty WAV on v3.1). We call the
+    current endpoint directly: POST /waves/v1/voice-cloning, which defaults to
+    lightning-v3.1 and takes the spoken `language` so the clone matches the
+    clinic's language.
+    """
+    if not settings.smallest_api_key:
+        raise VoiceServiceError("smallest.ai is not configured (SMALLEST_API_KEY missing)")
+    import httpx
+
     try:
-        resp = _waves().add_voice(display_name=display_name, file=(filename, audio_bytes))
-    except VoiceServiceError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        # Surface the smallest.ai REASON (the JSON body), not just the headers —
-        # the SDK ApiError str only shows headers, hiding WHY (audio too short,
-        # model deprecated, bad format, etc.). body/status_code carry the cause.
-        body = getattr(e, "body", None)
-        status = getattr(e, "status_code", None)
-        reason = str(body) if body else str(e)
-        logger.error("smallest_clone_failed", status=status, reason=str(reason)[:400])
-        raise VoiceServiceError(f"Voice cloning failed ({status}): {str(reason)[:200]}")
-    voice_id = getattr(getattr(resp, "data", None), "voice_id", None)
+        r = httpx.post(
+            f"{_WAVES_BASE}/waves/v1/voice-cloning",
+            headers={"Authorization": f"Bearer {settings.smallest_api_key}"},
+            data={"displayName": display_name, "language": language},
+            files={"file": (filename, audio_bytes, "audio/wav")},
+            timeout=90.0,
+        )
+    except Exception as e:  # noqa: BLE001 — network/timeout
+        logger.error("smallest_clone_request_failed", error=str(e)[:200])
+        raise VoiceServiceError(f"Voice cloning request failed: {str(e)[:160]}")
+
+    if r.status_code >= 400:
+        logger.error("smallest_clone_failed", status=r.status_code, body=r.text[:400])
+        raise VoiceServiceError(f"Voice cloning failed ({r.status_code}): {r.text[:200]}")
+
+    body = r.json() if r.content else {}
+    data = body.get("data") if isinstance(body.get("data"), dict) else {}
+    voice_id = (
+        body.get("voiceId") or body.get("voice_id")
+        or data.get("voiceId") or data.get("voice_id")
+    )
     if not voice_id:
-        raise VoiceServiceError("Clone succeeded but no voice_id was returned")
+        raise VoiceServiceError(f"Clone succeeded but no voiceId in response: {str(body)[:160]}")
     logger.info("smallest_voice_cloned", voice_id=voice_id, name=display_name[:40])
     return voice_id
 

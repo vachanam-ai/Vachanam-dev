@@ -345,9 +345,14 @@ async def clone_branch_voice(
 
     from backend.services import smallest_voice
 
+    # Clone in the clinic's spoken language so the voice matches the agent
+    # (smallest tags voices by full language name, e.g. "telugu").
+    _code = (getattr(branch, "language", None) or "te")
+    _lang_cfg = _LANGUAGES.get(_code) or _LANGUAGES.get("te")
+    clone_language = (_lang_cfg.name.lower() if _lang_cfg else "english")
     try:
         voice_id = smallest_voice.clone_voice(
-            display_name.strip(), file.filename or "sample.wav", audio
+            display_name.strip(), file.filename or "sample.wav", audio, language=clone_language
         )
     except smallest_voice.VoiceServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
