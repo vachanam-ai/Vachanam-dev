@@ -878,6 +878,15 @@ class VachanamAgent(Agent):
 
         booking_date = self._parse_date(new_date)
         appt_time = self._parse_time(new_time)
+        # Release any hold THIS session already placed before re-assigning. The
+        # caller often first asks to "book" the new time (the LLM assigns a hold),
+        # then we steer them to reschedule the existing booking instead. That
+        # stale hold — frequently on the SAME slot they now want — makes the
+        # assign_token below see the slot as full and wrongly report it
+        # "unavailable". Releasing it first lets the re-assign see true capacity.
+        if self._state.token_held and self._state.token_redis_key:
+            await self._release_hold({"redis_key": self._state.token_redis_key})
+            self._clear_hold()
         assigned = await assign_token(
             doctor_id=old_token.doctor_id,
             branch_id=self._state.branch_id,
