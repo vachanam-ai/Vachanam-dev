@@ -1699,17 +1699,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         logger.info("lat_pre_session_build answer_to_build=%.2fs", _perf.monotonic() - _t_answer)
 
-        # Finish playing the short clip BEFORE constructing the AgentSession.
-        # AgentSession(...) (esp. MultilingualModel()) can briefly block the event
-        # loop; if the clip is still playing then, its audio frames can't pump and
-        # it stalls. The clip was kicked off early and runs concurrently with the
-        # async setup above, so this await mostly waits the short clip's tail.
-        if _welcome_task is not None:
-            try:
-                await _welcome_task
-            except Exception as _we:  # noqa: BLE001
-                logger.warning("welcome_await_failed: %s", _we)
-
         _t_build = _perf.monotonic()
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
@@ -1889,17 +1878,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         ctx.add_shutdown_callback(_cleanup_on_shutdown)
 
-        # (The instant clip was already awaited+unpublished before the AgentSession
-        # was constructed — see above — so it plays out on a free event loop and
-        # never collides with the agent's own track here.)
+        # OVERLAP the session connect with the welcome clip so the session is ready
+        # the moment the clip ends — no silent gap before the real greeting (Vinay
+        # 06-21: clip fixed the start-silence but left a ~3s gap before the
+        # reminder). session.start()'s connect (~3s) runs CONCURRENTLY with the
+        # clip's playout; the agent's track stays silent during connect, so it
+        # doesn't collide with the clip's audible track, and the clip unpublishes
+        # itself when done. We then await the clip, then the connect, then greet.
         logger.info("lat_setup answer_to_session_start=%.2fs", _perf.monotonic() - _t_answer)
-        await session.start(
-            room=ctx.room,
-            agent=vachanam_agent,
-            room_input_options=RoomInputOptions(
-                noise_cancellation=noise_cancellation.BVCTelephony(),
-            ),
+        _start_task = asyncio.create_task(
+            session.start(
+                room=ctx.room,
+                agent=vachanam_agent,
+                room_input_options=RoomInputOptions(
+                    noise_cancellation=noise_cancellation.BVCTelephony(),
+                ),
+            )
         )
+        if _welcome_task is not None:
+            try:
+                await _welcome_task
+            except Exception as _we:  # noqa: BLE001
+                logger.warning("welcome_await_failed: %s", _we)
+        await _start_task
         logger.info("lat_session_connect total_answer_to_ready=%.2fs", _perf.monotonic() - _t_answer)
 
         # RULE 6: single short opening utterance, sanitized. (The short welcome
