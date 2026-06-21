@@ -60,7 +60,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa
 import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
-from agent.i18n import get_lang, get_lines  # noqa: E402
+from agent.i18n import get_lang, get_lines, get_welcome  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -71,6 +71,7 @@ from agent.prompts.system_prompt import (  # noqa: E402
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
 from agent.services.telugu_dates import telugu_date, telugu_time  # noqa: E402
+from agent.livekit_minimal.welcome_audio import play_welcome  # noqa: E402
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
@@ -1473,6 +1474,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # language's default smallest voice when unset (TTS provider = smallest).
         tts_voice = (getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice
         state.branch_id = branch_id
+
+        # INSTANT WELCOME (kills start-of-call silence — see welcome_audio). For
+        # INBOUND only: the caller dialed the clinic, so "welcome to <clinic>" is
+        # right; outbound reminder/rebook calls have their own greeting. Kicked
+        # off NOW and run concurrently with the rest of setup (doctors query,
+        # prompt build, session build), then awaited right before session.start()
+        # so its track is unpublished before the agent publishes its own. The
+        # caller hears a warm welcome at ~2s instead of ~6s of dead air.
+        _welcome_task = None
+        if not outbound_number:
+            _welcome_tts = smallestai.TTS(
+                api_key=settings.smallest_api_key,
+                model=settings.smallest_model,
+                voice_id=tts_voice,
+                language=lang_cfg.tts_code,
+                sample_rate=settings.smallest_sample_rate,
+                output_format="pcm",
+            )
+            _welcome_task = asyncio.create_task(
+                play_welcome(
+                    ctx.room,
+                    sanitize_for_tts(get_welcome(lang_code).format(clinic=branch_name)),
+                    _welcome_tts,
+                )
+            )
         state.emergency_contact = emergency_contact
         state.plan = org_plan  # was always "clinic" — solo cap could never fire
         state.language = lang_code  # quality/feedback signal (CallLog + transcript)
@@ -1846,6 +1872,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 await db.close()
 
         ctx.add_shutdown_callback(_cleanup_on_shutdown)
+
+        # Let the welcome clip finish + unpublish before the agent publishes its
+        # own audio track (sequential = no track collision on the SIP leg). The
+        # clip ran concurrently with setup above, so this usually waits only the
+        # tail of its playout. Never fails the call — play_welcome swallows.
+        if _welcome_task is not None:
+            try:
+                await _welcome_task
+            except Exception as _we:  # noqa: BLE001
+                logger.warning("welcome_await_failed: %s", _we)
 
         logger.info("lat_setup answer_to_session_start=%.2fs", _perf.monotonic() - _t_answer)
         await session.start(

@@ -330,3 +330,26 @@ def get_lines(code: str | None) -> Lines:
     """Resolve spoken lines for a Branch.language code, falling back to Telugu so
     a None / unknown / legacy value can never break a live call."""
     return LINES.get((code or "").lower().strip(), LINES[DEFAULT_LANG])
+
+
+# ── Instant pre-session welcome (played before the main session connects, to
+# kill start-of-call silence — see welcome_audio.play_welcome). Short and warm;
+# the full disclosure greeting follows. Kept OUT of the Lines dataclass so it can
+# be added without touching every language entry. te is Vinay-validated
+# ("namaskaram <clinic> clinic ki swagatham"); the rest are first-pass.
+WELCOME: dict[str, str] = {
+    "te": "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం.",
+    "hi": "नमस्ते, {clinic} क्लिनिक में आपका स्वागत है।",
+    "ta": "வணக்கம், {clinic} கிளினிக்கிற்கு வரவேற்கிறோம்.",
+    "kn": "ನಮಸ್ಕಾರ, {clinic} ಕ್ಲಿನಿಕ್‌ಗೆ ಸ್ವಾಗತ.",
+    "ml": "നമസ്കാരം, {clinic} ക്ലിനിക്കിലേക്ക് സ്വാഗതം.",
+    "mr": "नमस्कार, {clinic} क्लिनिकमध्ये आपले स्वागत आहे.",
+    "bn": "নমস্কার, {clinic} ক্লিনিকে আপনাকে স্বাগতম।",
+    "or": "ନମସ୍କାର, {clinic} କ୍ଲିନିକ୍‌କୁ ସ୍ୱାଗତ।",
+}
+
+
+def get_welcome(code: str | None) -> str:
+    """Pre-session welcome line for a Branch.language code (falls back to Telugu).
+    Takes a {clinic} placeholder."""
+    return WELCOME.get((code or "").lower().strip(), WELCOME[DEFAULT_LANG])
