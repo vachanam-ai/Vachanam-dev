@@ -1630,17 +1630,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 except ValueError:
                     pass
 
-        try:
-            # SA path resolved against repo root — settings default is the
-            # relative './google-service-account.json', which breaks when the
-            # worker's cwd is livekit_minimal/.
-            sa_path = _REPO_ROOT / "google-service-account.json"
-            calendar_service: CalendarService | None = CalendarService(
-                sa_json_path=str(sa_path) if sa_path.exists() else None
-            )
-        except Exception as e:
-            logger.critical("calendar_service_init_failed: %s", e)
-            calendar_service = None
+        # Reuse the prewarmed CalendarService (Google client build is the slow
+        # part of pre-session setup); rebuild only if prewarm missed it.
+        calendar_service: CalendarService | None = ctx.proc.userdata.get("calendar")
+        if calendar_service is None:
+            try:
+                # SA path resolved against repo root — settings default is the
+                # relative './google-service-account.json', which breaks when the
+                # worker's cwd is livekit_minimal/.
+                sa_path = _REPO_ROOT / "google-service-account.json"
+                calendar_service = CalendarService(
+                    sa_json_path=str(sa_path) if sa_path.exists() else None
+                )
+            except Exception as e:
+                logger.critical("calendar_service_init_failed: %s", e)
+                calendar_service = None
 
         vachanam_agent = VachanamAgent(
             instructions=instructions,
@@ -1995,6 +1999,15 @@ def _prewarm(proc) -> None:
     # process and reuse, so its construction is off every call's pre-greeting
     # path (part of the ~3s lat_setup before the agent can speak).
     proc.userdata["llm"] = _build_fallback_llm()
+    # CalendarService builds a Google API client (the slow part of the ~2.9s
+    # pre-session work). The SA is global, so build it once and reuse.
+    try:
+        _sa = _REPO_ROOT / "google-service-account.json"
+        proc.userdata["calendar"] = CalendarService(
+            sa_json_path=str(_sa) if _sa.exists() else None
+        )
+    except Exception as e:  # noqa: BLE001 — prewarm best-effort; entrypoint rebuilds
+        logger.warning("prewarm_calendar_failed: %s", e)
 
 
 if __name__ == "__main__":
