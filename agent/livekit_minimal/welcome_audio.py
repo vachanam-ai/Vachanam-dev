@@ -35,21 +35,31 @@ async def play_welcome(room: rtc.Room, text: str, tts) -> bool:
     pub = None
     ok = False
     try:
-        source = rtc.AudioSource(tts.sample_rate, 1)
-        track = rtc.LocalAudioTrack.create_audio_track("welcome", source)
-        pub = await room.local_participant.publish_track(
-            track,
-            rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
-        )
-        _first = True
+        # Build the AudioSource from the FIRST frame's OWN sample_rate/channels —
+        # not tts.sample_rate. A mismatch between the source's declared rate and
+        # the real frame rate makes LiveKit's playout clock wrong (the clip plays
+        # stretched/slow — 06-21: 3.7s of audio took ~12s). _samples tracks the
+        # true audio duration so we can compare it against wall-clock playout.
+        _samples = 0
         async for ev in tts.synthesize(text):
-            if _first:
-                logger.info("welcome_clip_first_frame")  # patient starts hearing audio
-                _first = False
-            await source.capture_frame(ev.frame)
-        await source.wait_for_playout()
-        logger.info("welcome_clip_done")
-        ok = True
+            f = ev.frame
+            if source is None:
+                logger.info(
+                    "welcome_clip_first_frame", sr=f.sample_rate, ch=f.num_channels
+                )  # patient starts hearing audio
+                source = rtc.AudioSource(f.sample_rate, f.num_channels)
+                track = rtc.LocalAudioTrack.create_audio_track("welcome", source)
+                pub = await room.local_participant.publish_track(
+                    track,
+                    rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
+                )
+                _sr = f.sample_rate
+            _samples += f.samples_per_channel
+            await source.capture_frame(f)
+        if source is not None:
+            await source.wait_for_playout()
+            logger.info("welcome_clip_done", audio_s=round(_samples / max(_sr, 1), 2))
+            ok = True
     except Exception as e:  # noqa: BLE001 — a welcome clip must never break a call
         logger.warning("welcome_clip_failed", error=str(e)[:160])
     finally:

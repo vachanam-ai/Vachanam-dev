@@ -42,7 +42,11 @@ def _fake_tts(frames=2, raise_on_synth=False):
         if raise_on_synth:
             raise RuntimeError("tts down")
         for _ in range(frames):
-            yield SimpleNamespace(frame=object())
+            yield SimpleNamespace(
+                frame=SimpleNamespace(
+                    sample_rate=24000, num_channels=1, samples_per_channel=240
+                )
+            )
 
     tts.synthesize = _synth
     return tts
@@ -102,11 +106,14 @@ def test_play_welcome_swallows_tts_failure_and_still_unpublishes(monkeypatch):
     monkeypatch.setattr(wa.rtc, "TrackPublishOptions", lambda **k: None)
     monkeypatch.setattr(wa.rtc, "TrackSource", SimpleNamespace(SOURCE_MICROPHONE=1))
 
-    # Must NOT raise even though synth blows up, must return False (so the caller
-    # still speaks the outbound greeting after session.start), and still unpublish.
+    # Must NOT raise even though synth blows up, and must return False (so the
+    # caller still speaks the outbound greeting after session.start). The track is
+    # published lazily on the first frame, so a synth that fails before any frame
+    # never publishes — nothing to unpublish.
     ok = asyncio.run(play_welcome(room, "hi", _fake_tts(raise_on_synth=True)))
     assert ok is False
-    room.local_participant.unpublish_track.assert_awaited_once()
+    room.local_participant.publish_track.assert_not_awaited()
+    room.local_participant.unpublish_track.assert_not_awaited()
 
 
 if __name__ == "__main__":
