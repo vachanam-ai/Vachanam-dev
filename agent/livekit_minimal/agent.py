@@ -1730,6 +1730,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
 
         logger.info("lat_pre_session_build answer_to_build=%.2fs", _perf.monotonic() - _t_answer)
+
+        # Finish playing the instant clip BEFORE constructing the AgentSession.
+        # AgentSession(...) (esp. MultilingualModel()) runs SYNCHRONOUSLY and can
+        # block the event loop for several seconds; if the clip is still playing
+        # out then, its audio frames can't pump and the greeting stalls mid-word
+        # (Vinay 06-21: "played but late"). The clip was kicked off early and ran
+        # concurrently with the async setup above, so this await usually returns
+        # near-instantly — and crucially the clip plays to completion on a FREE
+        # loop, before the blocking construction. If the clip failed, the greeting
+        # is still spoken after session.start (_greeting_done stays False, RULE 8).
+        _greeting_done = False
+        if _welcome_task is not None:
+            try:
+                _clip_ok = await _welcome_task
+                _greeting_done = _outbound_greeted and bool(_clip_ok)
+            except Exception as _we:  # noqa: BLE001
+                logger.warning("welcome_await_failed: %s", _we)
+
+        _t_build = _perf.monotonic()
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
             # speaks the clinic's language (falls back to Telugu).
@@ -1776,6 +1795,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             min_endpointing_delay=0.2,
             max_endpointing_delay=1.0,
         )
+        logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
         # Per-turn latency breakdown so the 7s "stop speaking -> agent speaks"
         # gap is attributable to a stage (STT finalize / LLM TTFT / TTS TTFB /
@@ -1907,18 +1927,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         ctx.add_shutdown_callback(_cleanup_on_shutdown)
 
-        # Let the welcome clip finish + unpublish before the agent publishes its
-        # own audio track (sequential = no track collision on the SIP leg). The
-        # clip ran concurrently with setup above, so this usually waits only the
-        # tail of its playout. Never fails the call — play_welcome swallows.
-        _greeting_done = False  # outbound greeting already delivered by the clip
-        if _welcome_task is not None:
-            try:
-                _clip_ok = await _welcome_task
-                _greeting_done = _outbound_greeted and bool(_clip_ok)
-            except Exception as _we:  # noqa: BLE001
-                logger.warning("welcome_await_failed: %s", _we)
-
+        # (The instant clip was already awaited+unpublished before the AgentSession
+        # was constructed — see above — so it plays out on a free event loop and
+        # never collides with the agent's own track here.)
         logger.info("lat_setup answer_to_session_start=%.2fs", _perf.monotonic() - _t_answer)
         await session.start(
             room=ctx.room,

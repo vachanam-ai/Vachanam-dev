@@ -41,9 +41,14 @@ async def play_welcome(room: rtc.Room, text: str, tts) -> bool:
             track,
             rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE),
         )
+        _first = True
         async for ev in tts.synthesize(text):
+            if _first:
+                logger.info("welcome_clip_first_frame")  # patient starts hearing audio
+                _first = False
             await source.capture_frame(ev.frame)
         await source.wait_for_playout()
+        logger.info("welcome_clip_done")
         ok = True
     except Exception as e:  # noqa: BLE001 — a welcome clip must never break a call
         logger.warning("welcome_clip_failed", error=str(e)[:160])
