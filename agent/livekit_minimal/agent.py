@@ -195,6 +195,15 @@ def _build_caller_context(rows, today) -> tuple[str | None, str]:
     return greeting_name, extra
 
 
+def _cancel_on_shutdown(task):
+    """Async shutdown callback that cancels ``task``. LiveKit 1.6 ``await``s
+    shutdown callbacks, so a bare ``lambda: task.cancel()`` (Task.cancel returns
+    a bool) raised 'object bool can't be used in await' on every call teardown."""
+    async def _cb() -> None:
+        task.cancel()
+    return _cb
+
+
 REBOOK_PROMPT_EXTRA = (
     "\n\nTHIS IS A CASCADE-REBOOK CALL (doctor went on leave; the patient's "
     "booking on {cancelled_date} with {doctor} was cancelled by the clinic). "
@@ -601,13 +610,17 @@ class VachanamAgent(Agent):
         patient_name: str,
         complaint: str,
         booking_date: str,
-        token_number: int,
         followup_consent: bool,
         patient_phone: str | None = None,
         appointment_time: str | None = None,
         patient_age: int | None = None,
         patient_gender: str | None = None,
         different_person: bool = False,
+        # OPTIONAL: appointment (time) bookings have no queue token, so the LLM
+        # omits it. The body resolves the real number from the server-side hold
+        # (assign_token) regardless — never trust the LLM's echo. Required arg
+        # before made bookings hard-fail with "token_number Field required".
+        token_number: int | None = None,
     ) -> dict:
         """Finalize the booking AFTER the patient explicitly confirms. Writes the
         token to the database and creates the calendar event. patient_name is the
@@ -1507,7 +1520,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             logger.warning("meter_heartbeat_failed: %s", _hbe)
 
                 _hb_task = asyncio.create_task(_meter_heartbeat())
-                ctx.add_shutdown_callback(lambda: _hb_task.cancel())
+                ctx.add_shutdown_callback(_cancel_on_shutdown(_hb_task))
 
         result = await db.execute(
             select(Doctor).where(
@@ -1941,7 +1954,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     logger.warning("solo_cap_watchdog_failed: %s", e)
 
             _cap_task = asyncio.create_task(_solo_cap_watchdog())
-            ctx.add_shutdown_callback(lambda: _cap_task.cancel())
+            ctx.add_shutdown_callback(_cancel_on_shutdown(_cap_task))
 
 
 _TERMINAL_ORG_STATES = frozenset({"paused", "cancelled", "suspended"})
