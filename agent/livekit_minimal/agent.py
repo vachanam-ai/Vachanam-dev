@@ -1190,6 +1190,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     is_reminder = meta.get("call_type") == "reminder"
     is_rebook_call = meta.get("call_type") == "cascade_rebook"
 
+    # LATENCY: warm a DB connection NOW, before the outbound dial / SIP wait below
+    # (both are dead time — the phone is ringing). Every call runs on a FRESH event
+    # loop, so the pool is COLD and the first query otherwise pays a ~1.8s Neon
+    # TLS+auth handshake right before the greeting. For OUTBOUND this matters most:
+    # branch resolution runs the instant the patient answers, so the handshake must
+    # already be done. Fire-and-forget; never blocks or fails the call.
+    from sqlalchemy import text as _sql_text
+
+    async def _warm_db_pool() -> None:
+        try:
+            eng = get_loop_engine()
+            async with eng.connect() as _wc:
+                await _wc.execute(_sql_text("SELECT 1"))
+        except Exception as _we:  # noqa: BLE001 — warming is best-effort
+            logger.warning("db_pool_warm_failed: %s", _we)
+
+    _warm_task = asyncio.create_task(_warm_db_pool())
+
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
         try:
@@ -1222,25 +1240,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     did = ""
     caller = outbound_number or ""
-
-    # LATENCY (measured 2026-06-17): every call runs on a FRESH event loop, so
-    # get_loop_engine() hands back a COLD pool — the first DB query of the call
-    # paid a ~1.8s TLS+auth handshake to Neon (cross-region), landing right
-    # before the greeting. Warm one connection NOW, concurrently with the SIP /
-    # participant wait below (already-dead time), so the pool is hot by the time
-    # branch resolution runs its first query. Fire-and-forget; never blocks or
-    # fails the call.
-    from sqlalchemy import text as _sql_text
-
-    async def _warm_db_pool() -> None:
-        try:
-            eng = get_loop_engine()
-            async with eng.connect() as _wc:
-                await _wc.execute(_sql_text("SELECT 1"))
-        except Exception as _we:  # noqa: BLE001 — warming is best-effort
-            logger.warning("db_pool_warm_failed: %s", _we)
-
-    _warm_task = asyncio.create_task(_warm_db_pool())
 
     # 1) The SIP leg is usually already in the room when the agent is dispatched.
     for p in ctx.room.remote_participants.values():
@@ -1476,52 +1475,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         state.branch_id = branch_id
 
         # INSTANT CLIP (kills the silence between answer and first word — see
-        # welcome_audio). Synth'd + published into the room the moment the branch
-        # is resolved, run concurrently with the rest of setup (doctors query,
-        # prompt build, session build), then awaited+unpublished right before
-        # session.start() so the agent's own track never collides.
-        #
-        #  - OUTBOUND reminder/rebook: the silence was worst here (patient answers,
-        #    then waits through setup + session.start). The greeting is fully known
-        #    from dispatch metadata, so the clip IS the real personalized greeting,
-        #    and we DON'T repeat it after session.start (_outbound_greeted).
-        #  - INBOUND: a short "welcome to <clinic>" bridge; the disclosure greeting
-        #    still follows after session.start (it carries the DPDP notice).
+        # welcome_audio). A SHORT "namaskaram <clinic> clinic ki swagatham" bridge,
+        # synth'd + published into the room the moment the branch is resolved, run
+        # concurrently with the rest of setup, then awaited+unpublished right before
+        # the AgentSession is built. Deliberately SHORT (not the full greeting):
+        # the real greeting (reminder/rebook/disclosure) is still spoken AFTER
+        # session.start so STT is live and the patient can be heard when they reply.
+        # Applies to inbound AND outbound (outbound reminder/rebook had the worst
+        # post-answer silence). RULE 8: any failure is swallowed; the real greeting
+        # still plays regardless.
         _welcome_task = None
-        _outbound_greeted = False
-        _clip_text = None
-        if is_reminder:
-            _appt_raw = meta.get("appointment_time", "")
-            try:
-                _t = time_cls.fromisoformat(_appt_raw)
-                _spoken = telugu_time(_t) if lang_code == "te" else _t.strftime("%I:%M %p").lstrip("0")
-            except (ValueError, TypeError):
-                _spoken = _appt_raw
-            _clip_text = lines.reminder_greeting.format(
-                patient=meta.get("patient_name", ""),
-                clinic=branch_name,
-                doctor=meta.get("doctor_name", ""),
-                time=_spoken,
-            )
-            _outbound_greeted = True
-        elif is_rebook_call:
-            _raw_date = meta.get("cancelled_date", "")
-            try:
-                _d = date_cls.fromisoformat(_raw_date)
-                _spoken = telugu_date(_d) if lang_code == "te" else _d.strftime("%d %B").lstrip("0")
-            except ValueError:
-                _spoken = _raw_date
-            _clip_text = lines.rebook_greeting.format(
-                patient=meta.get("patient_name", ""),
-                clinic=branch_name,
-                doctor=meta.get("doctor_name", ""),
-                date=_spoken,
-            )
-            _outbound_greeted = True
-        elif not outbound_number:
-            _clip_text = get_welcome(lang_code).format(clinic=branch_name)
-
-        if _clip_text:
+        if branch_name:
             _welcome_tts = smallestai.TTS(
                 api_key=settings.smallest_api_key,
                 model=settings.smallest_model,
@@ -1531,7 +1495,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 output_format="pcm",
             )
             _welcome_task = asyncio.create_task(
-                play_welcome(ctx.room, sanitize_for_tts(_clip_text), _welcome_tts)
+                play_welcome(
+                    ctx.room,
+                    sanitize_for_tts(get_welcome(lang_code).format(clinic=branch_name)),
+                    _welcome_tts,
+                )
             )
         state.emergency_contact = emergency_contact
         state.plan = org_plan  # was always "clinic" — solo cap could never fire
@@ -1731,20 +1699,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         logger.info("lat_pre_session_build answer_to_build=%.2fs", _perf.monotonic() - _t_answer)
 
-        # Finish playing the instant clip BEFORE constructing the AgentSession.
-        # AgentSession(...) (esp. MultilingualModel()) runs SYNCHRONOUSLY and can
-        # block the event loop for several seconds; if the clip is still playing
-        # out then, its audio frames can't pump and the greeting stalls mid-word
-        # (Vinay 06-21: "played but late"). The clip was kicked off early and ran
-        # concurrently with the async setup above, so this await usually returns
-        # near-instantly — and crucially the clip plays to completion on a FREE
-        # loop, before the blocking construction. If the clip failed, the greeting
-        # is still spoken after session.start (_greeting_done stays False, RULE 8).
-        _greeting_done = False
+        # Finish playing the short clip BEFORE constructing the AgentSession.
+        # AgentSession(...) (esp. MultilingualModel()) can briefly block the event
+        # loop; if the clip is still playing then, its audio frames can't pump and
+        # it stalls. The clip was kicked off early and runs concurrently with the
+        # async setup above, so this await mostly waits the short clip's tail.
         if _welcome_task is not None:
             try:
-                _clip_ok = await _welcome_task
-                _greeting_done = _outbound_greeted and bool(_clip_ok)
+                await _welcome_task
             except Exception as _we:  # noqa: BLE001
                 logger.warning("welcome_await_failed: %s", _we)
 
@@ -1940,12 +1902,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         logger.info("lat_session_connect total_answer_to_ready=%.2fs", _perf.monotonic() - _t_answer)
 
-        # RULE 6: single short opening utterance, sanitized.
-        if _greeting_done:
-            # OUTBOUND reminder/rebook: the instant clip already spoke the full
-            # personalized greeting before session.start(); don't repeat it.
-            pass
-        elif is_reminder:
+        # RULE 6: single short opening utterance, sanitized. (The short welcome
+        # clip already played pre-session; this is the real greeting, spoken with
+        # STT live so the patient's reply is heard.)
+        if is_reminder:
             # Raw "16:30" gets read digit-by-digit by TTS. For Telugu speak it in
             # Telugu words; for other languages a clean "04:30 PM" reads naturally
             # (Telugu number-words inside e.g. a Hindi sentence would be wrong).
