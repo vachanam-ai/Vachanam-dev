@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import date, timedelta, datetime, time, timezone
 from uuid import UUID
@@ -929,7 +930,7 @@ async def confirm_booking(
     event_id = None
     if doctor.booking_type != "token":
 
-        @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+        @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
         async def _calendar_write() -> str:
             return await calendar_service.create_booking_event(
                 calendar_id=doctor_calendar_id or branch_calendar_id,
@@ -941,7 +942,12 @@ async def confirm_booking(
                 doctor_name=doctor_name,
             )
 
-        event_id = await _calendar_write()
+        # RULE 8: never let a slow/misconfigured calendar hang the LIVE call. A
+        # shared-failure (e.g. the SA hitting a GCP Regional Access Boundary, or
+        # the calendar not shared) otherwise burned ~15-20s of retries = pure
+        # silence on the phone, dropping the call. Hard-cap the whole write so it
+        # fails the booking FAST and the agent can give the patient a next step.
+        event_id = await asyncio.wait_for(_calendar_write(), timeout=8.0)
         token.google_calendar_event_id = event_id
 
     await db.commit()

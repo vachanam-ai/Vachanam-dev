@@ -629,6 +629,10 @@ class VachanamAgent(Agent):
         patient_gender: 'male' | 'female' | 'other' if known.
         different_person: True ONLY when the caller explicitly books for a
         DIFFERENT family member who already has a booking that day."""
+        # Booking touches the DB + writes the calendar (the slowest step) — cover
+        # that beat with a spoken filler so the patient never hears dead air mid-
+        # booking. Non-blocking + fully guarded (never affects the booking).
+        _say_lookup_filler(context)
         if self._calendar is None:
             logger.error("confirm_booking_no_calendar_service")
             return {"success": False, "error": "booking_system_unavailable"}
