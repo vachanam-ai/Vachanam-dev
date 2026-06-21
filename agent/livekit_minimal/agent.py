@@ -1425,7 +1425,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         gate_session = AgentSession(
             stt=sarvam.STT(api_key=settings.sarvam_api_key, model="saaras:v3", language=lang_cfg.stt_code),
-            llm=_build_fallback_llm(),
+            llm=ctx.proc.userdata.get("llm") or _build_fallback_llm(),
             # TTS = smallest.ai Waves (STT stays Sarvam Saaras). voice falls back
             # to the language's default smallest voice when the clinic hasn't set one.
             tts=smallestai.TTS(
@@ -1652,6 +1652,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             transfer_to=emergency_contact,
         )
 
+        logger.info("lat_pre_session_build answer_to_build=%.2fs", _perf.monotonic() - _t_answer)
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
             # speaks the clinic's language (falls back to Telugu).
@@ -1668,7 +1669,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 language=lang_cfg.stt_code,
                 flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
             ),
-            llm=_build_fallback_llm(),
+            llm=ctx.proc.userdata.get("llm") or _build_fallback_llm(),
             # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
             # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
             # (or a cloned voice); language is the clinic's short code (smallest uses
@@ -1990,6 +1991,10 @@ def _prewarm(proc) -> None:
     is just a lightweight handle, not the model weights).
     """
     proc.userdata["vad"] = silero.VAD.load()
+    # The Gemini+GPT FallbackAdapter is clinic-agnostic — build it ONCE per
+    # process and reuse, so its construction is off every call's pre-greeting
+    # path (part of the ~3s lat_setup before the agent can speak).
+    proc.userdata["llm"] = _build_fallback_llm()
 
 
 if __name__ == "__main__":
