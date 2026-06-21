@@ -23,12 +23,17 @@ from livekit import rtc
 logger = structlog.get_logger()
 
 
-async def play_welcome(room: rtc.Room, text: str, tts) -> None:
+async def play_welcome(room: rtc.Room, text: str, tts) -> bool:
     """Synthesize `text` with the given LiveKit TTS plugin and play it into the
     room on a temporary track. Blocks until the clip finishes playing out, then
-    unpublishes so session.start() can publish the agent's own audio track."""
+    unpublishes so session.start() can publish the agent's own audio track.
+
+    Returns True only if the clip was synthesized and played to completion — the
+    caller uses this to decide whether an outbound greeting still needs to be
+    spoken after session.start() (if the clip failed, it must be; RULE 8)."""
     source = None
     pub = None
+    ok = False
     try:
         source = rtc.AudioSource(tts.sample_rate, 1)
         track = rtc.LocalAudioTrack.create_audio_track("welcome", source)
@@ -39,6 +44,7 @@ async def play_welcome(room: rtc.Room, text: str, tts) -> None:
         async for ev in tts.synthesize(text):
             await source.capture_frame(ev.frame)
         await source.wait_for_playout()
+        ok = True
     except Exception as e:  # noqa: BLE001 — a welcome clip must never break a call
         logger.warning("welcome_clip_failed", error=str(e)[:160])
     finally:
@@ -52,3 +58,4 @@ async def play_welcome(room: rtc.Room, text: str, tts) -> None:
                 await source.aclose()
             except Exception:  # noqa: BLE001
                 pass
+    return ok

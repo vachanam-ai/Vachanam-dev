@@ -72,8 +72,9 @@ def test_play_welcome_captures_frames_and_unpublishes(monkeypatch):
     monkeypatch.setattr(wa.rtc, "TrackPublishOptions", lambda **k: None)
     monkeypatch.setattr(wa.rtc, "TrackSource", SimpleNamespace(SOURCE_MICROPHONE=1))
 
-    asyncio.run(play_welcome(room, "hi", _fake_tts(frames=3)))
+    ok = asyncio.run(play_welcome(room, "hi", _fake_tts(frames=3)))
 
+    assert ok is True  # success → caller may skip the post-start greeting
     assert captured["n"] == 3
     room.local_participant.unpublish_track.assert_awaited_once()  # track cleaned up
 
@@ -101,8 +102,10 @@ def test_play_welcome_swallows_tts_failure_and_still_unpublishes(monkeypatch):
     monkeypatch.setattr(wa.rtc, "TrackPublishOptions", lambda **k: None)
     monkeypatch.setattr(wa.rtc, "TrackSource", SimpleNamespace(SOURCE_MICROPHONE=1))
 
-    # Must NOT raise even though synth blows up, and must still unpublish.
-    asyncio.run(play_welcome(room, "hi", _fake_tts(raise_on_synth=True)))
+    # Must NOT raise even though synth blows up, must return False (so the caller
+    # still speaks the outbound greeting after session.start), and still unpublish.
+    ok = asyncio.run(play_welcome(room, "hi", _fake_tts(raise_on_synth=True)))
+    assert ok is False
     room.local_participant.unpublish_track.assert_awaited_once()
 
 
