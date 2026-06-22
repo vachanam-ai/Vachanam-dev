@@ -493,6 +493,55 @@ class FollowupTask(Base):
     patient: Mapped["Patient"] = relationship(back_populates="followup_tasks")
 
 
+class TreatmentNote(Base):
+    """Treatment progress notes: one row per patient visit. Tracks what was done
+    (steps_performed), what comes next (next_steps), when to follow up (next_reporting_date),
+    and whether this is a final visit (is_final). Links back to the Token that triggered
+    this visit (nullable — some notes may be created offline)."""
+    __tablename__ = "treatment_notes"
+    __table_args__ = (
+        Index("ix_treatment_notes_branch_patient_date", "branch_id", "patient_id", "visit_date"),
+        Index("ix_treatment_notes_branch_doctor", "branch_id", "doctor_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: treatment notes reference live patient/doctor/branch; explicit deletion required (DPDP)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # Optional back-reference to the Token that triggered this visit
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tokens.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    visit_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Treatment performed during the visit
+    steps_performed: Mapped[str | None] = mapped_column(Text)
+    # Instructions for ongoing care or follow-up actions
+    next_steps: Mapped[str | None] = mapped_column(Text)
+    # Date when the patient should return for follow-up
+    next_reporting_date: Mapped[date | None] = mapped_column(Date)
+    # Indicates if this is the final visit in a treatment cycle
+    is_final: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # User (doctor/staff) who created this note; SET NULL if user deleted
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    branch: Mapped["Branch"] = relationship()
+    doctor: Mapped["Doctor"] = relationship()
+    patient: Mapped["Patient"] = relationship()
+
+
 class BillingCycle(Base):
     __tablename__ = "billing_cycles"
 
