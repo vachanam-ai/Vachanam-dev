@@ -22,3 +22,10 @@ smallestai>=4.4.7
 fastapi-limiter==0.2.0
 markdown>=3.6
 bcrypt>=5.0.0
+
+# LiveKit dispatch SDK — the reminder / cascade-rebook / follow-up jobs create
+# outbound agent dispatches via `from livekit import api`. Without this the
+# backend threw "No module named 'livekit'" on every scheduled dispatch and
+# reminders silently never fired (FIXLOG #152). Only the API client is needed
+# (no rtc/audio in the backend).
+livekit-api==1.1.0
