@@ -27,20 +27,25 @@ load_dotenv()
 logger = structlog.get_logger()
 
 AGENT_NAME = "vachanam-agent"
-# Reminder fires ~30 min before the appointment (Vinay 2026-06-20). The 3-min
-# window (28-31) is wider than the 1-min scheduler tick, so no appointment falls
-# between ticks and gets skipped.
-WINDOW_MIN = 28
+# Reminder fires up to ~30 min before the appointment. RESILIENT WINDOW (Vinay
+# 2026-06-22): the window spans from NOW to 31 min ahead, and fires on the FIRST
+# scheduler tick inside it. The old 28-31 min band was only 3 min wide, so a
+# single missed tick — a Render free-tier restart/gap, a slow job — dropped the
+# reminder PERMANENTLY (reminder_sent never flipped, the band moved past the
+# appointment). With lo=now, a missed 30-min mark still catches up: the patient
+# just gets a slightly-later reminder (e.g. 20 min before) instead of none.
 WINDOW_MAX = 31
 
 
 def reminder_window(now_local: datetime) -> tuple[datetime, datetime]:
-    """The [lo, hi] DATETIME window an appointment must fall in to be
-    reminded now. Datetimes, not bare times: near midnight the old
-    time-only comparison wrapped (lo > hi) and matched nothing, silently
-    skipping late-night reminders."""
+    """The [lo, hi] DATETIME window an appointment must fall in to be reminded
+    now: from NOW up to WINDOW_MAX minutes ahead. lo=now (not now+28) makes the
+    reminder catch up after a missed tick instead of being lost. Past
+    appointments (appt < now) fall outside [lo, hi] and are correctly excluded.
+    Datetimes, not bare times: near midnight a time-only compare wrapped and
+    matched nothing."""
     return (
-        now_local + timedelta(minutes=WINDOW_MIN),
+        now_local,
         now_local + timedelta(minutes=WINDOW_MAX),
     )
 
