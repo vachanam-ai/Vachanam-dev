@@ -2040,6 +2040,42 @@ def _gate_failure_blocked_reason(last_known_status: str | None) -> str | None:
     return None
 
 
+_keepalive_started = False
+
+
+def _start_render_keepalive() -> None:
+    """Keep the Render free-tier backend awake so its in-process APScheduler
+    (30-min reminders, cascade-rebook, retention) keeps firing — free services
+    sleep after ~15 min idle. The Fly agent is always-on, so it makes a reliable
+    external pinger (GitHub Actions cron drifts and lost the race). Disabled by
+    setting BACKEND_HEALTH_URL empty. ponytail: stdlib thread, 5-min interval (3×
+    margin on the 15-min sleep) — swap for an external monitor if the agent ever
+    isn't always-on. Best-effort: a failed ping never touches the call path."""
+    global _keepalive_started
+    if _keepalive_started:
+        return
+    url = os.getenv("BACKEND_HEALTH_URL", "https://vachanam-backend.onrender.com/health")
+    if not url:
+        return
+    _keepalive_started = True
+
+    import threading
+    import time
+    import urllib.request
+
+    def _loop() -> None:
+        while True:
+            try:
+                with urllib.request.urlopen(url, timeout=30) as r:
+                    r.read(1)
+            except Exception as e:  # noqa: BLE001 — keepalive is best-effort
+                logger.warning("render_keepalive_ping_failed: %s", str(e)[:120])
+            time.sleep(300)  # 5 min — well under Render's ~15-min idle sleep
+
+    threading.Thread(target=_loop, name="render-keepalive", daemon=True).start()
+    logger.info("render_keepalive_started url=%s interval=300s", url)
+
+
 def _prewarm(proc) -> None:
     """Load the Silero VAD model ONCE per worker process (latency fix).
 
@@ -2055,6 +2091,8 @@ def _prewarm(proc) -> None:
     inference runs in the shared worker inference executor, so the per-call cost
     is just a lightweight handle, not the model weights).
     """
+    # Keep the Render backend warm so reminders/jobs keep firing (free-tier sleep).
+    _start_render_keepalive()
     proc.userdata["vad"] = silero.VAD.load()
     # The Gemini+GPT FallbackAdapter is clinic-agnostic — build it ONCE per
     # process and reuse, so its construction is off every call's pre-greeting
