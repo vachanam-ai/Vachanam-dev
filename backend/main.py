@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI):
         from backend.jobs.calendar_writer import requeue_stale_in_progress
         from backend.jobs.data_retention import run_data_retention
         from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
+        from backend.jobs.next_visit_followup_caller import run_next_visit_followups
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
         from backend.jobs.trial_pause import run_trial_pause
         from backend.jobs.vobiz_cdr_sync import run_vobiz_cdr_sync
@@ -107,6 +108,12 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(
             run_cascade_rebook_calls, IntervalTrigger(seconds=60),
             id="cascade_rebook_caller", replace_existing=True,
+        )
+        # M2: dispatch treatment follow-up calls (next_visit_book at/after 09:00
+        # on the scheduled day; doctor_advice ASAP). Calling hours 09:00-20:00 IST.
+        scheduler.add_job(
+            run_next_visit_followups, IntervalTrigger(minutes=15),
+            id="next_visit_followups", replace_existing=True,
         )
         # H5: pause expired trials once a day.
         scheduler.add_job(
