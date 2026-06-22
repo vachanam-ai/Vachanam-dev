@@ -283,3 +283,35 @@ async def health() -> dict:
     Phase 10 adds: /health/deep that probes DB + Redis on demand.
     """
     return {"status": "ok", "env": settings.app_env, "service": "vachanam-api"}
+
+
+@app.get("/health/voice-plane", tags=["health"])
+async def health_voice_plane() -> dict:
+    """Diagnostic (Vinay 2026-06-22, missing reminders): confirm THIS host can
+    dispatch outbound calls. Returns booleans + a reachability probe only — NO
+    secret values. If voice_plane_configured is False here, the reminder /
+    follow-up jobs no-op every tick. If livekit_reachable is False, create_dispatch
+    would throw. ponytail: keep until the reminder path is proven stable, then
+    fold into /health/deep."""
+    import os as _os
+
+    out = {
+        "voice_plane_configured": settings.voice_plane_configured,
+        "livekit_url_present": bool(settings.livekit_url or _os.getenv("LIVEKIT_URL")),
+        "livekit_key_present": bool(settings.livekit_api_key or _os.getenv("LIVEKIT_API_KEY")),
+        "livekit_secret_present": bool(settings.livekit_api_secret or _os.getenv("LIVEKIT_API_SECRET")),
+        "outbound_trunk_present": bool(settings.outbound_trunk_id or _os.getenv("OUTBOUND_TRUNK_ID")),
+    }
+    try:
+        from livekit import api as _lk
+        _api = _lk.LiveKitAPI()
+        try:
+            rooms = await _api.room.list_rooms(_lk.ListRoomsRequest())
+            out["livekit_reachable"] = True
+            out["active_rooms"] = len(rooms.rooms)
+        finally:
+            await _api.aclose()
+    except Exception as e:  # noqa: BLE001 — diagnostic, surface the reason
+        out["livekit_reachable"] = False
+        out["livekit_error"] = str(e)[:200]
+    return out

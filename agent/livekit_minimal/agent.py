@@ -1745,6 +1745,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # the case where it's unsure. min 0.4->0.2, max 1.5->1.0.
             min_endpointing_delay=0.2,
             max_endpointing_delay=1.0,
+            # BARGE-IN FIX (Vinay 2026-06-22: "when I interrupt mid-sentence the
+            # agent skips the sentence it was supposed to say"). Telugu/Indian
+            # callers backchannel constantly while the agent speaks ("haan",
+            # "ఊ", "సరే", "mm"). With LiveKit's defaults a single such sound
+            # truncates the agent's turn AND the LLM moves on, so a half-said
+            # confirmation (token, doctor, time) is lost. Two guards:
+            #  - min_interruption_words=2 + min_interruption_duration=0.6: a lone
+            #    backchannel word/short sound no longer counts as an interruption.
+            #  - resume_false_interruption=True: if the "interruption" turns out
+            #    to be nothing real (no transcript within the timeout), the agent
+            #    RESUMES the very sentence it was cut off on instead of skipping
+            #    it. A genuine interruption (real words) still stops the agent.
+            min_interruption_duration=0.6,
+            min_interruption_words=2,
+            resume_false_interruption=True,
+            false_interruption_timeout=2.0,
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
