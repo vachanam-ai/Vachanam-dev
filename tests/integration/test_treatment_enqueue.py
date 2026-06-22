@@ -62,6 +62,15 @@ async def test_newer_note_cancels_prior_pending(db):
     pend = (await db.execute(select(FollowupTask).where(
         FollowupTask.patient_id == pat.id, FollowupTask.status == "pending"))).scalars().all()
     assert len(pend) == 1   # only the latest survives
+    # superseded prior task is DELETED, not lingering as "completed":
+    all_tasks = (await db.execute(select(FollowupTask).where(
+        FollowupTask.patient_id == pat.id,
+        FollowupTask.task_type == "next_visit_book"))).scalars().all()
+    assert len(all_tasks) == 1   # exactly one row total — no phantom row left behind
+    completed = (await db.execute(select(FollowupTask).where(
+        FollowupTask.patient_id == pat.id, FollowupTask.task_type == "next_visit_book",
+        FollowupTask.status == "completed"))).scalars().all()
+    assert completed == []   # no phantom completed follow-up
 
 
 @pytest.mark.asyncio
@@ -74,3 +83,13 @@ async def test_final_note_cancels_and_does_not_enqueue(db):
     pend = (await db.execute(select(FollowupTask).where(
         FollowupTask.patient_id == pat.id, FollowupTask.status == "pending"))).scalars().all()
     assert pend == []
+    # final note deletes the superseded pending task and enqueues nothing →
+    # zero next_visit_book tasks remain, and none as a phantom "completed":
+    all_tasks = (await db.execute(select(FollowupTask).where(
+        FollowupTask.patient_id == pat.id,
+        FollowupTask.task_type == "next_visit_book"))).scalars().all()
+    assert len(all_tasks) == 0   # exactly zero rows total
+    completed = (await db.execute(select(FollowupTask).where(
+        FollowupTask.patient_id == pat.id, FollowupTask.task_type == "next_visit_book",
+        FollowupTask.status == "completed"))).scalars().all()
+    assert completed == []   # no phantom completed follow-up

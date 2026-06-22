@@ -9,18 +9,23 @@ from __future__ import annotations
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import update
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.schema import TreatmentNote, FollowupTask
 
 
 async def _cancel_pending(patient_id: uuid.UUID, doctor_id: uuid.UUID, db: AsyncSession) -> None:
+    # Superseded pending tasks are DELETED, not completed: a pending task was
+    # never dialed, so deleting it leaves no phantom "completed" follow-up row
+    # (no ghost in the upcoming thread, no over-count in reporting). Only
+    # status=='pending' is touched — an in_progress (dispatched) task is never
+    # affected, so no live call is dropped. FK-safe: nothing references
+    # followup_tasks.id.
     await db.execute(
-        update(FollowupTask)
+        delete(FollowupTask)
         .where(FollowupTask.patient_id == patient_id, FollowupTask.doctor_id == doctor_id,
                FollowupTask.task_type == "next_visit_book", FollowupTask.status == "pending")
-        .values(status="completed")  # cancelled-superseded; not dialed
     )
 
 
