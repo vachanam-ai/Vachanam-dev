@@ -488,6 +488,19 @@ class FollowupTask(Base):
         index=True,
     )
 
+    # --- Sub-spec M2 (treatment progress + follow-up loop) additions (migration s16followupthread2026) ---
+    # treatment_note_id: links this follow-up into a treatment thread. Nullable for
+    # free-floating follow-ups (reminders/cascade-rebook). RESTRICT: a TreatmentNote
+    # cannot be deleted while a FollowupTask references it.
+    treatment_note_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("treatment_notes.id", ondelete="RESTRICT"),
+        nullable=True, index=True)
+    # created_by_user_id: doctor/staff who scheduled this follow-up. SET NULL on user
+    # deletion so the thread survives. task_type (VARCHAR) now also carries
+    # 'next_visit_book' | 'doctor_advice' — no DB enum change.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
     branch: Mapped["Branch"] = relationship()
     doctor: Mapped["Doctor"] = relationship(back_populates="followup_tasks")
     patient: Mapped["Patient"] = relationship(back_populates="followup_tasks")
