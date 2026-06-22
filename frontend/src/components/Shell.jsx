@@ -6,17 +6,22 @@ const NAV = {
   receptionist: [
     { to: "/queue", label: "Queue" },
     { to: "/walk-in", label: "Walk-in" },
+    { to: "/treatments", label: "Treatments" },
     { to: "/availability", label: "Doctor leave" }
   ],
   org_admin: [
     { to: "/dashboard", label: "Dashboard" },
     { to: "/queue", label: "Queue" },
     { to: "/walk-in", label: "Walk-in" },
+    { to: "/treatments", label: "Treatments" },
     { to: "/availability", label: "Doctor leave" },
     { to: "/my-schedule", label: "Doctors" },
     { to: "/settings", label: "Settings" }
   ],
-  doctor: [{ to: "/my-schedule", label: "My Schedule" }],
+  doctor: [
+    { to: "/my-schedule", label: "My Schedule" },
+    { to: "/treatments", label: "Treatments" }
+  ],
   super_admin: [
     { to: "/admin", label: "Operations" },
     { to: "/admin/monitoring", label: "Monitoring" }
