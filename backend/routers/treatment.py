@@ -32,6 +32,7 @@ class NoteIn(BaseModel):
     next_steps: str | None = Field(None, max_length=2000)
     next_reporting_date: date | None = None
     is_final: bool | None = None
+    followup_question: str | None = Field(None, max_length=2000)
 
     @field_validator("visit_date")
     @classmethod
@@ -83,8 +84,11 @@ async def create_note(
     db.add(note)
     await db.commit()
     await db.refresh(note)
-    # M2 (Task 6) hooks enqueue here. (next_reporting_date → followup task;
-    # is_final cancels any pending follow-up). M1 stores only.
+    # M2 (Task 6): next_reporting_date / followup_question → pending next_visit_book;
+    # is_final cancels any pending follow-up. Idempotent (one pending per patient+doctor).
+    from backend.services.treatment_followup import sync_note_followup
+    await sync_note_followup(note, body.followup_question,
+                             uuid.UUID(user.user_id) if user.user_id else None, db)
     logger.info(
         "treatment_note_created",
         branch_id=str(body.branch_id),
@@ -121,7 +125,10 @@ async def edit_note(
     note.is_final = resolve_is_final(body.is_final, body.next_steps)
     await db.commit()
     await db.refresh(note)
-    # M2 (Task 6) hooks enqueue here. (re-schedule or cancel the follow-up).
+    # M2 (Task 6): re-schedule or cancel the follow-up to match the edited note.
+    from backend.services.treatment_followup import sync_note_followup
+    await sync_note_followup(note, body.followup_question,
+                             uuid.UUID(user.user_id) if user.user_id else None, db)
     logger.info(
         "treatment_note_updated",
         branch_id=str(body.branch_id),
