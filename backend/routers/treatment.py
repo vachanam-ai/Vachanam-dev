@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user, forbid_admin
 from backend.middleware.branch_guard import assert_branch_access
-from backend.models.schema import TreatmentNote, Patient
+from backend.models.schema import TreatmentNote, Patient, FollowupTask
 from backend.services.treatment_logic import resolve_is_final
 
 logger = structlog.get_logger()
@@ -40,6 +40,14 @@ class NoteIn(BaseModel):
         if v > date.today():
             raise ValueError("visit_date cannot be in the future")
         return v
+
+
+class ReplyIn(BaseModel):
+    branch_id: uuid.UUID
+    doctor_id: uuid.UUID
+    message: str = Field(..., min_length=1, max_length=2000)
+    next_reporting_date: date | None = None
+    treatment_note_id: uuid.UUID | None = None
 
 
 class NoteOut(BaseModel):
@@ -216,3 +224,73 @@ async def list_patients(
             "active": active,
         })
     return {"patients": out}
+
+
+# --- M2 (Task 7): follow-up thread (read + doctor reply) ---
+# Thread = next_visit_book + doctor_advice rows for one patient+branch, oldest first.
+# A doctor reply (any language) is relayed verbatim via what_to_ask; it NEVER writes
+# steps_performed/next_steps (RULE 9 — those are dashboard-only operational notes).
+
+
+@router.get("/patients/{patient_id}/followups")
+async def list_followups(
+    patient_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await assert_branch_access(user, str(branch_id), db)
+    rows = (await db.execute(
+        select(FollowupTask).where(
+            FollowupTask.patient_id == patient_id,
+            FollowupTask.branch_id == branch_id,
+            FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"]),
+        ).order_by(FollowupTask.created_at.asc())
+    )).scalars().all()
+    return {
+        "thread": [
+            {
+                "id": str(t.id),
+                "task_type": t.task_type,
+                "message": t.what_to_ask,
+                "response": t.response_summary,
+                "status": t.status,
+                "scheduled_date": t.scheduled_date.isoformat() if t.scheduled_date else None,
+                "created_at": t.created_at.isoformat(),
+            }
+            for t in rows
+        ]
+    }
+
+
+@router.post("/patients/{patient_id}/followups", status_code=201)
+async def doctor_reply(
+    patient_id: uuid.UUID,
+    body: ReplyIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    await assert_branch_access(user, str(body.branch_id), db)
+    await _load_patient(patient_id, body.branch_id, db)
+    task = FollowupTask(
+        branch_id=body.branch_id,
+        doctor_id=body.doctor_id,
+        patient_id=patient_id,
+        treatment_note_id=body.treatment_note_id,
+        task_type="doctor_advice",
+        channel="voice",
+        what_to_ask=body.message,
+        scheduled_date=date.today(),
+        status="pending",
+        created_by_user_id=uuid.UUID(user.user_id) if user.user_id else None,
+    )
+    db.add(task)
+    await db.commit()
+    await db.refresh(task)
+    logger.info(
+        "followup_doctor_reply_created",
+        branch_id=str(body.branch_id),
+        task_id=str(task.id),
+        action="treatment.followup.reply",
+    )
+    return {"id": str(task.id), "task_type": task.task_type, "status": task.status}
