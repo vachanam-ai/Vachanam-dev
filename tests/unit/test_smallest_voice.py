@@ -69,6 +69,30 @@ def test_delete_cloned_voice_calls_sdk(fake_waves):
     assert fake_waves.deleted == ["voice_clone_abc"]
 
 
+def _vd(vid, gender):
+    return {"voice_id": vid, "display_name": vid, "gender": gender, "languages": ["telugu"]}
+
+
+def test_select_top_caps_3_female_2_male_default_first():
+    catalog = [
+        _vd("f1", "female"), _vd("m1", "male"), _vd("f2", "Female"),
+        _vd("f3", "female"), _vd("m2", "MALE"), _vd("f4", "female"),
+        _vd("m3", "male"), _vd("nb", None),
+    ]
+    out = sv._select_top(catalog, default_id="f4")
+    ids = [v["voice_id"] for v in out]
+    assert len(out) == 5
+    assert sum((v["gender"] or "").lower() == "female" for v in out) == 3
+    assert sum((v["gender"] or "").lower() == "male" for v in out) == 2
+    assert ids[0] == "f4"          # default pulled to front of its bucket
+    assert "nb" not in ids          # genderless excluded
+
+
+def test_select_top_short_buckets_yield_fewer():
+    out = sv._select_top([_vd("f1", "female"), _vd("m1", "male")])
+    assert [v["voice_id"] for v in out] == ["f1", "m1"]  # 1F+1M, no padding
+
+
 def test_missing_key_raises_voice_service_error(monkeypatch):
     monkeypatch.setattr(sv.settings, "smallest_api_key", "")
     with pytest.raises(sv.VoiceServiceError):

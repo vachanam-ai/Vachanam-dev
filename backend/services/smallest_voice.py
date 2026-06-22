@@ -40,9 +40,22 @@ def _waves():
     return SmallestAI(api_key=settings.smallest_api_key).waves
 
 
+def _select_top(voices: list[dict], default_id: str = "") -> list[dict]:
+    """Trim the catalog to a clean 5 — 3 female + 2 male (Vinay 2026-06-21): the
+    full catalog is too many options. The language's default voice is pulled to
+    the front of its gender bucket so it's always offered. Genderless/short
+    buckets just yield fewer. Order: females first, then males."""
+    def _bucket(g: str) -> list[dict]:
+        b = [v for v in voices if (v.get("gender") or "").lower() == g]
+        return sorted(b, key=lambda v: v.get("voice_id") != default_id)
+
+    return _bucket("female")[:3] + _bucket("male")[:2]
+
+
 def list_voices(language: str | None = None) -> list[dict]:
     """Catalog of smallest.ai voices, optionally filtered to a language code
-    (te/hi/ta/kn/ml/mr/bn/or). Returns [{voice_id, display_name, gender, languages}].
+    (te/hi/ta/kn/ml/mr/bn/or). Returns up to 5 voices (3 female + 2 male) as
+    [{voice_id, display_name, gender, languages}].
 
     smallest tags each voice with the FULL language name ("telugu", "hindi"), not
     the short code, so we translate the code → name via the i18n registry before
@@ -57,11 +70,14 @@ def list_voices(language: str | None = None) -> list[dict]:
 
     # Short code → full language name (e.g. "te" → "telugu") to match the tags.
     target = ""
+    default_id = ""
     code = (language or "").lower().strip()
     if code:
         from agent.i18n import get_lang
 
-        target = get_lang(code).name.lower()
+        lang = get_lang(code)
+        target = lang.name.lower()
+        default_id = lang.default_voice
     out: list[dict] = []
     for v in getattr(resp, "voices", None) or []:
         tags = getattr(v, "tags", None)
@@ -76,7 +92,7 @@ def list_voices(language: str | None = None) -> list[dict]:
                 "languages": langs,
             }
         )
-    return out
+    return _select_top(out, default_id)
 
 
 # smallest.ai waves API base (POST /waves/v1/voice-cloning clones onto v3.1).
