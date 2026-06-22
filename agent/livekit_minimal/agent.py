@@ -2091,8 +2091,6 @@ def _prewarm(proc) -> None:
     inference runs in the shared worker inference executor, so the per-call cost
     is just a lightweight handle, not the model weights).
     """
-    # Keep the Render backend warm so reminders/jobs keep firing (free-tier sleep).
-    _start_render_keepalive()
     proc.userdata["vad"] = silero.VAD.load()
     # The Gemini+GPT FallbackAdapter is clinic-agnostic — build it ONCE per
     # process and reuse, so its construction is off every call's pre-greeting
@@ -2110,6 +2108,10 @@ def _prewarm(proc) -> None:
 
 
 if __name__ == "__main__":
+    # Start the Render keep-warm pinger in the MAIN worker process (always-on),
+    # NOT in _prewarm — prewarm runs in the job subprocess, which may not spawn
+    # until the first call, and Render sleeps precisely when there are NO calls.
+    _start_render_keepalive()
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
