@@ -99,17 +99,32 @@ async def run_pre_appt_reminders() -> None:
             for token, doctor, patient in rows:
                 if not appointment_in_window(token.date, token.appointment_time, lo, hi):
                     continue
-                token.reminder_sent = True
-                # commit in BOTH branches — the old no-phone path skipped the
-                # commit, so phoneless tokens were rescanned every minute forever
-                await db.commit()
                 if not patient.phone:
-                    continue  # nothing to dial
-                await _dispatch_reminder_call(branch, token, doctor, patient)
+                    # Nothing to dial — mark sent so we don't rescan it forever.
+                    token.reminder_sent = True
+                    await db.commit()
+                    continue
+                # FLIP AFTER DISPATCH (Vinay 2026-06-22: reminders went missing).
+                # The old code set reminder_sent=True BEFORE dialing, so ANY
+                # dispatch failure (a Render LiveKit hiccup, a transient API error)
+                # permanently suppressed the reminder — reminder_sent stayed True,
+                # the next tick skipped it, the patient never got the call. Now we
+                # dispatch FIRST and only mark sent when create_dispatch SUCCEEDS;
+                # on failure reminder_sent stays False and the next tick retries
+                # (within the resilient [now, now+31] window). A rare duplicate
+                # (dispatch ok but the commit below fails) is acceptable — the
+                # call itself re-confirms with the patient — and far better than a
+                # silently dropped reminder.
+                ok = await _dispatch_reminder_call(branch, token, doctor, patient)
+                if ok:
+                    token.reminder_sent = True
+                    await db.commit()
 
 
-async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> None:
-    """Create an explicit agent dispatch; the agent dials the patient."""
+async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> bool:
+    """Create an explicit agent dispatch; the agent dials the patient. Returns
+    True only when the dispatch was created (the caller marks reminder_sent on
+    True, and retries next tick on False)."""
     try:
         from livekit import api as lk_api
 
@@ -144,7 +159,9 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                 patient_phone=patient.phone[-4:],
                 appt=token.appointment_time.strftime("%H:%M"),
             )
+            return True
         finally:
             await lkapi.aclose()
     except Exception as e:
         logger.error("reminder_dispatch_failed", token_id=str(token.id), error=str(e))
+        return False
