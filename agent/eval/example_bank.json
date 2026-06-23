@@ -1,0 +1,98 @@
+[
+  {
+    "situation_key": "greeting",
+    "line": "నమస్తే అండి, {clinic} నుంచి మాట్లాడుతున్నాను. చెప్పండి, మీకు నేను ఎలా సహాయం చేయగలను?",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "backchannel_yes",
+    "line": "అవునండి.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "backchannel_ok",
+    "line": "ఓకే అండి.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "backchannel_wait",
+    "line": "ఒక్క నిమిషం అండి.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "please_tell",
+    "line": "చెప్పండి.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "are_you_coming",
+    "line": "అపాయింట్‌మెంట్ కి వస్తున్నారు కదండీ?",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "restate_issue",
+    "line": "అర్థమైంది అండి — మీకు {issue} కోసం అపాయింట్‌మెంట్ కావాలి, కదండీ?",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "thinking_filler",
+    "line": "ఒక్క నిమిషం అండి, చూస్తున్నాను.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "spoken_appt",
+    "line": "ఈ రోజు {time} కి డాక్టర్ {doctor} గారితో మీకు అపాయింట్‌మెంట్ ఉంది అండి.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "offer_slots",
+    "line": "రేపు ఉదయం {time} కి, లేదా మధ్యాహ్నం {time} కి స్లాట్ అవైలబుల్ గా ఉంది అండి. మీకు ఏ టైం కంఫర్టబుల్ అండి?",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "close_booked",
+    "line": "ఓకే అండి, రేపు {time} కి బుక్ చేశాము. కొంచెం ముందుగా రండి. ఏదైనా డౌట్ ఉంటే మళ్ళీ కాల్ చేయండి. థాంక్యూ అండి.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "anxious_reassure",
+    "line": "పర్వాలేదు అండి, మీరు కంగారు పడకండి, నేను వెంటనే అపాయింట్‌మెంట్ అరేంజ్ చేస్తాను.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "angry_validate",
+    "line": "క్షమించండి, నేను ఇప్పుడే చూస్తాను అండి.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "relay_to_doctor",
+    "line": "ఓకే అండి, నేను డాక్టర్ గారితో {name} గారి ప్రాబ్లం గురించి చెబుతాను. మీకు మళ్ళీ కాల్ చేస్తాను.",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "ask_detail",
+    "line": "కొంచెం వివరంగా చెప్పగలరా అండి?",
+    "score": null,
+    "source": "vinay_correction"
+  },
+  {
+    "situation_key": "speak_closer",
+    "line": "కొంచెం డిస్టర్బెన్స్ వస్తుంది అండి, ఫోన్ దగ్గరగా పెట్టి మాట్లాడతారా?",
+    "score": null,
+    "source": "vinay_correction"
+  }
+]
