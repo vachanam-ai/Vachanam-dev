@@ -27,6 +27,10 @@ PLANS: dict[str, Plan] = {
 # of the plan the clinic selected at signup. This is the single source of truth.
 TRIAL_MINUTES = 500
 
+# CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
+# charge) adds GST on top; B2B clinics reclaim it via input credit.
+GST_RATE = 0.18
+
 # Vachanam's own VARIABLE cost floor (CLAUDE.md, 2026-06 repricing): per voice
 # minute (Vobiz + Sarvam STT + smallest.ai TTS + Gemini + LiveKit) + DID rent.
 # NOTE: this is VARIABLE only — it excludes fixed overhead (servers, salaries,
@@ -71,6 +75,40 @@ def included_minutes_for(plan: str, status: str, adjustment: int = 0) -> int:
     """
     base = TRIAL_MINUTES if status == "trial" else included_minutes(plan)
     return max(0, base + (adjustment or 0))
+
+
+def overage_breakdown(
+    plan: str, minutes_used: float, status: str = "active", adjustment: int = 0
+) -> dict:
+    """Itemised overage bill for one cycle — the single source for what a clinic
+    is charged for minutes beyond its included bucket, and the exact amount sent
+    to Razorpay (in paise).
+
+    Razorpay does not know about minutes; it charges a rupee total. The
+    "per-minute" billing is THIS math: overage_minutes × overage_rate, + 18% GST.
+
+    Example (solo plan, 1000 minutes used): included 100 → 900 overage × ₹5 =
+    ₹4500 + ₹810 GST = ₹5310 total = 531000 paise.
+    """
+    included = included_minutes_for(plan, status, adjustment)
+    p = PLANS.get(plan)
+    rate = p.overage_per_min if p else 0.0
+    used = int(round(minutes_used))
+    overage_min = max(0, used - included)
+    overage_amount = round(overage_min * rate, 2)
+    gst = round(overage_amount * GST_RATE, 2)
+    total = round(overage_amount + gst, 2)
+    return {
+        "plan": plan,
+        "included_minutes": included,
+        "minutes_used": used,
+        "overage_minutes": overage_min,
+        "overage_rate": rate,
+        "overage_amount": overage_amount,
+        "gst": gst,
+        "total_with_gst": total,
+        "amount_paise": int(round(total * 100)),
+    }
 
 
 def next_cycle_start(today: date) -> date:

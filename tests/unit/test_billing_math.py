@@ -12,7 +12,35 @@ from backend.services.billing_math import (
     minutes_exhausted,
     month_expense,
     month_revenue,
+    overage_breakdown,
 )
+
+
+def test_overage_breakdown_solo_1000_minutes():
+    # The #6 scenario: solo plan (100 included), 1000 minutes used.
+    bd = overage_breakdown("solo", 1000)
+    assert bd["included_minutes"] == 100
+    assert bd["overage_minutes"] == 900
+    assert bd["overage_rate"] == 5.0
+    assert bd["overage_amount"] == 4500.0       # 900 × ₹5
+    assert bd["gst"] == 810.0                    # 18% of 4500
+    assert bd["total_with_gst"] == 5310.0
+    assert bd["amount_paise"] == 531000          # exact paise sent to Razorpay
+
+
+def test_overage_breakdown_no_overage_within_bucket():
+    bd = overage_breakdown("clinic", 1200)       # under the 1800 bucket
+    assert bd["overage_minutes"] == 0
+    assert bd["overage_amount"] == 0.0
+    assert bd["amount_paise"] == 0
+
+
+def test_overage_breakdown_respects_minute_adjustment():
+    # +500 goodwill minutes on solo → bucket 600, so 1000 used = 400 overage.
+    bd = overage_breakdown("solo", 1000, "active", 500)
+    assert bd["included_minutes"] == 600
+    assert bd["overage_minutes"] == 400
+    assert bd["amount_paise"] == int(round(400 * 5 * 1.18 * 100))
 
 
 def test_trial_org_gets_flat_500_minutes_regardless_of_plan():
