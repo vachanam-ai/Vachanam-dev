@@ -231,7 +231,7 @@ from backend.models.schema import BillingCycle, CallLog
 from backend.services.billing_math import (
     PLANS,
     call_blocked,
-    included_minutes,
+    included_minutes_for,
     month_expense,
     month_revenue,
 )
@@ -397,7 +397,7 @@ async def admin_overview(
             blist = org_branches.get(o.id, [])
             dids = sum(1 for b in blist if b.did_number)
             used = round(org_min_this.get(o.id, 0.0), 1)
-            inc = included_minutes(o.plan)
+            inc = included_minutes_for(o.plan, o.status)
             pct = round(used / inc * 100, 1) if inc else 0.0
             approaching = inc > 0 and used >= 0.8 * inc
             exhausted = inc > 0 and used >= inc

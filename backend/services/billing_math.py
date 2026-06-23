@@ -22,6 +22,10 @@ PLANS: dict[str, Plan] = {
     "multi": Plan(15_999, 3_600, 5.0),
 }
 
+# CLAUDE.md: the 14-day free trial grants a flat 500 voice minutes, regardless
+# of the plan the clinic selected at signup. This is the single source of truth.
+TRIAL_MINUTES = 500
+
 # Vachanam's own VARIABLE cost floor (CLAUDE.md, 2026-06 repricing): per voice
 # minute (Vobiz + Sarvam STT + smallest.ai TTS + Gemini + LiveKit) + DID rent.
 # NOTE: this is VARIABLE only — it excludes fixed overhead (servers, salaries,
@@ -54,6 +58,18 @@ def month_expense(minutes_used: float, did_count: int) -> float:
 def included_minutes(plan: str) -> int:
     p = PLANS.get(plan)
     return p.included_minutes if p else 0
+
+
+def included_minutes_for(plan: str, status: str) -> int:
+    """Voice-minute allowance for an org THIS month, honoring the trial grant.
+
+    A trial org gets the flat TRIAL_MINUTES bucket regardless of the plan it
+    picked at signup; any other status gets the plan's own included bucket.
+    Single source for both the clinic dashboard donut and the super-admin view.
+    """
+    if status == "trial":
+        return TRIAL_MINUTES
+    return included_minutes(plan)
 
 
 def minutes_exhausted(plan: str, minutes_used: float) -> bool:

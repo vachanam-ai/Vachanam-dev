@@ -305,9 +305,21 @@ def _make_endpoint_limiter(times: int, seconds: int):
                 return  # trusted IP — no counting
 
         key = await user_or_ip_key(request)
-        limiter = await _get_limiter()
-
-        ok = await limiter.try_acquire_async(key, blocking=False)
+        try:
+            limiter = await _get_limiter()
+            ok = await limiter.try_acquire_async(key, blocking=False)
+        except Exception as exc:
+            # RULE 8: a Redis outage MUST NOT take down auth/login. Fail OPEN —
+            # allow the request and log loudly so the outage is visible. Degraded
+            # throttling beats a total auth outage (every Redis-touching route
+            # 500ing). Scoped to throttling only; token-locking for bookings
+            # stays fail-CLOSED elsewhere so a Redis blip can never double-book.
+            logger.error(
+                "rate_limit_redis_unavailable",
+                endpoint=request.url.path,
+                error=str(exc),
+            )
+            return
         if not ok:
             logger.warning(
                 "rate_limit_exceeded",
@@ -349,11 +361,19 @@ _BLOCK_TTL = 3600           # 1 hour
 
 
 async def record_failed_login(ip: str) -> None:
-    """Increment failed-login counter for IP. Block if threshold reached (spec §5.6)."""
-    r = await _get_rate_limit_redis()
-    fail_key = f"{_AUTH_FAIL_PREFIX}:{ip}"
-    count = await r.incr(fail_key)
-    await r.expire(fail_key, _AUTH_FAIL_TTL)
+    """Increment failed-login counter for IP. Block if threshold reached (spec §5.6).
+
+    RULE 8: best-effort. A Redis outage must not turn a 401 (bad password) into a
+    500 — swallow the error and log it. Worst case we miss counting one failure.
+    """
+    try:
+        r = await _get_rate_limit_redis()
+        fail_key = f"{_AUTH_FAIL_PREFIX}:{ip}"
+        count = await r.incr(fail_key)
+        await r.expire(fail_key, _AUTH_FAIL_TTL)
+    except Exception as exc:
+        logger.error("record_failed_login_redis_unavailable", error=str(exc))
+        return
 
     if count >= _AUTH_FAIL_THRESHOLD:
         # Block IP for 1 hour using both storage shapes so either lookup works
@@ -368,13 +388,22 @@ async def record_failed_login(ip: str) -> None:
 
 
 async def is_ip_blocked(ip: str) -> bool:
-    """Return True if IP is in the blocklist (checks both storage shapes)."""
-    r = await _get_rate_limit_redis()
-    is_set_member = await r.sismember(_BLOCKED_IPS_SET, ip)
-    if is_set_member:
-        return True
-    key_exists = await r.exists(f"{_BLOCKED_IPS_KEY_PREFIX}:{ip}")
-    return bool(key_exists)
+    """Return True if IP is in the blocklist (checks both storage shapes).
+
+    RULE 8: fail OPEN on a Redis outage (return False = not blocked) so auth
+    stays reachable. A Redis blip must not 500 every login; the blocklist is a
+    secondary defense, not a hard gate.
+    """
+    try:
+        r = await _get_rate_limit_redis()
+        is_set_member = await r.sismember(_BLOCKED_IPS_SET, ip)
+        if is_set_member:
+            return True
+        key_exists = await r.exists(f"{_BLOCKED_IPS_KEY_PREFIX}:{ip}")
+        return bool(key_exists)
+    except Exception as exc:
+        logger.error("is_ip_blocked_redis_unavailable", error=str(exc))
+        return False
 
 
 async def check_ip_blocklist(request: Request) -> None:

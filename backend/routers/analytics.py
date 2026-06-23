@@ -24,9 +24,7 @@ from backend.models.schema import (
     Patient,
     Token,
 )
-
-# Included voice minutes per plan (pricing table; trial = 500)
-PLAN_MINUTES = {"solo": 100, "clinic": 1800, "multi": 3600}
+from backend.services.billing_math import included_minutes_for
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -376,14 +374,16 @@ async def analytics_overview(
             )
         )
     ).scalar_one()
-    plan = (
+    org_row = (
         await db.execute(
-            select(Organization.plan)
+            select(Organization.plan, Organization.status)
             .join(Branch, Branch.org_id == Organization.id)
             .where(Branch.id == branch_uuid)
         )
-    ).scalar_one_or_none() or "clinic"
-    included = PLAN_MINUTES.get(plan, 1800)
+    ).first()
+    plan, org_status = (org_row[0], org_row[1]) if org_row else ("clinic", "active")
+    # Trial clinics get the flat 500-min trial bucket, not the plan allowance.
+    included = included_minutes_for(plan or "clinic", org_status or "active")
     used_min = int(used_seconds // 60)
 
     # â”€â”€ Attendance rate + weekday load over the period â”€â”€

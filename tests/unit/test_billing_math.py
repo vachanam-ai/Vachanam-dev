@@ -5,12 +5,29 @@ Pricing per CLAUDE.md (repriced 2026-06-16): solo 1999/100min/Rs5, clinic
 """
 from backend.services.billing_math import (
     PLANS,
+    TRIAL_MINUTES,
     call_blocked,
     included_minutes,
+    included_minutes_for,
     minutes_exhausted,
     month_expense,
     month_revenue,
 )
+
+
+def test_trial_org_gets_flat_500_minutes_regardless_of_plan():
+    # Bug (2026-06-23): trial clinics showed the plan's bucket (solo=100) instead
+    # of the 500-min trial grant. The trial allowance is flat across all plans.
+    assert TRIAL_MINUTES == 500
+    assert included_minutes_for("solo", "trial") == 500
+    assert included_minutes_for("clinic", "trial") == 500
+    assert included_minutes_for("multi", "trial") == 500
+
+
+def test_non_trial_org_gets_plan_bucket():
+    assert included_minutes_for("solo", "active") == 100
+    assert included_minutes_for("clinic", "active") == 1800
+    assert included_minutes_for("multi", "paused") == 3600
 
 
 def test_plan_table_matches_claude_md():

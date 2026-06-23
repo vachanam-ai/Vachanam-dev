@@ -61,6 +61,7 @@ import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
 from agent.i18n import get_lang, get_lines, get_welcome  # noqa: E402
+from agent.i18n.transliterate import spoken_name  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -2016,6 +2017,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # RULE 6: single short opening utterance, sanitized. (The short welcome
         # clip already played pre-session; this is the real greeting, spoken with
         # STT live so the patient's reply is heard.)
+        #
+        # Names enter the greeting in the CALL'S script so the TTS speaks them as
+        # names, not spelled letters (fix 2026-06-23: "Srinivas" → "S R I N I").
+        # spoken_name() is best-effort and cached; it no-ops for already-Indic
+        # names and falls back to the raw name on any failure.
+        _spk_patient = await spoken_name(meta.get("patient_name", ""), lang_code)
+        _spk_doctor = await spoken_name(meta.get("doctor_name", ""), lang_code)
         if is_reminder:
             # Raw "16:30" gets read digit-by-digit by TTS. For Telugu speak it in
             # Telugu words; for other languages a clean "04:30 PM" reads naturally
@@ -2029,9 +2037,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await session.say(
                 sanitize_for_tts(
                     lines.reminder_greeting.format(
-                        patient=meta.get("patient_name", ""),
+                        patient=_spk_patient,
                         clinic=branch_name,
-                        doctor=meta.get("doctor_name", ""),
+                        doctor=_spk_doctor,
                         time=_spoken_time,
                     )
                 )
@@ -2048,9 +2056,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await session.say(
                 sanitize_for_tts(
                     lines.rebook_greeting.format(
-                        patient=meta.get("patient_name", ""),
+                        patient=_spk_patient,
                         clinic=branch_name,
-                        doctor=meta.get("doctor_name", ""),
+                        doctor=_spk_doctor,
                         date=spoken_date,
                     )
                 )
@@ -2063,7 +2071,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await session.say(
                 sanitize_for_tts(
                     lines.known_caller_greeting.format(
-                        patient=meta.get("patient_name", ""), clinic=branch_name
+                        patient=_spk_patient, clinic=branch_name
                     )
                 )
             )
