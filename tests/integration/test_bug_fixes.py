@@ -137,7 +137,10 @@ async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db,
     assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=appt)
     assert assigned["success"]
 
-    cal = FlakyCalendar(failures=2)  # fails twice, succeeds third time
+    # Calendar write retries with stop_after_attempt(2) (one retry, see
+    # booking_tools.py:933 — kept inside the 8s wait_for budget). One transient
+    # failure then success exercises the retry path.
+    cal = FlakyCalendar(failures=1)  # fails once, succeeds on the retry
     result = await confirm_booking(
         doctor_id=doc.id,
         branch_id=branch.id,
@@ -155,8 +158,8 @@ async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db,
         meta_service=NullMeta(),
     )
     assert result["success"], result
-    assert cal.calls == 3  # retried inside the calendar step only
-    assert await _count_tokens(db, doc.id, branch.id, day) == 1  # ONE row, not 2/3
+    assert cal.calls == 2  # one failure + one successful retry (calendar step only)
+    assert await _count_tokens(db, doc.id, branch.id, day) == 1  # ONE row, not one-per-retry
 
 
 # â”€â”€ Bug 3: cancelled token numbers are never reissued â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

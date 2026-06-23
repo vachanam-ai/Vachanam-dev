@@ -17,6 +17,17 @@ from backend.models.schema import Base
 from backend.config import settings
 import backend.database as _db_module
 
+# Tests use the LOCAL Docker Redis (docker-compose `redis` service), never prod
+# Upstash. Reasons: (1) the time-based rate-limit tests assume low latency — 60
+# requests must finish well inside the 60s window, which fails against Upstash
+# from a dev box (~hundreds of ms/request) so the limit is never reached;
+# (2) hermetic + flushable per test; (3) never burns the Upstash free-tier
+# command quota. The limiter reads settings.redis_url lazily, so overriding it
+# here (before any test runs) repoints both the limiter and the `redis` fixture.
+import os as _os
+
+settings.redis_url = _os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0")
+
 
 def _refuse_unsafe_test_db() -> None:
     """Hard-fail pytest if TEST_DATABASE_URL could point at a dev or prod DB.

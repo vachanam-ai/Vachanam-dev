@@ -59,7 +59,20 @@ def test_list_voices_no_filter_returns_all(fake_waves):
     assert allv[0]["display_name"] and "languages" in allv[0]
 
 
-def test_clone_voice_returns_voice_id(fake_waves):
+def test_clone_voice_returns_voice_id(fake_waves, monkeypatch):
+    # clone_voice() posts to smallest.ai with raw httpx (NOT the mocked SDK), so
+    # mock httpx.post here — otherwise the test hits the live API and 500s.
+    import httpx
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+        text = ""
+
+        def json(self):
+            return {"voiceId": "voice_clone_abc"}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
     vid = sv.clone_voice("Dr Voice", "sample.wav", b"RIFFfakeaudio")
     assert vid == "voice_clone_abc"
 
