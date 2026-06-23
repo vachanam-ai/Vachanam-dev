@@ -48,6 +48,11 @@ export const resetPassword = (email, code, new_password) =>
   api.post("/auth/reset-password", { email, code, new_password }).then((r) => r.data);
 export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
 
+// ── Plan / billing (clinic owner) ──
+export const fetchPlan = () => api.get("/api/plan").then((r) => r.data);
+export const changePlan = (plan) =>
+  api.post("/api/plan-change", { plan }).then((r) => r.data);
+
 // ── Analytics (owner) ──
 export const fetchAnalytics = (branchId, days = 14) =>
   api.get("/analytics/overview", { params: { branch_id: branchId, days } }).then((r) => r.data);

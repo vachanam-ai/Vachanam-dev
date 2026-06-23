@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   addStaff,
+  changePlan,
   cloneBranchVoice,
   fetchBranchSettings,
+  fetchPlan,
   fetchStaff,
   getBranchVoices,
   registerClonedVoice,
@@ -13,6 +15,8 @@ import {
   testCalendar,
   updateBranchSettings
 } from "../api/client.js";
+
+const PLAN_LABELS = { solo: "Solo · ₹1,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹15,999/mo" };
 import { useAuth } from "../hooks/useAuth.jsx";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
@@ -139,6 +143,19 @@ export default function Settings() {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change language")
   });
 
+  // Plan & billing — current plan + any scheduled change.
+  const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan });
+  const planChange = useMutation({
+    mutationFn: (p) => changePlan(p),
+    onSuccess: (d) => {
+      qc.setQueryData(["plan"], d);
+      if (d.pending_plan)
+        toast.success(`Plan changes to ${d.pending_plan} on ${d.pending_plan_effective}`);
+      else toast.success("Scheduled change cancelled");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change plan")
+  });
+
   // smallest.ai voice catalog for the clinic's language (drives the picker).
   const voices = useQuery({
     queryKey: ["branch-voices", branchId, data?.language],
@@ -262,6 +279,32 @@ export default function Settings() {
           ))}
         </div>
       </div>
+
+      {/* Plan & billing */}
+      <Section id="plan" title="Plan & billing"
+        sub="Switch plans any time — the change takes effect from your next billing month, so you never lose minutes you've already paid for.">
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <label className="label">Plan</label>
+            <select className="field min-w-[220px]" value={plan.data?.plan ?? "clinic"}
+              disabled={planChange.isPending}
+              onChange={(e) => planChange.mutate(e.target.value)}>
+              <option value="solo">{PLAN_LABELS.solo}</option>
+              <option value="clinic">{PLAN_LABELS.clinic}</option>
+              <option value="multi">{PLAN_LABELS.multi}</option>
+            </select>
+          </div>
+          <span className={plan.data?.status === "active" ? "chip-token" : "chip-muted"}>
+            {plan.data?.status ?? "—"}
+          </span>
+        </div>
+        {plan.data?.pending_plan && (
+          <InfoBox title="Scheduled change">
+            Switching to <strong>{plan.data.pending_plan}</strong> on{" "}
+            <strong>{plan.data.pending_plan_effective}</strong>. Pick your current plan to cancel.
+          </InfoBox>
+        )}
+      </Section>
 
       {/* 1 — Clinic details */}
       <Section id="details" title="1 · Clinic details" done={steps[0].done}

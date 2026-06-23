@@ -38,6 +38,11 @@ class Organization(Base):
     minutes_adjustment: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    # Clinic-scheduled plan change: takes effect at pending_plan_effective (1st
+    # of next month) so a switch never shrinks the current month's paid bucket.
+    # A daily job applies it. Both NULL = no pending change.
+    pending_plan: Mapped[str | None] = mapped_column(String(20))
+    pending_plan_effective: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     branches: Mapped[list["Branch"]] = relationship(back_populates="organization")

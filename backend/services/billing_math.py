@@ -7,6 +7,7 @@ no I/O — unit-tested in tests/unit/test_billing_math.py.
 All amounts in WHOLE RUPEES (floats only where overage rates demand it).
 """
 from dataclasses import dataclass
+from datetime import date
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,15 @@ def included_minutes_for(plan: str, status: str, adjustment: int = 0) -> int:
     """
     base = TRIAL_MINUTES if status == "trial" else included_minutes(plan)
     return max(0, base + (adjustment or 0))
+
+
+def next_cycle_start(today: date) -> date:
+    """First day of the month AFTER ``today`` — when a clinic-scheduled plan
+    change takes effect (never mid-month, so a switch can't shrink the bucket
+    the clinic already paid for)."""
+    if today.month == 12:
+        return date(today.year + 1, 1, 1)
+    return date(today.year, today.month + 1, 1)
 
 
 def minutes_exhausted(plan: str, minutes_used: float) -> bool:

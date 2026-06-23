@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
         from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
         from backend.jobs.next_visit_followup_caller import run_next_visit_followups
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
-        from backend.jobs.trial_pause import run_trial_pause
+        from backend.jobs.trial_pause import run_pending_plan_changes, run_trial_pause
         from backend.jobs.vobiz_cdr_sync import run_vobiz_cdr_sync
 
         scheduler = AsyncIOScheduler()
@@ -119,6 +119,12 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(
             run_trial_pause, IntervalTrigger(hours=6),
             id="trial_pause", replace_existing=True,
+        )
+        # Apply clinic-scheduled plan changes whose effective date (1st of the
+        # month) has arrived.
+        scheduler.add_job(
+            run_pending_plan_changes, IntervalTrigger(hours=6),
+            id="pending_plan_changes", replace_existing=True,
         )
         # TD-027/F6: reconcile call-metering rows stranded by a crashed worker.
         scheduler.add_job(

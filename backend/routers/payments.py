@@ -28,7 +28,8 @@ from backend.middleware.rate_limit import (
     razorpay_webhook_limit,
     verify_payment_limit,
 )
-from backend.services.billing_math import PLANS
+from backend.models.schema import Organization
+from backend.services.billing_math import PLANS, next_cycle_start
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -165,6 +166,92 @@ async def create_order(
         currency=order["currency"],
         key_id=settings.razorpay_key_id,
     )
+
+
+# ── Clinic self-serve plan change (effective next billing cycle) ────────────
+
+
+class PlanInfo(BaseModel):
+    plan: str
+    status: str
+    pending_plan: str | None
+    pending_plan_effective: str | None  # ISO date the pending change applies
+
+
+class PlanChangeRequest(BaseModel):
+    plan: str
+
+
+async def _load_my_org(current_user: CurrentUser, db: "AsyncSession") -> Organization:
+    if not current_user.org_id:
+        raise HTTPException(status_code=403, detail="No organization")
+    org = (
+        await db.execute(
+            select(Organization).where(Organization.id == _uuid.UUID(current_user.org_id))
+        )
+    ).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return org
+
+
+def _plan_info(org: Organization) -> "PlanInfo":
+    return PlanInfo(
+        plan=org.plan,
+        status=org.status,
+        pending_plan=org.pending_plan,
+        pending_plan_effective=(
+            org.pending_plan_effective.isoformat() if org.pending_plan_effective else None
+        ),
+    )
+
+
+@router.get("/plan", response_model=PlanInfo)
+async def get_plan(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: "AsyncSession" = Depends(get_db),
+) -> "PlanInfo":
+    """Caller's current plan + any scheduled change."""
+    return _plan_info(await _load_my_org(current_user, db))
+
+
+@router.post("/plan-change", response_model=PlanInfo)
+async def change_plan(
+    req: PlanChangeRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: "AsyncSession" = Depends(get_db),
+) -> "PlanInfo":
+    """Schedule a plan change for the next billing cycle (1st of next month).
+
+    A clinic owner can switch any time; the change never applies mid-month, so
+    a downgrade can't shrink minutes already paid for. Selecting the current
+    plan cancels a pending change. A daily job applies the change once its
+    effective date arrives.
+    """
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only a clinic owner can change the plan")
+    plan = req.plan.strip().lower()
+    if plan not in PLANS:
+        raise HTTPException(status_code=422, detail="plan must be solo, clinic or multi")
+
+    org = await _load_my_org(current_user, db)
+    if plan == org.plan:
+        # No-op / cancel a previously scheduled change.
+        org.pending_plan = None
+        org.pending_plan_effective = None
+    else:
+        org.pending_plan = plan
+        org.pending_plan_effective = next_cycle_start(date.today())
+    await db.commit()
+    await db.refresh(org)
+    logger.info(
+        "plan_change_scheduled",
+        org_id=current_user.org_id,
+        from_plan=org.plan,
+        to_plan=org.pending_plan,
+        effective=org.pending_plan_effective.isoformat() if org.pending_plan_effective else None,
+    )
+    return _plan_info(org)
 
 
 @router.post(
