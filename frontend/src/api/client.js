@@ -42,6 +42,10 @@ export const registerClinic = (payload) =>
   api.post("/auth/register", payload).then((r) => r.data);
 export const requestOtp = (payload) =>
   api.post("/auth/request-otp", payload).then((r) => r.data);
+export const forgotPassword = (email) =>
+  api.post("/auth/forgot-password", { email }).then((r) => r.data);
+export const resetPassword = (email, code, new_password) =>
+  api.post("/auth/reset-password", { email, code, new_password }).then((r) => r.data);
 export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
 
 // ── Analytics (owner) ──

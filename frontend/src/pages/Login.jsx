@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
+import { forgotPassword, resetPassword } from "../api/client.js";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
@@ -14,6 +15,11 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [fpStage, setFpStage] = useState("request"); // request | reset
+  const [fpCode, setFpCode] = useState("");
+  const [fpNew, setFpNew] = useState("");
+  const [fpBusy, setFpBusy] = useState(false);
 
   useEffect(() => {
     revealStagger(pageRef.current);
@@ -71,6 +77,38 @@ export default function Login() {
     }
   };
 
+  const requestReset = async (e) => {
+    e.preventDefault();
+    if (!email.trim()) return toast.error("Enter your email first");
+    setFpBusy(true);
+    try {
+      const r = await forgotPassword(email.trim());
+      // Dev (no email provider): the code is echoed so the flow is testable.
+      if (r?.dev_email_code) toast.info(`Reset code: ${r.dev_email_code}`);
+      setFpStage("reset");
+      toast.success("If that account exists, we emailed a reset code");
+    } catch {
+      toast.error("Could not send the reset code — try again");
+    } finally {
+      setFpBusy(false);
+    }
+  };
+
+  const doReset = async (e) => {
+    e.preventDefault();
+    setFpBusy(true);
+    try {
+      await resetPassword(email.trim(), fpCode.trim(), fpNew);
+      const me = await loginPassword(email.trim(), fpNew);
+      toast.success("Password updated");
+      navigate(roleHome(me.role), { replace: true });
+    } catch (err) {
+      toast.error(err?.response?.data?.detail ?? "Reset failed — check the code");
+    } finally {
+      setFpBusy(false);
+    }
+  };
+
   return (
     <div ref={pageRef} className="min-h-dvh grid lg:grid-cols-[1.1fr_1fr]">
       <section className="relative hidden overflow-hidden bg-teal-deep text-white lg:flex lg:flex-col lg:justify-between lg:p-12">
@@ -110,21 +148,63 @@ export default function Login() {
             Open today&rsquo;s clinic
           </h2>
 
-          <form data-reveal onSubmit={submit} className="mt-8 space-y-4">
-            <div>
-              <label className="label">Email</label>
-              <input className="field" type="email" value={email} required
-                onChange={(e) => setEmail(e.target.value)} placeholder="you@clinic.in" />
-            </div>
-            <div>
-              <label className="label">Password</label>
-              <input className="field" type="password" value={password} required
-                onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
-            </div>
-            <button className="btn-primary w-full py-3" disabled={busy}>
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
-          </form>
+          {!forgotOpen ? (
+            <form data-reveal onSubmit={submit} className="mt-8 space-y-4">
+              <div>
+                <label className="label">Email</label>
+                <input className="field" type="email" value={email} required
+                  onChange={(e) => setEmail(e.target.value)} placeholder="you@clinic.in" />
+              </div>
+              <div>
+                <div className="flex items-center justify-between">
+                  <label className="label">Password</label>
+                  <button type="button"
+                    onClick={() => { setForgotOpen(true); setFpStage("request"); }}
+                    className="font-ui text-xs text-teal underline-offset-4 hover:underline">
+                    Forgot password?
+                  </button>
+                </div>
+                <input className="field" type="password" value={password} required
+                  onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
+              </div>
+              <button className="btn-primary w-full py-3" disabled={busy}>
+                {busy ? "Signing in…" : "Sign in"}
+              </button>
+            </form>
+          ) : (
+            <form data-reveal onSubmit={fpStage === "request" ? requestReset : doReset}
+              className="mt-8 space-y-4">
+              <div>
+                <label className="label">Email</label>
+                <input className="field" type="email" value={email} required
+                  onChange={(e) => setEmail(e.target.value)} placeholder="you@clinic.in"
+                  disabled={fpStage === "reset"} />
+              </div>
+              {fpStage === "reset" && (
+                <>
+                  <div>
+                    <label className="label">Reset code</label>
+                    <input className="field" inputMode="numeric" value={fpCode} required
+                      onChange={(e) => setFpCode(e.target.value)} placeholder="6-digit code" />
+                  </div>
+                  <div>
+                    <label className="label">New password</label>
+                    <input className="field" type="password" value={fpNew} required
+                      onChange={(e) => setFpNew(e.target.value)} placeholder="••••••••" />
+                  </div>
+                </>
+              )}
+              <button className="btn-primary w-full py-3" disabled={fpBusy}>
+                {fpBusy
+                  ? "Working…"
+                  : fpStage === "request" ? "Email me a reset code" : "Set new password & sign in"}
+              </button>
+              <button type="button" onClick={() => setForgotOpen(false)}
+                className="w-full font-ui text-sm text-slate underline-offset-4 hover:underline">
+                Back to sign in
+              </button>
+            </form>
+          )}
 
           <div data-reveal className="my-6 flex items-center gap-3">
             <span className="h-px flex-1 bg-hairline" />

@@ -503,3 +503,115 @@ async def request_otp(request: Request, body: OtpRequest) -> OtpResponse:
     return OtpResponse(
         sent=sent, dev_phone_code=dev_phone_code, dev_email_code=dev_email_code
     )
+
+
+# ── Forgot / reset password (email-OTP, reuses otp_service) ─────────────────
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
+
+@router.post(
+    "/forgot-password",
+    response_model=OtpResponse,
+    dependencies=[Depends(auth_google_limit)],
+)
+async def forgot_password(request: Request, body: ForgotPasswordRequest) -> OtpResponse:
+    """Email a password-reset code. ALWAYS returns the same shape regardless of
+    whether the email maps to an account — no account-existence oracle (a code
+    is only actually issued when a user exists). Dev (no email provider) echoes
+    the code so the flow is testable end-to-end.
+    """
+    from backend.services import otp_service
+    from backend.services.validators import normalize_email
+
+    client_ip = _client_ip(request)
+    await check_ip_blocklist(request)
+
+    dev_email_code: str | None = None
+    try:
+        email = normalize_email(body.email)
+    except ValueError:
+        # Malformed email — still return the generic "sent" shape (no oracle).
+        return OtpResponse(sent=["email"])
+
+    async with AsyncSessionLocal() as db:
+        user = (
+            await db.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+
+    if user is not None:
+        dev_email_code = await otp_service.issue_code("email", email)
+
+    logger.info("password_reset_requested", account_exists=bool(user), ip=client_ip[-4:])
+    return OtpResponse(sent=["email"], dev_email_code=dev_email_code)
+
+
+@router.post(
+    "/reset-password",
+    response_model=TokenResponse,
+    dependencies=[Depends(auth_google_limit)],
+)
+async def reset_password(request: Request, body: ResetPasswordRequest) -> TokenResponse:
+    """Verify the email code, set a new bcrypt password, and sign the user in.
+
+    422 on a malformed email / weak password; 401 on a wrong/expired code
+    (counts against the IP blocklist like any auth failure).
+    """
+    from backend.services import otp_service
+    from backend.services.validators import normalize_email, validate_password
+
+    client_ip = _client_ip(request)
+    await check_ip_blocklist(request)
+
+    try:
+        email = normalize_email(body.email)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    try:
+        validate_password(body.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    if not await otp_service.verify_code("email", email, body.code):
+        await record_failed_login(client_ip)
+        raise HTTPException(status_code=401, detail="Invalid or expired code")
+
+    async with AsyncSessionLocal() as db:
+        user = (
+            await db.execute(select(User).where(User.email == email))
+        ).scalar_one_or_none()
+        if user is None:
+            # Code verified but no user — should not happen; treat as failure.
+            raise HTTPException(status_code=404, detail="Account not found")
+        user.password_hash = _hash_password(body.new_password)
+        await db.commit()
+        await db.refresh(user)
+        user_id = user.id
+        token = create_access_token(user)
+
+    await otp_service.clear_verified("email", email)  # one-shot — code can't be reused
+    logger.info("password_reset", user_id=str(user_id))
+    try:
+        await _audit_svc.write_audit_row(
+            action="user.password_reset",
+            user_id=user_id,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+        )
+    except Exception as audit_err:
+        logger.error("audit_write_failed", action="user.password_reset", error=str(audit_err))
+
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        expires_in=settings.jwt_expire_hours * 3600,
+    )
