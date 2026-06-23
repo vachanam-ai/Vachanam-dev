@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user, forbid_admin
 from backend.middleware.branch_guard import assert_branch_access
-from backend.models.schema import TreatmentNote, Patient, FollowupTask
+from backend.models.schema import TreatmentNote, Patient, FollowupTask, Doctor
 from backend.services.treatment_logic import resolve_is_final
 
 logger = structlog.get_logger()
@@ -69,6 +69,15 @@ async def _load_patient(patient_id: uuid.UUID, branch_id: uuid.UUID, db: AsyncSe
     return pat
 
 
+async def _load_doctor(doctor_id: uuid.UUID, branch_id: uuid.UUID, db: AsyncSession) -> Doctor:
+    doc = (await db.execute(
+        select(Doctor).where(Doctor.id == doctor_id, Doctor.branch_id == branch_id)
+    )).scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="doctor not found in branch")
+    return doc
+
+
 @router.post("/patients/{patient_id}/treatment-notes", status_code=201, response_model=NoteOut)
 async def create_note(
     patient_id: uuid.UUID,
@@ -78,6 +87,7 @@ async def create_note(
 ) -> NoteOut:
     await assert_branch_access(user, str(body.branch_id), db)
     await _load_patient(patient_id, body.branch_id, db)
+    await _load_doctor(body.doctor_id, body.branch_id, db)
     if body.next_reporting_date and body.next_reporting_date < body.visit_date:
         raise HTTPException(status_code=422, detail="next_reporting_date before visit_date")
     is_final = resolve_is_final(body.is_final, body.next_steps)
@@ -116,6 +126,7 @@ async def edit_note(
     db: AsyncSession = Depends(get_db),
 ) -> NoteOut:
     await assert_branch_access(user, str(body.branch_id), db)
+    await _load_doctor(body.doctor_id, body.branch_id, db)
     if body.next_reporting_date and body.next_reporting_date < body.visit_date:
         raise HTTPException(status_code=422, detail="next_reporting_date before visit_date")
     note = (await db.execute(
@@ -272,6 +283,7 @@ async def doctor_reply(
 ) -> dict:
     await assert_branch_access(user, str(body.branch_id), db)
     await _load_patient(patient_id, body.branch_id, db)
+    await _load_doctor(body.doctor_id, body.branch_id, db)
     task = FollowupTask(
         branch_id=body.branch_id,
         doctor_id=body.doctor_id,

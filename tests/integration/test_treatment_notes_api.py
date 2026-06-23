@@ -95,6 +95,48 @@ async def test_end_keyword_closes_treatment(db):
 
 
 @pytest.mark.asyncio
+async def test_cross_branch_doctor_id_rejected_on_write(db):
+    """RULE 1 write-hygiene: a doctor_id belonging to another branch is rejected
+    with 404 on both create_note and edit_note, even when branch_access is legit."""
+    org_id = uuid.uuid4()
+    other_org_id = uuid.uuid4()
+    db.add_all([_org(org_id), _org(other_org_id)]); await db.flush()
+    usr = _user(org_id)
+    br = Branch(id=uuid.uuid4(), org_id=org_id, name="C", whatsapp_number="+910000000014")
+    other = Branch(id=uuid.uuid4(), org_id=other_org_id, name="O", whatsapp_number="+910000000015")
+    db.add_all([usr, br, other]); await db.flush()
+    in_doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr In", booking_type="token")
+    other_doc = Doctor(id=uuid.uuid4(), branch_id=other.id, name="Dr Out", booking_type="token")
+    pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000014")
+    db.add_all([in_doc, other_doc, pat]); await db.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, user_id=usr.id)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://t") as ac:
+            # create_note with a cross-branch doctor_id → 404
+            r = await ac.post(f"/treatment/patients/{pat.id}/treatment-notes", json={
+                "doctor_id": str(other_doc.id), "branch_id": str(br.id),
+                "visit_date": "2026-06-22"})
+            assert r.status_code == 404, r.text
+            assert r.json()["detail"] == "doctor not found in branch"
+
+            # seed a real in-branch note, then PATCH it with a cross-branch doctor_id → 404
+            ok = await ac.post(f"/treatment/patients/{pat.id}/treatment-notes", json={
+                "doctor_id": str(in_doc.id), "branch_id": str(br.id),
+                "visit_date": "2026-06-22"})
+            assert ok.status_code == 201, ok.text
+            note_id = ok.json()["id"]
+            r2 = await ac.patch(f"/treatment/treatment-notes/{note_id}", json={
+                "doctor_id": str(other_doc.id), "branch_id": str(br.id),
+                "visit_date": "2026-06-22"})
+            assert r2.status_code == 404, r2.text
+            assert r2.json()["detail"] == "doctor not found in branch"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_cross_branch_note_denied(db):
     org_id = uuid.uuid4()
     other_org_id = uuid.uuid4()

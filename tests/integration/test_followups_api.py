@@ -114,6 +114,32 @@ async def test_list_followups_thread_ordered(db):
 
 
 @pytest.mark.asyncio
+async def test_cross_branch_doctor_id_rejected_on_reply(db):
+    """RULE 1 write-hygiene: doctor_reply with a doctor_id from another branch is
+    rejected with 404, even when the user's branch_access is legitimate."""
+    o = uuid.uuid4()
+    other_o = uuid.uuid4()
+    db.add_all([_org(o), _org(other_o)]); await db.flush()
+    usr = _user(o)
+    br = Branch(id=uuid.uuid4(), org_id=o, name="C", whatsapp_number="+910000000044")
+    other = Branch(id=uuid.uuid4(), org_id=other_o, name="O", whatsapp_number="+910000000045")
+    db.add_all([usr, br, other]); await db.flush()
+    other_doc = Doctor(id=uuid.uuid4(), branch_id=other.id, name="Dr Out", booking_type="token")
+    pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000044")
+    db.add_all([other_doc, pat]); await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: _u(br.id, o, user_id=usr.id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            r = await ac.post(f"/treatment/patients/{pat.id}/followups", json={
+                "branch_id": str(br.id), "doctor_id": str(other_doc.id),
+                "message": "x"})
+            assert r.status_code == 404, r.text
+            assert r.json()["detail"] == "doctor not found in branch"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_cross_branch_followup_denied(db):
     o = uuid.uuid4()
     other_o = uuid.uuid4()
