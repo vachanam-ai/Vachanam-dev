@@ -344,6 +344,8 @@ async def health_ratelimit(request: Request) -> dict:
         "rate_limit_key": await user_or_ip_key(request),
         "xff_present": bool(request.headers.get("x-forwarded-for")),
         "xff_len": len((request.headers.get("x-forwarded-for") or "").split(",")) if request.headers.get("x-forwarded-for") else 0,
+        "cf_connecting_ip": request.headers.get("cf-connecting-ip"),
+        "true_client_ip": request.headers.get("true-client-ip"),
     }
 
 
