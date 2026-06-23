@@ -71,6 +71,7 @@ _SAFE_JWT_SECRETS = [
     "dev-secret-change-in-production",
     "ci-test-jwt-secret-not-real-do-not-use-in-prod",
     "fakesecretfortestonly",  # this test suite's own fixture (in history at e7745d3bf7c3)
+    "build-only-not-a-real-secret",  # Fly model-bake build dummy (commit d6c050f, infra/Dockerfile.agent)
 ]
 
 # Known safe RAZORPAY_KEY_SECRET values (test-mode secrets, mentioned in docs)
