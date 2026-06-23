@@ -328,3 +328,27 @@ async def health_voice_plane() -> dict:
         out["livekit_reachable"] = False
         out["livekit_error"] = str(e)[:200]
     return out
+
+
+@app.get("/health/redis", tags=["health"])
+async def health_redis() -> dict:
+    """Diagnostic: can THIS host reach Redis? Uses the rate-limiter's OWN client
+    and does a ping + set/get/del round-trip. Booleans + error class only, no
+    secrets. If redis_ok is False in prod, the rate limiter / IP blocklist / OTP
+    are silently failing OPEN and atomic token locking is degraded — a Redis
+    connectivity problem, not a code one."""
+    out: dict = {"redis_ok": False}
+    try:
+        from backend.middleware.rate_limit import _get_rate_limit_redis
+
+        r = await _get_rate_limit_redis()
+        await r.set("health:redis:probe", "1", ex=10)
+        v = await r.get("health:redis:probe")
+        await r.delete("health:redis:probe")
+        out["ping"] = True
+        out["roundtrip_ok"] = v in ("1", b"1")
+        out["redis_ok"] = out["roundtrip_ok"]
+    except Exception as e:  # noqa: BLE001 — diagnostic
+        out["error_class"] = type(e).__name__
+        out["error"] = str(e)[:160]
+    return out
