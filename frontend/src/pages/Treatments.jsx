@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { fetchDoctors } from "../api/client.js";
-import { listTreatmentPatients, listNotes, createNote } from "../api/treatment.js";
+import {
+  listTreatmentPatients,
+  listNotes,
+  createNote,
+  listFollowups,
+  replyToPatient
+} from "../api/treatment.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
@@ -36,6 +42,42 @@ function NoteCard({ n }) {
   );
 }
 
+function ThreadRow({ item }) {
+  const hasReply = Boolean(item.response && item.response.trim());
+  const unreachable = item.status === "unreachable";
+  return (
+    <div className="space-y-2 px-4 py-3">
+      {/* Clinic / agent message — left aligned */}
+      <div className="flex flex-col items-start gap-1">
+        <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-teal-mint/60 px-4 py-2">
+          <p className="font-ui text-sm">{item.message}</p>
+        </div>
+        <div className="flex items-center gap-2 pl-1">
+          <span className="font-ui text-[11px] uppercase tracking-wide text-slate">
+            {(item.task_type ?? "").replace(/_/g, " ") || "follow-up"}
+          </span>
+          {unreachable && <span className="chip-muted text-[11px]">unreachable</span>}
+          {item.status && !unreachable && (
+            <span className="chip-muted text-[11px]">{item.status}</span>
+          )}
+        </div>
+      </div>
+
+      {/* Patient reply — right aligned, visually distinct */}
+      {hasReply && (
+        <div className="flex flex-col items-end gap-1">
+          <div className="max-w-[85%] rounded-2xl rounded-tr-sm border border-amber-300 bg-amber-50 px-4 py-2">
+            <p className="font-ui text-sm text-amber-900">{item.response}</p>
+          </div>
+          <span className="pr-1 font-ui text-[11px] uppercase tracking-wide text-amber-700">
+            patient reply
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Treatments() {
   const { branchId } = useAuth();
   const qc = useQueryClient();
@@ -48,6 +90,7 @@ export default function Treatments() {
   const [nextSteps, setNextSteps] = useState("");
   const [nextReportingDate, setNextReportingDate] = useState("");
   const [isFinal, setIsFinal] = useState(false);
+  const [replyMessage, setReplyMessage] = useState("");
 
   const { data: doctors = [] } = useQuery({
     queryKey: ["doctors", branchId],
@@ -68,6 +111,12 @@ export default function Treatments() {
   const { data: notesData, isLoading: notesLoading } = useQuery({
     queryKey: ["treatment-notes", patientId, branchId],
     queryFn: () => listNotes(patientId, branchId),
+    enabled: Boolean(patientId && branchId)
+  });
+
+  const { data: followups = [], isLoading: followupsLoading } = useQuery({
+    queryKey: ["followups", patientId, branchId],
+    queryFn: () => listFollowups(patientId, branchId),
     enabled: Boolean(patientId && branchId)
   });
 
@@ -115,6 +164,28 @@ export default function Treatments() {
 
   const canSubmit =
     Boolean(patientId) && Boolean(doctorId) && Boolean(visitDate) && !save.isPending;
+
+  const reply = useMutation({
+    mutationFn: () =>
+      replyToPatient(patientId, {
+        branch_id: branchId,
+        doctor_id: doctorId || null,
+        message: replyMessage.trim()
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["followups", patientId, branchId] });
+      setReplyMessage("");
+      toast.success("Reply queued for the patient");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Couldn't send the reply")
+  });
+
+  const canReply =
+    Boolean(patientId) && Boolean(doctorId) && Boolean(replyMessage.trim()) && !reply.isPending;
+
+  const needsAttention = followups.some(
+    (f) => (f.response && f.response.trim()) || f.status === "unreachable"
+  );
 
   if (!branchId)
     return <p className="font-ui text-slate">No branch linked to your account yet.</p>;
@@ -172,6 +243,50 @@ export default function Treatments() {
             ) : (
               notes.map((n) => <NoteCard key={n.id} n={n} />)
             )}
+          </section>
+
+          {/* Follow-up thread */}
+          <section data-reveal className="card overflow-hidden">
+            <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+              <h2 className="font-display text-lg font-semibold">Follow-up thread</h2>
+              {needsAttention && (
+                <span className="chip-token bg-amber-100 text-amber-900">needs attention</span>
+              )}
+            </header>
+            {followupsLoading ? (
+              <p className="px-4 py-6 font-ui text-sm text-slate">Loading follow-ups…</p>
+            ) : followups.length === 0 ? (
+              <p className="px-4 py-6 font-ui text-sm text-slate">
+                No follow-up calls or replies yet.
+              </p>
+            ) : (
+              <div className="divide-y divide-hairline">
+                {followups.map((item) => (
+                  <ThreadRow key={item.id} item={item} />
+                ))}
+              </div>
+            )}
+
+            <form
+              className="space-y-3 border-t border-hairline px-4 py-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (canReply) reply.mutate();
+              }}
+            >
+              <label className="label" htmlFor="reply-message">Reply to patient</label>
+              <textarea
+                id="reply-message"
+                className="field"
+                rows={2}
+                value={replyMessage}
+                onChange={(e) => setReplyMessage(e.target.value)}
+                placeholder="Advice to relay on the next call…"
+              />
+              <button type="submit" disabled={!canReply} className="btn-primary w-full py-3">
+                {reply.isPending ? "Sending…" : "Send reply"}
+              </button>
+            </form>
           </section>
 
           {/* Add note */}
