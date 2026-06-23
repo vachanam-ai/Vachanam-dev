@@ -253,6 +253,41 @@ REMINDER_PROMPT_EXTRA = (
     "negotiation rules. Keep every reply to two short sentences."
 )
 
+NEXT_VISIT_PROMPT_EXTRA = (
+    "\n\nTHIS IS A TREATMENT FOLLOW-UP CALL. You already know this patient — never "
+    "ask who they are or restart the new-patient flow.\n"
+    "1) If a message is given, ask it warmly in the clinic's language: \"{message}\".\n"
+    "2) If a target date is given ({target_date}), offer to book a visit within 2 "
+    "days of it; on agreement use the booking tools (assign a token around that "
+    "date) and confirm in one breath.\n"
+    "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
+    "triage. If the patient reports ANY problem or pain, say warmly: 'I will inform "
+    "the doctor and they will get back to you as soon as possible.' Do not advise.\n"
+    "Keep every reply to two short sentences."
+)
+
+DOCTOR_ADVICE_PROMPT_EXTRA = (
+    "\n\nTHIS IS A DOCTOR-ADVICE RELAY CALL. The doctor reviewed the patient's "
+    "concern and wrote a message. RELAY it warmly and faithfully in the clinic's "
+    "language — do NOT add, interpret, or invent any medical content of your own "
+    "(RULE 7). The doctor's message: \"{message}\".\n"
+    "After relaying, ask if they have more concerns; if a target date "
+    "({target_date}) is given, offer to book within 2 days of it. If they report a "
+    "new problem, say 'I will inform the doctor and get back to you as soon as "
+    "possible.' Two short sentences per reply."
+)
+
+_FOLLOWUP_CALLTYPES = {"next_visit_book", "doctor_advice"}
+
+
+def _followup_meta_safe(meta: dict) -> dict:
+    """RULE 9: the ONLY metadata fields allowed to reach the LLM/agent for a
+    follow-up call. Private clinical notes (steps_performed/next_steps) must never
+    appear here even if a future caller accidentally includes them."""
+    allowed = ("call_type", "message", "target_date", "window",
+               "patient_name", "doctor_name", "doctor_id", "task_id")
+    return {k: meta[k] for k in allowed if k in meta}
+
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
@@ -1189,6 +1224,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             pass
     is_reminder = meta.get("call_type") == "reminder"
     is_rebook_call = meta.get("call_type") == "cascade_rebook"
+    # Treatment follow-up loop (M2): next_visit_book / doctor_advice.
+    is_followup = meta.get("call_type") in _FOLLOWUP_CALLTYPES
+    # RULE 9 — the LLM/agent only ever sees the allowlisted operational fields of a
+    # follow-up call; private clinical notes (steps_performed/next_steps) never reach
+    # the prompt. SIP routing (phone_number/branch_id/outbound_trunk_id) still reads
+    # the RAW `meta`, so build the safe view separately rather than overwriting it.
+    followup_meta = _followup_meta_safe(meta) if is_followup else {}
 
     # LATENCY: warm a DB connection NOW, before the outbound dial / SIP wait below
     # (both are dead time — the phone is ringing). Every call runs on a FRESH event
@@ -1670,6 +1712,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     state.followup_task_id = UUID(meta["followup_task_id"])
                 except ValueError:
                     pass
+        elif meta.get("call_type") == "next_visit_book":
+            # Treatment follow-up: ask the doctor's question + book ±2 days. Values
+            # come from followup_meta (RULE 9 — the allow-listed safe dict), never
+            # the raw metadata, so private notes can never reach the prompt.
+            instructions += NEXT_VISIT_PROMPT_EXTRA.format(
+                message=followup_meta.get("message", ""),
+                target_date=followup_meta.get("target_date", ""),
+            )
+            state.call_type = "next_visit_book"
+        elif meta.get("call_type") == "doctor_advice":
+            instructions += DOCTOR_ADVICE_PROMPT_EXTRA.format(
+                message=followup_meta.get("message", ""),
+                target_date=followup_meta.get("target_date", ""),
+            )
+            state.call_type = "doctor_advice"
 
         # Reuse the prewarmed CalendarService (Google client build is the slow
         # part of pre-session setup); rebuild only if prewarm missed it.
@@ -1889,6 +1946,43 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         await db.rollback()
                     except Exception:
                         pass
+
+                # TREATMENT FOLLOW-UP write-back (Task 9): for next_visit_book /
+                # doctor_advice calls, persist the patient's spoken reply onto the
+                # FollowupTask so the doctor reads it in the thread. Own short-lived
+                # session — never the live call's `db`; best-effort, must not break
+                # teardown. (Task 8 set status=completed on dispatch; this enriches
+                # response_summary and is idempotent.) RULE 9: health self-report —
+                # branch_id-scoped, retention-wiped by the data_retention job.
+                _task_id = meta.get("task_id")
+                if _task_id:
+                    try:
+                        _replies = []
+                        _hist = getattr(session, "history", None)
+                        for _it in (getattr(_hist, "items", None) or []):
+                            if getattr(_it, "role", None) != "user":
+                                continue
+                            _t = (getattr(_it, "text_content", None) or "").strip()
+                            if _t:
+                                _replies.append(_t)
+                        _summary = (" | ".join(_replies))[:500] or "(no reply captured)"
+                        import backend.database as _dbm2
+                        from sqlalchemy import update as _sa_upd
+
+                        from backend.models.schema import FollowupTask as _FT2
+
+                        async with _dbm2.AsyncSessionLocal() as _fdb:
+                            await _fdb.execute(
+                                _sa_upd(_FT2)
+                                .where(
+                                    _FT2.id == UUID(_task_id),
+                                    _FT2.branch_id == state.branch_id,
+                                )
+                                .values(response_summary=_summary, status="completed")
+                            )
+                            await _fdb.commit()
+                    except Exception as _fe:  # noqa: BLE001
+                        logger.warning("followup_response_writeback_failed: %s", _fe)
             finally:
                 await db.close()
 
@@ -1958,6 +2052,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         clinic=branch_name,
                         doctor=meta.get("doctor_name", ""),
                         date=spoken_date,
+                    )
+                )
+            )
+        elif is_followup:
+            # Outbound treatment follow-up — greet the known patient by name; the
+            # NEXT_VISIT_PROMPT_EXTRA / DOCTOR_ADVICE_PROMPT_EXTRA then drives the
+            # conversation. NOT the inbound disclosure path (this is an outbound
+            # call — no inbound Consent record).
+            await session.say(
+                sanitize_for_tts(
+                    lines.known_caller_greeting.format(
+                        patient=meta.get("patient_name", ""), clinic=branch_name
                     )
                 )
             )
