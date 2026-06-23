@@ -248,6 +248,7 @@ class OrgBusinessRow(BaseModel):
     dids: int
     minutes_used: float          # this month
     minutes_included: int
+    minutes_adjustment: int      # super-admin per-clinic minute override (signed)
     minutes_left: float
     pct_used: float
     approaching_limit: bool      # >= 80% of included
@@ -397,7 +398,7 @@ async def admin_overview(
             blist = org_branches.get(o.id, [])
             dids = sum(1 for b in blist if b.did_number)
             used = round(org_min_this.get(o.id, 0.0), 1)
-            inc = included_minutes_for(o.plan, o.status)
+            inc = included_minutes_for(o.plan, o.status, getattr(o, "minutes_adjustment", 0))
             pct = round(used / inc * 100, 1) if inc else 0.0
             approaching = inc > 0 and used >= 0.8 * inc
             exhausted = inc > 0 and used >= inc
@@ -422,6 +423,7 @@ async def admin_overview(
                     dids=dids,
                     minutes_used=used,
                     minutes_included=inc,
+                    minutes_adjustment=int(getattr(o, "minutes_adjustment", 0) or 0),
                     minutes_left=round(max(0.0, inc - used), 1),
                     pct_used=min(pct, 100.0),
                     approaching_limit=approaching,
@@ -540,7 +542,11 @@ async def admin_overview(
 
 
 class StatusBody(BaseModel):
-    status: str  # active | paused
+    status: str  # active | paused | cancelled
+
+
+class MinutesBody(BaseModel):
+    adjustment: int  # signed delta added to the plan/trial bucket (can be negative)
 
 
 class PlanBody(BaseModel):
@@ -575,10 +581,12 @@ async def set_org_status(
     current_user: CurrentUser = Depends(require_admin),
     _rate_limit: None = Depends(default_limit),
 ) -> dict:
-    """Stop (paused) or resume (active) a clinic's service. Paused orgs'
-    calls are answered with a one-line unavailable message and hung up."""
-    if body.status not in ("active", "paused"):
-        raise HTTPException(status_code=422, detail="status must be active|paused")
+    """Block (paused/cancelled) or resume (active) a clinic's service. Paused
+    and cancelled orgs' calls are answered with a one-line unavailable message
+    and hung up. 'cancelled' is the soft-delete/blocked state; 'paused' is a
+    temporary hold."""
+    if body.status not in ("active", "paused", "cancelled"):
+        raise HTTPException(status_code=422, detail="status must be active|paused|cancelled")
     async with AsyncSessionLocal() as db:
         org = await _load_org(db, org_id)
         org.status = body.status
@@ -629,6 +637,92 @@ async def set_org_hard_block(
             "org_hard_block_changed", org_id=org_id, enabled=body.enabled, by=current_user.email
         )
         return {"org_id": org_id, "hard_block_on_exhaust": body.enabled}
+
+
+@router.post("/orgs/{org_id}/minutes")
+@audit("admin.org_minutes_adjusted", resource_type="organization")
+async def set_org_minutes(
+    org_id: str,
+    body: MinutesBody,
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> dict:
+    """Set a per-clinic minute adjustment (signed). The effective included
+    bucket becomes max(0, plan/trial bucket + adjustment)."""
+    async with AsyncSessionLocal() as db:
+        org = await _load_org(db, org_id)
+        org.minutes_adjustment = int(body.adjustment)
+        await db.commit()
+        request.state.audit_resource_id = org_id
+        logger.info(
+            "org_minutes_adjusted", org_id=org_id, adjustment=body.adjustment, by=current_user.email
+        )
+        return {"org_id": org_id, "minutes_adjustment": int(body.adjustment)}
+
+
+async def _hard_delete_org(db, org) -> None:
+    """Delete an org and ALL its tenant data in FK-safe order (children →
+    branches → users → billing → org). Admin-initiated, audited, irreversible.
+    Ordering is load-bearing: every tenant FK is ondelete=RESTRICT."""
+    from sqlalchemy import delete as _delete
+
+    from backend.models.schema import (
+        BillingCycle as _BC,
+        Branch as _B,
+        Call as _Call,
+        CalendarWriteTask as _CWT,
+        CallLog as _CL,
+        CallQuality as _CQ,
+        Consent as _Cons,
+        Doctor as _Doc,
+        DoctorUnavailability as _DU,
+        FollowupTask as _FT,
+        Patient as _Pat,
+        Token as _Tok,
+        TreatmentNote as _TN,
+        WhatsAppSession as _WA,
+    )
+
+    branch_ids = (
+        await db.execute(select(_B.id).where(_B.org_id == org.id))
+    ).scalars().all()
+
+    if branch_ids:
+        # Children that reference tokens/treatment_notes/doctors/patients first.
+        for model in (_FT, _TN, _CWT, _CQ, _CL, _Call, _Cons, _Tok, _DU, _Pat, _Doc, _WA):
+            await db.execute(_delete(model).where(model.branch_id.in_(branch_ids)))
+
+    await db.execute(_delete(_BC).where(_BC.org_id == org.id))
+    await db.execute(_delete(User).where(User.org_id == org.id))
+    if branch_ids:
+        await db.execute(_delete(_B).where(_B.id.in_(branch_ids)))
+    await db.execute(_delete(Organization).where(Organization.id == org.id))
+
+
+@router.delete("/orgs/{org_id}")
+@audit("admin.org_deleted", resource_type="organization")
+async def delete_org(
+    org_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> dict:
+    """Permanently delete a clinic and all its data. Guard: the org must be
+    blocked first (status != 'active') so a live clinic can't be nuked by a
+    misclick — cancel/pause it, then delete."""
+    async with AsyncSessionLocal() as db:
+        org = await _load_org(db, org_id)
+        if org.status == "active":
+            raise HTTPException(
+                status_code=409,
+                detail="Cancel or pause the clinic before deleting it",
+            )
+        await _hard_delete_org(db, org)
+        await db.commit()
+        request.state.audit_resource_id = org_id
+        logger.info("org_deleted", org_id=org_id, by=current_user.email)
+        return {"org_id": org_id, "deleted": True}
 
 
 # ── Platform monitoring + feedback loop (super_admin) ─────────────────────────

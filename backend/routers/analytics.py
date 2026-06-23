@@ -376,14 +376,17 @@ async def analytics_overview(
     ).scalar_one()
     org_row = (
         await db.execute(
-            select(Organization.plan, Organization.status)
+            select(Organization.plan, Organization.status, Organization.minutes_adjustment)
             .join(Branch, Branch.org_id == Organization.id)
             .where(Branch.id == branch_uuid)
         )
     ).first()
-    plan, org_status = (org_row[0], org_row[1]) if org_row else ("clinic", "active")
-    # Trial clinics get the flat 500-min trial bucket, not the plan allowance.
-    included = included_minutes_for(plan or "clinic", org_status or "active")
+    plan, org_status, adj = (
+        (org_row[0], org_row[1], org_row[2]) if org_row else ("clinic", "active", 0)
+    )
+    # Trial clinics get the flat 500-min trial bucket, not the plan allowance;
+    # plus the super-admin per-clinic minute adjustment.
+    included = included_minutes_for(plan or "clinic", org_status or "active", adj or 0)
     used_min = int(used_seconds // 60)
 
     # â”€â”€ Attendance rate + weekday load over the period â”€â”€

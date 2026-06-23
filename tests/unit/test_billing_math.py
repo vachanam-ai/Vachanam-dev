@@ -30,6 +30,15 @@ def test_non_trial_org_gets_plan_bucket():
     assert included_minutes_for("multi", "paused") == 3600
 
 
+def test_minutes_adjustment_applies_and_floors_at_zero():
+    # Super-admin per-clinic override: signed delta on top of the bucket.
+    assert included_minutes_for("solo", "active", 50) == 150
+    assert included_minutes_for("clinic", "active", -300) == 1500
+    assert included_minutes_for("solo", "trial", 100) == 600
+    # Never goes negative.
+    assert included_minutes_for("solo", "active", -9999) == 0
+
+
 def test_plan_table_matches_claude_md():
     assert PLANS["solo"].base_rupees == 1999
     assert PLANS["solo"].included_minutes == 100

@@ -5,9 +5,11 @@ import { toast } from "sonner";
 import {
   addOwner,
   adminPing,
+  deleteOrg,
   fetchAdminOverview,
   fetchOwners,
   setOrgHardBlock,
+  setOrgMinutes,
   setOrgPlan,
   setOrgStatus
 } from "../api/client.js";
@@ -216,6 +218,24 @@ function ClinicRow({ row, onAction }) {
               `${row.name} hard-block ${e.target.checked ? "ON" : "off"}`)} />
           hard-block at limit
         </label>
+        <button className="rounded border border-hairline px-3 py-1 font-ui text-xs transition-transform active:scale-[0.97]"
+          onClick={() => {
+            const cur = String(row.minutes_adjustment ?? 0);
+            const v = window.prompt(`Minute adjustment for ${row.name} (signed delta, e.g. 500 or -200):`, cur);
+            if (v === null) return;
+            const n = parseInt(v, 10);
+            if (Number.isNaN(n)) return;
+            act(() => setOrgMinutes(row.org_id, n), `${row.name} minutes adj → ${n}`);
+          }}>
+          Adjust minutes
+        </button>
+        <button className="rounded border border-danger bg-danger/5 px-3 py-1 font-ui text-xs font-semibold text-danger transition-transform active:scale-[0.97]"
+          onClick={() => {
+            if (!window.confirm(`Permanently DELETE ${row.name} and ALL its data? This cannot be undone. (The clinic must be paused/cancelled first.)`)) return;
+            act(() => deleteOrg(row.org_id), `${row.name} deleted`);
+          }}>
+          Delete clinic
+        </button>
       </div>
     </div>
   );

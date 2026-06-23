@@ -33,6 +33,11 @@ class Organization(Base):
     hard_block_on_exhaust: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    # Super-admin per-clinic minute override (signed): added to the plan/trial
+    # bucket. Positive = goodwill grant, negative = claw back. Floored at 0.
+    minutes_adjustment: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     branches: Mapped[list["Branch"]] = relationship(back_populates="organization")

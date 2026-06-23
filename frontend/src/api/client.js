@@ -141,3 +141,7 @@ export const setOrgPlan = (orgId, plan) =>
   api.post(`/admin/orgs/${orgId}/plan`, { plan }).then((r) => r.data);
 export const setOrgHardBlock = (orgId, enabled) =>
   api.post(`/admin/orgs/${orgId}/hard-block`, { enabled }).then((r) => r.data);
+export const setOrgMinutes = (orgId, adjustment) =>
+  api.post(`/admin/orgs/${orgId}/minutes`, { adjustment }).then((r) => r.data);
+export const deleteOrg = (orgId) =>
+  api.delete(`/admin/orgs/${orgId}`).then((r) => r.data);

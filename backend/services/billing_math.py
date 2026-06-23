@@ -60,16 +60,16 @@ def included_minutes(plan: str) -> int:
     return p.included_minutes if p else 0
 
 
-def included_minutes_for(plan: str, status: str) -> int:
-    """Voice-minute allowance for an org THIS month, honoring the trial grant.
+def included_minutes_for(plan: str, status: str, adjustment: int = 0) -> int:
+    """Voice-minute allowance for an org THIS month, honoring the trial grant
+    and the super-admin per-clinic ``adjustment`` (signed delta, floored at 0).
 
     A trial org gets the flat TRIAL_MINUTES bucket regardless of the plan it
     picked at signup; any other status gets the plan's own included bucket.
     Single source for both the clinic dashboard donut and the super-admin view.
     """
-    if status == "trial":
-        return TRIAL_MINUTES
-    return included_minutes(plan)
+    base = TRIAL_MINUTES if status == "trial" else included_minutes(plan)
+    return max(0, base + (adjustment or 0))
 
 
 def minutes_exhausted(plan: str, minutes_used: float) -> bool:
