@@ -330,6 +330,23 @@ async def health_voice_plane() -> dict:
     return out
 
 
+@app.get("/health/ratelimit", tags=["health"])
+async def health_ratelimit(request: Request) -> dict:
+    """Diagnostic: what client IP + rate-limit key does THIS request resolve to,
+    and what is trusted_proxy_hops? If the key VARIES across repeated requests
+    from one client, the limiter can never accumulate a count (no 429) — an
+    IP-resolution problem behind Cloudflare/Render, not a limiter bug. No secrets."""
+    from backend.middleware.rate_limit import client_ip, user_or_ip_key
+
+    return {
+        "trusted_proxy_hops": getattr(settings, "trusted_proxy_hops", 0),
+        "resolved_client_ip": client_ip(request),
+        "rate_limit_key": await user_or_ip_key(request),
+        "xff_present": bool(request.headers.get("x-forwarded-for")),
+        "xff_len": len((request.headers.get("x-forwarded-for") or "").split(",")) if request.headers.get("x-forwarded-for") else 0,
+    }
+
+
 @app.get("/health/redis", tags=["health"])
 async def health_redis() -> dict:
     """Diagnostic: can THIS host reach Redis? Uses the rate-limiter's OWN client
