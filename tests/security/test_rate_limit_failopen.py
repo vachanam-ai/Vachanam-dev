@@ -62,3 +62,48 @@ async def test_record_failed_login_swallows_redis_error(monkeypatch):
     monkeypatch.setattr(rl, "_get_rate_limit_redis", _boom)
     # Best-effort: a Redis outage here must not convert a 401 into a 500.
     assert await rl.record_failed_login("8.8.8.8") is None
+
+
+# ── client_ip behind Cloudflare (prod rate-limiter was silently disabled) ─────
+
+
+class _CfReq:
+    """Request with rotating Cloudflare-edge XFF + a stable CF-Connecting-IP."""
+
+    def __init__(self, edge_ip, cf_ip="223.0.0.1"):
+        self.headers = {
+            "x-forwarded-for": f"223.0.0.1, {edge_ip}, 10.0.0.9",
+            "cf-connecting-ip": cf_ip,
+        }
+
+        class _C:
+            host = "10.0.0.9"
+
+        self.client = _C()
+
+
+def test_client_ip_prefers_cf_connecting_ip_and_is_stable(monkeypatch):
+    # trusted_proxy_hops=2 would pick the rotating Cloudflare edge (XFF[-2]) →
+    # a different key every request → counters never accumulate → no 429.
+    # With CF-Connecting-IP preferred, the resolved IP is STABLE across requests.
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2, raising=False)
+    ip1 = rl.client_ip(_CfReq("162.158.54.36"))
+    ip2 = rl.client_ip(_CfReq("172.71.124.143"))  # edge rotated
+    assert ip1 == ip2 == "223.0.0.1"  # stable real client, not the edge
+
+
+def test_client_ip_falls_back_to_hops_without_cf_header(monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2, raising=False)
+
+    class _NoCf:
+        headers = {"x-forwarded-for": "9.9.9.9, 1.1.1.1, 10.0.0.9"}
+
+        class client:
+            host = "10.0.0.9"
+
+    # hops=2 → XFF[-2] = 1.1.1.1 (existing behaviour preserved when no CF header)
+    assert rl.client_ip(_NoCf()) == "1.1.1.1"

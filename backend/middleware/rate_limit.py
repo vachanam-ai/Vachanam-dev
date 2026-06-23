@@ -159,6 +159,20 @@ def client_ip(request: Request) -> str:
     from backend.config import settings as _s
 
     peer = request.client.host if request.client else "127.0.0.1"
+
+    # Behind Cloudflare (Render fronts every request with its own Cloudflare
+    # edge), CF-Connecting-IP / True-Client-IP carry the AUTHORITATIVE real
+    # client IP — set by Cloudflare, not spoofable by a client coming through it,
+    # and stable per client. The X-Forwarded-For chain's middle entries are
+    # ROTATING Cloudflare edge IPs, so the hops logic below resolves a different
+    # IP on every request and the rate-limit/blocklist counters never accumulate
+    # (the limiter silently never fires). Prefer CF-Connecting-IP when present.
+    cf = request.headers.get("cf-connecting-ip") or request.headers.get(
+        "true-client-ip"
+    )
+    if cf and cf.strip():
+        return cf.strip()
+
     hops = getattr(_s, "trusted_proxy_hops", 0) or 0
     if hops <= 0:
         return peer
