@@ -22,7 +22,14 @@ from sqlalchemy import select
 
 import backend.database as _db_module
 from backend.config import settings
-from backend.models.schema import CallQuality, Consent, Patient, Token
+from backend.models.schema import (
+    CallQuality,
+    Consent,
+    FollowupTask,
+    Patient,
+    Token,
+    TreatmentNote,
+)
 
 logger = structlog.get_logger()
 
@@ -60,6 +67,22 @@ async def run_data_retention() -> None:
             p.gender = None
             p.followup_consent = False
             p.anonymized_at = now
+
+            # Treatment health-data erasure (RULE 9): delete the patient's
+            # treatment notes outright and NULL the health text on their
+            # follow-up thread (keep the task rows for non-PII outcome trends).
+            # FK ORDER: FollowupTask.treatment_note_id -> treatment_notes is
+            # RESTRICT, so the FollowupTask link must be cleared BEFORE the
+            # treatment_notes are deleted, else the delete raises FK violation.
+            await db.execute(
+                FollowupTask.__table__.update()
+                .where(FollowupTask.patient_id == p.id)
+                .values(treatment_note_id=None, what_to_ask=None, response_summary=None)
+            )
+            await db.execute(
+                TreatmentNote.__table__.delete().where(TreatmentNote.patient_id == p.id)
+            )
+
             logger.info(
                 "patient_pii_erased",
                 patient_id=str(p.id),
