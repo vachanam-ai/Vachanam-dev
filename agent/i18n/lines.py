@@ -58,9 +58,11 @@ LINES: dict[str, Lines] = {
             "చూసి చెప్తానండి, ఒక్క నిమిషం.",
             "సరేనండి, ఒక్కసారి సిస్టమ్‌లో చూస్తాను.",
         ),
+        # The welcome clip already said "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం" — so
+        # this does NOT repeat namaskaram/clinic; it discloses the AI (legal) and
+        # goes straight to "how can I help". Minimal అండి (Vinay 2026-06-24).
         disclosure_greeting=(
-            "నమస్కారం అండి! {clinic} నుంచి మాట్లాడుతున్నాను. నేను ఇక్కడి AI అసిస్టెంట్‌ని అండి. "
-            "చెప్పండి, మీకేం సహాయం కావాలి?"
+            "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని, చెప్పండి, మీకు నేను ఎలా సహాయం చేయగలను?"
         ),
         known_caller_greeting=(
             "నమస్కారం {patient} గారు! మళ్ళీ కాల్ చేశారు, సంతోషం అండి. {clinic} నుంచి AI "
