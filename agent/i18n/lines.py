@@ -64,16 +64,19 @@ LINES: dict[str, Lines] = {
         disclosure_greeting=(
             "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని, చెప్పండి, మీకు నేను ఎలా సహాయం చేయగలను?"
         ),
+        # Leading namaskaram dropped from these three OUTBOUND bodies — the welcome
+        # clip already said "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం" (Vinay 2026-06-24:
+        # reminder said namaskaram twice).
         known_caller_greeting=(
-            "నమస్కారం {patient} గారు! మళ్ళీ కాల్ చేశారు, సంతోషం అండి. {clinic} నుంచి AI "
+            "{patient} గారు! మళ్ళీ కాల్ చేశారు, సంతోషం అండి. {clinic} నుంచి AI "
             "అసిస్టెంట్‌ని మాట్లాడుతున్నాను. చెప్పండి, ఈసారి ఏం కావాలి అండి?"
         ),
         reminder_greeting=(
-            "నమస్కారం {patient} గారు! {clinic} క్లినిక్ నుంచి అపాయింట్‌మెంట్ రిమైండర్ కాల్ అండి. "
+            "{patient} గారు! {clinic} క్లినిక్ నుంచి అపాయింట్‌మెంట్ రిమైండర్ కాల్ అండి. "
             "ఈరోజు {time}కి {doctor} గారితో మీ బుకింగ్ ఉంది. వస్తున్నారు కదండీ?"
         ),
         rebook_greeting=(
-            "నమస్కారం {patient} గారు, {clinic} క్లినిక్ నుంచి కాల్ చేస్తున్నామండి. "
+            "{patient} గారు, {clinic} క్లినిక్ నుంచి కాల్ చేస్తున్నామండి. "
             "చిన్న రిక్వెస్ట్, {date}న {doctor} గారు అవైలబుల్‌గా లేరు. అందుకని మీ "
             "అపాయింట్‌మెంట్ కాన్సిల్ అయింది, ఏమనుకోవద్దు. వేరే డేట్ చూసి బుక్ చేయమంటారా?"
         ),

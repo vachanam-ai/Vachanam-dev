@@ -29,17 +29,24 @@ async def main(force: bool) -> None:
         branches = (await db.execute(select(Branch))).scalars().all()
         n = 0
         for b in branches:
-            if b.welcome_audio and not force:
+            need_full = not b.welcome_audio or force
+            need_short = not b.welcome_short_audio or force
+            if not (need_full or need_short):
                 continue
             lang = getattr(b, "language", None) or "te"
             cfg = get_lang(lang)
             clinic_spoken = (b.name_spoken or "").strip() or b.name
             voice = (getattr(b, "tts_voice", None) or "").strip() or cfg.default_voice
-            text = _welcome_text(clinic_spoken, lang)
-            wav = synth_wav(text, voice, cfg.tts_code)
-            b.welcome_audio = wav
+            if need_full:
+                wav = synth_wav(_welcome_text(clinic_spoken, lang), voice, cfg.tts_code)
+                b.welcome_audio = wav
+                print(f"  {b.name} FULL: {len(wav)} bytes (~{len(wav)/2/24000:.1f}s)")
+            if need_short:
+                short_text = get_welcome(lang).format(clinic=clinic_spoken)
+                swav = synth_wav(short_text, voice, cfg.tts_code)
+                b.welcome_short_audio = swav
+                print(f"  {b.name} SHORT: {len(swav)} bytes (~{len(swav)/2/24000:.1f}s)")
             n += 1
-            print(f"  {b.name}: {len(wav)} bytes (~{len(wav)/2/24000:.1f}s) voice={voice}")
         await db.commit()
         print(f"backfilled {n} of {len(branches)} branches.")
 

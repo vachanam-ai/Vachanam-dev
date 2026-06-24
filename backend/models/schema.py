@@ -68,6 +68,12 @@ class Branch(Base):
     # once per clinic (smallest.ai), so the caller hears continuous warm speech
     # instead of a cold-TTS delay + dead air. NULL → fall back to live synth.
     welcome_audio: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Welcome-ONLY clip ("నమస్కారం, <clinic> క్లినిక్‌కి స్వాగతం") for OUTBOUND calls
+    # (reminder/rebook/followup). Same instant-mask trick as welcome_audio, but
+    # without the inbound "how can I help" tail — the call's own body follows.
+    # NULL → live synth. Lets outbound say namaskaram exactly ONCE (the body drops
+    # its leading namaskaram).
+    welcome_short_audio: Mapped[bytes | None] = mapped_column(LargeBinary)
     address: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str | None] = mapped_column(String(100))
     # whatsapp_number: human-readable phone (+91XXXXXXXXXX) used in messages
