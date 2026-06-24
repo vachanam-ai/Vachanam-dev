@@ -38,6 +38,21 @@ def test_conversation_alternates_and_ends_on_thanks():
     assert "ధన్యవాదాలు" in t[-1]["text"]
 
 
+def test_build_live_agent_prompt_wraps_real_prompt_with_facts():
+    from agent.prompts.system_prompt import DoctorContext
+
+    docs = [DoctorContext(id="d1", name="అనిల్", specialization="dermatology",
+                          routing_keywords=["skin"], booking_type="appointment", is_default=True)]
+    p = conversation_sim.build_live_agent_prompt(
+        docs, "- Consultation fee: four hundred rupees.", clinic="ఆరోగ్య"
+    )
+    # sim wrapper forbids tools + injects the facts
+    assert "NO tools" in p and "KNOWN FACTS" in p
+    assert "four hundred rupees" in p
+    # the REAL receptionist prompt is included (its RULE-6 AM/PM ban is present)
+    assert '"AM"' in p and "TTS spells Latin" in p
+
+
 def test_conversation_respects_max_turns():
     client = _ScriptedClient(["turn"] * 10)  # never says thanks
     t = conversation_sim.simulate_conversation(

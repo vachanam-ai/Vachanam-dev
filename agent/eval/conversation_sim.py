@@ -26,6 +26,35 @@ PERSONA_TEMPLATE = """You are a patient calling a clinic in Hyderabad. {persona}
 Speak ONLY in short, natural spoken Telugu/Tenglish (Telugu script), like a real caller — one short turn at a time. Start the call yourself. When your goal is met (or you're satisfied), thank them briefly and end. Reply with ONE short turn only."""
 
 
+# Sim wrapper for the REAL system prompt: the live prompt expects to call tools
+# (check_availability, route_to_doctor, confirm_booking). In a bare-text sim
+# there are none, so we forbid tool-calls/English and feed tool RESULTS as facts.
+_SIM_PREAMBLE = """SIMULATION — IMPORTANT: This is a TEST conversation. You have NO tools/functions; do NOT call check_availability, route_to_doctor, confirm_booking or any function. Treat the KNOWN FACTS below as if they were the tool results you would have gotten. Output ONLY your single next spoken turn in Telugu script (exactly the words the patient hears) — NO English words, NO narration, NO stage directions, NO function calls, NO translations, NO quotes.
+
+KNOWN FACTS (use these instead of tools):
+{facts}
+
+--- The clinic's full receptionist instructions follow ---
+"""
+
+
+def build_live_agent_prompt(
+    doctors,
+    known_facts: str,
+    *,
+    clinic: str = "ఆరోగ్య",
+    emergency: str = "",
+    plan: str = "clinic",
+    language: str = "te",
+) -> str:
+    """Wrap the REAL build_system_prompt with a sim preamble + injected tool-result
+    facts, so the sim drives the live agent faithfully (no tools, no English leak)."""
+    from agent.prompts.system_prompt import build_system_prompt
+
+    base = build_system_prompt(clinic, doctors, emergency, plan, language=language)
+    return _SIM_PREAMBLE.format(facts=known_facts) + "\n" + base
+
+
 def _render(transcript: list[dict]) -> str:
     # Render the conversation so far for the model (role-labelled).
     return "\n".join(
