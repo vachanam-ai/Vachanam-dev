@@ -87,24 +87,28 @@ def simulate_conversation(
     clinic: str = "ఆరోగ్య",
     max_turns: int = 6,
     model: str = DEFAULT_MODEL,
+    agent_first: bool = False,
 ) -> list[dict]:
     """Run a persona<->agent conversation. ``scenario`` = {persona, goal}.
-    Returns the transcript [{role, text}] (role: user=caller, agent=receptionist)."""
+    Returns the transcript [{role, text}] (role: user=caller, agent=receptionist).
+
+    ``agent_first`` mirrors a real INBOUND call: the agent greets first, then the
+    caller speaks. (Default caller-first is for outbound-style sims.)"""
     client = client or _client()
     persona_sys = PERSONA_TEMPLATE.format(**scenario)
     agent_sys = agent_prompt or DEFAULT_AGENT_PROMPT
     if "{clinic}" in agent_sys:  # the real live prompt is already rendered (no placeholder)
         agent_sys = agent_sys.format(clinic=clinic)
 
+    order = ("agent", "user") if agent_first else ("user", "agent")
     transcript: list[dict] = []
     for i in range(max_turns):
-        if i % 2 == 0:  # caller speaks on even turns (starts the call)
-            text = _turn(client, persona_sys, transcript, model)
-            transcript.append({"role": "user", "text": text})
-            low = text.lower()
-            if any(w in text for w in ("ధన్యవాద", "థాంక్యూ", "థాంక్స్")) or "bye" in low:
-                break
-        else:
-            text = _turn(client, agent_sys, transcript, model)
-            transcript.append({"role": "agent", "text": text})
+        speaker = order[i % 2]
+        sys = agent_sys if speaker == "agent" else persona_sys
+        text = _turn(client, sys, transcript, model)
+        transcript.append({"role": speaker, "text": text})
+        if speaker == "user" and (
+            any(w in text for w in ("ధన్యవాద", "థాంక్యూ", "థాంక్స్")) or "bye" in text.lower()
+        ):
+            break
     return transcript

@@ -53,6 +53,15 @@ def test_build_live_agent_prompt_wraps_real_prompt_with_facts():
     assert '"AM"' in p and "TTS spells Latin" in p
 
 
+def test_agent_first_inbound_order():
+    # inbound-faithful: agent greets first, then caller, then agent.
+    client = _ScriptedClient(["నమస్కారం అండి.", "అపాయింట్‌మెంట్ కావాలి.", "ఏ రోజు అండి?"])
+    t = conversation_sim.simulate_conversation(
+        {"persona": "p", "goal": "g"}, client=client, max_turns=3, agent_first=True
+    )
+    assert [x["role"] for x in t] == ["agent", "user", "agent"]
+
+
 def test_conversation_respects_max_turns():
     client = _ScriptedClient(["turn"] * 10)  # never says thanks
     t = conversation_sim.simulate_conversation(
