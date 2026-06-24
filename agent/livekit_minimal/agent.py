@@ -1877,15 +1877,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             #    to be nothing real (no transcript within the timeout), the agent
             #    RESUMES the very sentence it was cut off on instead of skipping
             #    it. A genuine interruption (real words) still stops the agent.
-            # 2026-06-24: the agent was talking OVER the caller and ignoring new
-            # info ("I said 4pm, it didn't care"). Yield FAST now — interrupt on
-            # the first real word after 0.3s. resume_false_interruption still
-            # recovers the sentence if it was only a backchannel (no transcript),
-            # so a lone "హా/అవును" doesn't permanently cut a confirmation.
-            min_interruption_duration=0.3,
+            # 2026-06-24: when the caller barges in, the agent must STOP and STAY
+            # stopped. resume_false_interruption=True made it RESUME ("it finishes
+            # what it's saying") because Sarvam's Telugu transcript arrives slower
+            # than the false-interruption window, so a real interruption looked
+            # "false" and the sentence resumed. Disabled — a detected interruption
+            # now stays stopped. min_interruption_words=1 + 0.2s = yield on the
+            # first word. (Trade-off: a lone backchannel can cut the agent; revisit
+            # with a Telugu-aware backchannel filter if it becomes an issue.)
+            min_interruption_duration=0.2,
             min_interruption_words=1,
-            resume_false_interruption=True,
-            false_interruption_timeout=1.5,
+            resume_false_interruption=False,
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
