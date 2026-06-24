@@ -15,31 +15,51 @@ import { revealStagger } from "../lib/motion.js";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-function NoteCard({ n }) {
+// One step in the treatment timeline. `isLatest` = the newest visit: only it shows
+// the pending "Next" + next-date — once a later visit records what was done, the
+// prior "Next" has been performed and is no longer pending (Vinay 2026-06-24).
+// `isLast` removes the connector line below the final dot.
+function NoteCard({ n, isLatest, isLast, onEdit }) {
   return (
-    <div className={`ledger-row flex-col items-start gap-1 ${n.is_final ? "border-l-4 border-teal" : ""}`}>
+    <li className={`relative pl-6 text-left ${isLast ? "" : "pb-5"}`}>
+      {/* connector line between this dot and the next */}
+      {!isLast && (
+        <span className="absolute left-[5px] top-3 h-full w-px bg-hairline" aria-hidden />
+      )}
+      {/* dot on the line */}
+      <span
+        className={`absolute left-0 top-1.5 h-[11px] w-[11px] rounded-full border-2 ${
+          isLatest ? "border-teal bg-teal" : "border-teal bg-white"
+        }`}
+        aria-hidden
+      />
       <div className="flex w-full items-center gap-3">
         <span className="numeral text-sm text-teal-deep tabular-nums">{n.visit_date}</span>
         {n.is_final && <span className="chip-token">final</span>}
-        {n.next_reporting_date && (
-          <span className="ml-auto font-ui text-xs text-slate">
-            next: {n.next_reporting_date}
-          </span>
+        <button
+          type="button"
+          onClick={() => onEdit(n)}
+          className="ml-auto font-ui text-xs text-teal underline-offset-2 hover:underline"
+        >
+          Edit
+        </button>
+        {isLatest && n.next_reporting_date && (
+          <span className="font-ui text-xs text-slate">next: {n.next_reporting_date}</span>
         )}
       </div>
       {n.steps_performed && (
-        <p className="font-ui text-sm">
+        <p className="mt-1 font-ui text-sm">
           <span className="text-slate">Done: </span>
           {n.steps_performed}
         </p>
       )}
-      {n.next_steps && (
-        <p className="font-ui text-sm">
+      {isLatest && n.next_steps && (
+        <p className="mt-1 font-ui text-sm">
           <span className="text-slate">Next: </span>
           {n.next_steps}
         </p>
       )}
-    </div>
+    </li>
   );
 }
 
@@ -90,7 +110,9 @@ export default function Treatments() {
   const [stepsPerformed, setStepsPerformed] = useState("");
   const [nextSteps, setNextSteps] = useState("");
   const [nextReportingDate, setNextReportingDate] = useState("");
+  const [followupQuestion, setFollowupQuestion] = useState("");
   const [isFinal, setIsFinal] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [replyMessage, setReplyMessage] = useState("");
 
   const { data: doctors = [] } = useQuery({
@@ -144,7 +166,22 @@ export default function Treatments() {
     setStepsPerformed("");
     setNextSteps("");
     setNextReportingDate("");
+    setFollowupQuestion("");
     setIsFinal(false);
+    setEditingId(null);
+  };
+
+  // Load an existing note into the form to edit it (PATCH on save). The follow-up
+  // question lives on the task, not the note, so it starts blank — re-enter it.
+  const startEdit = (n) => {
+    setEditingId(n.id);
+    setVisitDate(n.visit_date);
+    setStepsPerformed(n.steps_performed || "");
+    setNextSteps(n.next_steps || "");
+    setNextReportingDate(n.next_reporting_date || "");
+    setIsFinal(Boolean(n.is_final));
+    setFollowupQuestion("");
+    document.getElementById("steps")?.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
   const save = useMutation({
@@ -156,14 +193,17 @@ export default function Treatments() {
         steps_performed: stepsPerformed.trim() || null,
         next_steps: nextSteps.trim() || null,
         next_reporting_date: nextReportingDate || null,
+        followup_question: followupQuestion.trim() || null,
         is_final: isFinal
       };
-      // Marking attended auto-creates a blank log for the visit. If one exists for
-      // this date with no details yet, FILL it (PATCH) instead of duplicating it.
+      // Editing an existing note → PATCH it. Otherwise, attendance auto-creates a
+      // blank log for the visit; if one exists for this date with no details yet,
+      // FILL it (PATCH) instead of duplicating. Else create a new note.
       const blank = (notesData?.notes ?? []).find(
         (n) => n.visit_date === visitDate && !n.steps_performed && !n.next_steps
       );
-      return blank ? editNote(blank.id, payload) : createNote(patientId, payload);
+      const targetId = editingId || blank?.id;
+      return targetId ? editNote(targetId, payload) : createNote(patientId, payload);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["treatment-notes", patientId, branchId] });
@@ -253,7 +293,17 @@ export default function Treatments() {
             ) : notes.length === 0 ? (
               <p className="px-4 py-6 font-ui text-sm text-slate">No visit notes recorded yet.</p>
             ) : (
-              notes.map((n) => <NoteCard key={n.id} n={n} />)
+              <ol className="px-5 py-5">
+                {notes.map((n, i) => (
+                  <NoteCard
+                    key={n.id}
+                    n={n}
+                    isLatest={i === notes.length - 1}
+                    isLast={i === notes.length - 1}
+                    onEdit={startEdit}
+                  />
+                ))}
+              </ol>
             )}
           </section>
 
@@ -310,7 +360,20 @@ export default function Treatments() {
               if (canSubmit) save.mutate();
             }}
           >
-            <h2 className="font-display text-lg font-semibold">Add a visit note</h2>
+            <div className="flex items-center gap-3">
+              <h2 className="font-display text-lg font-semibold">
+                {editingId ? "Edit visit note" : "Add a visit note"}
+              </h2>
+              {editingId && (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="ml-auto font-ui text-xs text-slate underline-offset-2 hover:underline"
+                >
+                  Cancel edit
+                </button>
+              )}
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
@@ -369,6 +432,23 @@ export default function Treatments() {
             </div>
 
             <div>
+              <label className="label" htmlFor="followup-q">
+                Question to ask on the follow-up call (optional)
+              </label>
+              <textarea
+                id="followup-q"
+                className="field"
+                rows={2}
+                value={followupQuestion}
+                onChange={(e) => setFollowupQuestion(e.target.value)}
+                placeholder="e.g. Is the pain reducing? Any swelling?"
+              />
+              <p className="mt-1 font-ui text-xs text-slate">
+                The agent asks this on the next-visit reminder call, then helps them book.
+              </p>
+            </div>
+
+            <div>
               <label className="label" htmlFor="next-date">Next reporting date (optional)</label>
               <input
                 id="next-date"
@@ -403,7 +483,9 @@ export default function Treatments() {
                 ? "Saving…"
                 : isFinal
                   ? "Save & mark complete"
-                  : "Add visit note"}
+                  : editingId
+                    ? "Save changes"
+                    : "Add visit note"}
             </button>
           </form>
         </>
