@@ -1816,6 +1816,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         logger.info("lat_pre_session_build answer_to_build=%.2fs", _perf.monotonic() - _t_answer)
 
         _t_build = _perf.monotonic()
+        # Session TTS captured in a var so we can PRIME its connection during the
+        # masked welcome-clip window. The smallest.ai plugin cold-connects on its
+        # FIRST synth and (on Fly) often throws "Connection error" → 3 retries with
+        # 2s backoff = ~6s of dead air on the first real response ("silent for 10s
+        # after intro", 2026-06-24). Priming it while the clip plays makes that cold
+        # connect happen invisibly.
+        _session_tts = smallestai.TTS(
+            api_key=settings.smallest_api_key,
+            model=settings.smallest_model,
+            voice_id=tts_voice,
+            language=lang_cfg.tts_code,
+            sample_rate=settings.smallest_sample_rate,
+            output_format="pcm",
+        )
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
             # speaks the clinic's language (falls back to Telugu).
@@ -1837,14 +1851,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
             # (or a cloned voice); language is the clinic's short code (smallest uses
             # the same te/hi/ta/... codes). output_format pcm streams to LiveKit.
-            tts=smallestai.TTS(
-                api_key=settings.smallest_api_key,
-                model=settings.smallest_model,
-                voice_id=tts_voice,
-                language=lang_cfg.tts_code,
-                sample_rate=settings.smallest_sample_rate,
-                output_format="pcm",
-            ),
+            tts=_session_tts,
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             # LATENCY (biggest network-independent win): a SEMANTIC turn detector.
             # Without it, turn-end was decided by VAD silence alone, forcing a long
@@ -2092,6 +2099,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "lat_real_session_start=%.2fs", _perf.monotonic() - _t_ss
             )
         )
+
+        # PRIME the session TTS connection now (concurrent with the clip + connect),
+        # so its cold "Connection error" + retries happen in the masked window and
+        # the first real response is hot. Best-effort — never blocks the call.
+        async def _warm_session_tts() -> None:
+            _t = _perf.monotonic()
+            try:
+                async for _ in _session_tts.synthesize("సరే"):
+                    break  # first frame = connection established; discard audio
+                logger.info("tts_warm_ok=%.2fs", _perf.monotonic() - _t)
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("tts_warm_failed: %s", str(_e)[:100])
+
+        _tts_warm_task = asyncio.create_task(_warm_session_tts())
         if _welcome_task is not None:
             try:
                 await _welcome_task
