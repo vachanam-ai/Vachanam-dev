@@ -38,7 +38,14 @@ async def play_stored_welcome(room: rtc.Room, wav_bytes: bytes) -> bool:
         sr, ch, n = wf.getframerate(), wf.getnchannels(), wf.getnframes()
         pcm = wf.readframes(n)
         wf.close()
-        source = rtc.AudioSource(sr, ch)
+        # Queue must hold the WHOLE clip: session.start() connects on the same
+        # event loop concurrently and starves this capture loop. With the default
+        # 1000ms queue, capture_frame blocks on backpressure mid-clip and the
+        # playout underruns ("words breaking", 06-24). Size the queue to the full
+        # clip + margin so all frames buffer into the rtc engine in one pass and
+        # playout is engine-driven, immune to Python-loop blocking.
+        clip_ms = int(n / max(sr, 1) * 1000) + 1000
+        source = rtc.AudioSource(sr, ch, queue_size_ms=clip_ms)
         track = rtc.LocalAudioTrack.create_audio_track("welcome", source)
         pub = await room.local_participant.publish_track(
             track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
