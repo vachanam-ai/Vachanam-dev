@@ -1829,10 +1829,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # max_endpointing_delay so the patient isn't cut off mid-sentence. The
             # model commits the turn as soon as the utterance is grammatically
             # complete (often 200-400ms), letting the silence timers drop below.
-            # Prewarmed once per process in _prewarm (no per-call load cost).
             # Built here (not prewarm): livekit-agents 1.6 binds the model to the
-            # job's inference executor, which only exists inside the entrypoint.
-            turn_detection=MultilingualModel(),
+            # job's inference executor, which only exists inside the entrypoint —
+            # so it loads at session.start and adds seconds to the call-start.
+            # 2026-06-24: MultilingualModel does NOT support te-IN (logs: "Turn
+            # detector does not support language te-IN") — for Telugu it is pure
+            # start-up latency with ZERO benefit (turn-end falls to VAD anyway).
+            # Skip it for unsupported languages; VAD + the 0.6s endpointing handle
+            # turn-end. Keep it only where it actually works.
+            turn_detection=(
+                None if lang_cfg.stt_code in ("te-IN",) else MultilingualModel()
+            ),
             preemptive_generation=True,
             # With the semantic turn detector backstopping, the silence timers can
             # shrink: the detector fires on a complete utterance; these only catch
