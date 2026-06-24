@@ -1832,8 +1832,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # With the semantic turn detector backstopping, the silence timers can
             # shrink: the detector fires on a complete utterance; these only catch
             # the case where it's unsure. min 0.4->0.2, max 1.5->1.0.
+            # te-IN is NOT supported by MultilingualModel (logs: "Turn detector
+            # does not support language te-IN") — so for Telugu the semantic
+            # detector is inert and turn-end falls to VAD silence alone. The
+            # conservative 1.0s max only guarded against cutting a speaker off;
+            # trim it to shave ~0.3-0.4s off every Telugu reply (2026-06-24
+            # latency pass). Raise back toward 1.0 if speakers get clipped.
             min_endpointing_delay=0.2,
-            max_endpointing_delay=1.0,
+            max_endpointing_delay=0.6,
             # BARGE-IN FIX (Vinay 2026-06-22: "when I interrupt mid-sentence the
             # agent skips the sentence it was supposed to say"). Telugu/Indian
             # callers backchannel constantly while the agent speaks ("haan",
