@@ -308,10 +308,14 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
         llm=[
             google.LLM(
                 api_key=settings.gemini_api_key,
-                model="gemini-2.5-flash",
-                # Thinking is ON by default for 2.5 Flash and adds 1-3s+ of
-                # silence per turn before the first token. A booking
-                # receptionist needs none of it.
+                # PRIMARY: gemini-3.1-flash-lite (2026-06-24). gemini-2.5-flash was
+                # 503-ing 30-80% during a Google overload spike (5s+ latency on the
+                # rest). A live probe across models showed 3.1-flash-lite is on a
+                # separate, healthy capacity pool: 6/6 available, ~1.5s, natural
+                # Telugu — while the bigger flash models (3.5/latest/3-preview) run
+                # 5-50s with thinking ON (unusable on a phone). thinking_budget=0
+                # keeps the first token fast.
+                model="gemini-3.1-flash-lite",
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
             openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
@@ -345,8 +349,9 @@ async def _routing_llm_call(messages: list) -> str:
         client = genai.Client(api_key=settings.gemini_api_key)
         resp = await client.aio.models.generate_content(
             # flash-lite: matching a complaint to a doctor list needs no depth;
-            # noticeably faster first token than full flash on the call path.
-            model="gemini-2.5-flash-lite",
+            # noticeably faster first token than full flash. Moved to the 3.1 gen
+            # (2026-06-24) — 2.5-flash-lite shared the 2.5 overload spike.
+            model="gemini-3.1-flash-lite",
             contents=combined,
             config=genai_types.GenerateContentConfig(
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
