@@ -59,6 +59,10 @@ class Branch(Base):
         ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Clinic name in the call's TTS script (RULE 6), so it is SPOKEN not
+    # mispronounced as English ("Datta" → "దత్త", not "data"). Transliterated +
+    # stored once (lazy, off the per-call path); falls back to `name` when unset.
+    name_spoken: Mapped[str | None] = mapped_column(String(255))
     address: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str | None] = mapped_column(String(100))
     # whatsapp_number: human-readable phone (+91XXXXXXXXXX) used in messages

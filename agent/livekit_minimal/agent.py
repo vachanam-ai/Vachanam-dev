@@ -310,9 +310,24 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
                 # receptionist needs none of it.
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
+            # Second Telugu-capable tier. Gemini's API 503s intermittently under
+            # load (Google-side spikes); a transient 503 on flash would otherwise
+            # drop the turn onto GPT-4o-mini's much weaker Telugu ("not Telugu,
+            # garbage" on a live call, 2026-06-24). flash-lite is another strong
+            # Telugu model, so we exhaust two Gemini tiers — each retried once —
+            # before ever reaching the weak fallback.
+            google.LLM(
+                api_key=settings.gemini_api_key,
+                model="gemini-2.5-flash-lite",
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            ),
             openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
         ],
         attempt_timeout=10.0,
+        # Retry a transient 503 on the SAME model before switching (a 503 returns
+        # fast, so the retry is cheap; it keeps good-Telugu Gemini in play).
+        max_retry_per_llm=1,
+        retry_interval=0.4,
     )
 
 
@@ -1511,6 +1526,33 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     if True:  # noqa: SIM108 — preserves indentation of the call-setup block
         branch_id, branch_name = branch.id, branch.name
+        # Speak the clinic name in the call's script (RULE 6): "Datta" must be
+        # HEARD as "దత్త", not English "data". Use the stored spoken form; if it
+        # is unset, transliterate once and store it asynchronously (off the call
+        # path) so later calls read it instantly. Best-effort — never blocks.
+        _stored_spoken = (getattr(branch, "name_spoken", None) or "").strip()
+        if _stored_spoken:
+            branch_name = _stored_spoken
+        else:
+            try:
+                _tl_clinic = await spoken_name(branch.name, lang_code)
+            except Exception:  # noqa: BLE001 — RULE 8
+                _tl_clinic = branch.name
+            if _tl_clinic and _tl_clinic != branch.name:
+                branch_name = _tl_clinic
+
+                async def _store_clinic_spoken(_bid=branch_id, _val=_tl_clinic) -> None:
+                    try:
+                        from sqlalchemy import update as _u
+                        async with AsyncSessionLocal() as _s:
+                            await _s.execute(
+                                _u(Branch).where(Branch.id == _bid).values(name_spoken=_val)
+                            )
+                            await _s.commit()
+                    except Exception as _e:  # noqa: BLE001
+                        logger.warning("name_spoken_store_failed: %s", _e)
+
+                asyncio.create_task(_store_clinic_spoken())
         emergency_contact = branch.emergency_contact or ""
         # smallest.ai voice_id (clinic-chosen or cloned); fall back to the
         # language's default smallest voice when unset (TTS provider = smallest).
