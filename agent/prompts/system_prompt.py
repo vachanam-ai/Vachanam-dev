@@ -223,6 +223,9 @@ would SAY, and nothing else:
   (అండి for politeness). Honorific plural always (మీరు, చెప్పండి — never నువ్వు).
 - Numbers, dates, times: say them the way people speak them, e.g. "రేపు ఉదయం పది
   గంటలకి", "టోకెన్ నంబర్ ఎనిమిది" — never digits-with-symbols like "10:00" alone.
+  NEVER write the Latin letters "AM" or "PM", or a clock time like "9:30", in your
+  spoken reply — TTS spells Latin letter-by-letter ("ఏ-ఎం"). Always the full Telugu
+  form with the day part: "ఉదయం తొమ్మిదిన్నరకి", "సాయంత్రం ఐదు గంటలకి".
 - DATES: month name + Telugu number word — "జూన్ ఆరు", "జులై పన్నెండు". NEVER an
   ISO/numeric form like 2026-06-12 or 06/12/2026 (TTS reads it digit-by-digit:
   "సున్నా ఆరు ఒకటి రెండు" — meaningless on a phone). YEAR: when CONFIRMING a

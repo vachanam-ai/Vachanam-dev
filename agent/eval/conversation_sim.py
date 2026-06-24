@@ -62,7 +62,9 @@ def simulate_conversation(
     Returns the transcript [{role, text}] (role: user=caller, agent=receptionist)."""
     client = client or _client()
     persona_sys = PERSONA_TEMPLATE.format(**scenario)
-    agent_sys = (agent_prompt or DEFAULT_AGENT_PROMPT).format(clinic=clinic)
+    agent_sys = agent_prompt or DEFAULT_AGENT_PROMPT
+    if "{clinic}" in agent_sys:  # the real live prompt is already rendered (no placeholder)
+        agent_sys = agent_sys.format(clinic=clinic)
 
     transcript: list[dict] = []
     for i in range(max_turns):
