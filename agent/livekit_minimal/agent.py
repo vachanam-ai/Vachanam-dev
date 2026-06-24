@@ -300,6 +300,10 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     """
     from google.genai import types as genai_types
 
+    # IMPORTANT (2026-06-24): do NOT add per-LLM retries or extra Gemini tiers
+    # here. A retry/extra-tier variant pushed live TTFT to 9.5s during a Gemini
+    # 503 storm (each failed attempt waits before switching) — far worse on a
+    # phone than a fast switch to GPT-4o-mini. Fail FAST to the fallback.
     return lk_llm.FallbackAdapter(
         llm=[
             google.LLM(
@@ -310,24 +314,9 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
                 # receptionist needs none of it.
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
-            # Second Telugu-capable tier. Gemini's API 503s intermittently under
-            # load (Google-side spikes); a transient 503 on flash would otherwise
-            # drop the turn onto GPT-4o-mini's much weaker Telugu ("not Telugu,
-            # garbage" on a live call, 2026-06-24). flash-lite is another strong
-            # Telugu model, so we exhaust two Gemini tiers — each retried once —
-            # before ever reaching the weak fallback.
-            google.LLM(
-                api_key=settings.gemini_api_key,
-                model="gemini-2.5-flash-lite",
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-            ),
             openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
         ],
         attempt_timeout=10.0,
-        # Retry a transient 503 on the SAME model before switching (a 503 returns
-        # fast, so the retry is cheap; it keeps good-Telugu Gemini in play).
-        max_retry_per_llm=1,
-        retry_interval=0.4,
     )
 
 
