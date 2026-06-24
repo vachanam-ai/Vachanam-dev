@@ -121,9 +121,13 @@ export default function Treatments() {
     enabled: Boolean(patientId && branchId)
   });
 
+  // Re-run on patientId change: the Visit-history / Follow-up / Add-note cards
+  // mount only AFTER a patient is selected. [data-reveal] is opacity:0 in CSS, so
+  // without re-revealing those late-mounted cards they stay invisible ("can't see
+  // anything", 2026-06-24).
   useEffect(() => {
     revealStagger(pageRef.current);
-  }, []);
+  }, [patientId]);
 
   const selectedPatient = useMemo(
     () => patients.find((p) => p.patient_id === patientId),
