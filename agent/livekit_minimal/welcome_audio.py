@@ -31,6 +31,9 @@ async def play_welcome(room: rtc.Room, text: str, tts) -> bool:
     Returns True only if the clip was synthesized and played to completion — the
     caller uses this to decide whether an outbound greeting still needs to be
     spoken after session.start() (if the clip failed, it must be; RULE 8)."""
+    import time as _time
+
+    _t0 = _time.monotonic()
     source = None
     pub = None
     ok = False
@@ -45,7 +48,10 @@ async def play_welcome(room: rtc.Room, text: str, tts) -> bool:
             f = ev.frame
             if source is None:
                 logger.info(
-                    "welcome_clip_first_frame", sr=f.sample_rate, ch=f.num_channels
+                    "welcome_clip_first_frame",
+                    sr=f.sample_rate,
+                    ch=f.num_channels,
+                    synth_s=round(_time.monotonic() - _t0, 2),  # TTS time-to-first-frame
                 )  # patient starts hearing audio
                 source = rtc.AudioSource(f.sample_rate, f.num_channels)
                 track = rtc.LocalAudioTrack.create_audio_track("welcome", source)

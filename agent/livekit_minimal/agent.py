@@ -1857,10 +1857,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             #    to be nothing real (no transcript within the timeout), the agent
             #    RESUMES the very sentence it was cut off on instead of skipping
             #    it. A genuine interruption (real words) still stops the agent.
-            min_interruption_duration=0.6,
-            min_interruption_words=2,
+            # 2026-06-24: the agent was talking OVER the caller and ignoring new
+            # info ("I said 4pm, it didn't care"). Yield FAST now — interrupt on
+            # the first real word after 0.3s. resume_false_interruption still
+            # recovers the sentence if it was only a backchannel (no transcript),
+            # so a lone "హా/అవును" doesn't permanently cut a confirmation.
+            min_interruption_duration=0.3,
+            min_interruption_words=1,
             resume_false_interruption=True,
-            false_interruption_timeout=2.0,
+            false_interruption_timeout=1.5,
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
@@ -2066,6 +2071,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # names and falls back to the raw name on any failure.
         _spk_patient = await spoken_name(meta.get("patient_name", ""), lang_code)
         _spk_doctor = await spoken_name(meta.get("doctor_name", ""), lang_code)
+        logger.info("lat_greeting answer_to_greeting=%.2fs", _perf.monotonic() - _t_answer)
         if is_reminder:
             # Raw "16:30" gets read digit-by-digit by TTS. For Telugu speak it in
             # Telugu words; for other languages a clean "04:30 PM" reads naturally
