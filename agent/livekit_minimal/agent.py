@@ -1565,7 +1565,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # still plays regardless.
         _welcome_task = None
         if branch_name:
-            _welcome_tts = smallestai.TTS(
+            # Reuse the WARM smallest TTS from _prewarm (its connection is already
+            # established) so the welcome's first frame is ~0.2s, not the several
+            # seconds a cold per-call instance took ("7s before the first word",
+            # 2026-06-24). The warm instance uses the default voice — fine for the
+            # short bridge; the real greeting after session.start uses the clinic
+            # voice. ponytail: a per-voice warm pool if call concurrency grows.
+            _welcome_tts = ctx.proc.userdata.get("welcome_tts") or smallestai.TTS(
                 api_key=settings.smallest_api_key,
                 model=settings.smallest_model,
                 voice_id=tts_voice,
@@ -2290,6 +2296,41 @@ def _prewarm(proc) -> None:
         )
     except Exception as e:  # noqa: BLE001 — prewarm best-effort; entrypoint rebuilds
         logger.warning("prewarm_calendar_failed: %s", e)
+
+    # WELCOME-TTS WARMUP (2026-06-24 start-latency fix). The instant welcome clip
+    # was synth'd on a FRESH smallest.ai TTS every call — a COLD connection whose
+    # first frame took several seconds, so the caller heard ~7s of silence before
+    # the first word (warm ttfb is ~0.2s). Build ONE smallest TTS here, warm it
+    # with a tiny synth, and reuse it for the welcome clip. Times the cold synth
+    # so the logs confirm the cost. Best-effort; the entrypoint falls back to a
+    # fresh instance if this is missing.
+    try:
+        import asyncio as _aio
+        import time as _t
+
+        from agent.i18n.languages import get_lang as _get_lang
+
+        async def _warm_welcome_tts():
+            _cfg = _get_lang("te")
+            _w = smallestai.TTS(
+                api_key=settings.smallest_api_key,
+                model=settings.smallest_model,
+                voice_id=_cfg.default_voice,
+                language=_cfg.tts_code,
+                sample_rate=settings.smallest_sample_rate,
+                output_format="pcm",
+            )
+            _s = _t.monotonic()
+            async for _ev in _w.synthesize("నమస్కారం"):
+                break  # first frame = connection warm
+            logger.info("prewarm_welcome_tts_cold_synth_s=%.2f", _t.monotonic() - _s)
+            return _w
+
+        proc.userdata["welcome_tts"] = _aio.run(
+            _aio.wait_for(_warm_welcome_tts(), timeout=12)
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort warmup
+        logger.warning("prewarm_welcome_tts_failed: %s", str(e)[:140])
 
 
 if __name__ == "__main__":
