@@ -18,7 +18,8 @@ from datetime import date
 import pytest
 from httpx import AsyncClient, ASGITransport
 from backend.main import app
-from backend.models.schema import Branch, Doctor, Patient, Organization, User
+from backend.models.schema import Branch, Doctor, Patient, Organization, User, Token, TreatmentNote
+from sqlalchemy import select
 from backend.middleware.auth_middleware import get_current_user, CurrentUser
 
 
@@ -157,3 +158,38 @@ async def test_cross_branch_note_denied(db):
             assert r.status_code == 403
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_attend_auto_creates_treatment_log(db):
+    """Marking a token attended opens a treatment log for that patient (Vinay
+    2026-06-24: 'whoever attends should have a log created'). Idempotent per token."""
+    org_id = uuid.uuid4()
+    db.add(_org(org_id)); await db.flush()
+    usr = _user(org_id)
+    br = Branch(id=uuid.uuid4(), org_id=org_id, name="C", whatsapp_number="+910000000011")
+    db.add_all([usr, br]); await db.flush()
+    doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token")
+    pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000011")
+    db.add_all([doc, pat]); await db.flush()
+    tok = Token(id=uuid.uuid4(), branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
+                date=date(2026, 6, 24), token_number=1, status="confirmed", source="walk_in")
+    db.add(tok); await db.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, user_id=usr.id)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://t") as ac:
+            r = await ac.patch(f"/queue/{br.id}/token/{tok.id}/attend")
+            assert r.status_code == 200, r.text
+    finally:
+        app.dependency_overrides.clear()
+
+    notes = (await db.execute(
+        select(TreatmentNote).where(TreatmentNote.token_id == tok.id)
+    )).scalars().all()
+    assert len(notes) == 1
+    assert notes[0].patient_id == pat.id
+    assert notes[0].doctor_id == doc.id
+    assert notes[0].visit_date == date(2026, 6, 24)
+    assert notes[0].steps_performed is None  # blank log to be filled by the doctor

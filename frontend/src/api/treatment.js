@@ -13,6 +13,9 @@ export const listNotes = (patientId, branchId) =>
 export const createNote = (patientId, payload) =>
   api.post(`/treatment/patients/${patientId}/treatment-notes`, payload).then((r) => r.data);
 
+export const editNote = (noteId, payload) =>
+  api.patch(`/treatment/treatment-notes/${noteId}`, payload).then((r) => r.data);
+
 export const listFollowups = (patientId, branchId) =>
   api.get(`/treatment/patients/${patientId}/followups`, { params: { branch_id: branchId } })
      .then((r) => r.data.thread);

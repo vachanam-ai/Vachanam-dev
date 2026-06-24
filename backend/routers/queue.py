@@ -23,7 +23,7 @@ from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import queue_today_limit
-from backend.models.schema import Branch, Doctor, Patient, Token
+from backend.models.schema import Branch, Doctor, Patient, Token, TreatmentNote
 from backend.services.audit_service import audit
 
 logger = structlog.get_logger()
@@ -294,6 +294,32 @@ async def _update_status(
         branch_id=branch_id,
         marked_by_user_id=user_id,
     )
+
+    # When a patient is ATTENDED, open their treatment log so the doctor can record
+    # the visit (Vinay 2026-06-24: "whoever attends should have a log created").
+    # Idempotent per token; best-effort — a failure must NOT undo the attend.
+    if new_status == "attended":
+        try:
+            exists = (
+                await db.execute(
+                    select(TreatmentNote.id).where(TreatmentNote.token_id == token_uuid)
+                )
+            ).scalar_one_or_none()
+            if not exists:
+                db.add(
+                    TreatmentNote(
+                        branch_id=token.branch_id,
+                        doctor_id=token.doctor_id,
+                        patient_id=token.patient_id,
+                        token_id=token_uuid,
+                        visit_date=token.date,
+                    )
+                )
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 — never undo a successful attend
+            await db.rollback()
+            logger.warning("attend_treatment_note_failed", token_id=token_id, error=str(exc))
+
     return StatusResponse(status=new_status, token_id=token_id)
 
 

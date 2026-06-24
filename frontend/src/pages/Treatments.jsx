@@ -6,6 +6,7 @@ import {
   listTreatmentPatients,
   listNotes,
   createNote,
+  editNote,
   listFollowups,
   replyToPatient
 } from "../api/treatment.js";
@@ -143,8 +144,8 @@ export default function Treatments() {
   };
 
   const save = useMutation({
-    mutationFn: () =>
-      createNote(patientId, {
+    mutationFn: () => {
+      const payload = {
         branch_id: branchId,
         doctor_id: doctorId || null,
         visit_date: visitDate,
@@ -152,7 +153,14 @@ export default function Treatments() {
         next_steps: nextSteps.trim() || null,
         next_reporting_date: nextReportingDate || null,
         is_final: isFinal
-      }),
+      };
+      // Marking attended auto-creates a blank log for the visit. If one exists for
+      // this date with no details yet, FILL it (PATCH) instead of duplicating it.
+      const blank = (notesData?.notes ?? []).find(
+        (n) => n.visit_date === visitDate && !n.steps_performed && !n.next_steps
+      );
+      return blank ? editNote(blank.id, payload) : createNote(patientId, payload);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["treatment-notes", patientId, branchId] });
       qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
