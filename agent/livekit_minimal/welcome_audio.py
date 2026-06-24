@@ -23,6 +23,55 @@ from livekit import rtc
 logger = structlog.get_logger()
 
 
+async def play_stored_welcome(room: rtc.Room, wav_bytes: bytes) -> bool:
+    """Play a PRE-RENDERED welcome WAV (Branch.welcome_audio) into the room —
+    INSTANTLY, with no TTS synth — to mask the ~6s session.start. Returns True on
+    success. Best-effort (RULE 8): any failure → caller falls back to live synth."""
+    import io
+    import wave
+
+    source = None
+    pub = None
+    ok = False
+    try:
+        wf = wave.open(io.BytesIO(wav_bytes), "rb")
+        sr, ch, n = wf.getframerate(), wf.getnchannels(), wf.getnframes()
+        pcm = wf.readframes(n)
+        wf.close()
+        source = rtc.AudioSource(sr, ch)
+        track = rtc.LocalAudioTrack.create_audio_track("welcome", source)
+        pub = await room.local_participant.publish_track(
+            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+        spf = sr // 100  # 10ms frames
+        fb = spf * 2 * ch  # bytes per frame (int16)
+        for i in range(0, len(pcm), fb):
+            chunk = pcm[i : i + fb]
+            if len(chunk) < fb:
+                chunk = chunk + b"\x00" * (fb - len(chunk))
+            await source.capture_frame(
+                rtc.AudioFrame(data=chunk, sample_rate=sr, num_channels=ch,
+                               samples_per_channel=spf)
+            )
+        await source.wait_for_playout()
+        logger.info("stored_welcome_done", audio_s=round(n / max(sr, 1), 2))
+        ok = True
+    except Exception as e:  # noqa: BLE001 — never break a call
+        logger.warning("stored_welcome_failed", error=str(e)[:160])
+    finally:
+        if pub is not None:
+            try:
+                await room.local_participant.unpublish_track(pub.sid)
+            except Exception:  # noqa: BLE001
+                pass
+        if source is not None:
+            try:
+                await source.aclose()
+            except Exception:  # noqa: BLE001
+                pass
+    return ok
+
+
 async def play_welcome(room: rtc.Room, text: str, tts) -> bool:
     """Synthesize `text` with the given LiveKit TTS plugin and play it into the
     room on a temporary track. Blocks until the clip finishes playing out, then

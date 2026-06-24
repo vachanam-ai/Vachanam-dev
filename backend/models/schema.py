@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, date, time
 from sqlalchemy import (
-    String, Boolean, Integer, Text, DateTime, Date, Time,
+    String, Boolean, Integer, Text, DateTime, Date, Time, LargeBinary,
     ForeignKey, Enum, ARRAY, JSON, func, text, false, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -63,6 +63,11 @@ class Branch(Base):
     # mispronounced as English ("Datta" → "దత్త", not "data"). Transliterated +
     # stored once (lazy, off the per-call path); falls back to `name` when unset.
     name_spoken: Mapped[str | None] = mapped_column(String(255))
+    # Pre-rendered welcome+greeting audio (WAV bytes), played INSTANTLY on answer
+    # to mask the ~6s LiveKit session.start (Sarvam STT cold connect). Generated
+    # once per clinic (smallest.ai), so the caller hears continuous warm speech
+    # instead of a cold-TTS delay + dead air. NULL → fall back to live synth.
+    welcome_audio: Mapped[bytes | None] = mapped_column(LargeBinary)
     address: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str | None] = mapped_column(String(100))
     # whatsapp_number: human-readable phone (+91XXXXXXXXXX) used in messages

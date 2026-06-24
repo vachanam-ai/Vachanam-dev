@@ -72,7 +72,7 @@ from agent.prompts.system_prompt import (  # noqa: E402
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
 from agent.services.telugu_dates import telugu_date, telugu_time  # noqa: E402
-from agent.livekit_minimal.welcome_audio import play_welcome  # noqa: E402
+from agent.livekit_minimal.welcome_audio import play_stored_welcome, play_welcome  # noqa: E402
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
@@ -1564,13 +1564,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # post-answer silence). RULE 8: any failure is swallowed; the real greeting
         # still plays regardless.
         _welcome_task = None
-        if branch_name:
-            # Reuse the WARM smallest TTS from _prewarm (its connection is already
-            # established) so the welcome's first frame is ~0.2s, not the several
-            # seconds a cold per-call instance took ("7s before the first word",
-            # 2026-06-24). The warm instance uses the default voice — fine for the
-            # short bridge; the real greeting after session.start uses the clinic
-            # voice. ponytail: a per-voice warm pool if call concurrency grows.
+        _used_stored_welcome = False
+        # OPTION 1 (2026-06-24): a PRE-RENDERED welcome+greeting WAV, played
+        # INSTANTLY on answer (no cold TTS), long enough to mask the ~6s
+        # session.start (Sarvam STT cold connect). When present it IS the full
+        # greeting (welcome + AI disclosure + "how can I help"), so the live
+        # post-session greeting is skipped. NULL → fall back to live synth.
+        _stored_welcome = getattr(branch, "welcome_audio", None)
+        if _stored_welcome and not (is_reminder or is_rebook_call or is_followup):
+            _welcome_task = asyncio.create_task(
+                play_stored_welcome(ctx.room, _stored_welcome)
+            )
+            _used_stored_welcome = True
+        elif branch_name:
+            # Fallback: live short welcome bridge (reused warm TTS where possible).
             _welcome_tts = ctx.proc.userdata.get("welcome_tts") or smallestai.TTS(
                 api_key=settings.smallest_api_key,
                 model=settings.smallest_model,
@@ -2144,7 +2151,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
             else:
                 _greeting = lines.disclosure_greeting.format(clinic=branch_name)
-            await session.say(sanitize_for_tts(_greeting))
+            # When the pre-rendered welcome already spoke the full greeting +
+            # disclosure (Option 1), don't repeat it live — only record consent.
+            if not _used_stored_welcome:
+                await session.say(sanitize_for_tts(_greeting))
 
             # DPDP s.5 demonstrable notice: the greeting just spoken contains the
             # AI-assistant / data-processing disclosure. Record that notice was
