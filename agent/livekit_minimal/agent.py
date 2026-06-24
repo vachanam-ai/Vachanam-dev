@@ -2075,6 +2075,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # doesn't collide with the clip's audible track, and the clip unpublishes
         # itself when done. We then await the clip, then the connect, then greet.
         logger.info("lat_setup answer_to_session_start=%.2fs", _perf.monotonic() - _t_answer)
+        _t_ss = _perf.monotonic()
         _start_task = asyncio.create_task(
             session.start(
                 room=ctx.room,
@@ -2084,13 +2085,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ),
             )
         )
+        # Time session.start() ON ITS OWN (not tangled with the welcome-clip await,
+        # which previously made lat_session_connect look like the clip's ~6s).
+        _start_task.add_done_callback(
+            lambda _t: logger.info(
+                "lat_real_session_start=%.2fs", _perf.monotonic() - _t_ss
+            )
+        )
         if _welcome_task is not None:
             try:
                 await _welcome_task
             except Exception as _we:  # noqa: BLE001
                 logger.warning("welcome_await_failed: %s", _we)
+        _t_pre_start_await = _perf.monotonic()
         await _start_task
-        logger.info("lat_session_connect total_answer_to_ready=%.2fs", _perf.monotonic() - _t_answer)
+        logger.info(
+            "lat_session_connect total_answer_to_ready=%.2fs wait_after_clip=%.2fs",
+            _perf.monotonic() - _t_answer,
+            _perf.monotonic() - _t_pre_start_await,
+        )
 
         # RULE 6: single short opening utterance, sanitized. (The short welcome
         # clip already played pre-session; this is the real greeting, spoken with
