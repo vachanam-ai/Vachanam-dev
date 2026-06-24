@@ -54,6 +54,7 @@ from livekit.agents import (  # noqa: E402
     metrics,
 )
 from livekit.agents import llm as lk_llm  # noqa: E402
+from livekit.agents import tts as lk_tts  # noqa: E402
 from livekit.plugins import google, noise_cancellation, openai, sarvam, silero, smallestai  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
@@ -289,6 +290,19 @@ def _followup_meta_safe(meta: dict) -> dict:
                "patient_name", "doctor_name", "doctor_id", "task_id")
     return {k: meta[k] for k in allowed if k in meta}
 
+
+
+class _HttpSmallestTTS(smallestai.TTS):
+    """Force the STABLE HTTP /tts path. The plugin's default WS streaming
+    (wss .../tts/live) throws 'Connection error' on Fly on nearly every synth →
+    ~6s of retries = "silent for 10s after intro" (2026-06-24). Its HTTP
+    ChunkedStream hits the same /tts REST endpoint welcome_synth uses reliably.
+    Declaring streaming=False makes AgentSession synthesize per sentence over
+    HTTP (slightly higher first-audio than working WS, but reliable not 6s)."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._capabilities = lk_tts.TTSCapabilities(streaming=False)
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
@@ -1822,7 +1836,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # 2s backoff = ~6s of dead air on the first real response ("silent for 10s
         # after intro", 2026-06-24). Priming it while the clip plays makes that cold
         # connect happen invisibly.
-        _session_tts = smallestai.TTS(
+        _session_tts = _HttpSmallestTTS(
             api_key=settings.smallest_api_key,
             model=settings.smallest_model,
             voice_id=tts_voice,
