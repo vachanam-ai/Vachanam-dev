@@ -258,7 +258,8 @@ REMINDER_PROMPT_EXTRA = (
 NEXT_VISIT_PROMPT_EXTRA = (
     "\n\nTHIS IS A TREATMENT FOLLOW-UP CALL. You already know this patient — never "
     "ask who they are or restart the new-patient flow.\n"
-    "1) If a message is given, ask it warmly in the clinic's language: \"{message}\".\n"
+    "1) Your OPENING line already asked the doctor's question (\"{message}\"). Do "
+    "NOT ask it again — just listen to their answer and respond warmly in one line.\n"
     "2) If a target date is given ({target_date}), offer to book a visit within 2 "
     "days of it; on agreement use the booking tools (assign a token around that "
     "date) and confirm in one breath.\n"
@@ -2195,17 +2196,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
             )
         elif is_followup:
-            # Outbound treatment follow-up — greet the known patient by name; the
-            # NEXT_VISIT_PROMPT_EXTRA / DOCTOR_ADVICE_PROMPT_EXTRA then drives the
-            # conversation. NOT the inbound disclosure path (this is an outbound
-            # call — no inbound Consent record).
-            await session.say(
-                sanitize_for_tts(
-                    lines.known_caller_greeting.format(
-                        patient=_spk_patient, clinic=branch_name
-                    )
+            # Outbound treatment follow-up — open the FOLLOW-UP purpose, NOT the
+            # inbound "welcome back, how can I help" (wrong frame — we called them).
+            # If the doctor set a question, ask it in the opening; else a generic
+            # post-treatment check-in. Falls back to known_caller_greeting only if
+            # the language has no follow-up line yet.
+            _fu_msg = (followup_meta.get("message") or "").strip()
+            if _fu_msg and lines.followup_greeting_q:
+                _fg = lines.followup_greeting_q.format(
+                    patient=_spk_patient, clinic=branch_name, message=_fu_msg
                 )
-            )
+            elif lines.followup_greeting_noq:
+                _fg = lines.followup_greeting_noq.format(
+                    patient=_spk_patient, clinic=branch_name
+                )
+            else:
+                _fg = lines.known_caller_greeting.format(
+                    patient=_spk_patient, clinic=branch_name
+                )
+            await session.say(sanitize_for_tts(_fg))
         else:
             # Returning patient → greet by name; new caller → standard greeting.
             if caller_greeting_name:

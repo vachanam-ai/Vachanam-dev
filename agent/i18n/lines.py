@@ -35,6 +35,10 @@ class Lines:
     cap_warning: str
     cap_goodbye: str
     brevity: str
+    # Treatment follow-up call openings (default "" → agent falls back). _q asks the
+    # doctor's question {message}; _noq is a generic post-treatment check-in.
+    followup_greeting_q: str = ""    # {patient} {clinic} {message}
+    followup_greeting_noq: str = ""  # {patient} {clinic}
 
 
 # Shared English brevity directive for non-Telugu languages (LLM instruction).
@@ -85,6 +89,16 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="ఆగండండి, టైమ్ అయిపోతోంది. మీ బుకింగ్ త్వరగా కన్ఫర్మ్ చేద్దామా?",
         cap_goodbye="థాంక్యూ అండి, ఉంటాను మరి!",
+        # Treatment follow-up openings (Gemini-generated 2026-06-25). No namaskaram
+        # (welcome clip says it). _q asks the doctor's question {message}.
+        followup_greeting_q=(
+            "{patient} గారు, ఇది {clinic} క్లినిక్ నుండి చిన్న ఫాలో-అప్ కాల్ అండి. "
+            "డాక్టర్ గారు {message} అని అడగమన్నారు, చెప్తారా?"
+        ),
+        followup_greeting_noq=(
+            "{patient} గారు, ఇది {clinic} క్లినిక్ నుండి చిన్న కాల్ అండి. "
+            "ట్రీట్‌మెంట్ తర్వాత ఇప్పుడు మీకు ఎలా అనిపిస్తుందో చెప్పగలరా అండి?"
+        ),
         brevity=(
             "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి ఆన్సర్ చాలా చిన్నగా, "
             "ఒకటి లేదా రెండు ముక్కల్లో ఉండాలి. డిస్క్లోజర్ మళ్ళీ చెప్పొద్దు. "
