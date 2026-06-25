@@ -330,7 +330,11 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
                 # 5-50s with thinking ON (unusable on a phone). thinking_budget=0
                 # keeps the first token fast.
                 model="gemini-3.1-flash-lite",
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                # gemini-3 IGNORES thinking_budget (logs the warning) → thinking
+                # stays ON → 4.9s ttft + 11 tok/s on the real 8k-token prompt
+                # (morning followup call, 2026-06-25). thinking_level="low" is the
+                # supported Gemini-3 control to cap thinking and keep TTFT down.
+                thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
             ),
             openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
         ],
@@ -368,7 +372,7 @@ async def _routing_llm_call(messages: list) -> str:
             model="gemini-3.1-flash-lite",
             contents=combined,
             config=genai_types.GenerateContentConfig(
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
                 response_mime_type="application/json",
             ),
         )
