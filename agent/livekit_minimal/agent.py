@@ -307,37 +307,26 @@ class _HttpSmallestTTS(smallestai.TTS):
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
-    """RULE 9: Gemini primary, GPT-4o-mini automatic fallback.
+    """GPT-4o-mini PRIMARY, gemini-3.1-flash-lite fallback (2026-06-25).
 
-    attempt_timeout is forwarded to the provider as the HTTP deadline; the
-    Google GenAI API rejects anything under 10s with a 400, which silently
-    pushed every single turn onto GPT-4o-mini (and its much weaker Telugu).
+    Gemini was unusable on live calls all session: 503 storms, then 504
+    DEADLINE_EXCEEDED on nearly every turn. Because the Google API rejects an
+    attempt_timeout under 10s (400), each Gemini failure burns the FULL 10s
+    before the adapter switches — "latency is horrible" + the cold fallback
+    voice. GPT-4o-mini is fast (~1-2s) and reliable; make it primary so turns
+    don't gate on Gemini's health. Gemini stays as a fallback for when it
+    recovers. Swap back to Gemini-primary only if it proves stable again.
     """
     from google.genai import types as genai_types
 
-    # IMPORTANT (2026-06-24): do NOT add per-LLM retries or extra Gemini tiers
-    # here. A retry/extra-tier variant pushed live TTFT to 9.5s during a Gemini
-    # 503 storm (each failed attempt waits before switching) — far worse on a
-    # phone than a fast switch to GPT-4o-mini. Fail FAST to the fallback.
     return lk_llm.FallbackAdapter(
         llm=[
+            openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
             google.LLM(
                 api_key=settings.gemini_api_key,
-                # PRIMARY: gemini-3.1-flash-lite (2026-06-24). gemini-2.5-flash was
-                # 503-ing 30-80% during a Google overload spike (5s+ latency on the
-                # rest). A live probe across models showed 3.1-flash-lite is on a
-                # separate, healthy capacity pool: 6/6 available, ~1.5s, natural
-                # Telugu — while the bigger flash models (3.5/latest/3-preview) run
-                # 5-50s with thinking ON (unusable on a phone). thinking_budget=0
-                # keeps the first token fast.
                 model="gemini-3.1-flash-lite",
-                # gemini-3 IGNORES thinking_budget (logs the warning) → thinking
-                # stays ON → 4.9s ttft + 11 tok/s on the real 8k-token prompt
-                # (morning followup call, 2026-06-25). thinking_level="low" is the
-                # supported Gemini-3 control to cap thinking and keep TTFT down.
                 thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
             ),
-            openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
         ],
         attempt_timeout=10.0,
     )
@@ -359,34 +348,32 @@ async def update_call_duration(call_log_id, seconds: int) -> None:
 
 
 async def _routing_llm_call(messages: list) -> str:
-    """Plain-text LLM call used by route_to_doctor (Gemini -> OpenAI fallback)."""
-    combined = "\n".join(m["content"] for m in messages)
+    """Plain-text JSON call used by route_to_doctor. GPT-4o-mini PRIMARY (2026-06-25:
+    Gemini 503/504 storms hung routing); Gemini fallback if OpenAI fails."""
     try:
+        from openai import AsyncOpenAI
+
+        oai = AsyncOpenAI(api_key=settings.openai_api_key)
+        resp = await oai.chat.completions.create(
+            model="gpt-4o-mini", messages=messages, temperature=0,
+            response_format={"type": "json_object"},
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as exc:
+        logger.error("routing_llm_openai_failed: %s", exc)
         from google import genai
         from google.genai import types as genai_types
 
         client = genai.Client(api_key=settings.gemini_api_key)
         resp = await client.aio.models.generate_content(
-            # flash-lite: matching a complaint to a doctor list needs no depth;
-            # noticeably faster first token than full flash. Moved to the 3.1 gen
-            # (2026-06-24) — 2.5-flash-lite shared the 2.5 overload spike.
             model="gemini-3.1-flash-lite",
-            contents=combined,
+            contents="\n".join(m["content"] for m in messages),
             config=genai_types.GenerateContentConfig(
                 thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
                 response_mime_type="application/json",
             ),
         )
         return resp.text or ""
-    except Exception as exc:
-        logger.error("routing_llm_gemini_failed: %s", exc)
-        from openai import AsyncOpenAI
-
-        oai = AsyncOpenAI(api_key=settings.openai_api_key)
-        resp = await oai.chat.completions.create(
-            model="gpt-4o-mini", messages=messages, temperature=0
-        )
-        return resp.choices[0].message.content or ""
 
 
 _PHONE_DIGITS_RE = re.compile(r"\d{4,}")
