@@ -92,8 +92,8 @@ LINES: dict[str, Lines] = {
         # Treatment follow-up openings (Gemini-generated 2026-06-25). No namaskaram
         # (welcome clip says it). _q asks the doctor's question {message}.
         followup_greeting_q=(
-            "{patient} గారు, ఇది {clinic} క్లినిక్ నుండి చిన్న ఫాలో-అప్ కాల్ అండి. "
-            "డాక్టర్ గారు {message} అని అడగమన్నారు, చెప్తారా?"
+            "{patient} గారు, ఇది {clinic} క్లినిక్ నుంచి చేస్తున్న చిన్న ఫాలో-అప్ కాల్. "
+            "డాక్టర్ గారు మిమ్మల్ని ఒక విషయం అడగమన్నారు — {message}"
         ),
         followup_greeting_noq=(
             "{patient} గారు, ఇది {clinic} క్లినిక్ నుండి చిన్న కాల్ అండి. "
