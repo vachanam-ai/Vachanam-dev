@@ -110,7 +110,16 @@ def build_system_prompt(
     # Telugu is the reference language the examples are written in. For any other
     # language, prepend a hard directive so every spoken word is in that language.
     if lang.code == "te":
-        language_directive = ""
+        # Match the caller (Vinay 2026-06-25): default Telugu, but reply in English
+        # when the caller speaks English.
+        language_directive = (
+            "LANGUAGE — MATCH THE CALLER. Your opening is in Telugu. After that, "
+            "reply in whatever language the CALLER is using: if they speak mostly "
+            "ENGLISH, reply in clear, simple, warm spoken English; if they speak "
+            "Telugu or Tenglish, reply in natural spoken Telugu. Switch with them if "
+            "they switch. Always spoken-style for the phone — never literary, no "
+            "markdown or symbols.\n\n"
+        )
     else:
         language_directive = (
             f"PRIMARY LANGUAGE — OVERRIDES EVERYTHING BELOW: You speak {lang.name} "
