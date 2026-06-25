@@ -344,9 +344,13 @@ async def _localize_message(message: str, lang_code: str) -> str:
         client = genai.Client(api_key=settings.gemini_api_key)
         prompt = (
             f"Translate this clinic follow-up note into natural, warm, SPOKEN "
-            f"{cfg.name} for a phone call to a patient. Keep common English medical/"
-            f"everyday loanwords as people actually say them. Output ONLY the "
-            f"translation, nothing else:\n\n{msg}"
+            f"{cfg.name} for a phone call to a patient. Keep common English everyday "
+            f"loanwords as people actually say them. CRITICAL: medicine / tablet / "
+            f"brand names (e.g. Cytrizine, Dolo, Augmentin) are NOT regular words — "
+            f"transliterate each one accurately into {cfg.name} script so the patient "
+            f"hears the SAME medicine name clearly and can recognize it at the "
+            f"pharmacy; never translate or alter a drug name's meaning. Output ONLY "
+            f"the translation, nothing else:\n\n{msg}"
         )
         resp = await client.aio.models.generate_content(
             model="gemini-2.5-flash",
