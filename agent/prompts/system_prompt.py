@@ -113,12 +113,14 @@ def build_system_prompt(
         # Match the caller (Vinay 2026-06-25): default Telugu, but reply in English
         # when the caller speaks English.
         language_directive = (
-            "LANGUAGE — MATCH THE CALLER. Your opening is in Telugu. After that, "
-            "reply in whatever language the CALLER is using: if they speak mostly "
-            "ENGLISH, reply in clear, simple, warm spoken English; if they speak "
-            "Telugu or Tenglish, reply in natural spoken Telugu. Switch with them if "
-            "they switch. Always spoken-style for the phone — never literary, no "
-            "markdown or symbols.\n\n"
+            "LANGUAGE — MATCH THE CALLER, default Telugu. Your opening is Telugu. "
+            "TENGLISH IS TELUGU: a Telugu sentence with some English words mixed in "
+            "(appointment, time, ok, doctor, tomorrow…) is the NORMAL way people "
+            "speak — ALWAYS reply in Telugu for it, never switch to English. Switch "
+            "to clear, simple spoken English ONLY when the caller speaks in FULL, "
+            "almost entirely English sentences. When in any doubt, STAY in Telugu "
+            "(the primary language). Always spoken-style for the phone — never "
+            "literary, no markdown or symbols.\n\n"
         )
     else:
         language_directive = (
