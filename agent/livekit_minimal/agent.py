@@ -55,6 +55,8 @@ from livekit.agents import (  # noqa: E402
 )
 from livekit.agents import llm as lk_llm  # noqa: E402
 from livekit.agents import tts as lk_tts  # noqa: E402
+from livekit.agents import utils as _lk_utils  # noqa: E402
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS as _DEFAULT_CONN  # noqa: E402
 from livekit.plugins import google, noise_cancellation, openai, sarvam, silero, smallestai  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
@@ -293,17 +295,51 @@ def _followup_meta_safe(meta: dict) -> dict:
 
 
 
+class _RawRestChunked(lk_tts.ChunkedStream):
+    """Synthesize ONE utterance via the RAW smallest.ai REST /tts (WAV) and emit it
+    as PCM frames — the exact path the welcome clip uses (reliable + correct speed).
+    The plugin's own WS path Connection-errors on Fly, and its HTTP ChunkedStream
+    played the audio at the wrong SPEED ('5x', 2026-06-25)."""
+
+    def __init__(self, *, tts, input_text, conn_options) -> None:
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._mytts = tts
+
+    async def _run(self, output_emitter) -> None:
+        import io
+        import wave
+
+        from backend.services.welcome_synth import synth_wav
+
+        opts = self._mytts._opts
+        wav = await asyncio.to_thread(
+            synth_wav, self._input_text, opts.voice_id, opts.language
+        )
+        wf = wave.open(io.BytesIO(wav), "rb")
+        sr = wf.getframerate()
+        pcm = wf.readframes(wf.getnframes())
+        wf.close()
+        output_emitter.initialize(
+            request_id=_lk_utils.shortuuid(),
+            sample_rate=sr,
+            num_channels=1,
+            mime_type="audio/pcm",
+        )
+        output_emitter.push(pcm)
+        output_emitter.flush()
+
+
 class _HttpSmallestTTS(smallestai.TTS):
-    """Force the STABLE HTTP /tts path. The plugin's default WS streaming
-    (wss .../tts/live) throws 'Connection error' on Fly on nearly every synth →
-    ~6s of retries = "silent for 10s after intro" (2026-06-24). Its HTTP
-    ChunkedStream hits the same /tts REST endpoint welcome_synth uses reliably.
-    Declaring streaming=False makes AgentSession synthesize per sentence over
-    HTTP (slightly higher first-audio than working WS, but reliable not 6s)."""
+    """Session TTS over the RAW REST /tts path (_RawRestChunked). streaming=False
+    so AgentSession synthesizes per sentence; reuses smallestai.TTS only for its
+    _opts/voice config."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._capabilities = lk_tts.TTSCapabilities(streaming=False)
+
+    def synthesize(self, text, *, conn_options=_DEFAULT_CONN):
+        return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
@@ -1834,7 +1870,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             voice_id=tts_voice,
             language=lang_cfg.tts_code,
             sample_rate=settings.smallest_sample_rate,
-            output_format="pcm",
+            # WAV, not pcm: the HTTP /tts endpoint returns a WAV container even when
+            # asked for pcm, so declaring "pcm" made the emitter play WAV bytes as
+            # raw PCM → garbled/too-fast speech (2026-06-25). "wav" lets the decoder
+            # read the real rate from the header.
+            output_format="wav",
         )
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
