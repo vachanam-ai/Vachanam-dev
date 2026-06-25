@@ -338,12 +338,16 @@ async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
             TreatmentNote as _TN,
         )
 
-        # Join by phone (a number can map to several Patient rows — find the task on
-        # ANY of them, not just the first patient row).
+        # Match on the LAST 10 DIGITS so caller-ID format (+91/91/bare) never breaks
+        # it; join by phone (a number can map to several Patient rows — find the task
+        # on ANY of them).
+        digits = "".join(c for c in (phone or "") if c.isdigit())[-10:]
+        if len(digits) < 10:
+            return None
         task = (await db.execute(
             _sel(_FT).join(_P, _FT.patient_id == _P.id).where(
                 _FT.branch_id == branch_id,
-                _P.phone == phone,
+                _P.phone.like(f"%{digits}"),
                 _FT.task_type == "next_visit_book",
                 _FT.status == "pending",
             ).order_by(_FT.scheduled_date.asc())
