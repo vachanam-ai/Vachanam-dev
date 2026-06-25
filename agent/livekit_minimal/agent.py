@@ -323,6 +323,48 @@ def _spoken_target_date(raw: str, lang_code: str) -> str:
     return f"{spoken} ({raw})"
 
 
+async def _localize_message(message: str, lang_code: str) -> str:
+    """Speak the doctor's follow-up note in the CALL's language. If the doctor wrote
+    it in English (mostly Latin), translate to natural spoken <lang> (so it's clear,
+    not fast English over a Telugu TTS); if already in an Indic script, keep it.
+    Best-effort — returns the original on any failure."""
+    msg = (message or "").strip()
+    letters = [c for c in msg if c.isalpha()]
+    if not letters:
+        return message
+    if sum(1 for c in letters if c.isascii()) / len(letters) < 0.5:
+        return message  # already mostly non-Latin → assume the call's language
+    cfg = get_lang(lang_code)
+    if cfg.code == "en":
+        return message
+    try:
+        from google import genai
+        from google.genai import types as gt
+
+        client = genai.Client(api_key=settings.gemini_api_key)
+        prompt = (
+            f"Translate this clinic follow-up note into natural, warm, SPOKEN "
+            f"{cfg.name} for a phone call to a patient. Keep common English medical/"
+            f"everyday loanwords as people actually say them. Output ONLY the "
+            f"translation, nothing else:\n\n{msg}"
+        )
+        resp = await client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=gt.GenerateContentConfig(
+                thinking_config=gt.ThinkingConfig(thinking_budget=0)
+            ),
+        )
+        out = (resp.text or "").strip()
+        if out:
+            logger.info("localized_doctor_msg lang=%s", cfg.code)
+            return out
+        return message
+    except Exception as e:  # noqa: BLE001 — never block a call
+        logger.warning("localize_message_failed: %s", str(e)[:120])
+        return message
+
+
 async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
     """For an INBOUND caller, find a pending next_visit_book follow-up so the agent
     can deliver the doctor's question + offer the scheduled visit when the patient
@@ -1526,6 +1568,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     lang_cfg = get_lang(lang_code)
     lines = get_lines(lang_code)
 
+    # A doctor may write the follow-up note in English; speak it in the call's
+    # language (clear Telugu), not fast English over a Telugu TTS (Vinay 2026-06-25).
+    if is_followup and followup_meta.get("message"):
+        followup_meta["message"] = await _localize_message(
+            followup_meta["message"], lang_code
+        )
+
     # Super-admin service gate: paused/cancelled org, expired trial, or
     # hard-block with the month's minutes exhausted -> answer, speak ONE line,
     # hang up (RULE 8). Also captures the org plan for the call-duration cap.
@@ -1848,6 +1897,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     state.branch_id, state.patient_phone, db
                 )
                 if inbound_followup:
+                    # Speak the doctor's note in the call's language (translate English).
+                    if inbound_followup.get("message"):
+                        inbound_followup["message"] = await _localize_message(
+                            inbound_followup["message"], lang_code
+                        )
                     # The GREETING (below) deterministically asks the doctor's question;
                     # this extra just drives the booking offer + locks the doctor.
                     _td = _spoken_target_date(inbound_followup.get("target_date", ""), lang_code)
