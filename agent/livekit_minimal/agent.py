@@ -1693,31 +1693,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # still plays regardless.
         _welcome_task = None
         _used_stored_welcome = False
-        # OPTION 1 (2026-06-24): a PRE-RENDERED welcome+greeting WAV, played
-        # INSTANTLY on answer (no cold TTS), long enough to mask the ~6s
-        # session.start (Sarvam STT cold connect). When present it IS the full
-        # greeting (welcome + AI disclosure + "how can I help"), so the live
-        # post-session greeting is skipped. NULL → fall back to live synth.
-        _stored_welcome = getattr(branch, "welcome_audio", None)
+        # The pre-rendered clip is OUTBOUND-ONLY now (Vinay 2026-06-25: inbound calls
+        # don't want a welcome clip — the original live greeting is good enough).
+        # OUTBOUND (reminder/rebook/followup) plays the instant welcome-ONLY mask to
+        # cover session.start; INBOUND (incl. missed-call callback) uses the live
+        # welcome bridge + live greeting below.
         _stored_short = getattr(branch, "welcome_short_audio", None)
-        # inbound_followup (missed-call callback) also opens with the doctor's question,
-        # so it uses the SHORT welcome (not the inbound full one ending in "how can I
-        # help") and a live follow-up greeting below.
-        _is_outbound_greet = is_reminder or is_rebook_call or is_followup or bool(inbound_followup)
-        if _stored_welcome and not _is_outbound_greet:
-            _welcome_task = asyncio.create_task(
-                play_stored_welcome(ctx.room, _stored_welcome)
-            )
-            _used_stored_welcome = True
-        elif _is_outbound_greet and _stored_short:
-            # OUTBOUND (reminder/rebook/followup): instant welcome-ONLY mask (says
-            # namaskaram once); the call's own body follows after session.start and
-            # drops its leading namaskaram so it isn't said twice.
+        _is_outbound_greet = is_reminder or is_rebook_call or is_followup
+        if _is_outbound_greet and _stored_short:
             _welcome_task = asyncio.create_task(
                 play_stored_welcome(ctx.room, _stored_short)
             )
         elif branch_name:
-            # Fallback: live short welcome bridge (reused warm TTS where possible).
+            # Inbound: original live short welcome bridge (reused warm TTS where possible).
             _welcome_tts = ctx.proc.userdata.get("welcome_tts") or smallestai.TTS(
                 api_key=settings.smallest_api_key,
                 model=settings.smallest_model,
