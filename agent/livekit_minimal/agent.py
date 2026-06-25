@@ -2291,7 +2291,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _fg = lines.known_caller_greeting.format(
                     patient=_spk_patient, clinic=branch_name
                 )
-            await session.say(sanitize_for_tts(_fg))
+            # Uninterruptible: the patient often says "చెప్పండి/హా/hello" right after the
+            # intro, which barged in and cut off the doctor's QUESTION (2026-06-25).
+            # The opening question must always be delivered in full.
+            await session.say(sanitize_for_tts(_fg), allow_interruptions=False)
         else:
             # Returning patient → greet by name; new caller → standard greeting.
             if caller_greeting_name:
