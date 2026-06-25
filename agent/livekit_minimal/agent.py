@@ -431,20 +431,20 @@ class _HttpSmallestTTS(smallestai.TTS):
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
-    """GPT-4o PRIMARY, gemini-3.1-flash-lite fallback (2026-06-25).
-
-    Balances speed AND Telugu. On the REAL agent load (10k prompt + 8 function
-    tools + conversation history), a live probe showed GPT-4o answers tool-calling
-    turns in ~1.5s while gemini-3.1-flash-lite took 3-4.5s — a booking is ~4 such
-    turns, so Gemini made bookings drag to ~18s of mostly-silence ('loooot of
-    latency, 15s silent'). GPT-4o's full-model Telugu is good (NOT the weak
-    gpt-4o-mini), so we get fast + good Telugu. Gemini stays as the fallback.
+    """Gemini-only (Vinay 2026-06-25): primary gemini-2.5-flash, fallback
+    gemini-3.1-flash-lite. If the primary is overloaded/slow, the FallbackAdapter
+    swaps to the faster Flash-lite. thinking is disabled on both to keep TTFT low
+    (2.5-flash uses thinking_budget; gemini-3 uses thinking_level).
     """
     from google.genai import types as genai_types
 
     return lk_llm.FallbackAdapter(
         llm=[
-            openai.LLM(api_key=settings.openai_api_key, model="gpt-4o"),
+            google.LLM(
+                api_key=settings.gemini_api_key,
+                model="gemini-2.5-flash",
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            ),
             google.LLM(
                 api_key=settings.gemini_api_key,
                 model="gemini-3.1-flash-lite",
@@ -471,32 +471,21 @@ async def update_call_duration(call_log_id, seconds: int) -> None:
 
 
 async def _routing_llm_call(messages: list) -> str:
-    """Plain-text JSON call used by route_to_doctor. GPT-4o-mini PRIMARY (2026-06-25:
-    Gemini 503/504 storms hung routing); Gemini fallback if OpenAI fails."""
-    try:
-        from openai import AsyncOpenAI
+    """Plain-text JSON call used by route_to_doctor. Gemini-only (Vinay 2026-06-25:
+    no GPT): gemini-3.1-flash-lite (fast for complaint->doctor matching)."""
+    from google import genai
+    from google.genai import types as genai_types
 
-        oai = AsyncOpenAI(api_key=settings.openai_api_key)
-        resp = await oai.chat.completions.create(
-            model="gpt-4o-mini", messages=messages, temperature=0,
-            response_format={"type": "json_object"},
-        )
-        return resp.choices[0].message.content or ""
-    except Exception as exc:
-        logger.error("routing_llm_openai_failed: %s", exc)
-        from google import genai
-        from google.genai import types as genai_types
-
-        client = genai.Client(api_key=settings.gemini_api_key)
-        resp = await client.aio.models.generate_content(
-            model="gemini-3.1-flash-lite",
-            contents="\n".join(m["content"] for m in messages),
-            config=genai_types.GenerateContentConfig(
-                thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
-                response_mime_type="application/json",
-            ),
-        )
-        return resp.text or ""
+    client = genai.Client(api_key=settings.gemini_api_key)
+    resp = await client.aio.models.generate_content(
+        model="gemini-3.1-flash-lite",
+        contents="\n".join(m["content"] for m in messages),
+        config=genai_types.GenerateContentConfig(
+            thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
+            response_mime_type="application/json",
+        ),
+    )
+    return resp.text or ""
 
 
 _PHONE_DIGITS_RE = re.compile(r"\d{4,}")
