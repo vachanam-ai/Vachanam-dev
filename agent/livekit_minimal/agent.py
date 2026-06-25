@@ -317,12 +317,18 @@ class _RawRestChunked(lk_tts.ChunkedStream):
         )
         wf = wave.open(io.BytesIO(wav), "rb")
         sr = wf.getframerate()
-        pcm = wf.readframes(wf.getnframes())
+        ch = wf.getnchannels()
+        n = wf.getnframes()
+        pcm = wf.readframes(n)
         wf.close()
+        logger.info(
+            "rawrest_tts sr=%d ch=%d dur=%.2fs bytes=%d",
+            sr, ch, round(n / max(sr, 1), 2), len(pcm),
+        )
         output_emitter.initialize(
             request_id=_lk_utils.shortuuid(),
             sample_rate=sr,
-            num_channels=1,
+            num_channels=ch,
             mime_type="audio/pcm",
         )
         output_emitter.push(pcm)
