@@ -264,7 +264,9 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "NOT ask it again — just listen to their answer and respond warmly in one line.\n"
     "2) If a target date is given ({target_date}), offer to book a visit within 2 "
     "days of it; on agreement use the booking tools (assign a token around that "
-    "date) and confirm in one breath.\n"
+    "date) and confirm in one breath. SPEAK the date using the words BEFORE the "
+    "parenthesis (e.g. 'ఇరవై తొమ్మిది'); the value in parentheses is the ISO date "
+    "for the tools ONLY — never read the parenthesis or the digits aloud.\n"
     "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
     "triage. If the patient reports ANY problem or pain, say warmly: 'I will inform "
     "the doctor and they will get back to you as soon as possible.' Do not advise.\n"
@@ -277,9 +279,11 @@ DOCTOR_ADVICE_PROMPT_EXTRA = (
     "language — do NOT add, interpret, or invent any medical content of your own "
     "(RULE 7). The doctor's message: \"{message}\".\n"
     "After relaying, ask if they have more concerns; if a target date "
-    "({target_date}) is given, offer to book within 2 days of it. If they report a "
-    "new problem, say 'I will inform the doctor and get back to you as soon as "
-    "possible.' Two short sentences per reply."
+    "({target_date}) is given, offer to book within 2 days of it (SPEAK the date "
+    "using the words before the parenthesis; the value in parentheses is the ISO "
+    "for the tools only — never read it aloud). If they report a new problem, say "
+    "'I will inform the doctor and get back to you as soon as possible.' Two short "
+    "sentences per reply."
 )
 
 _FOLLOWUP_CALLTYPES = {"next_visit_book", "doctor_advice"}
@@ -292,6 +296,20 @@ def _followup_meta_safe(meta: dict) -> dict:
     allowed = ("call_type", "message", "target_date", "window",
                "patient_name", "doctor_name", "doctor_id", "task_id")
     return {k: meta[k] for k in allowed if k in meta}
+
+
+def _spoken_target_date(raw: str, lang_code: str) -> str:
+    """Render an ISO target date for the follow-up prompt as 'Telugu words (ISO)'
+    so the agent SPEAKS it correctly (29 → ఇరవై తొమ్మిది, not '29th') while still
+    having the ISO date for the booking tools. Falls back to raw on parse failure."""
+    if not raw:
+        return raw
+    try:
+        d = date_cls.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return raw
+    spoken = telugu_date(d) if lang_code == "te" else d.strftime("%d %B").lstrip("0")
+    return f"{spoken} ({raw})"
 
 
 
@@ -1825,13 +1843,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # the raw metadata, so private notes can never reach the prompt.
             instructions += NEXT_VISIT_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
-                target_date=followup_meta.get("target_date", ""),
+                target_date=_spoken_target_date(
+                    followup_meta.get("target_date", ""), lang_code
+                ),
             )
             state.call_type = "next_visit_book"
         elif meta.get("call_type") == "doctor_advice":
             instructions += DOCTOR_ADVICE_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
-                target_date=followup_meta.get("target_date", ""),
+                target_date=_spoken_target_date(
+                    followup_meta.get("target_date", ""), lang_code
+                ),
             )
             state.call_type = "doctor_advice"
 
