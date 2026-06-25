@@ -278,9 +278,23 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
     "triage. If the patient reports ANY problem or pain, say warmly: 'I will inform "
     "the doctor and they will get back to you as soon as possible.' Do not advise.\n"
-    "4) The patient is ALREADY in our records — do NOT ask their name or age, and do "
-    "NOT read patient details back. Book on their existing record with the phone we "
-    "already have.\n"
+    "4) BOOKING — the patient is ALREADY on record, so keep it tight (this OVERRIDES "
+    "the normal new-patient details flow):\n"
+    "   - The patient's name is '{patient}'. Do NOT ask their name, do NOT ask their "
+    "age, do NOT read details back. Pass patient_name='{patient}' to confirm_booking; "
+    "it does NOT need age for an existing patient — book on their phone-on-record.\n"
+    "   - Do NOT mention, check, or read out any OTHER appointment they already have. "
+    "This call is ONLY about the follow-up visit — never say 'you already have an "
+    "appointment on <date>'.\n"
+    "   - {doctor} is an APPOINTMENT (time-slot) doctor: confirm ONLY the date and "
+    "time. NEVER say a token or queue number — tokens are meaningless for an "
+    "appointment doctor.\n"
+    "5) ONCE BOOKED — confirm_booking returned success=true — the follow-up is DONE. "
+    "You have ALREADY booked this visit. NEVER offer to book again, NEVER ask 'shall I "
+    "book', NEVER call assign_token or confirm_booking a second time (it will be "
+    "rejected as a duplicate). Just give the ONE confirmation, and when they "
+    "acknowledge, say a short goodbye and end_call. Remember what you have already "
+    "done in this call.\n"
     "Keep every reply to two short sentences."
 )
 
@@ -1974,6 +1988,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             instructions += NEXT_VISIT_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
                 doctor=followup_meta.get("doctor_name", "the doctor"),
+                patient=followup_meta.get("patient_name", "the patient"),
                 target_date=_spoken_target_date(
                     followup_meta.get("target_date", ""), lang_code
                 ),
