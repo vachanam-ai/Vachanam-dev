@@ -166,12 +166,11 @@ def test_system_prompt_has_availability_grounding_and_name_readback():
 
 
 def test_system_prompt_contains_greeting_with_ai_disclosure():
-    """STEP 0 embeds the spoken greeting; the 'AI అసిస్టెంట్' self-identification
-    is the DPDP s.5 disclosure that must always be in it (greeting reworded to a
-    real receptionist register 2026-06-16 — the IVR-ish 'స్వాగతం' was dropped)."""
+    """STEP 0 embeds the spoken greeting; the AI self-identification is the DPDP
+    s.5 disclosure that must always be in it. (2026-06-25: disclosure now in Telugu
+    script 'ఏఐ అసిస్టెంట్' per Vinay's reworded greeting.)"""
     prompt = _make_prompt()
-    assert "AI అసిస్టెంట్" in prompt  # the disclosure itself, not any one greeting word
-    assert "మాట్లాడుతున్నాను" in prompt  # warm receptionist open
+    assert "ఏఐ అసిస్టెంట్" in prompt  # AI self-identification (DPDP disclosure)
 
 
 def test_system_prompt_moves_collection_notice_to_point_of_collection():
@@ -186,10 +185,12 @@ def test_system_prompt_instructs_llm_not_to_repeat_disclosure():
     assert "Do NOT repeat it" in prompt
 
 
-def test_system_prompt_starts_with_vachanam_identity():
-    """Prompt still opens with the agent identity line (not changed by Step 0)."""
+def test_system_prompt_contains_vachanam_identity():
+    """Prompt carries the agent identity line. (2026-06-25: the language directive
+    — 'match the caller' — now legitimately leads the prompt, so the identity is
+    present but no longer strictly first.)"""
     prompt = _make_prompt()
-    assert prompt.startswith("You are Vachanam")
+    assert "You are Vachanam" in prompt
 
 
 def test_system_prompt_step0_precedes_booking_flow():

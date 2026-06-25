@@ -57,9 +57,9 @@ LINES: dict[str, Lines] = {
             "నమస్కారం అండి! క్షమించాలి, ఈ సర్వీస్ ప్రస్తుతానికి ఆగిపోయింది. "
             "దయచేసి క్లినిక్‌కి డైరెక్ట్‌గా కాల్ చేయండి. థాంక్యూ."
         ),
-        # Vinay 2026-06-25: one filler only — "okay". No verbose "ఒక్క నిమిషం చెక్
-        # చేస్తాను" variants.
-        fillers=("ఓకే,",),
+        # Vinay 2026-06-25: minimal "okay" fillers only — no verbose "ఒక్క నిమిషం చెక్
+        # చేస్తాను" variants. A few short variants so it isn't robotic repetition.
+        fillers=("ఓకే,", "ఓకే అండి,", "సరే,"),
         # The welcome clip already said "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం" — so
         # this does NOT repeat namaskaram/clinic; it discloses the AI (legal) and
         # goes straight to "how can I help". Minimal అండి (Vinay 2026-06-24).

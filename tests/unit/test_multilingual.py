@@ -59,8 +59,8 @@ def test_lines_complete(code):
     lines = get_lines(code)
     assert isinstance(lines, Lines)
     assert len(lines.fillers) >= 3 and all(f.strip() for f in lines.fillers)
-    # Greeting placeholders survive for the call site to fill.
-    assert "{clinic}" in lines.disclosure_greeting
+    # Greeting placeholders survive for the call site to fill. (disclosure_greeting
+    # is a fixed line now — the welcome clip carries the clinic name, 2026-06-24.)
     assert "{patient}" in lines.known_caller_greeting and "{clinic}" in lines.known_caller_greeting
     for ph in ("{patient}", "{clinic}", "{time}", "{doctor}"):
         assert ph in lines.reminder_greeting
