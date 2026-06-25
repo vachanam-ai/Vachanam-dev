@@ -1985,6 +1985,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # gap is attributable to a stage (STT finalize / LLM TTFT / TTS TTFB /
         # end-of-utterance delay) instead of guessed. log_metrics keeps the
         # existing structured line; the extra line surfaces the key numbers.
+        # TEMP DIAGNOSTIC (2026-06-25): log what Sarvam actually transcribed for the
+        # patient, to tell an STT failure apart from an LLM behaviour problem
+        # ("voice unclear" loop). PII: short utterances only, tenant-scoped logs.
+        @session.on("user_input_transcribed")
+        def _on_user_transcript(ev) -> None:  # noqa: ANN001
+            try:
+                txt = getattr(ev, "transcript", "") or ""
+                final = getattr(ev, "is_final", True)
+                if final:
+                    logger.info("user_said=%r", txt[:120])
+            except Exception:  # noqa: BLE001
+                pass
+
         @session.on("metrics_collected")
         def _on_metrics(ev: MetricsCollectedEvent) -> None:
             metrics.log_metrics(ev.metrics)
