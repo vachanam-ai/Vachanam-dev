@@ -260,13 +260,17 @@ REMINDER_PROMPT_EXTRA = (
 NEXT_VISIT_PROMPT_EXTRA = (
     "\n\nTHIS IS A TREATMENT FOLLOW-UP CALL. You already know this patient — never "
     "ask who they are or restart the new-patient flow.\n"
+    "DOCTOR IS ALREADY KNOWN: this follow-up is for {doctor}, the same doctor who "
+    "treated this patient. NEVER ask the patient which doctor, NEVER call "
+    "route_to_doctor — the visit is with {doctor}. Use {doctor} directly for "
+    "check_availability and the booking.\n"
     "1) Your OPENING line already asked the doctor's question (\"{message}\"). Do "
     "NOT ask it again — just listen to their answer and respond warmly in one line.\n"
-    "2) If a target date is given ({target_date}), offer to book a visit within 2 "
-    "days of it; on agreement use the booking tools (assign a token around that "
-    "date) and confirm in one breath. SPEAK the date using the words BEFORE the "
-    "parenthesis (e.g. 'ఇరవై తొమ్మిది'); the value in parentheses is the ISO date "
-    "for the tools ONLY — never read the parenthesis or the digits aloud.\n"
+    "2) If a target date is given ({target_date}), offer to book a visit with "
+    "{doctor} within 2 days of it; on agreement use the booking tools (assign a "
+    "token around that date) and confirm in one breath. SPEAK the date using the "
+    "words BEFORE the parenthesis (e.g. 'ఇరవై తొమ్మిది'); the value in parentheses is "
+    "the ISO date for the tools ONLY — never read the parenthesis or digits aloud.\n"
     "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
     "triage. If the patient reports ANY problem or pain, say warmly: 'I will inform "
     "the doctor and they will get back to you as soon as possible.' Do not advise.\n"
@@ -330,8 +334,10 @@ class _RawRestChunked(lk_tts.ChunkedStream):
         from backend.services.welcome_synth import synth_wav
 
         opts = self._mytts._opts
+        # speed 0.9: the default rate sounded rushed on the phone, esp. the doctor's
+        # question (Vinay 2026-06-25). Slightly slower = clearer.
         wav = await asyncio.to_thread(
-            synth_wav, self._input_text, opts.voice_id, opts.language
+            synth_wav, self._input_text, opts.voice_id, opts.language, 0.9
         )
         wf = wave.open(io.BytesIO(wav), "rb")
         sr = wf.getframerate()
@@ -367,26 +373,24 @@ class _HttpSmallestTTS(smallestai.TTS):
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
-    """GPT-4o-mini PRIMARY, gemini-3.1-flash-lite fallback (2026-06-25).
+    """gemini-3.1-flash-lite PRIMARY, GPT-4o (not mini) fallback (2026-06-25).
 
-    Gemini was unusable on live calls all session: 503 storms, then 504
-    DEADLINE_EXCEEDED on nearly every turn. Because the Google API rejects an
-    attempt_timeout under 10s (400), each Gemini failure burns the FULL 10s
-    before the adapter switches — "latency is horrible" + the cold fallback
-    voice. GPT-4o-mini is fast (~1-2s) and reliable; make it primary so turns
-    don't gate on Gemini's health. Gemini stays as a fallback for when it
-    recovers. Swap back to Gemini-primary only if it proves stable again.
+    QUALITY is the priority (Vinay). A live probe: gemini-3.1-flash-lite gives the
+    most natural, colloquial Telugu (~1.7s, healthy now); GPT-4o-mini's Telugu is
+    bookish/weak ('Telugu worst'). Gemini's morning 504 storm was transient. So
+    Gemini is primary for the best Telugu; the fallback is upgraded to GPT-4o (also
+    good Telugu, reliable) so a Gemini blip never drops to the weak mini.
     """
     from google.genai import types as genai_types
 
     return lk_llm.FallbackAdapter(
         llm=[
-            openai.LLM(api_key=settings.openai_api_key, model="gpt-4o-mini"),
             google.LLM(
                 api_key=settings.gemini_api_key,
                 model="gemini-3.1-flash-lite",
                 thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
             ),
+            openai.LLM(api_key=settings.openai_api_key, model="gpt-4o"),
         ],
         attempt_timeout=10.0,
     )
@@ -1843,6 +1847,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # the raw metadata, so private notes can never reach the prompt.
             instructions += NEXT_VISIT_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
+                doctor=followup_meta.get("doctor_name", "the doctor"),
                 target_date=_spoken_target_date(
                     followup_meta.get("target_date", ""), lang_code
                 ),
