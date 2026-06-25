@@ -39,6 +39,7 @@ class Lines:
     # doctor's question {message}; _noq is a generic post-treatment check-in.
     followup_greeting_q: str = ""    # {patient} {clinic} {message}
     followup_greeting_noq: str = ""  # {patient} {clinic}
+    inbound_followup_greeting: str = ""  # {message} — disclosure + doctor's question
 
 
 # Shared English brevity directive for non-Telugu languages (LLM instruction).
@@ -56,12 +57,9 @@ LINES: dict[str, Lines] = {
             "నమస్కారం అండి! క్షమించాలి, ఈ సర్వీస్ ప్రస్తుతానికి ఆగిపోయింది. "
             "దయచేసి క్లినిక్‌కి డైరెక్ట్‌గా కాల్ చేయండి. థాంక్యూ."
         ),
-        fillers=(
-            "ఒక్క నిమిషం అండి, చెక్ చేస్తాను.",
-            "ఒక్క సెకండ్ అండి, చూస్తున్నాను.",
-            "చూసి చెప్తానండి, ఒక్క నిమిషం.",
-            "సరేనండి, ఒక్కసారి సిస్టమ్‌లో చూస్తాను.",
-        ),
+        # Vinay 2026-06-25: one filler only — "okay". No verbose "ఒక్క నిమిషం చెక్
+        # చేస్తాను" variants.
+        fillers=("ఓకే,",),
         # The welcome clip already said "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం" — so
         # this does NOT repeat namaskaram/clinic; it discloses the AI (legal) and
         # goes straight to "how can I help". Minimal అండి (Vinay 2026-06-24).
@@ -98,6 +96,11 @@ LINES: dict[str, Lines] = {
         followup_greeting_noq=(
             "{patient} గారు, ఇది {clinic} క్లినిక్ నుండి చిన్న కాల్ అండి. "
             "ట్రీట్‌మెంట్ తర్వాత ఇప్పుడు మీకు ఎలా అనిపిస్తుందో చెప్పగలరా అండి?"
+        ),
+        # Missed-call callback: the patient rang back; disclose the AI (inbound legal
+        # notice) + deliver the doctor's question. {message} = the doctor's question.
+        inbound_followup_greeting=(
+            "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని. డాక్టర్ గారు మిమ్మల్ని ఒక విషయం అడగమన్నారు. {message}"
         ),
         brevity=(
             "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి ఆన్సర్ చాలా చిన్నగా, "

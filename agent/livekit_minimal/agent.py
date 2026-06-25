@@ -278,6 +278,9 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
     "triage. If the patient reports ANY problem or pain, say warmly: 'I will inform "
     "the doctor and they will get back to you as soon as possible.' Do not advise.\n"
+    "4) The patient is ALREADY in our records — do NOT ask their name or age, and do "
+    "NOT read patient details back. Book on their existing record with the phone we "
+    "already have.\n"
     "Keep every reply to two short sentences."
 )
 
@@ -318,6 +321,53 @@ def _spoken_target_date(raw: str, lang_code: str) -> str:
         return raw
     spoken = telugu_date(d) if lang_code == "te" else d.strftime("%d %B").lstrip("0")
     return f"{spoken} ({raw})"
+
+
+async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
+    """For an INBOUND caller, find a pending next_visit_book follow-up so the agent
+    can deliver the doctor's question + offer the scheduled visit when the patient
+    missed the outbound call and rang back. Branch-scoped (RULE 1). Best-effort —
+    returns None on anything missing/failed."""
+    try:
+        from sqlalchemy import select as _sel
+
+        from backend.models.schema import (
+            Doctor as _D,
+            FollowupTask as _FT,
+            Patient as _P,
+            TreatmentNote as _TN,
+        )
+
+        # Join by phone (a number can map to several Patient rows — find the task on
+        # ANY of them, not just the first patient row).
+        task = (await db.execute(
+            _sel(_FT).join(_P, _FT.patient_id == _P.id).where(
+                _FT.branch_id == branch_id,
+                _P.phone == phone,
+                _FT.task_type == "next_visit_book",
+                _FT.status == "pending",
+            ).order_by(_FT.scheduled_date.asc())
+        )).scalars().first()
+        if task is None:
+            return None
+        doc = (await db.execute(_sel(_D).where(_D.id == task.doctor_id))).scalars().first()
+        target_iso = ""
+        if task.treatment_note_id:
+            tn = (await db.execute(
+                _sel(_TN).where(_TN.id == task.treatment_note_id)
+            )).scalars().first()
+            if tn is not None and tn.next_reporting_date:
+                target_iso = tn.next_reporting_date.isoformat()
+        return {
+            "task_id": str(task.id),
+            "doctor_id": str(task.doctor_id),
+            "doctor_name": doc.name if doc else "the doctor",
+            "message": task.what_to_ask or "",
+            "target_date": target_iso,
+        }
+    except Exception as e:  # noqa: BLE001 — never block answering
+        logger.warning("inbound_followup_lookup_failed: %s", e)
+        return None
 
 
 
@@ -1646,7 +1696,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # post-session greeting is skipped. NULL → fall back to live synth.
         _stored_welcome = getattr(branch, "welcome_audio", None)
         _stored_short = getattr(branch, "welcome_short_audio", None)
-        _is_outbound_greet = is_reminder or is_rebook_call or is_followup
+        # inbound_followup (missed-call callback) also opens with the doctor's question,
+        # so it uses the SHORT welcome (not the inbound full one ending in "how can I
+        # help") and a live follow-up greeting below.
+        _is_outbound_greet = is_reminder or is_rebook_call or is_followup or bool(inbound_followup)
         if _stored_welcome and not _is_outbound_greet:
             _welcome_task = asyncio.create_task(
                 play_stored_welcome(ctx.room, _stored_welcome)
@@ -1777,6 +1830,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # lookup is branch-scoped; a failure must never block answering (RULE 8).
         caller_greeting_name: str | None = None
         caller_prompt_extra = ""
+        inbound_followup: dict | None = None  # missed-call callback (set below)
         if not outbound_number and not is_reminder and not is_rebook_call and state.patient_phone:
             try:
                 _caller_rows = await find_bookings_by_phone(
@@ -1803,6 +1857,33 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             "flow — do NOT ask for their name again unless they say "
                             "the booking is for a different person."
                         )
+                # MISSED-CALL CALLBACK: if this caller has a pending follow-up the
+                # doctor scheduled, the agent proactively raises the doctor's question
+                # + offers the booking (instead of a plain inbound). Booking marks the
+                # task complete (state.followup_task_id), stopping the outbound retry.
+                inbound_followup = await _inbound_pending_followup(
+                    state.branch_id, state.patient_phone, db
+                )
+                if inbound_followup:
+                    # The GREETING (below) deterministically asks the doctor's question;
+                    # this extra just drives the booking offer + locks the doctor.
+                    _td = _spoken_target_date(inbound_followup.get("target_date", ""), lang_code)
+                    caller_prompt_extra += (
+                        "\n\nPENDING FOLLOW-UP: your opening already asked the doctor's "
+                        "question. After the patient answers, ALWAYS tell them the doctor "
+                        f"wants them back around {_td} for a follow-up with "
+                        f"{inbound_followup['doctor_name']} and OFFER TO BOOK it — book "
+                        f"with {inbound_followup['doctor_name']}, never ask which doctor. "
+                        "The patient is already in our records — do NOT ask their name or "
+                        "age; book on their existing record. Do NOT end without offering "
+                        "it. Speak the date using the words BEFORE the parenthesis; the "
+                        "parenthesis is the ISO for tools only."
+                    )
+                    try:
+                        state.followup_task_id = UUID(inbound_followup["task_id"])
+                        state.doctor_id = UUID(inbound_followup["doctor_id"])
+                    except (ValueError, KeyError):
+                        pass
             except Exception as e:
                 logger.warning("caller_lookup_failed: %s", e)
 
@@ -2296,17 +2377,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # The opening question must always be delivered in full.
             await session.say(sanitize_for_tts(_fg), allow_interruptions=False)
         else:
-            # Returning patient → greet by name; new caller → standard greeting.
-            if caller_greeting_name:
-                _greeting = lines.known_caller_greeting.format(
-                    patient=caller_greeting_name, clinic=branch_name
+            if inbound_followup and lines.inbound_followup_greeting and inbound_followup.get("message"):
+                # MISSED-CALL CALLBACK: short welcome played (no "how can I help"); now
+                # disclose the AI + deliver the doctor's question, uninterruptible so it
+                # lands. The prompt extra then drives the booking offer. (Consent still
+                # recorded below — the disclosure was served.)
+                await session.say(
+                    sanitize_for_tts(
+                        lines.inbound_followup_greeting.format(
+                            message=inbound_followup["message"]
+                        )
+                    ),
+                    allow_interruptions=False,
                 )
             else:
-                _greeting = lines.disclosure_greeting.format(clinic=branch_name)
-            # When the pre-rendered welcome already spoke the full greeting +
-            # disclosure (Option 1), don't repeat it live — only record consent.
-            if not _used_stored_welcome:
-                await session.say(sanitize_for_tts(_greeting))
+                # Returning patient → greet by name; new caller → standard greeting.
+                if caller_greeting_name:
+                    _greeting = lines.known_caller_greeting.format(
+                        patient=caller_greeting_name, clinic=branch_name
+                    )
+                else:
+                    _greeting = lines.disclosure_greeting.format(clinic=branch_name)
+                # When the pre-rendered welcome already spoke the full greeting +
+                # disclosure (Option 1), don't repeat it live — only record consent.
+                if not _used_stored_welcome:
+                    await session.say(sanitize_for_tts(_greeting))
 
             # DPDP s.5 demonstrable notice: the greeting just spoken contains the
             # AI-assistant / data-processing disclosure. Record that notice was
