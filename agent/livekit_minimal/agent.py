@@ -431,24 +431,25 @@ class _HttpSmallestTTS(smallestai.TTS):
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
-    """gemini-3.1-flash-lite PRIMARY, GPT-4o (not mini) fallback (2026-06-25).
+    """GPT-4o PRIMARY, gemini-3.1-flash-lite fallback (2026-06-25).
 
-    QUALITY is the priority (Vinay). A live probe: gemini-3.1-flash-lite gives the
-    most natural, colloquial Telugu (~1.7s, healthy now); GPT-4o-mini's Telugu is
-    bookish/weak ('Telugu worst'). Gemini's morning 504 storm was transient. So
-    Gemini is primary for the best Telugu; the fallback is upgraded to GPT-4o (also
-    good Telugu, reliable) so a Gemini blip never drops to the weak mini.
+    Balances speed AND Telugu. On the REAL agent load (10k prompt + 8 function
+    tools + conversation history), a live probe showed GPT-4o answers tool-calling
+    turns in ~1.5s while gemini-3.1-flash-lite took 3-4.5s — a booking is ~4 such
+    turns, so Gemini made bookings drag to ~18s of mostly-silence ('loooot of
+    latency, 15s silent'). GPT-4o's full-model Telugu is good (NOT the weak
+    gpt-4o-mini), so we get fast + good Telugu. Gemini stays as the fallback.
     """
     from google.genai import types as genai_types
 
     return lk_llm.FallbackAdapter(
         llm=[
+            openai.LLM(api_key=settings.openai_api_key, model="gpt-4o"),
             google.LLM(
                 api_key=settings.gemini_api_key,
                 model="gemini-3.1-flash-lite",
                 thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
             ),
-            openai.LLM(api_key=settings.openai_api_key, model="gpt-4o"),
         ],
         attempt_timeout=10.0,
     )
@@ -745,6 +746,7 @@ class VachanamAgent(Agent):
         """Atomically reserve the next token for doctor+date. Call only after
         check_availability confirms capacity AND the patient agrees to the date.
         appointment_time (HH:MM) only for slot-type doctors."""
+        _say_lookup_filler(context)  # cover the atomic-assign beat (no dead air)
         result = await assign_token(
             doctor_id=await self._resolve_doctor_id(doctor_id),
             branch_id=self._state.branch_id,
