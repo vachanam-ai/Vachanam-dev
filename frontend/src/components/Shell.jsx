@@ -7,6 +7,7 @@ const NAV = {
     { to: "/queue", label: "Queue" },
     { to: "/walk-in", label: "Walk-in" },
     { to: "/treatments", label: "Treatments" },
+    { to: "/patients", label: "Patients" },
     { to: "/availability", label: "Doctor leave" }
   ],
   org_admin: [
@@ -14,6 +15,7 @@ const NAV = {
     { to: "/queue", label: "Queue" },
     { to: "/walk-in", label: "Walk-in" },
     { to: "/treatments", label: "Treatments" },
+    { to: "/patients", label: "Patients" },
     { to: "/availability", label: "Doctor leave" },
     { to: "/my-schedule", label: "Doctors" },
     { to: "/settings", label: "Settings" }

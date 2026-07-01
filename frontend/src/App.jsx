@@ -8,6 +8,7 @@ import Settings from "./pages/Settings.jsx";
 import Queue from "./pages/Queue.jsx";
 import WalkIn from "./pages/WalkIn.jsx";
 import Treatments from "./pages/Treatments.jsx";
+import Patients from "./pages/Patients.jsx";
 import Availability from "./pages/Availability.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import DoctorSchedule from "./pages/DoctorSchedule.jsx";
@@ -73,6 +74,14 @@ export default function App() {
           element={
             <Protected roles={["org_admin", "doctor", "receptionist"]}>
               <Treatments />
+            </Protected>
+          }
+        />
+        <Route
+          path="/patients"
+          element={
+            <Protected roles={["org_admin", "receptionist"]}>
+              <Patients />
             </Protected>
           }
         />
