@@ -221,6 +221,9 @@ class Patient(Base):
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     gender: Mapped[str | None] = mapped_column(String(10), nullable=True)
     followup_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Exactly one patient per phone is the owner (is_primary). Family members
+    # sharing the phone are is_primary=False. NULL-phone rows: each its own primary.
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # DPDP s.8(7) retention: set by the data_retention job when this patient's PII
     # is erased (name/phone/age/gender cleared) after the retention window. NULL =
@@ -230,6 +233,21 @@ class Patient(Base):
     branch: Mapped["Branch"] = relationship(back_populates="patients")
     tokens: Mapped[list["Token"]] = relationship(back_populates="patient")
     followup_tasks: Mapped[list["FollowupTask"]] = relationship(back_populates="patient")
+
+    __table_args__ = (
+        # No two patients per branch share the same phone AND name (case-
+        # insensitive). Partial: only enforced when a phone is present, so
+        # several NULL-phone walk-ins never collide. Family members = distinct
+        # names on the same phone, so they pass.
+        Index(
+            "uq_patient_branch_phone_name",
+            "branch_id",
+            "phone",
+            func.lower(name),
+            unique=True,
+            postgresql_where=text("phone IS NOT NULL"),
+        ),
+    )
 
 
 class Consent(Base):
