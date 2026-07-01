@@ -1071,22 +1071,32 @@ async def recognize_caller_name(
     an UPCOMING booking, so a returning patient whose appointment is already
     done got "who are you?". The Patient row persists, so recognition should too.
 
-    Returns the name only when exactly ONE distinct name is on file for that
-    number (RULE 1: branch-scoped). Several names (a shared family phone) → None,
-    so the agent asks instead of greeting the wrong person.
+    Returns the name of the patient who OWNS the number (Patient.is_primary) when
+    several patients share it (a shared family phone), so the agent greets the
+    primary instead of asking "who are you?" (RULE 1: branch-scoped). If no
+    primary is flagged (legacy row) but exactly ONE distinct name is on file, that
+    name is returned. None only when no patient / no primary and >1 distinct name.
     """
     digits = _phone_digits(phone)
     if len(digits) < 10:
         return None
     last10 = digits[-10:]
-    names = (
+    rows = (
         await db.execute(
-            select(Patient.name).where(
+            select(Patient.name, Patient.is_primary).where(
                 and_(Patient.branch_id == branch_id, Patient.phone.like(f"%{last10}"))
             )
         )
-    ).scalars().all()
-    distinct = {n.strip() for n in names if n and n.strip()}
+    ).all()
+    named = [(n.strip(), pr) for (n, pr) in rows if n and n.strip()]
+    if not named:
+        return None
+    # Primary owns the phone -> greet them by name even on a shared family phone.
+    for n, is_primary in named:
+        if is_primary:
+            return n
+    # No primary flagged (legacy row) but exactly one name -> safe to greet.
+    distinct = {n for n, _ in named}
     return next(iter(distinct)) if len(distinct) == 1 else None
 
 
