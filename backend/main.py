@@ -243,6 +243,7 @@ from backend.routers import availability as availability_router
 from backend.routers import branches as branches_router
 from backend.routers import doctors as doctors_router
 from backend.routers import legal as legal_router
+from backend.routers import patients as patients_router
 from backend.routers import payments as payments_router
 from backend.routers import queue as queue_router
 from backend.routers import treatment as treatment_router
@@ -258,6 +259,7 @@ app.include_router(branches_router.router, prefix="/branches", tags=["branches"]
 app.include_router(legal_router.router, tags=["legal"])
 app.include_router(analytics_router.router, tags=["analytics"])
 app.include_router(treatment_router.router, prefix="/treatment", tags=["treatment"])
+app.include_router(patients_router.router, prefix="/patients", tags=["patients"])
 
 # Landing page (Vachanam marketing mirror + Razorpay test target).
 # Static files served from backend/static/ — landing index.html at /,
