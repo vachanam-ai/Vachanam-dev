@@ -463,8 +463,14 @@ async def create_walkin(
     # slot/token is burned until TTL.
     try:
         if patient is None:
+            # First patient on this phone owns it (is_primary). A NULL-phone
+            # walk-in has no phone-mates, so it is its own primary too.
+            existing_on_phone = same_phone if norm_phone else []
             patient = Patient(
-                branch_id=branch_uuid, name=body.patient_name, phone=norm_phone
+                branch_id=branch_uuid,
+                name=body.patient_name,
+                phone=norm_phone,
+                is_primary=(len(existing_on_phone) == 0),
             )
             db.add(patient)
             await db.flush()

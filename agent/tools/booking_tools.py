@@ -774,6 +774,8 @@ async def confirm_booking(
             age=patient_age,
             gender=patient_gender,
             followup_consent=followup_consent,
+            # First patient on this phone owns it; family members added later are not.
+            is_primary=(len(same_phone) == 0),
         )
         db.add(patient)
         await db.flush()
