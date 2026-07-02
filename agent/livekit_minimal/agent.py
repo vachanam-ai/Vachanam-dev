@@ -1835,7 +1835,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # post-answer silence). RULE 8: any failure is swallowed; the real greeting
         # still plays regardless.
         _welcome_task = None
-        _used_stored_welcome = False
+        # B18: `_used_stored_welcome` removed — it was set to False and never
+        # flipped True since the stored welcome became outbound-only, so the
+        # `if not _used_stored_welcome` guard below was always-True dead code.
         # The pre-rendered clip is OUTBOUND-ONLY now (Vinay 2026-06-25: inbound calls
         # don't want a welcome clip — the original live greeting is good enough).
         # OUTBOUND (reminder/rebook/followup) plays the instant welcome-ONLY mask to
@@ -2534,10 +2536,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     )
                 else:
                     _greeting = lines.disclosure_greeting.format(clinic=branch_name)
-                # When the pre-rendered welcome already spoke the full greeting +
-                # disclosure (Option 1), don't repeat it live — only record consent.
-                if not _used_stored_welcome:
-                    await session.say(sanitize_for_tts(_greeting))
+                # B18: the live greeting always plays (the stored welcome is
+                # outbound-only and never spoke the full greeting+disclosure
+                # inbound). The old `if not _used_stored_welcome` guard was dead.
+                await session.say(sanitize_for_tts(_greeting))
 
             # DPDP s.5 demonstrable notice: the greeting just spoken contains the
             # AI-assistant / data-processing disclosure. Record that notice was
