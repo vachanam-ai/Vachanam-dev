@@ -170,6 +170,22 @@ class GoogleCalendarService:
                 error=str(exc),
             )
             raise CalendarWriteFailed(str(exc)) from exc
+        except Exception as exc:
+            # B6: non-HttpError failures (socket timeout, google.auth token
+            # refresh error, SSL error during events().insert) must ALSO surface
+            # as CalendarWriteFailed. Otherwise they sail past every
+            # `except CalendarWriteFailed` wrapper: the retry/enqueue loop in
+            # write_booking_calendar can't catch them, the walk-in route 500s
+            # AFTER commit, and no CalendarWriteTask is enqueued (the event is
+            # silently never created).
+            logger.error(
+                "calendar_create_failed_unexpected",
+                calendar_id=calendar_id,
+                doctor_name=doctor_name,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise CalendarWriteFailed(str(exc)) from exc
 
     # ── TOKEN-DOCTOR PATH ─────────────────────────────────────────────────────
 
