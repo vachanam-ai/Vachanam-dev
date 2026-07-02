@@ -819,6 +819,13 @@ class VachanamAgent(Agent):
             self._state.token_held = True
             self._state.token_number = result["token_number"]
             self._state.token_redis_key = result["redis_key"]
+            # B4: token_confirmed is a per-BOOKING latch, not a per-call one. A
+            # single call can hold several sequential bookings (family cap = 2,
+            # plus reschedules). If a prior booking left it True, this NEW hold
+            # must reset it — otherwise RULE 3 shutdown cleanup skips releasing
+            # this hold, and the cancel/end-call guards (which key off
+            # not token_confirmed) go inert for exactly the in-progress booking.
+            self._state.token_confirmed = False
             # APPOINTMENT (schedule) doctors have NO patient-facing queue number —
             # the returned token_number is an internal slot index. Surfacing it to
             # the LLM is exactly how it gets spoken as a "token number" on schedule
@@ -921,6 +928,50 @@ class VachanamAgent(Agent):
         resolved = await self._resolve_doctor_id(doctor_id)
         parsed_date = self._parse_date(booking_date)
         parsed_time = self._parse_time(appointment_time)
+
+        # B2: the confirm time MUST match the atomically-held slot. state
+        # .token_redis_key encodes the held slot as slot:<doc>:<branch>:<date>:
+        # <HHMM> — the only slot the Redis gate actually protected. Two hazards
+        # the DB re-count alone can't close:
+        #   (A) the LLM omits appointment_time at confirm -> a slot doctor would
+        #       be written with appointment_time=NULL (no reminder, calendar
+        #       defaults to 12:00, queue shows no time). Inherit the held time.
+        #   (B) the LLM confirms a DIFFERENT time than it held -> the atomic gate
+        #       protected the OLD time; the new time is guarded only by a TOCTOU
+        #       re-count that two concurrent callers can both pass. Release the
+        #       stale hold (RULE 3) and re-acquire the new time atomically.
+        held_key = self._state.token_redis_key or ""
+        if self._state.token_held and held_key.startswith("slot:"):
+            held_hhmm = held_key.rsplit(":", 1)[-1]  # 'HHMM'
+            held_time = None
+            if len(held_hhmm) == 4 and held_hhmm.isdigit():
+                held_time = time_cls(int(held_hhmm[:2]), int(held_hhmm[2:]))
+            if parsed_time is None and held_time is not None:
+                # (A) adopt the held slot's time as the confirm time.
+                parsed_time = held_time
+                appointment_time = held_time.strftime("%H:%M")
+            elif (
+                parsed_time is not None
+                and held_time is not None
+                and parsed_time != held_time
+            ):
+                # (B) confirm time drifted off the hold — re-gate atomically.
+                await self._release_hold({"redis_key": held_key})
+                self._clear_hold()
+                rehold = await assign_token(
+                    doctor_id=resolved,
+                    branch_id=self._state.branch_id,
+                    booking_date=parsed_date,
+                    db=self._db,
+                    appointment_time=parsed_time,
+                )
+                if not rehold.get("success"):
+                    return rehold  # slot full / past / off-grid — surfaced to LLM
+                self._state.token_held = True
+                self._state.token_confirmed = False  # B4: fresh hold, fresh state
+                self._state.token_number = rehold["token_number"]
+                self._state.token_redis_key = rehold.get("redis_key")
+
         # RULE 2 (race-proof): if the LLM skipped assign_token there is no
         # server-side hold, and confirm_booking's DB re-count is TOCTOU under
         # concurrency (bug-bounty T1). Acquire the atomic Redis hold NOW — same
@@ -938,6 +989,7 @@ class VachanamAgent(Agent):
             if not held.get("success"):
                 return held  # full / past_slot / outside_hours — surfaced to LLM
             self._state.token_held = True
+            self._state.token_confirmed = False  # B4: fresh hold -> fresh latch
             self._state.token_number = held["token_number"]
             self._state.token_redis_key = held.get("redis_key")
         # The number reserved by assign_token (held server-side) is the truth —
