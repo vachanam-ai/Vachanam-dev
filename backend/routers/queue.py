@@ -532,7 +532,10 @@ async def create_walkin(
         doctor,
         doctor.google_calendar_id or branch_row.google_calendar_id,
         patient_first_name=body.patient_name.split()[0] if body.patient_name else "",
-        patient_phone_last4=(body.patient_phone or "")[-4:],
+        # B17: use the NORMALIZED phone for last-4, not the raw typed value — a
+        # trailing space / formatting in the input otherwise put junk like
+        # "345 " into the calendar summary.
+        patient_phone_last4=(norm_phone or "")[-4:],
     )
 
     request.state.audit_resource_id = str(token.id)
