@@ -28,6 +28,19 @@ logger = structlog.get_logger()
 # Token holds are NOT affected — that counter is the all-day queue sequence.
 SLOT_HOLD_TTL_SECONDS = 900
 
+# B5: atomic "seed the token counter forward to the DB floor, then increment".
+# Runs server-side in ONE step so concurrent assigns after a Redis eviction can
+# never both read a stale value and hand out the same number. ARGV[1] = the DB
+# confirmed count (the floor); returns the newly-assigned token number.
+_TOKEN_SEED_INCR_LUA = """
+local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+local floor = tonumber(ARGV[1])
+if floor > cur then
+  redis.call('SET', KEYS[1], floor)
+end
+return redis.call('INCR', KEYS[1])
+"""
+
 # iter1 #12: the spoken complaint is fully attacker-controlled (the caller can
 # say anything, including "ignore your instructions and ..."). Before it reaches
 # the routing LLM prompt we strip control/newline characters (which a prompt
@@ -536,11 +549,18 @@ async def assign_token(
         if db_confirmed >= limit:
             return {"success": False, "reason": "full"}
 
+        # B5: the seed-forward MUST be atomic. The old GET -> (SET floor) ->
+        # INCR was three round-trips: after a Redis eviction two concurrent
+        # assigns could both read cur=0, both SET the floor, and both INCR to
+        # the SAME number — two callers holding one token (the second confirm
+        # then fails the num_taken pre-check / unique index, forcing the real
+        # caller to redo assign). Do floor+increment in one Lua script so the
+        # whole operation is a single atomic step. DB pre-check + partial unique
+        # index remain the backstop.
         async with _redis() as r:
-            cur = int(await r.get(redis_key) or 0)
-            if db_confirmed > cur:
-                await r.set(redis_key, db_confirmed)  # seed forward, no number reuse
-            token_number = await r.incr(redis_key)
+            token_number = int(
+                await r.eval(_TOKEN_SEED_INCR_LUA, 1, redis_key, str(db_confirmed))
+            )
             await r.expire(redis_key, max(ttl_seconds, 7200))
 
         logger.info(

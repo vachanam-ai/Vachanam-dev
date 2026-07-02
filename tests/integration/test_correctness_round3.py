@@ -398,3 +398,48 @@ async def test_b4_new_hold_resets_token_confirmed(clinic, db, redis):
 
     with pytest.raises(_ToolError):
         VachanamAgent._check_end_allowed(state, abandon_pending_booking=False)
+
+
+# ── B5: atomic seed-forward — evicted counter never re-issues a number ────────
+
+
+async def test_b5_seed_forward_after_eviction_no_reuse(clinic, db, redis):
+    """After a Redis eviction the counter reads 0 while N tokens are confirmed
+    in the DB. The seed-forward must lift it to N+1 in ONE atomic step, and
+    many concurrent assigns must all get distinct numbers (never a repeat)."""
+    import asyncio
+
+    import backend.database as _dbmod
+
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    doc_id, branch_id = doc.id, branch.id
+    day = _tomorrow()
+
+    # Book 3 confirmed tokens, then simulate an eviction of the counter key.
+    for i in range(3):
+        a = await assign_token(doc_id, branch_id, day, db)
+        c = await confirm_booking(
+            doctor_id=doc_id, branch_id=branch_id, patient_name=f"Seed {i}",
+            patient_phone=f"+91966644{i:04d}", complaint="fever", booking_date=day,
+            token_number=a["token_number"], followup_consent=False, patient_age=30,
+            appointment_time=None, source="voice", db=db,
+            calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+        )
+        assert c["success"]
+    redis_key = f"token:{doc_id}:{branch_id}:{day}"
+    await redis.delete(redis_key)  # eviction
+
+    # Fire many concurrent assigns on independent sessions (gated so NullPool
+    # never opens more connections than Postgres allows).
+    sem = asyncio.Semaphore(5)
+
+    async def _one():
+        async with sem:
+            async with _dbmod.AsyncSessionLocal() as s:
+                return await assign_token(doc_id, branch_id, day, s)
+
+    results = await asyncio.gather(*[_one() for _ in range(8)])
+    numbers = [r["token_number"] for r in results if r.get("success")]
+    assert len(numbers) == len(set(numbers)), f"duplicate token numbers: {numbers}"
+    # every number is above the 3 already-confirmed seats (seed floor respected)
+    assert min(numbers) >= 4, f"seed-forward re-issued a used number: {numbers}"
