@@ -209,6 +209,22 @@ def _cancel_on_shutdown(task):
     return _cb
 
 
+KNOWN_CALLER_BOOKING_EXTRA = (
+    "\n\nCALLER IDENTIFICATION: this number belongs to an EXISTING patient, "
+    "{name}, with no upcoming booking. The greeting already welcomed them by "
+    "name. After they state the concern, ask ONCE whether the appointment is "
+    "for THEMSELVES or for SOMEONE ELSE (spoken naturally in the call's "
+    "language, e.g. 'is this appointment for you, or for someone else?').\n"
+    "- FOR THEMSELVES: do NOT ask their name or age again — you already know "
+    "them as {name}. Take only the concern (route_to_doctor) and their "
+    "preferred time, then confirm_booking with patient_name='{name}' and "
+    "different_person=false.\n"
+    "- FOR SOMEONE ELSE: take that person's NAME and AGE. The phone number is "
+    "OPTIONAL — do NOT insist on it (spoken digits are often misheard); if not "
+    "given, book under this caller's number. Call confirm_booking with that "
+    "person's name and age and different_person=true."
+)
+
 REBOOK_PROMPT_EXTRA = (
     "\n\nTHIS IS A CASCADE-REBOOK CALL (doctor went on leave; the patient's "
     "booking on {cancelled_date} with {doctor} was cancelled by the clinic). "
@@ -1895,13 +1911,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     )
                     if _known:
                         caller_greeting_name = _known
-                        caller_prompt_extra = (
-                            "\n\nCALLER IDENTIFICATION: this number belongs to an "
-                            f"EXISTING patient, {_known}, with no upcoming booking. "
-                            "The greeting already welcomed them by name. Greet warmly, "
-                            "ask their concern, and proceed with the normal booking "
-                            "flow — do NOT ask for their name again unless they say "
-                            "the booking is for a different person."
+                        caller_prompt_extra = KNOWN_CALLER_BOOKING_EXTRA.format(
+                            name=_known
                         )
                 # MISSED-CALL CALLBACK: if this caller has a pending follow-up the
                 # doctor scheduled, the agent proactively raises the doctor's question
