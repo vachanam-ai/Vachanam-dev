@@ -411,6 +411,13 @@ async def create_walkin(
             appt_time = time_cls.fromisoformat(body.appointment_time)
         except ValueError:
             raise HTTPException(status_code=422, detail="appointment_time must be HH:MM")
+    # B10: a TOKEN doctor's queue has no clock time — drop any stray time the
+    # client sent (mirrors assign_token / confirm_booking, FIXLOG #36). Left in,
+    # it showed a bogus time in the queue, made _do_cancel/cascade treat the
+    # token booking as a SLOT (guarded DECR of a never-INCRed key), and blurred
+    # dup/capacity semantics.
+    if doctor.booking_type == "token":
+        appt_time = None
     if doctor.booking_type == "appointment" and appt_time is None:
         raise HTTPException(status_code=422, detail="appointment_time required for this doctor")
 

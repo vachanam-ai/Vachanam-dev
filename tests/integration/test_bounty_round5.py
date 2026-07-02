@@ -155,3 +155,34 @@ async def test_walkin_overlong_name_is_422(clinic, client):
         json={"doctor_id": str(uuid.uuid4()), "patient_name": "x" * 500},
     )
     assert r.status_code == 422, r.text
+
+
+async def test_b10_walkin_token_doctor_drops_stray_appointment_time(clinic, client, db):
+    """B10: a walk-in for a TOKEN doctor must NEVER store a clock time even if the
+    client sends one — the token queue has no appointment_time."""
+    from backend.models.schema import Token
+
+    bid = clinic["branch_id"]
+    owner = _owner_jwt(clinic["org_id"], bid)
+    dr = await client.post(
+        f"/doctors/{bid}", headers=_auth(owner),
+        json={"name": "Dr Walk", "specialization": "dentist", "routing_keywords": ["x"],
+              "booking_type": "token", "daily_token_limit": 20},
+    )
+    assert dr.status_code in (200, 201), dr.text
+    doctor_id = dr.json()["id"]
+
+    r = await client.post(
+        f"/queue/{bid}/walkin", headers=_auth(owner),
+        json={"doctor_id": doctor_id, "patient_name": "Stray Time",
+              "patient_phone": "+919888800010", "appointment_time": "15:30"},
+    )
+    assert r.status_code in (200, 201), r.text
+
+    import backend.database as _dbmod
+
+    async with _dbmod.AsyncSessionLocal() as s:
+        tok = (await s.execute(
+            select(Token).where(Token.doctor_id == uuid.UUID(doctor_id))
+        )).scalar_one()
+    assert tok.appointment_time is None, "token-doctor walk-in must drop the stray time"
