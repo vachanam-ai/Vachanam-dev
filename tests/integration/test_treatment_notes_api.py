@@ -96,6 +96,58 @@ async def test_end_keyword_closes_treatment(db):
 
 
 @pytest.mark.asyncio
+async def test_b7_visit_date_today_ist_accepted_future_rejected(db, monkeypatch):
+    """B7: during the 00:00-05:30 IST window server-UTC is still yesterday, so
+    the old Pydantic `v > date.today()` rejected a legit same-day (branch-local)
+    note as future. Simulate that window by making the validator's `date.today`
+    return yesterday; the IST-today note must still be accepted, and a genuinely
+    future branch-local date must still be rejected."""
+    from datetime import timedelta, date as _date
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    import backend.routers.treatment as _tmod
+
+    org_id = uuid.uuid4()
+    db.add(_org(org_id)); await db.flush()
+    usr = _user(org_id)
+    br = Branch(id=uuid.uuid4(), org_id=org_id, name="C",
+                whatsapp_number="+910000000019", timezone="Asia/Kolkata")
+    db.add_all([usr, br]); await db.flush()
+    doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token")
+    pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000019")
+    db.add_all([doc, pat]); await db.commit()
+
+    ist_today = _dt.now(ZoneInfo("Asia/Kolkata")).date()
+    ist_tomorrow = ist_today + timedelta(days=1)
+
+    # Simulate server-UTC being a calendar day behind branch-local (the IST
+    # 00:00-05:30 window). Only the Pydantic validator reads this `date`.
+    class _FrozenDate(_date):
+        @classmethod
+        def today(cls):
+            return ist_today - timedelta(days=1)
+
+    monkeypatch.setattr(_tmod, "date", _FrozenDate)
+
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, user_id=usr.id)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://t") as ac:
+            ok = await ac.post(f"/treatment/patients/{pat.id}/treatment-notes", json={
+                "doctor_id": str(doc.id), "branch_id": str(br.id),
+                "visit_date": ist_today.isoformat(), "steps_performed": "today visit"})
+            assert ok.status_code == 201, ok.text
+
+            future = await ac.post(f"/treatment/patients/{pat.id}/treatment-notes", json={
+                "doctor_id": str(doc.id), "branch_id": str(br.id),
+                "visit_date": ist_tomorrow.isoformat(), "steps_performed": "future"})
+            assert future.status_code == 422, future.text
+            assert "future" in future.text.lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_cross_branch_doctor_id_rejected_on_write(db):
     """RULE 1 write-hygiene: a doctor_id belonging to another branch is rejected
     with 404 on both create_note and edit_note, even when branch_access is legit."""
