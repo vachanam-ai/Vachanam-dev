@@ -229,7 +229,9 @@ from sqlalchemy import func as _func
 
 from backend.models.schema import BillingCycle, CallLog
 from backend.services.billing_math import (
+    DID_COST_PER_MONTH,
     PLANS,
+    VARIABLE_COST_PER_MIN,
     call_blocked,
     included_minutes_for,
     month_expense,
@@ -478,9 +480,16 @@ async def admin_overview(
                 if is_current
                 else 0.0
             )
+            # B22: single source of truth for the per-minute cost — the stale
+            # ₹1.49 here disagreed with the per-clinic month_expense column
+            # (VARIABLE_COST_PER_MIN = ₹2.0), so the profit trend was inconsistent.
             est_exp = round(
-                mins * 1.49
-                + (sum(1 for b in branches if b.did_number) * 1000 if is_current else 0),
+                mins * VARIABLE_COST_PER_MIN
+                + (
+                    sum(1 for b in branches if b.did_number) * DID_COST_PER_MONTH
+                    if is_current
+                    else 0
+                ),
                 2,
             )
             monthly.append(

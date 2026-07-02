@@ -126,6 +126,15 @@ async def test_overview_money_and_usage_math(client, biz_org):
     # never any patient identifiers in the payload
     assert "patient" not in r.text.lower()
 
+    # B22: the monthly trend's CURRENT-month expense must use the SAME
+    # per-minute cost (₹2.0) as the per-clinic expense_month, not the stale
+    # ₹1.49. Current month: 120 min + 1 DID = 120*2.0 + 1000 = 1240.
+    from backend.services.billing_math import VARIABLE_COST_PER_MIN
+
+    assert VARIABLE_COST_PER_MIN == 2.0
+    cur = data["monthly"][-1]  # current month is the last point
+    assert cur["expense"] == round(120 * VARIABLE_COST_PER_MIN + 1000, 2), cur
+
 
 @pytest.mark.asyncio
 async def test_pause_resume_persists(client, db, biz_org):
