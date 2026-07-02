@@ -470,6 +470,11 @@ class CallQuality(Base):
     judge_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)     # issue-tag vocab
     judge_summary: Mapped[str | None] = mapped_column(Text, nullable=True)   # 1-line, PII-FREE, INTERNAL only
     judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # B21: count judge attempts so a permanently-failing transcript (malformed /
+    # rejected contents) is retired after N tries instead of being re-selected
+    # every run — which otherwise froze scoring for all NEWER calls (head-of-line
+    # blocking) and burned a full batch of failing LLM calls every hour.
+    judge_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True

@@ -59,15 +59,26 @@ _RUBRIC = (
 )
 
 
-def _judge_transcript(transcript: str, language: str | None) -> dict | None:
+# B21: retire a transcript after this many failed judge attempts so it stops
+# starving newer calls and re-burning LLM calls every run.
+MAX_JUDGE_ATTEMPTS = 3
+
+
+async def _judge_transcript(transcript: str, language: str | None) -> dict | None:
     """Call the judge LLM for one transcript → {score, tags, summary} or None on
-    failure. Isolated so the scoring loop (and tests) can swap it out."""
+    failure. Isolated so the scoring loop (and tests) can swap it out.
+
+    B20: uses the ASYNC Gemini client (`client.aio...`) — the scoring job runs
+    on the SAME asyncio loop as the FastAPI app (in-process APScheduler), so the
+    old SYNCHRONOUS client blocked the loop for the full LLM round-trip per row
+    (a 50-row batch stalled every request + scheduled job for tens of seconds).
+    """
     try:
         from google import genai
         from google.genai import types as genai_types
 
         client = genai.Client(api_key=settings.gemini_api_key)
-        resp = client.models.generate_content(
+        resp = await client.aio.models.generate_content(
             model="gemini-2.5-flash-lite",
             contents=_RUBRIC + transcript,
             config=genai_types.GenerateContentConfig(
@@ -107,16 +118,32 @@ async def run_call_scoring(batch: int = 50) -> None:
         ).scalars().all()
 
         scored = 0
+        retired = 0
+        failed = 0
         for row in rows:
-            verdict = _judge_transcript(row.transcript, row.language)
+            verdict = await _judge_transcript(row.transcript, row.language)
             if verdict is None:
-                continue  # leave judged_at NULL → retried next run
+                # B21: count the failed attempt; retire the row after the cap so
+                # a permanently-failing transcript stops being re-selected every
+                # run (head-of-line blocking of all newer calls).
+                row.judge_attempts = (row.judge_attempts or 0) + 1
+                failed += 1
+                if row.judge_attempts >= MAX_JUDGE_ATTEMPTS:
+                    row.judge_tags = ["judge_error"]  # sentinel; no score
+                    row.judged_at = datetime.now(timezone.utc)
+                    retired += 1
+                continue
             row.judge_score = verdict["score"]
             row.judge_tags = verdict["tags"]
             row.judge_summary = verdict["summary"]
             row.judged_at = datetime.now(timezone.utc)
             scored += 1
 
-        if scored:
+        # Commit whenever ANYTHING changed — including a bare attempt increment,
+        # otherwise the B21 counter would roll back and the row could loop forever.
+        if scored or retired or failed:
             await db.commit()
-            logger.info("call_scoring_run", scored=scored, batch_seen=len(rows))
+            logger.info(
+                "call_scoring_run",
+                scored=scored, retired=retired, failed=failed, batch_seen=len(rows),
+            )

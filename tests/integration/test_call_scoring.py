@@ -41,7 +41,7 @@ async def test_scoring_judges_only_unjudged_with_transcript(branch, db, monkeypa
     monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
     calls = {"n": 0}
 
-    def _fake_judge(transcript, language):
+    async def _fake_judge(transcript, language):
         calls["n"] += 1
         return {"score": 4, "tags": ["misrouted"], "summary": "agent picked the wrong doctor"}
 
@@ -74,7 +74,7 @@ async def test_scoring_is_idempotent(branch, db, monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
     calls = {"n": 0}
 
-    def _fake_judge(transcript, language):
+    async def _fake_judge(transcript, language):
         calls["n"] += 1
         return {"score": 5, "tags": ["good"], "summary": "clean call"}
 
@@ -90,7 +90,11 @@ async def test_scoring_is_idempotent(branch, db, monkeypatch):
 
 async def test_scoring_failure_leaves_row_unjudged(branch, db, monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
-    monkeypatch.setattr(scoring, "_judge_transcript", lambda t, l: None)  # LLM failed
+
+    async def _fail(t, l):
+        return None
+
+    monkeypatch.setattr(scoring, "_judge_transcript", _fail)  # LLM failed
     row = CallQuality(branch_id=branch.id, transcript="t", created_at=datetime.now(timezone.utc))
     db.add(row)
     await db.commit()
@@ -99,4 +103,51 @@ async def test_scoring_failure_leaves_row_unjudged(branch, db, monkeypatch):
     await scoring.run_call_scoring(batch=50)
     db.expire_all()
     again = (await db.execute(select(CallQuality).where(CallQuality.id == rid))).scalar_one()
-    assert again.judged_at is None  # retried next run
+    assert again.judged_at is None  # one failed attempt → retried next run
+    assert again.judge_attempts == 1  # B21: attempt counted
+
+
+async def test_b20_judge_transcript_is_async_awaitable():
+    """B20: _judge_transcript must be a coroutine so the scoring loop can await
+    it (async Gemini client) instead of blocking the shared event loop."""
+    import inspect
+
+    assert inspect.iscoroutinefunction(scoring._judge_transcript)
+
+
+async def test_b21_permanently_failing_row_retired_after_cap(branch, db, monkeypatch):
+    """B21: a transcript whose judge call permanently fails must be retired after
+    MAX_JUDGE_ATTEMPTS runs (judged_at stamped with a sentinel), so it stops
+    being re-selected every run and starving newer calls."""
+    monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
+
+    async def _fail(t, l):
+        return None
+
+    monkeypatch.setattr(scoring, "_judge_transcript", _fail)
+    row = CallQuality(branch_id=branch.id, transcript="bad", created_at=datetime.now(timezone.utc))
+    db.add(row)
+    await db.commit()
+    rid = row.id
+
+    # Run once per attempt up to the cap.
+    for _ in range(scoring.MAX_JUDGE_ATTEMPTS):
+        await scoring.run_call_scoring(batch=50)
+
+    db.expire_all()
+    retired = (await db.execute(select(CallQuality).where(CallQuality.id == rid))).scalar_one()
+    assert retired.judge_attempts >= scoring.MAX_JUDGE_ATTEMPTS
+    assert retired.judged_at is not None, "row must be retired (no longer re-selected)"
+    assert retired.judge_tags == ["judge_error"]
+    assert retired.judge_score is None  # sentinel: retired, not actually scored
+
+    # A subsequent run must NOT re-select it (it now has judged_at set).
+    seen = {"n": 0}
+
+    async def _count(t, l):
+        seen["n"] += 1
+        return None
+
+    monkeypatch.setattr(scoring, "_judge_transcript", _count)
+    await scoring.run_call_scoring(batch=50)
+    assert seen["n"] == 0, "retired row must not be re-judged"
