@@ -2252,6 +2252,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     finally:
                         await r.aclose()
                 # Call log — analytics + minute metering (Rule 9: last-4 only).
+                # B14: compute duration OUTSIDE both try blocks. It used to be
+                # assigned inside the CallLog try (after an import + a
+                # db.rollback that can throw on a torn connection); if that
+                # raised before the assignment, the later CallQuality block
+                # referenced an unbound `duration` -> NameError -> the quality
+                # row was silently dropped for every such teardown.
+                started = state.call_start or datetime_cls.now(timezone_utc)
+                duration = max(
+                    0,
+                    int((datetime_cls.now(timezone_utc) - started).total_seconds()),
+                )
+
                 # FINALIZE the at-start row (TD-027/F6) with the real duration +
                 # booking outcome. Fall back to an INSERT if the start row was
                 # never written (start-time metering failure).
@@ -2260,11 +2272,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
                     from backend.models.schema import CallLog
 
-                    started = state.call_start or datetime_cls.now(timezone_utc)
-                    duration = max(
-                        0,
-                        int((datetime_cls.now(timezone_utc) - started).total_seconds()),
-                    )
                     await db.rollback()  # clear any failed tx before logging
                     if state.call_log_id is not None:
                         # Finalize the agent-written at-start row (agent logging on).
