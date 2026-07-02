@@ -517,9 +517,16 @@ async def assign_token(
     if doctor.booking_type == "token":
         appointment_time = None  # token queue has no clock time — ignore strays
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
-        # Midnight of booking_date + 2h buffer
-        midnight = datetime.combine(booking_date + timedelta(days=1), time(0, 0))
-        ttl_seconds = int((midnight - datetime.now()).total_seconds()) + 7200
+        # B15: TTL = midnight-after-booking_date + 2h, measured in the BRANCH
+        # timezone. The old `datetime.now()` was the server clock (UTC on Fly),
+        # so the "~2h after midnight" intent actually landed ~07:30 IST next
+        # day; for future-dated bookings the key legitimately lives for days
+        # (RULE 9 booking keys expire same day). Both endpoints in branch tz now.
+        now_branch = await _branch_now(branch_id, db)
+        midnight = datetime.combine(
+            booking_date + timedelta(days=1), time(0, 0), tzinfo=now_branch.tzinfo
+        )
+        ttl_seconds = int((midnight - now_branch).total_seconds()) + 7200
 
         # Floor the counter against the DB confirmed count BEFORE incrementing
         # (Redis-restart safety, FIXLOG #14 for the token path). If the key was
