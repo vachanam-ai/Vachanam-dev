@@ -1734,6 +1734,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 bool(getattr(org, "hard_block_on_exhaust", False)),
                 used_min,
                 trial_ends_at=getattr(org, "trial_ends_at", None),
+                # B3: honor the trial grant + super-admin minutes_adjustment so
+                # the gate blocks at the SAME bucket the dashboard shows.
+                adjustment=int(getattr(org, "minutes_adjustment", 0) or 0),
             )
     except Exception as e:
         # iter1 #23: fail CLOSED for a known terminal status, fail OPEN otherwise.

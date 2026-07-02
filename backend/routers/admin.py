@@ -432,6 +432,8 @@ async def admin_overview(
                     blocked_now=call_blocked(
                         o.status, o.plan, bool(o.hard_block_on_exhaust), used,
                         trial_ends_at=o.trial_ends_at,  # T6: match the agent gate
+                        # B3: same bucket as the donut (trial grant + adjustment)
+                        adjustment=int(getattr(o, "minutes_adjustment", 0) or 0),
                     )
                     is not None,
                     revenue_month=rev,

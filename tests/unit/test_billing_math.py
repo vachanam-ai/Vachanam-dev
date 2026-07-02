@@ -120,3 +120,22 @@ def test_call_blocked_matrix():
     assert call_blocked("active", "clinic", True, 1800) == "minutes_exhausted"
     # hard block applies to trial orgs too once their bucket is gone
     assert call_blocked("trial", "clinic", True, 5000) == "minutes_exhausted"
+
+
+def test_b3_hard_block_honors_trial_grant_and_adjustment():
+    # B3: a solo-plan TRIAL org has a 500-min grant, not the 100-min plan
+    # bucket. The old gate blocked at 100 while the dashboard showed 400 left.
+    assert minutes_exhausted("solo", 100, status="trial") is False
+    assert minutes_exhausted("solo", 499, status="trial") is False
+    assert minutes_exhausted("solo", 500, status="trial") is True
+    assert call_blocked("trial", "solo", True, 100) is None
+    assert call_blocked("trial", "solo", True, 500) == "minutes_exhausted"
+
+    # A positive super-admin adjustment extends the active bucket; a negative
+    # one shrinks it — the gate must track both, exactly like the donut.
+    assert minutes_exhausted("solo", 100, status="active") is True
+    assert minutes_exhausted("solo", 100, status="active", adjustment=50) is False
+    assert minutes_exhausted("solo", 150, status="active", adjustment=50) is True
+    assert call_blocked("active", "solo", True, 120, adjustment=50) is None
+    assert call_blocked("active", "solo", True, 150, adjustment=50) == "minutes_exhausted"
+    assert call_blocked("active", "clinic", True, 1700, adjustment=-200) == "minutes_exhausted"
