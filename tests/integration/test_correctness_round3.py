@@ -443,3 +443,49 @@ async def test_b5_seed_forward_after_eviction_no_reuse(clinic, db, redis):
     assert len(numbers) == len(set(numbers)), f"duplicate token numbers: {numbers}"
     # every number is above the 3 already-confirmed seats (seed floor respected)
     assert min(numbers) >= 4, f"seed-forward re-issued a used number: {numbers}"
+
+
+# ── B12: voice booking uses the doctor's real slot length ────────────────────
+
+
+class _DurCapCalendar:
+    """Captures the duration_minutes the voice path passes via the legacy shim."""
+
+    def __init__(self):
+        self.duration = None
+
+    async def create_booking_event(self, **kw) -> str:
+        # The real CalendarService shim computes duration from slot_duration_minutes.
+        self.duration = kw.get("slot_duration_minutes")
+        return "evt-dur"
+
+    async def delete_event(self, *a):
+        return None
+
+
+async def test_b12_voice_booking_uses_real_slot_length(clinic, db, redis):
+    """B12: a 60-min slot doctor must get a 60-min calendar block from the voice
+    path, not the shim's hardcoded 30."""
+    branch = clinic["branch"]
+    doc = Doctor(
+        branch_id=branch.id, name="Dr Hour", specialization="dermatology",
+        routing_keywords=["skin"], booking_type="appointment",
+        working_hours_start=time(9, 0), working_hours_end=time(17, 0),
+        slot_duration_minutes=60, max_concurrent_per_slot=1, status="active",
+    )
+    db.add(doc)
+    await db.commit()
+    day = _tomorrow()
+
+    cal = _DurCapCalendar()
+    assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=time(10, 0))
+    assert assigned["success"], assigned
+    result = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Hour Long",
+        patient_phone="+919666440088", complaint="skin", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False, patient_age=30,
+        appointment_time=time(10, 0), source="voice", db=db,
+        calendar_service=cal, meta_service=NullMeta(),
+    )
+    assert result["success"], result
+    assert cal.duration == 60, f"voice booking must pass the real slot length, got {cal.duration}"

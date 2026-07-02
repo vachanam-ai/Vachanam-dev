@@ -380,8 +380,14 @@ class CalendarService(GoogleCalendarService):
         booking_date: _date,
         appointment_time: Optional[time],
         doctor_name: str,
+        slot_duration_minutes: Optional[int] = None,
     ) -> str:
-        """Legacy signature shim — delegates to real impl with PII stripping."""
+        """Legacy signature shim — delegates to real impl with PII stripping.
+
+        B12: honor the doctor's real slot length. The shim hardcoded 30 min, so a
+        slot doctor with 15/20/60-min slots got a wrong-length calendar block from
+        the voice path (the walk-in path already used the real duration).
+        """
         last4 = patient_phone[-4:] if patient_phone else "0000"
         first_name = patient_name.split()[0] if patient_name else "Patient"
         if not appointment_time:
@@ -395,6 +401,6 @@ class CalendarService(GoogleCalendarService):
             patient_first_name=first_name,
             patient_phone_last4=last4,
             appointment_dt=appointment_dt,
-            duration_minutes=30,
+            duration_minutes=slot_duration_minutes or 30,
             doctor_name=doctor_name,
         )

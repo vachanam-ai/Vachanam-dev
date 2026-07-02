@@ -962,6 +962,9 @@ async def confirm_booking(
                 booking_date=booking_date,
                 appointment_time=appointment_time,
                 doctor_name=doctor_name,
+                # B12: use the doctor's real slot length so the calendar block
+                # matches the appointment (the shim hardcoded 30 min).
+                slot_duration_minutes=doctor.slot_duration_minutes,
             )
 
         # RULE 8: never let a slow/misconfigured calendar hang the LIVE call. A
