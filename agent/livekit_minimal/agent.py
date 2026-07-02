@@ -2268,10 +2268,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     await db.rollback()  # clear any failed tx before logging
                     if state.call_log_id is not None:
                         # Finalize the agent-written at-start row (agent logging on).
+                        # B11: also refresh call_type — the start row was written
+                        # BEFORE the type was refined from the generic
+                        # "outbound"/"inbound_booking" to reminder / cascade_rebook
+                        # / next_visit_book / doctor_advice, so analytics that
+                        # segment by call_type undercounted those activities.
                         await db.execute(
                             _sa_update(CallLog)
                             .where(CallLog.id == state.call_log_id)
                             .values(
+                                call_type=state.call_type or "inbound",
                                 duration_seconds=duration,
                                 booking_made=state.token_confirmed,
                             )

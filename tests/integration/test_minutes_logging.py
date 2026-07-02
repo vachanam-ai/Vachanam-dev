@@ -81,6 +81,39 @@ async def test_logged_call_minutes_show_on_dashboard(branch, client, db):
     assert minutes["included"] == 100    # solo plan allowance
 
 
+async def test_b11_finalize_refreshes_call_type(branch, db):
+    """B11: the agent writes the CallLog start-row with the GENERIC call_type
+    ("outbound"/"inbound_booking") BEFORE it refines it to reminder /
+    cascade_rebook / next_visit_book. The shutdown finalize must refresh
+    call_type (not just duration/booking_made), so analytics that segment by
+    call_type don't undercount reminder/rebook activity. This exercises the
+    exact finalize UPDATE the agent runs."""
+    from sqlalchemy import select, update as _update
+
+    now = datetime.now(timezone.utc)
+    # Start row as the agent writes it, before type refinement.
+    row = CallLog(branch_id=branch["bid"], call_type="outbound", answered=True,
+                  started_at=now, duration_seconds=0, booking_made=False)
+    db.add(row)
+    await db.commit()
+    rid = row.id
+
+    # ...call runs, type is refined to "reminder", then shutdown finalizes:
+    await db.execute(
+        _update(CallLog).where(CallLog.id == rid).values(
+            call_type="reminder", duration_seconds=95, booking_made=False,
+        )
+    )
+    await db.commit()
+
+    import backend.database as _dbmod
+
+    async with _dbmod.AsyncSessionLocal() as s:
+        got = (await s.execute(select(CallLog).where(CallLog.id == rid))).scalar_one()
+    assert got.call_type == "reminder", "finalize must refresh call_type, not keep 'outbound'"
+    assert got.duration_seconds == 95
+
+
 async def test_heartbeat_duration_shows_without_clean_shutdown(branch, client, db):
     """The metering heartbeat updates duration mid-call — so a DROPPED/broken
     call (no clean-shutdown finalize) still logs minutes on the dashboard."""
