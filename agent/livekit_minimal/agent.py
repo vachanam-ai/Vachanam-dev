@@ -1165,10 +1165,28 @@ class VachanamAgent(Agent):
             )
         except Exception as e:
             logger.error("reschedule_confirm_failed: %s", e)
+            # B1: confirm_booking core did db.add()+flush() of a 'confirmed'
+            # Token BEFORE the calendar write raised. That row is pending in THIS
+            # still-open session; any later commit (a retry, a cancel, a
+            # follow-up complete) would persist a phantom booking with no
+            # calendar event. Roll the session back — mirroring the tool-wrapper
+            # confirm_booking (FIXLOG #67) — BEFORE releasing the hold, so the
+            # stray row can never ride a subsequent commit.
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
             await self._release_hold(assigned)  # RULE 3: don't leak the new hold
             self._clear_hold()  # so shutdown cleanup doesn't DECR it a 2nd time
             return {"success": False, "step": "confirm", "error": "booking_failed"}
         if not confirmed.get("success"):
+            # B1: an in-band failure path (dup guard / capacity) may return
+            # after the core flushed the Token. Roll back so no half-written row
+            # survives to a later commit on this session.
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
             await self._release_hold(assigned)  # RULE 3: dup guard / capacity etc.
             self._clear_hold()
             return {"success": False, "step": "confirm", **confirmed}
