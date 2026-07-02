@@ -44,8 +44,20 @@ export default function Patients() {
   };
 
   const save = (p) => {
+    setErr("");
+    // B24: validate age client-side. Number("abc") is NaN which JSON-serializes
+    // to null — the backend then treats it as "no change", so a typo was
+    // silently dropped under a success toast. Reject a non-numeric / out-of-range
+    // age here instead.
     const payload = { branch_id: branchId, name: form.name };
-    if (form.age !== "") payload.age = Number(form.age);
+    if (form.age !== "") {
+      const age = Number(form.age);
+      if (!Number.isInteger(age) || age < 0 || age > 120) {
+        setErr("Age must be a whole number between 0 and 120.");
+        return;
+      }
+      payload.age = age;
+    }
     if (form.phone !== "") payload.phone = form.phone;
     mut.mutate({ id: p.id, payload });
   };
