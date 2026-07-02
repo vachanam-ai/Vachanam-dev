@@ -282,6 +282,50 @@ async def test_post_unavailability_creates_rows_for_date_range(
 
 
 @pytest.mark.asyncio
+async def test_b9_leave_range_starting_in_past_never_cancels_past_bookings(
+    client, db: AsyncSession, clinic, org_admin_jwt
+):
+    """B9: marking leave with a range that STARTS in the past (but ends in the
+    future) must NOT cancel yesterday's confirmed bookings (patients who came
+    but were never marked attended) — only today onward."""
+    from backend.routers.queue import _branch_today
+
+    branch_uuid = uuid.UUID(clinic["branch_id"])
+    branch_today = await _branch_today(branch_uuid, db)
+    yesterday = branch_today - timedelta(days=1)
+    tomorrow = branch_today + timedelta(days=1)
+
+    doctor = await _seed_doctor(db, clinic["branch_id"])
+    p_past = await _seed_patient(db, clinic["branch_id"], name="Past", phone="+919999911101")
+    p_today = await _seed_patient(db, clinic["branch_id"], name="Today", phone="+919999911102")
+    past_tok = await _seed_token(db, clinic["branch_id"], doctor, p_past,
+                                 on_date=yesterday, token_number=1)
+    today_tok = await _seed_token(db, clinic["branch_id"], doctor, p_today,
+                                  on_date=branch_today, token_number=2)
+
+    r = await client.post(
+        f"/availability/{clinic['branch_id']}/{doctor.id}",
+        json={"date_from": yesterday.isoformat(), "date_to": tomorrow.isoformat()},
+        headers=_auth(org_admin_jwt),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["cancelled_tokens"] == 1  # only today's, not yesterday's
+
+    # Read the truth on a FRESH session (router committed on its own session).
+    import backend.database as _dbmod
+
+    async with _dbmod.AsyncSessionLocal() as s:
+        past = (await s.execute(select(Token).where(Token.id == past_tok.id))).scalar_one()
+        today = (await s.execute(select(Token).where(Token.id == today_tok.id))).scalar_one()
+        ft_past = (await s.execute(
+            select(FollowupTask).where(FollowupTask.patient_id == p_past.id)
+        )).scalars().all()
+    assert past.status == "confirmed", "past booking must be untouched"
+    assert today.status == "cancelled_by_clinic"
+    assert ft_past == [], "no rebook call may be scheduled about a past date"
+
+
+@pytest.mark.asyncio
 async def test_post_unavailability_cascade_cancels_existing_tokens(
     client, db: AsyncSession, clinic, org_admin_jwt
 ):
