@@ -128,6 +128,34 @@ async def test_patch_edits_name_age(db):
 
 
 @pytest.mark.asyncio
+async def test_b13_patch_whitespace_only_name_rejected(db):
+    """B13: a whitespace-only name passes min_length=1 but strips to "" — it must
+    be rejected 422, never saved as an empty name."""
+    org_id, br = await _seed_branch(db, "+910000000058")
+    p = Patient(id=uuid.uuid4(), branch_id=br.id, name="Real",
+                phone="+919000000028", age=30, is_primary=True)
+    db.add(p)
+    await db.commit()
+
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with _client() as ac:
+            r = await ac.patch(f"/patients/{p.id}",
+                               json={"branch_id": str(br.id), "name": "   "})
+            assert r.status_code == 422, r.text
+    finally:
+        app.dependency_overrides.clear()
+
+    # the name is unchanged in the DB
+    import backend.database as _dbmod
+    from sqlalchemy import select as _select
+
+    async with _dbmod.AsyncSessionLocal() as s:
+        got = (await s.execute(_select(Patient).where(Patient.id == p.id))).scalar_one()
+    assert got.name == "Real"
+
+
+@pytest.mark.asyncio
 async def test_patch_duplicate_collides_409(db):
     org_id, br = await _seed_branch(db, "+910000000053")
     a = Patient(id=uuid.uuid4(), branch_id=br.id, name="Amma",
