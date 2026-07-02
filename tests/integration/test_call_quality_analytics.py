@@ -109,6 +109,39 @@ async def test_call_quality_summary_aggregates(branch, client, db):
     assert "secret health detail" not in r.text
 
 
+async def test_b8_new_patients_today_bucketed_in_branch_tz(branch, client, db):
+    """B8: a patient created at 02:00 IST (which is the PREVIOUS UTC calendar
+    day) must count toward `new_patients_today`. UTC bucketing would drop it;
+    branch-tz bucketing keeps it — consistent with every other 'today' on the
+    page."""
+    from zoneinfo import ZoneInfo
+
+    from backend.models.schema import Patient
+
+    ist = ZoneInfo("Asia/Kolkata")
+    ist_today = datetime.now(ist).date()
+    # 02:00 IST today == 20:30 UTC the previous calendar day.
+    created_ist = datetime(ist_today.year, ist_today.month, ist_today.day, 2, 0, tzinfo=ist)
+    created_utc = created_ist.astimezone(timezone.utc)
+    assert created_utc.date() != ist_today  # sanity: UTC day differs
+
+    db.add(Patient(
+        branch_id=branch["bid"], name="Early Bird",
+        phone=f"+9198{str(uuid.uuid4().int)[:8]}", created_at=created_utc,
+    ))
+    await db.commit()
+
+    r = await client.get(
+        "/analytics/overview",
+        params={"branch_id": branch["branch_id"], "days": 14},
+        headers={"Authorization": f"Bearer {_owner_jwt(branch['org_id'], branch['branch_id'])}"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["new_patients_today"] >= 1, (
+        "IST-early patient must count as new today (branch-tz bucketing)"
+    )
+
+
 async def test_call_quality_requires_branch_access(branch, client):
     # A token for a different branch must not read this branch's quality.
     other = str(uuid.uuid4())

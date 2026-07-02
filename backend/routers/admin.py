@@ -845,7 +845,11 @@ async def admin_monitoring(
                 tag_counts[t] = tag_counts.get(t, 0) + 1
 
         # Daily trend.
-        _day = func.date(CallQuality.created_at)
+        # B23: bucket the platform daily volume in IST (Vachanam is all-India),
+        # not the session UTC zone — otherwise this series' day boundary is
+        # 05:30 off from every other IST-bucketed series. timezone(tz, ts)
+        # converts the timestamptz to local before truncating.
+        _day = func.date(func.timezone("Asia/Kolkata", CallQuality.created_at))
         day_rows = (
             await db.execute(
                 select(_day, func.count(), func.coalesce(func.sum(_cast(CallQuality.booking_made, _Integer)), 0))
@@ -855,8 +859,13 @@ async def admin_monitoring(
         ).all()
         by_day = {str(d): (int(n), int(b or 0)) for d, n, b in day_rows}
         daily = []
+        # B23: the axis must use the SAME IST calendar the buckets use, else an
+        # IST-early (UTC-previous-day) bucket would not map onto any axis day.
+        from zoneinfo import ZoneInfo as _ZI
+
+        _ist_now = datetime.now(_ZI("Asia/Kolkata"))
         for i in range(days):
-            d = (datetime.now(timezone.utc) - timedelta(days=days - 1 - i)).date().isoformat()
+            d = (_ist_now - timedelta(days=days - 1 - i)).date().isoformat()
             n, b = by_day.get(d, (0, 0))
             daily.append(MonDay(date=d, calls=n, booked=b))
 
