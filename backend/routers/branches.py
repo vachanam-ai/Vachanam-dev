@@ -200,18 +200,21 @@ async def list_branch_voices(
     except smallest_voice.VoiceServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    # Prepend this clinic's registered cloned voices for this language (tenant-
-    # scoped) so they're selectable in the picker, tagged cloned=true.
+    # Prepend ALL of this clinic's registered cloned voices (tenant-scoped) so
+    # they're selectable in the picker, tagged cloned=true. No language filter:
+    # a clinic clones a handful of its OWN voices and may use a voice cloned
+    # from a Tamil sample on its Telugu agent — hiding it by language made the
+    # active voice invisible in the picker (prod 2026-07-03).
     cloned = [
         {
             "voice_id": cv.get("voice_id"),
             "display_name": cv.get("name") or cv.get("voice_id"),
             "gender": None,
-            "languages": [lang],
+            "languages": [(cv.get("language") or lang).lower()],
             "cloned": True,
         }
         for cv in (getattr(branch, "cloned_voices", None) or [])
-        if (cv.get("language") or "").lower() == lang and cv.get("voice_id")
+        if cv.get("voice_id")
     ]
     return {
         "language": lang,
@@ -363,6 +366,12 @@ async def clone_branch_voice(
         raise HTTPException(status_code=502, detail=str(e))
 
     branch.tts_voice = voice_id
+    # Register the clone so it has a NAME in the picker + a Remove row — without
+    # this the voice spoke but "sreelekha" appeared nowhere (prod 2026-07-03).
+    # Reassign (not mutate) so SQLAlchemy detects the JSONB change.
+    branch.cloned_voices = [
+        c for c in (branch.cloned_voices or []) if c.get("voice_id") != voice_id
+    ] + [{"voice_id": voice_id, "name": display_name.strip(), "language": clone_language}]
     await db.commit()
 
     request.state.audit_resource_id = branch_id
