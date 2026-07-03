@@ -779,7 +779,20 @@ async def confirm_booking(
     )
     same_phone = result.scalars().all()
     wanted = patient_name.strip().lower()
-    patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
+    if not different_person:
+        # SELF booking: the caller IS the phone's owner. Attach to the primary
+        # record regardless of how STT spelled the name THIS call — one call
+        # hears Telugu "వినయ్", the next romanizes "Vinay", a third falls back to
+        # "patient". Matching on exact name spawned a NEW record per spelling,
+        # so the same person accumulated 3 records and could double-book
+        # (prod xx7554). The primary is the one true self record; reuse it.
+        patient = next((p for p in same_phone if p.is_primary), None)
+        if patient is None:
+            patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
+    else:
+        # Someone else on the shared phone (family) — keep them a distinct,
+        # name-matched record so real family members don't collapse together.
+        patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
     if not patient:
         # FIRST-TIME patient: details are MANDATORY (Vinay 2026-06-12). The
         # prompt alone was skipped sometimes — enforce at the tool boundary.
@@ -848,6 +861,38 @@ async def confirm_booking(
             "instruction": "Patient already has a confirmed booking that day — "
             "tell them their existing booking instead of creating another.",
         }
+
+    # 1b-2. TIME-CLASH guard across ALL doctors. The per-doctor guard above only
+    # blocks the SAME doctor twice; it let the same caller book two DIFFERENT
+    # doctors at the SAME time — one person in two places at once (prod: 16:30
+    # with both Dr.Lakshmi and Dr.Srinivas). A confirmed slot for THIS phone at
+    # the same date+time under any OTHER doctor is a physical impossibility.
+    # Family members (different_person) genuinely can share a time, so exempt.
+    if appointment_time is not None and patient_phone and not different_person:
+        clash_filters = [
+            Token.branch_id == branch_id,
+            Token.date == booking_date,
+            Token.appointment_time == appointment_time,
+            Token.status == "confirmed",
+            Token.doctor_id != doctor_id,
+            Token.patient_id.in_(
+                select(Patient.id).where(
+                    and_(Patient.branch_id == branch_id, Patient.phone == patient_phone)
+                )
+            ),
+        ]
+        if exclude_token_id is not None:
+            clash_filters.append(Token.id != exclude_token_id)
+        clash = await db.execute(select(Token).where(and_(*clash_filters)))
+        if clash.scalars().first() is not None:
+            return {
+                "success": False,
+                "reason": "time_clash",
+                "existing_time": appointment_time.strftime("%H:%M"),
+                "instruction": "The patient already has an appointment with a "
+                "different doctor at this exact time that day — a person can't be "
+                "in two places at once. Offer a different time.",
+            }
 
     # 1c. CAPACITY RE-CHECK (Rule 2 — the persistence-layer tripwire).
     # assign_token's Redis gate only protects callers who actually CALLED
