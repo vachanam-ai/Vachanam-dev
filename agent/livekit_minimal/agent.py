@@ -329,6 +329,10 @@ REMINDER_PROMPT_EXTRA = (
     "old_token_id=token_id above, new_date, new_time) — one atomic call. If it "
     "returns success=true, confirm the new time in one breath and close warmly; "
     "if false, offer another slot.\n"
+    "- If they want to CANCEL outright (not move it): call cancel_booking("
+    "token_id above). Say it is cancelled ONLY after the tool returns "
+    "success=true — NEVER claim a cancellation you did not perform; an "
+    "unperformed 'cancel' becomes a no-show against the patient.\n"
     "- If they want a different doctor or time, follow the normal availability "
     "negotiation rules. Keep every reply to two short sentences."
 )
@@ -1485,12 +1489,28 @@ class VachanamAgent(Agent):
 
         # New booking exists — NOW it is safe to drop the old one.
         cancelled = await self._do_cancel(str(old_token.id))
+        # Live call 2026-07-03 16:55Z: a reschedule that SUCCEEDED (DB showed the
+        # moved booking) was announced as "unable to reschedule" — the model
+        # misread the result. Log it (evidence for next time) and make success
+        # unmistakable with an explicit spoken instruction.
+        logger.info(
+            "reschedule_done new_date=%s new_time=%s old_cancelled=%s branch_id=%s",
+            booking_date.isoformat(),
+            assigned.get("appointment_time"),
+            bool(cancelled.get("success")),
+            str(self._state.branch_id),
+        )
         return {
             "success": True,
             "new_token_number": assigned["token_number"],
             "new_date": booking_date.isoformat(),
             "new_time": assigned.get("appointment_time"),
             "old_cancelled": bool(cancelled.get("success")),
+            "instruction": (
+                "The reschedule SUCCEEDED — the appointment is now on the new "
+                "date/time above and the old one is cancelled. Tell the caller "
+                "it is done, in one breath. Do NOT say it failed."
+            ),
         }
 
     @function_tool()

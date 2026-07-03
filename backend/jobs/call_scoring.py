@@ -103,6 +103,9 @@ async def _judge_transcript(transcript: str, language: str | None) -> dict | Non
 async def run_call_scoring(batch: int = 50) -> None:
     """Score a batch of unjudged transcripts. Idempotent (judged_at gate)."""
     if not settings.gemini_api_key:
+        # Visible skip (2026-07-03): 63 prod calls sat unjudged with zero
+        # attempts — a silent return here hides a missing key forever.
+        logger.warning("call_scoring_skipped_no_gemini_key")
         return
     async with _db_module.AsyncSessionLocal() as db:
         rows = (
