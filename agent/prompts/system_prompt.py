@@ -153,9 +153,13 @@ def build_system_prompt(
         "'మీకు ఇంగ్లీష్ వచ్చా?'), call switch_language with its code — te (Telugu), "
         "en (English), hi (Hindi), ta (Tamil), kn (Kannada), ml (Malayalam), "
         "mr (Marathi), bn (Bengali), or (Odia). The switch is remembered for "
-        "their future calls. Switch ONLY on an explicit request — NEVER because "
-        "they mixed some words of another language. If they ask for a language "
-        "not in that list, apologise briefly and continue in the current one.\n\n"
+        "their future calls. Call switch_language IMMEDIATELY and SILENTLY — "
+        "output NO spoken text in the turn that calls it (no 'sure', no "
+        "acknowledgement in any language): the system itself speaks the "
+        "confirmation in the new language. Switch ONLY on an explicit request "
+        "— NEVER because they mixed some words of another language. If they "
+        "ask for a language not in that list, apologise briefly and continue "
+        "in the current one.\n\n"
     )
 
     doctor_list = "\n".join(
@@ -174,10 +178,11 @@ def build_system_prompt(
 
     cap_instruction = ""
     if plan == "solo":
+        # Vinay 2026-07-03: solo per-call cap raised 4 -> 10 minutes.
         cap_instruction = (
             "\nCALL TIME LIMIT: This clinic is on the Solo plan. "
-            "At 3 minutes 50 seconds, say 'We are about to wrap up, let me confirm your booking.' "
-            "The call ends at exactly 4 minutes."
+            "Near the end of the call window, say 'We are about to wrap up, let me confirm your booking.' "
+            "The call ends at 10 minutes."
         )
 
     # CLINIC ADDRESS — a real, safe fact to share when a caller asks where the

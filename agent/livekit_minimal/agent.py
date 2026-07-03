@@ -705,6 +705,9 @@ class VachanamAgent(Agent):
         self._lang_code = lang_code
         self._agent_factory = agent_factory
         self._switch_ack = switch_ack
+        # Kept so switch_language can PRIME the new agent's TTS before handoff
+        # (livekit's Agent.tts is not a stable public accessor across versions).
+        self._tts_override = tts
 
     async def on_enter(self) -> None:
         """Fires when this agent becomes active. For the initial agent it's a
@@ -1325,6 +1328,19 @@ class VachanamAgent(Agent):
             logger.warning("chat_ctx_copy_failed: %s", e)
             _cc = None
         new_agent = self._agent_factory(code, chat_ctx=_cc)
+        # PRIME the new TTS BEFORE the handoff. smallest cold-connects on its
+        # first synth and on Fly that often throws "Connection error" + 2s
+        # retries — exactly the post-switch dead air / self-interruption of the
+        # 2026-07-03 live test (tts_failed x12 at 17:03Z). A tiny synth here
+        # absorbs the cold connect so the spoken ack starts instantly.
+        try:
+            _new_tts = getattr(new_agent, "_tts_override", None)
+            if _new_tts is not None:
+                async with asyncio.timeout(8):
+                    async for _ in _new_tts.synthesize("ok"):
+                        break
+        except Exception as e:  # noqa: BLE001 — priming is best-effort (RULE 8)
+            logger.warning("switch_tts_prime_failed: %s", e)
         return new_agent, {
             "success": True,
             "language": code,
@@ -2884,7 +2900,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # clinic mis-defaults to "clinic" and dodges its 240s cap. So every call
         # gets a ceiling: solo → 240s, everyone else → ABSOLUTE_CAP. A real call
         # finishes in ~4 min; the ceiling only ever fires on a hung session.
-        SOLO_CAP_DEFAULT = 240
+        # Vinay 2026-07-03: solo cap raised 4→10 min after live calls got cut at
+        # 5 min mid-booking (MAX_CALL_DURATION_SECONDS secret also moved to 600).
+        SOLO_CAP_DEFAULT = 600
         ABSOLUTE_CAP_DEFAULT = 900  # 15 min — never hits a legitimate call
         if state.plan == "solo":
             cap = settings.max_call_duration_seconds or SOLO_CAP_DEFAULT
