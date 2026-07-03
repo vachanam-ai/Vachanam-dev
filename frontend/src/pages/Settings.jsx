@@ -187,8 +187,11 @@ export default function Settings() {
   // Clone a voice from an uploaded audio sample (smallest.ai instant clone).
   const [uploadName, setUploadName] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
+  // "" = clone in the clinic's current agent language (backend default).
+  const [uploadLanguage, setUploadLanguage] = useState("");
   const uploadClone = useMutation({
-    mutationFn: () => cloneBranchVoice(branchId, uploadName.trim(), uploadFile),
+    mutationFn: () =>
+      cloneBranchVoice(branchId, uploadName.trim(), uploadFile, uploadLanguage || undefined),
     onSuccess: (d) => {
       qc.setQueryData(["branch-settings", branchId], d);
       qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
@@ -488,11 +491,21 @@ export default function Settings() {
           <p className="font-ui text-sm font-medium">Clone your own voice</p>
           <p className="mt-1 font-ui text-xs text-slate">
             Upload a clear 5–15s recording (WAV/MP3). We clone it instantly and the agent speaks
-            in it, in the language selected above ({data?.language ?? "te"}).
+            in it. Pick the language the sample is spoken in.
           </p>
           <div className="mt-3 space-y-2">
             <input className="field" placeholder="Voice name (e.g. Dr Vinay)"
               value={uploadName} onChange={(e) => setUploadName(e.target.value)} />
+            <select className="field" value={uploadLanguage}
+              aria-label="Sample language"
+              onChange={(e) => setUploadLanguage(e.target.value)}>
+              <option value="">
+                Clinic language ({data?.language ?? "te"})
+              </option>
+              {(data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES).map((l) => (
+                <option key={l.code} value={l.code}>{l.name}</option>
+              ))}
+            </select>
             <input type="file" accept="audio/*" className="field"
               onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)} />
             <button type="button" className="btn-primary w-full min-h-[44px]"

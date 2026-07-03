@@ -57,3 +57,44 @@ async def test_clone_sends_iso_code_not_language_name(db, monkeypatch):
         )
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+async def test_clone_explicit_language_choice_wins(db, monkeypatch):
+    """The clinic can clone a sample spoken in a DIFFERENT language than the
+    agent's (e.g. a Tamil sample for a te clinic) — the chosen code is sent."""
+    org_id = uuid.uuid4()
+    db.add(Organization(id=org_id, name="Org", owner_phone="+919000099078",
+                        owner_email=f"o-{org_id}@c.com", plan="clinic"))
+    await db.flush()
+    br = Branch(id=uuid.uuid4(), org_id=org_id, name="C",
+                whatsapp_number="+910000000078", language="te")
+    db.add(br)
+    await db.commit()
+
+    seen = {}
+
+    def fake_clone(display_name, filename, audio_bytes, language="en"):
+        seen["language"] = language
+        return "voice_test456"
+
+    monkeypatch.setattr(smallest_voice, "clone_voice", fake_clone)
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            r = await ac.post(
+                f"/branches/{br.id}/voice-clone",
+                data={"display_name": "sreelekha", "language": "ta"},
+                files={"file": ("sample.wav", b"RIFF0000WAVE", "audio/wav")},
+            )
+            assert r.status_code == 200, r.text
+            assert seen["language"] == "ta"
+
+            bad = await ac.post(
+                f"/branches/{br.id}/voice-clone",
+                data={"display_name": "x", "language": "xx"},
+                files={"file": ("sample.wav", b"RIFF0000WAVE", "audio/wav")},
+            )
+            assert bad.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

@@ -103,10 +103,11 @@ export const getBranchVoices = (branchId, language) =>
   api
     .get(`/branches/${branchId}/voices`, { params: language ? { language } : {} })
     .then((r) => r.data);
-export const cloneBranchVoice = (branchId, displayName, file) => {
+export const cloneBranchVoice = (branchId, displayName, file, language) => {
   const fd = new FormData();
   fd.append("display_name", displayName);
   fd.append("file", file);
+  if (language) fd.append("language", language);
   return api
     .post(`/branches/${branchId}/voice-clone`, fd, {
       headers: { "Content-Type": "multipart/form-data" }

@@ -320,6 +320,7 @@ async def clone_branch_voice(
     request: Request,
     display_name: str = Form(...),
     file: UploadFile = File(...),
+    language: str | None = Form(None),
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> BranchSettings:
@@ -345,11 +346,15 @@ async def clone_branch_voice(
 
     from backend.services import smallest_voice
 
-    # Clone in the clinic's spoken language so the voice matches the agent.
-    # smallest's cloning API takes the ISO code — it 400s on full names now
-    # ("Invalid language. Supported: en, hi, mr, kn, ta, ... te, pa, or",
+    # Clone in the chosen language (form field), defaulting to the clinic's
+    # spoken language. smallest's cloning API takes the ISO code — it 400s on
+    # full names now ("Invalid language. Supported: en, hi, ... te, pa, or",
     # prod 2026-07-03; it previously accepted "telugu").
-    clone_language = (getattr(branch, "language", None) or "te")
+    if language is not None and language not in ALLOWED_LANGUAGES:
+        raise HTTPException(
+            status_code=422, detail=f"Language must be one of {ALLOWED_LANGUAGES}"
+        )
+    clone_language = language or (getattr(branch, "language", None) or "te")
     try:
         voice_id = smallest_voice.clone_voice(
             display_name.strip(), file.filename or "sample.wav", audio, language=clone_language
