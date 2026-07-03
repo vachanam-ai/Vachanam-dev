@@ -40,6 +40,10 @@ class Lines:
     followup_greeting_q: str = ""    # {patient} {clinic} {message}
     followup_greeting_noq: str = ""  # {patient} {clinic}
     inbound_followup_greeting: str = ""  # {message} — disclosure + doctor's question
+    # Honorific name prefix for greeting a recognized caller on the inbound
+    # follow-up path (lifted verbatim from the validated known_caller_greeting
+    # pattern — not new hand-written copy).
+    followup_name_prefix: str = ""  # {patient}
 
 
 # Shared English brevity directive for non-Telugu languages (LLM instruction).
@@ -102,6 +106,8 @@ LINES: dict[str, Lines] = {
         inbound_followup_greeting=(
             "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని. డాక్టర్ గారు మిమ్మల్ని ఒక విషయం అడగమన్నారు. {message}"
         ),
+        # Verbatim honorific pattern from known_caller_greeting ("{patient} గారు").
+        followup_name_prefix="{patient} గారు, ",
         brevity=(
             "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి ఆన్సర్ చాలా చిన్నగా, "
             "ఒకటి లేదా రెండు ముక్కల్లో ఉండాలి. డిస్క్లోజర్ మళ్ళీ చెప్పొద్దు. "

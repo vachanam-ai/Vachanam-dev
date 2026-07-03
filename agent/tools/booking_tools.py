@@ -855,11 +855,20 @@ async def confirm_booking(
             "success": False,
             "reason": "already_booked",
             "existing_token_number": existing.token_number,
+            "existing_token_id": str(existing.id),
             "existing_time": existing.appointment_time.strftime("%H:%M")
             if existing.appointment_time
             else None,
+            # existing_token_id matters: on a reminder call the LLM only knows
+            # TODAY's token id, so "cancel today's and move tomorrow's" dead-ended
+            # — it kept rescheduling the wrong token and invented "slot not free"
+            # (prod 2026-07-03). Hand it the blocking booking's id so it can act.
             "instruction": "Patient already has a confirmed booking that day — "
-            "tell them their existing booking instead of creating another.",
+            "tell them their existing booking instead of creating another. If the "
+            "patient wants THAT existing booking moved, call "
+            "reschedule_booking(old_token_id=existing_token_id, ...) with the "
+            "existing_token_id from this response. NEVER invent a different "
+            "reason like 'slot not available'.",
         }
 
     # 1b-2. TIME-CLASH guard across ALL doctors. The per-doctor guard above only

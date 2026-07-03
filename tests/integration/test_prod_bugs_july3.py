@@ -130,6 +130,24 @@ async def test_b3_same_time_two_doctors_rejected(clinic, db, redis):
     assert clash["reason"] == "time_clash"
 
 
+async def test_r1_already_booked_returns_existing_token_id(clinic, db, redis):
+    """already_booked must hand the LLM the BLOCKING booking's token_id so a
+    'move my other booking' request is actionable (prod: reminder call only
+    knew today's token id and invented 'slot not available')."""
+    branch, doc = clinic["branch"], clinic["lakshmi"]
+    day = _tomorrow()
+    phone = "+919000007557"
+
+    first = await _book(db, branch, doc, "వినయ్", phone, day, time(12, 30))
+    assert first["success"], first
+
+    dup = await _book(db, branch, doc, "వినయ్", phone, day, time(15, 0))
+    assert not dup.get("success")
+    assert dup["reason"] == "already_booked"
+    assert dup["existing_token_id"] == str(first["token_id"])
+    assert "reschedule_booking" in dup["instruction"]
+
+
 async def test_b3_family_member_same_time_allowed(clinic, db, redis):
     branch = clinic["branch"]
     day = _tomorrow()

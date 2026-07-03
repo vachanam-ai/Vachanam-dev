@@ -105,6 +105,8 @@ export default function Treatments() {
   const pageRef = useRef(null);
 
   const [patientId, setPatientId] = useState("");
+  const [patientSearch, setPatientSearch] = useState("");
+  const [filterDoctorId, setFilterDoctorId] = useState("");
   const [doctorId, setDoctorId] = useState("");
   const [visitDate, setVisitDate] = useState(today());
   const [stepsPerformed, setStepsPerformed] = useState("");
@@ -155,6 +157,15 @@ export default function Treatments() {
     () => patients.find((p) => p.patient_id === patientId),
     [patients, patientId]
   );
+
+  const filteredPatients = useMemo(() => {
+    const q = patientSearch.trim().toLowerCase();
+    return patients.filter(
+      (p) =>
+        (!filterDoctorId || p.doctor_id === filterDoctorId) &&
+        (!q || p.name.toLowerCase().includes(q) || (p.phone_last4 || "").includes(q))
+    );
+  }, [patients, patientSearch, filterDoctorId]);
 
   // Default the note's doctor to the patient's treating doctor.
   useEffect(() => {
@@ -256,27 +267,68 @@ export default function Treatments() {
         <h1 className="section-title text-2xl">Treatment progress</h1>
       </div>
 
-      <div data-reveal className="card space-y-2 p-6">
-        <label className="label" htmlFor="patient-select">Patient under treatment</label>
-        <select
-          id="patient-select"
-          className="field min-h-[56px]"
-          value={patientId}
-          onChange={(e) => setPatientId(e.target.value)}
-        >
-          <option value="">
-            {patientsLoading ? "Loading patients…" : "Select a patient…"}
-          </option>
-          {patients.map((p) => (
-            <option key={p.patient_id} value={p.patient_id}>
-              {p.name} · …{p.phone_last4}
-              {p.active ? "" : " (completed)"}
-              {p.next_reporting_date ? ` · next ${p.next_reporting_date}` : ""}
-            </option>
-          ))}
-        </select>
-        {!patientsLoading && patients.length === 0 && (
-          <p className="font-ui text-sm text-slate">No patients under treatment yet.</p>
+      <div data-reveal className="card space-y-3 p-6">
+        <label className="label">Patients under treatment</label>
+        {/* Search + doctor filter: a clinic can have 100+ patients split across
+            doctors — a bare dropdown doesn't scale (Vinay 2026-07-03). */}
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            type="search"
+            className="field min-h-[48px] flex-1"
+            placeholder="Search by name or phone…"
+            value={patientSearch}
+            onChange={(e) => setPatientSearch(e.target.value)}
+            aria-label="Search patients"
+          />
+          <select
+            className="field min-h-[48px] sm:w-56"
+            value={filterDoctorId}
+            onChange={(e) => setFilterDoctorId(e.target.value)}
+            aria-label="Filter by doctor"
+          >
+            <option value="">All doctors</option>
+            {doctorList.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+        </div>
+        {patientsLoading ? (
+          <p className="font-ui text-sm text-slate">Loading patients…</p>
+        ) : filteredPatients.length === 0 ? (
+          <p className="font-ui text-sm text-slate">
+            {patients.length === 0 ? "No patients under treatment yet." : "No patients match."}
+          </p>
+        ) : (
+          <ul className="divide-y divide-hairline overflow-hidden rounded-xl border border-hairline">
+            {filteredPatients.map((p) => {
+              const selected = p.patient_id === patientId;
+              return (
+                <li key={p.patient_id}>
+                  <button
+                    type="button"
+                    onClick={() => setPatientId(selected ? "" : p.patient_id)}
+                    className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors min-h-[56px] ${
+                      selected ? "bg-teal-mint/60" : "hover:bg-teal-mint/30"
+                    }`}
+                    aria-expanded={selected}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate font-ui font-medium">
+                        {p.name} <span className="text-slate">· …{p.phone_last4}</span>
+                      </span>
+                      <span className="block truncate font-ui text-sm text-slate">
+                        {p.doctor_name || "—"}
+                        {p.next_reporting_date ? ` · next ${p.next_reporting_date}` : ""}
+                      </span>
+                    </span>
+                    <span className={p.active ? "chip-muted shrink-0" : "chip-token shrink-0"}>
+                      {p.active ? "Active" : "Completed"}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
 
@@ -286,6 +338,11 @@ export default function Treatments() {
           <section data-reveal className="card overflow-hidden">
             <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
               <h2 className="font-display text-lg font-semibold">Visit history</h2>
+              {selectedPatient?.doctor_name && (
+                <span className="font-ui text-sm text-slate">
+                  Dr: {selectedPatient.doctor_name}
+                </span>
+              )}
               {status && (
                 <span className={status === "completed" ? "chip-token" : "chip-muted"}>
                   {status === "completed" ? "Completed" : "Active"}

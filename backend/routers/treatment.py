@@ -241,6 +241,17 @@ async def list_patients(
             )
         )).scalars().all()
     }
+    # Doctor names so the list shows WHO each patient reports to and the UI
+    # can filter by doctor — no per-row lookup.
+    doc_names = {
+        d.id: d.name
+        for d in (await db.execute(
+            select(Doctor).where(
+                Doctor.id.in_({n.doctor_id for n in latest.values()}),
+                Doctor.branch_id == branch_id,
+            )
+        )).scalars().all()
+    }
     out = []
     for pid, n in latest.items():
         active = not n.is_final
@@ -254,6 +265,7 @@ async def list_patients(
             "name": p.name,
             "phone_last4": (p.phone or "")[-4:],
             "doctor_id": str(n.doctor_id),
+            "doctor_name": doc_names.get(n.doctor_id),
             "last_visit_date": n.visit_date.isoformat(),
             "next_reporting_date": n.next_reporting_date.isoformat() if n.next_reporting_date else None,
             "active": active,

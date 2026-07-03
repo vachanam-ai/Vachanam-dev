@@ -287,7 +287,9 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "proactively tell them the doctor wants them to come for a follow-up on that date "
     "and ask to book it — DO THIS EVEN IF they say they feel fine / 'nothing to worry' "
     "/ 'no problem'. NEVER end the call without offering this booking. On agreement, "
-    "use the booking tools to assign a slot with {doctor} within 2 days of that date "
+    "FIRST ask what time of day suits them (\"ఏ టైమ్ వీలవుతుందండి?\") — NEVER pick a "
+    "time yourself; the patient chooses the time, you check it with "
+    "check_availability. Then assign a slot with {doctor} within 2 days of that date "
     "and confirm in one breath. SPEAK the date using the words BEFORE the parenthesis "
     "(e.g. 'ఇరవై తొమ్మిది'); the value in parentheses is the ISO date for the tools "
     "ONLY — never read the parenthesis or digits aloud.\n"
@@ -2011,10 +2013,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         f"wants them back around {_td} for a follow-up with "
                         f"{inbound_followup['doctor_name']} and OFFER TO BOOK it — book "
                         f"with {inbound_followup['doctor_name']}, never ask which doctor. "
-                        "The patient is already in our records — do NOT ask their name or "
-                        "age; book on their existing record. Do NOT end without offering "
-                        "it. Speak the date using the words BEFORE the parenthesis; the "
-                        "parenthesis is the ISO for tools only."
+                        "On agreement, FIRST ask what time of day suits them — NEVER "
+                        "pick a time yourself; the patient chooses, you check it with "
+                        "check_availability. The patient is already in our records — do "
+                        "NOT ask their name or age; book on their existing record. Do "
+                        "NOT end without offering it. Speak the date using the words "
+                        "BEFORE the parenthesis; the parenthesis is the ISO for tools only."
                     )
                     try:
                         state.followup_task_id = UUID(inbound_followup["task_id"])
@@ -2513,21 +2517,40 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Uninterruptible: the patient often says "చెప్పండి/హా/hello" right after the
             # intro, which barged in and cut off the doctor's QUESTION (2026-06-25).
             # The opening question must always be delivered in full.
-            await session.say(sanitize_for_tts(_fg), allow_interruptions=False)
+            # Speak the doctor's QUESTION as its own short utterance: one long
+            # single-shot synth rushed/garbled the message (prod 2026-07-03,
+            # "read fast and broken"); short utterances keep Bulbul's prosody.
+            if _fu_msg and lines.followup_greeting_q and _fg.endswith(_fu_msg):
+                _fg_pre = _fg[: -len(_fu_msg)].strip()
+                await session.say(sanitize_for_tts(_fg_pre), allow_interruptions=False)
+                await session.say(sanitize_for_tts(_fu_msg), allow_interruptions=False)
+            else:
+                await session.say(sanitize_for_tts(_fg), allow_interruptions=False)
         else:
             if inbound_followup and lines.inbound_followup_greeting and inbound_followup.get("message"):
                 # MISSED-CALL CALLBACK: short welcome played (no "how can I help"); now
                 # disclose the AI + deliver the doctor's question, uninterruptible so it
                 # lands. The prompt extra then drives the booking offer. (Consent still
                 # recorded below — the disclosure was served.)
-                await session.say(
-                    sanitize_for_tts(
-                        lines.inbound_followup_greeting.format(
-                            message=inbound_followup["message"]
+                # Greet by NAME when recognized (prod 2026-07-03: "not speaking my
+                # name") and speak the doctor's question as its OWN short utterance
+                # — one long single-shot synth rushed/garbled ("fast and broken").
+                _ifg_raw = lines.inbound_followup_greeting
+                _ifg_msg = inbound_followup["message"]
+                if _ifg_raw.endswith("{message}"):
+                    _ifg_pre = _ifg_raw[: -len("{message}")].strip()
+                    if caller_greeting_name and lines.followup_name_prefix:
+                        _ifg_pre = (
+                            lines.followup_name_prefix.format(patient=caller_greeting_name)
+                            + _ifg_pre
                         )
-                    ),
-                    allow_interruptions=False,
-                )
+                    await session.say(sanitize_for_tts(_ifg_pre), allow_interruptions=False)
+                    await session.say(sanitize_for_tts(_ifg_msg), allow_interruptions=False)
+                else:
+                    await session.say(
+                        sanitize_for_tts(_ifg_raw.format(message=_ifg_msg)),
+                        allow_interruptions=False,
+                    )
             else:
                 # Returning patient → greet by name; new caller → standard greeting.
                 if caller_greeting_name:
