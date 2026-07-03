@@ -83,7 +83,13 @@ def build_date_context(now_local) -> str:
         f"{table}\n"
         "Always pass booking_date as YYYY-MM-DD copied from this list. For a date "
         "further out than next week, count forward from the matching weekday above. "
-        "Never announce a date the patient didn't ask about."
+        "Never announce a date the patient didn't ask about.\n"
+        "SPEAK-CHECK: before SAYING any weekday together with a date ('Wednesday, "
+        "July eight'), verify the pair against ONE row of the list above — if the "
+        "pair is not a row, you are wrong. If the caller corrects your date or "
+        "weekday, NEVER argue: re-read the list and use the row matching THEIR "
+        "weekday. (Live failure: agent insisted 'this Wednesday is July ninth' "
+        "while the list said Wednesday = July 8.)"
     )
 
 
@@ -153,11 +159,11 @@ def build_system_prompt(
         "'మీకు ఇంగ్లీష్ వచ్చా?'), call switch_language with its code — te (Telugu), "
         "en (English), hi (Hindi), ta (Tamil), kn (Kannada), ml (Malayalam), "
         "mr (Marathi), bn (Bengali), or (Odia). The switch is remembered for "
-        "their future calls. Call switch_language IMMEDIATELY and SILENTLY — "
-        "output NO spoken text in the turn that calls it (no 'sure', no "
-        "acknowledgement in any language): the system itself speaks the "
-        "confirmation in the new language. Switch ONLY on an explicit request "
-        "— NEVER because they mixed some words of another language. If they "
+        "their future calls. Call switch_language IMMEDIATELY. In that turn "
+        "output AT MOST the single word 'Ok.' — nothing else, no sentence, no "
+        "'I can speak X': the system itself speaks the full confirmation in "
+        "the new language and voice. Switch ONLY on an explicit request — "
+        "NEVER because they mixed some words of another language. If they "
         "ask for a language not in that list, apologise briefly and continue "
         "in the current one.\n\n"
     )
@@ -341,6 +347,18 @@ would SAY, and nothing else:
   the caller may be speaking a DIFFERENT language. Ask ONCE, briefly, which language
   they prefer (Telugu / English / Hindi ...) and call switch_language with their
   answer. Do not keep re-asking the same question into a language gap.
+- NO TOOLS ON FRAGMENTS: never fire a booking/cancel/reschedule tool from an
+  incomplete utterance — wait until the caller has finished the request. A tool
+  called on half a sentence acts on half the information.
+- FAILURE RECOVERY (never freeze, never loop): if a tool fails twice for the same
+  request, STOP retrying. Say plainly, in one line, what you could not do, and offer
+  exactly one alternative (a different time/day, or that the clinic will call them
+  back). Going silent or repeating the same failing step is the worst outcome — a
+  bookable caller must never be lost to a retry loop.
+- INTERRUPTED CONFIRMATIONS: if the caller interrupted you while you were stating a
+  booking detail (token number, date, time), they may not have heard it — restate
+  that ONE key detail once at the next natural moment, without replaying the whole
+  sentence.
 - NEVER translate English sentences word-by-word into Telugu. Think in Telugu directly.
   Avoid stiff/Sanskritized words a receptionist would never say (లభ్యత, నిర్ధారించండి,
   అందుబాటులో ఉన్నారు as a full clause) — prefer the everyday phrasing below.

@@ -432,16 +432,19 @@ def get_welcome(code: str | None) -> str:
 # NEW agent's on_enter right after the caller explicitly asks to switch, so
 # there is never dead air while the STT/TTS pipelines are swapped). Short,
 # spoken in the TARGET language. te/en natural; others first-pass.
+# Wording per Vinay 2026-07-03: the switched voice says ONLY "I can speak X.
+# How can I help you?" — nothing more (the LLM reply after the handoff is
+# suppressed mechanically; this line is the entire intro).
 SWITCH_ACK: dict[str, str] = {
-    "te": "సరే అండి, తెలుగులో మాట్లాడుకుందాం. చెప్పండి.",
-    "en": "Sure, we can continue in English. Please go ahead.",
-    "hi": "जी, अब हम हिंदी में बात करेंगे। बताइए।",
-    "ta": "சரி, இனி தமிழில் பேசலாம். சொல்லுங்க.",
-    "kn": "ಸರಿ, ಇನ್ನು ಕನ್ನಡದಲ್ಲಿ ಮಾತಾಡೋಣ. ಹೇಳಿ.",
-    "ml": "ശരി, ഇനി മലയാളത്തിൽ സംസാരിക്കാം. പറയൂ.",
-    "mr": "ठीक आहे, आता आपण मराठीत बोलूया. सांगा.",
-    "bn": "ঠিক আছে, এবার আমরা বাংলায় কথা বলব। বলুন।",
-    "or": "ଠିକ୍ ଅଛି, ଏବେ ଆମେ ଓଡ଼ିଆରେ କଥା ହେବା। କୁହନ୍ତୁ।",
+    "te": "నేను తెలుగులో మాట్లాడగలనండి. చెప్పండి, మీకు ఎలా సహాయం చేయగలను?",
+    "en": "I can speak English. How can I help you?",
+    "hi": "मैं हिंदी में बात कर सकती हूँ। बताइए, मैं आपकी क्या मदद करूँ?",
+    "ta": "நான் தமிழில் பேச முடியும். சொல்லுங்க, என்ன உதவி வேணும்?",
+    "kn": "ನಾನು ಕನ್ನಡದಲ್ಲಿ ಮಾತಾಡಬಲ್ಲೆ. ಹೇಳಿ, ಏನು ಸಹಾಯ ಬೇಕು?",
+    "ml": "എനിക്ക് മലയാളത്തിൽ സംസാരിക്കാം. പറയൂ, എന്ത് സഹായം വേണം?",
+    "mr": "मी मराठीत बोलू शकते. सांगा, काय मदत हवी?",
+    "bn": "আমি বাংলায় কথা বলতে পারি। বলুন, কী সাহায্য লাগবে?",
+    "or": "ମୁଁ ଓଡ଼ିଆରେ କଥା ହୋଇପାରିବି। କୁହନ୍ତୁ, କଣ ସାହାଯ୍ୟ ଦରକାର?",
 }
 
 

@@ -733,7 +733,12 @@ class VachanamAgent(Agent):
         pipelines are being swapped."""
         if self._switch_ack:
             try:
-                await self.session.say(sanitize_for_tts(self._switch_ack))
+                # allow_interruptions=False: the intro is ~2s and is the ONLY
+                # thing the new voice says — a caller's "okay" over it must not
+                # clip it into a half-sentence (live 17:49Z: "Please go[ ahead]").
+                await self.session.say(
+                    sanitize_for_tts(self._switch_ack), allow_interruptions=False
+                )
             except Exception as e:  # noqa: BLE001 — ack is best-effort (RULE 8)
                 logger.warning("switch_ack_failed: %s", e)
 
@@ -1357,15 +1362,22 @@ class VachanamAgent(Agent):
                         break
         except Exception as e:  # noqa: BLE001 — priming is best-effort (RULE 8)
             logger.warning("switch_tts_prime_failed: %s", e)
-        return new_agent, {
-            "success": True,
-            "language": code,
-            "note": (
-                "The switch was already acknowledged out loud by the system. "
-                "Do NOT acknowledge it again — continue the conversation in the "
-                "new language from where it left off, one short line."
-            ),
-        }
+        # Cut the OLD voice's in-flight sentence ("Okay, I can speak in
+        # English. How can I..." — live 17:49Z: THREE utterances played). The
+        # LLM streams spoken text alongside the tool call and the old TTS
+        # voices it; interrupting here leaves at most a clipped "Okay".
+        try:
+            sp = getattr(self.session, "current_speech", None)
+            if sp is not None:
+                sp.interrupt()
+        except Exception:  # noqa: BLE001
+            pass
+        # Return the Agent ALONE (no result payload): livekit generates a
+        # post-tool reply only when the tool returned an output
+        # (generation.make_tool_output: reply_required = fnc_out is not None).
+        # A bare Agent → handoff with NO extra LLM utterance — on_enter's ack
+        # is the ONLY thing spoken, exactly the single-intro Vinay specified.
+        return new_agent
 
     @function_tool()
     async def reschedule_booking(
