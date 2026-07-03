@@ -211,22 +211,39 @@ def _cancel_on_shutdown(task):
     return _cb
 
 
+def _phone_override_error(
+    caller_phone: str | None, patient_phone: str | None, different_person: bool
+) -> str | None:
+    """Vinay 2026-07-03 live test: a DICTATED different number sent with
+    different_person=false was silently discarded (iter1 #11 keeps a caller's
+    own booking on their caller-ID) and the booking landed on the caller's own
+    number. That combination is always a mistake — return the LLM-facing error
+    so the tool fails loudly and the model self-corrects with
+    different_person=true. None = combination is fine."""
+    if not patient_phone or different_person:
+        return None
+    caller_d = "".join(ch for ch in (caller_phone or "") if ch.isdigit())[-10:]
+    given_d = "".join(ch for ch in patient_phone if ch.isdigit())[-10:]
+    if caller_d and given_d and given_d != caller_d:
+        return (
+            "You passed a phone number DIFFERENT from the caller's own "
+            "number, but different_person=false. A caller's own booking "
+            "always uses the number they are calling from. If this "
+            "booking is for SOMEONE ELSE (a family member), call "
+            "confirm_booking again with different_person=true, that "
+            "person's name and age, and this patient_phone."
+        )
+    return None
+
+
 def _voice_for_lang(branch, lang_code: str) -> str:
-    """The TTS voice_id to speak `lang_code` for this branch. Keeps the clinic's
-    chosen voice, EXCEPT when that voice is a cloned voice registered for a
-    different language — a Telugu clone speaking English sounds broken, so fall
-    back to the target language's default catalog voice."""
-    cfg = get_lang(lang_code)
+    """The TTS voice_id to speak `lang_code` for this branch: the clinic's
+    chosen voice, else the language's default catalog voice. The clinic voice is
+    kept across a mid-call language switch — smallest.ai voices (including
+    clones) are multilingual, and the voice CHANGING mid-call is what actually
+    sounds broken (Vinay live test 2026-07-03)."""
     v = (getattr(branch, "tts_voice", None) or "").strip()
-    if not v:
-        return cfg.default_voice
-    for cv in getattr(branch, "cloned_voices", None) or []:
-        if not isinstance(cv, dict) or cv.get("voice_id") != v:
-            continue
-        clone_lang = (cv.get("language") or "").lower().strip()
-        if clone_lang and clone_lang != cfg.code:
-            return cfg.default_voice
-    return v
+    return v or get_lang(lang_code).default_voice
 
 
 KNOWN_CALLER_BOOKING_EXTRA = (
@@ -249,9 +266,11 @@ KNOWN_CALLER_BOOKING_EXTRA = (
     "చేయమంటారా, లేక వాళ్ళ నంబర్ వేరే ఉందా?'). If they say this number (or have "
     "no other), omit patient_phone — it defaults to the caller's number. If "
     "they give a different number, apply the PHONE NUMBER RULES (exactly 10 "
-    "digits, read back in English digits for confirmation) and pass it as "
-    "patient_phone. Then confirm_booking with that person's name and age and "
-    "different_person=true."
+    "digits; read it back in English digits and get a YES before booking) and "
+    "pass it as patient_phone. confirm_booking MUST then be called with "
+    "different_person=true — with different_person=false the other number is "
+    "REJECTED and the booking fails. Then confirm_booking with that person's "
+    "name and age and different_person=true."
 )
 
 REBOOK_PROMPT_EXTRA = (
@@ -661,10 +680,11 @@ class VachanamAgent(Agent):
         meta_service: MetaService,
         transfer_to: str,
         lang_code: str = "te",
-        agent_factory=None,   # callable(lang_code) -> VachanamAgent, for switch_language
+        agent_factory=None,   # callable(lang_code, chat_ctx=None) -> VachanamAgent
         switch_ack: str | None = None,  # spoken by on_enter right after a language switch
         stt=None,             # per-agent STT override (language switch handoff)
         tts=None,             # per-agent TTS override (language switch handoff)
+        chat_ctx=None,        # conversation history carried across the handoff
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
         # None would DISABLE the session-level pipeline, not inherit it.
@@ -673,6 +693,8 @@ class VachanamAgent(Agent):
             overrides["stt"] = stt
         if tts is not None:
             overrides["tts"] = tts
+        if chat_ctx is not None:
+            overrides["chat_ctx"] = chat_ctx
         super().__init__(instructions=instructions, **overrides)
         self._state = state
         self._db = db
@@ -966,6 +988,18 @@ class VachanamAgent(Agent):
         # LLM-passed override when different_person=True (an explicit family
         # booking for someone else); a caller's own booking is ALWAYS attributed
         # to the number they dialed from, never an LLM-asserted phone.
+        #
+        # Vinay 2026-07-03 live test: the caller DICTATED a different number for
+        # a family member but the LLM sent different_person=false — the override
+        # was silently discarded and the booking landed on the caller's own
+        # number/record. A dictated-different number with different_person=false
+        # is ALWAYS a mistake, so fail loudly and let the LLM self-correct
+        # instead of booking the wrong phone.
+        _override_err = _phone_override_error(
+            self._state.patient_phone, patient_phone, different_person
+        )
+        if _override_err:
+            raise ToolError(_override_err)
         if different_person and patient_phone:
             phone = patient_phone
         else:
@@ -1282,8 +1316,15 @@ class VachanamAgent(Agent):
         # LiveKit agent handoff: returning (new_agent, result) swaps the active
         # agent — the new one carries its OWN Sarvam STT + smallest TTS in the
         # target language plus rebuilt instructions. Its on_enter speaks the
-        # acknowledgement deterministically.
-        new_agent = self._agent_factory(code)
+        # acknowledgement deterministically. The conversation history MUST ride
+        # along (live test 2026-07-03: without it the new agent forgot the
+        # doctor/flow — 'Unknown doctor' tool errors, re-asking, Telugu endings).
+        try:
+            _cc = self.chat_ctx.copy()
+        except Exception as e:  # noqa: BLE001 — a switch without history still beats no switch
+            logger.warning("chat_ctx_copy_failed: %s", e)
+            _cc = None
+        new_agent = self._agent_factory(code, chat_ctx=_cc)
         return new_agent, {
             "success": True,
             "language": code,
@@ -2314,13 +2355,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 logger.critical("calendar_service_init_failed: %s", e)
                 calendar_service = None
 
-        def _agent_for_lang(lc: str) -> VachanamAgent:
+        def _agent_for_lang(lc: str, chat_ctx=None) -> VachanamAgent:
             """Build the handoff agent for a mid-call language switch: full
             prompt, Sarvam STT and smallest TTS all in the target language,
-            sharing this call's state/db/room. Used by switch_language."""
+            sharing this call's state/db/room + conversation history. Used by
+            switch_language."""
             cfg2 = get_lang(lc)
             return VachanamAgent(
                 instructions=_compose_instructions(lc),
+                chat_ctx=chat_ctx,
                 state=state,
                 db=db,
                 room=ctx.room,
@@ -2852,12 +2895,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             async def _solo_cap_watchdog() -> None:
                 try:
                     await asyncio.sleep(cap - 10)
+                    # Resolve lines at SPEAK time — switch_language may have
+                    # changed the call's language after `lines` was captured.
+                    _cur = get_lines(state.language or lang_code)
                     if not state.solo_warning_sent:
                         state.solo_warning_sent = True
-                        await session.say(sanitize_for_tts(lines.cap_warning))
+                        await session.say(sanitize_for_tts(_cur.cap_warning))
                     await asyncio.sleep(10)
                     await session.say(
-                        sanitize_for_tts(lines.cap_goodbye)
+                        sanitize_for_tts(_cur.cap_goodbye)
                     )
                     try:
                         await session.current_speech.wait_for_playout()

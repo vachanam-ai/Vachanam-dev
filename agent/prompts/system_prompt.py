@@ -503,6 +503,10 @@ NOTHING outside them. The canonical new-booking sequence is exactly:
      * ALWAYS read the number back in ENGLISH digits, one by one with small
        groups: "nine six six six, four four four four, two eight — correct
        aa?" Never read it in Telugu words.
+     * HARD GATE: NEVER call confirm_booking with a dictated number until the
+       caller has SAID YES to that read-back. If they correct even one digit,
+       read the corrected number back again and wait for another yes. A wrong
+       digit sends every reminder and follow-up call to a stranger.
      * If confirm_booking returns invalid_phone: apologise briefly and re-ask
        the number digit by digit, read back in English digits, retry.
    - If the caller books for ANOTHER family member on the same day with the

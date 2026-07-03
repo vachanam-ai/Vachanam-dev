@@ -94,34 +94,39 @@ def _state(branch_id):
     return s
 
 
-async def test_phone_defaults_to_caller_not_llm_override(clinic, db, redis):
-    """#11: a same-person booking ignores an LLM-passed phone and uses caller-ID."""
+async def test_phone_override_without_flag_is_rejected_loudly(clinic, db, redis):
+    """#11 + FIXLOG #240: a same-person booking may NEVER be re-attributed to an
+    LLM-passed phone. Previously the override was DISCARDED SILENTLY and the
+    booking landed on the caller-ID — Vinay's 2026-07-03 live test showed that
+    silently swallows a real 'book on a different number' request (the family
+    number the caller dictated vanished). Now the mismatch fails LOUDLY with a
+    ToolError telling the model to retry with different_person=true; no booking
+    and no forged-phone patient row are created either way."""
+    import pytest as _pytest
+    from livekit.agents.llm import ToolError
+
     branch, doc = clinic["branch"], clinic["doc"]
     state = _state(branch.id)
     agent = _agent(state, db)
 
-    result = await agent.confirm_booking(
-        context=None,
-        doctor_id=str(doc.id),
-        patient_name="Caller Self",
-        complaint="fever",
-        booking_date=_tomorrow().isoformat(),
-        token_number=1,
-        followup_consent=False,
-        patient_phone="+910000000000",  # LLM-asserted, different_person False
-        patient_age=30,
-        different_person=False,
-    )
-    assert result.get("success"), result
-    tok = (
-        await db.execute(select(Token).where(Token.id == __import__("uuid").UUID(result["token_id"])))
-    ).scalar_one()
-    patient = (
-        await db.execute(select(Patient).where(Patient.id == tok.patient_id))
-    ).scalar_one()
-    assert patient.phone == "+919876500011", "must attribute to verified caller-ID"
-    # the forged LLM phone must NOT have created/used a patient
-    assert patient.phone != "+910000000000"
+    with _pytest.raises(ToolError, match="different_person=true"):
+        await agent.confirm_booking(
+            context=None,
+            doctor_id=str(doc.id),
+            patient_name="Caller Self",
+            complaint="fever",
+            booking_date=_tomorrow().isoformat(),
+            token_number=1,
+            followup_consent=False,
+            patient_phone="+910000000000",  # LLM-asserted, different_person False
+            patient_age=30,
+            different_person=False,
+        )
+    # the forged LLM phone must NOT have created a patient
+    forged = (
+        await db.execute(select(Patient).where(Patient.phone == "+910000000000"))
+    ).scalar_one_or_none()
+    assert forged is None
 
 
 async def test_third_different_person_booking_refused(clinic, db, redis):
