@@ -610,6 +610,28 @@ export default function Settings() {
               {faqSave.isPending ? "Saving…" : "Save FAQ"}
             </button>
           </div>
+          {(faqQuery.data?.asked?.length ?? 0) > 0 && (
+            <div className="mt-4 border-t border-hairline pt-4">
+              <p className="font-ui text-sm font-medium">Callers recently asked (not in your FAQ)</p>
+              <p className="mt-0.5 font-ui text-xs text-slate">
+                The agent told them the clinic will get back after checking with the doctor.
+                Add an answer above so it's answered on the next call.
+              </p>
+              <ul className="mt-2 space-y-1">
+                {faqQuery.data.asked.map((a, i) => (
+                  <li key={i} className="flex items-center justify-between gap-2">
+                    <span className="font-ui text-sm">{a.question}</span>
+                    <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-xs"
+                      onClick={() =>
+                        setFaqRows([...(faqRows ?? []), { q: a.question, a: "" }])
+                      }>
+                      + Add to FAQ
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </Section>
 

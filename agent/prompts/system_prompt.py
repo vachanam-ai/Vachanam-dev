@@ -205,9 +205,17 @@ def build_system_prompt(
                 "\nCLINIC FAQ — when the caller asks any of these, answer from the "
                 "clinic's answer below (spoken naturally in the call's language, one "
                 "short line), then continue the booking. Never contradict or extend "
-                "these answers; anything NOT covered here → they can confirm at the "
-                "clinic." + "".join(_faq_rows)
+                "these answers." + "".join(_faq_rows)
             )
+    # Unanswered clinic-info questions: log + honest fallback, so the clinic
+    # can grow its FAQ from real caller questions (Vinay 2026-07-03).
+    faq_line += (
+        "\nCLINIC-INFO QUESTIONS NOT COVERED above (or when no FAQ exists): call "
+        "log_clinic_question with the caller's question, then say the clinic will "
+        "check with the doctor and get back to them. If the caller sounds worried "
+        "or says it is urgent, give the clinic's emergency contact instead. Never "
+        "guess an answer."
+    )
 
     recording_sentence = ""
     if _cfg.settings.recording_allowed:

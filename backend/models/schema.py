@@ -255,6 +255,22 @@ class Patient(Base):
     )
 
 
+class ClinicQuestion(Base):
+    """A clinic-info question a caller asked that the FAQ could NOT answer —
+    logged by the voice agent so the owner can discuss with the doctor and
+    grow the FAQ over time (Vinay 2026-07-03). RULE 9: question text only +
+    caller last-4; no names, no medical detail expected (info questions)."""
+    __tablename__ = "clinic_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    question: Mapped[str] = mapped_column(String(300), nullable=False)
+    caller_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Consent(Base):
     """DPDP s.5 demonstrable-notice record. One row per call where the data-
     processing disclosure (the AI-assistant greeting) was spoken to the caller,

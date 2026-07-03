@@ -5,9 +5,9 @@ export const listTreatmentPatients = (branchId, { doctorId, status = "all" } = {
     params: { doctor_id: doctorId, status },
   }).then((r) => r.data.patients);
 
-export const listNotes = (patientId, branchId) =>
+export const listNotes = (patientId, branchId, doctorId) =>
   api.get(`/treatment/patients/${patientId}/treatment-notes`, {
-    params: { branch_id: branchId },
+    params: { branch_id: branchId, doctor_id: doctorId || undefined },
   }).then((r) => r.data);
 
 export const createNote = (patientId, payload) =>
@@ -16,9 +16,10 @@ export const createNote = (patientId, payload) =>
 export const editNote = (noteId, payload) =>
   api.patch(`/treatment/treatment-notes/${noteId}`, payload).then((r) => r.data);
 
-export const listFollowups = (patientId, branchId) =>
-  api.get(`/treatment/patients/${patientId}/followups`, { params: { branch_id: branchId } })
-     .then((r) => r.data.thread);
+export const listFollowups = (patientId, branchId, doctorId) =>
+  api.get(`/treatment/patients/${patientId}/followups`, {
+    params: { branch_id: branchId, doctor_id: doctorId || undefined },
+  }).then((r) => r.data.thread);
 
 export const replyToPatient = (patientId, payload) =>
   api.post(`/treatment/patients/${patientId}/followups`, payload).then((r) => r.data);

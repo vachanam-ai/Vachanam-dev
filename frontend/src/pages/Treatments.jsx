@@ -105,6 +105,8 @@ export default function Treatments() {
   const pageRef = useRef(null);
 
   const [patientId, setPatientId] = useState("");
+  // The selected treatment THREAD's doctor — one thread per (patient, doctor).
+  const [threadDoctorId, setThreadDoctorId] = useState("");
   const [patientSearch, setPatientSearch] = useState("");
   const [filterDoctorId, setFilterDoctorId] = useState("");
   const [doctorId, setDoctorId] = useState("");
@@ -134,14 +136,14 @@ export default function Treatments() {
   });
 
   const { data: notesData, isLoading: notesLoading } = useQuery({
-    queryKey: ["treatment-notes", patientId, branchId],
-    queryFn: () => listNotes(patientId, branchId),
+    queryKey: ["treatment-notes", patientId, branchId, threadDoctorId],
+    queryFn: () => listNotes(patientId, branchId, threadDoctorId),
     enabled: Boolean(patientId && branchId)
   });
 
   const { data: followups = [], isLoading: followupsLoading } = useQuery({
-    queryKey: ["followups", patientId, branchId],
-    queryFn: () => listFollowups(patientId, branchId),
+    queryKey: ["followups", patientId, branchId, threadDoctorId],
+    queryFn: () => listFollowups(patientId, branchId, threadDoctorId),
     enabled: Boolean(patientId && branchId)
   });
 
@@ -151,11 +153,13 @@ export default function Treatments() {
   // anything", 2026-06-24).
   useEffect(() => {
     revealStagger(pageRef.current);
-  }, [patientId]);
+  }, [patientId, threadDoctorId]);
 
   const selectedPatient = useMemo(
-    () => patients.find((p) => p.patient_id === patientId),
-    [patients, patientId]
+    () => patients.find(
+      (p) => p.patient_id === patientId && (!threadDoctorId || p.doctor_id === threadDoctorId)
+    ),
+    [patients, patientId, threadDoctorId]
   );
 
   const filteredPatients = useMemo(() => {
@@ -217,12 +221,12 @@ export default function Treatments() {
       return targetId ? editNote(targetId, payload) : createNote(patientId, payload);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["treatment-notes", patientId, branchId] });
+      qc.invalidateQueries({ queryKey: ["treatment-notes", patientId, branchId, threadDoctorId] });
       qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
       // B25: a note with a follow-up question enqueues a next_visit_book task —
       // refresh the follow-up thread so it appears immediately (the reply
       // mutation already does this; note create/edit didn't).
-      qc.invalidateQueries({ queryKey: ["followups", patientId, branchId] });
+      qc.invalidateQueries({ queryKey: ["followups", patientId, branchId, threadDoctorId] });
       resetForm();
       toast.success(isFinal ? "Treatment marked complete" : "Visit note added");
     },
@@ -240,7 +244,7 @@ export default function Treatments() {
         message: replyMessage.trim()
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["followups", patientId, branchId] });
+      qc.invalidateQueries({ queryKey: ["followups", patientId, branchId, threadDoctorId] });
       setReplyMessage("");
       toast.success("Reply queued for the patient");
     },
@@ -301,12 +305,15 @@ export default function Treatments() {
         ) : (
           <ul className="divide-y divide-hairline overflow-hidden rounded-xl border border-hairline">
             {filteredPatients.map((p) => {
-              const selected = p.patient_id === patientId;
+              const selected = p.patient_id === patientId && p.doctor_id === threadDoctorId;
               return (
-                <li key={p.patient_id}>
+                <li key={`${p.patient_id}:${p.doctor_id}`}>
                   <button
                     type="button"
-                    onClick={() => setPatientId(selected ? "" : p.patient_id)}
+                    onClick={() => {
+                      setPatientId(selected ? "" : p.patient_id);
+                      setThreadDoctorId(selected ? "" : p.doctor_id);
+                    }}
                     className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors min-h-[56px] ${
                       selected ? "bg-teal-mint/60" : "hover:bg-teal-mint/30"
                     }`}

@@ -186,15 +186,21 @@ async def edit_note(
 async def list_notes(
     patient_id: uuid.UUID,
     branch_id: uuid.UUID,
+    doctor_id: uuid.UUID | None = None,
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await assert_branch_access(user, str(branch_id), db)
+    # doctor_id: scope the visit history to ONE treatment thread — a patient
+    # can run concurrent treatments with different doctors.
+    q = select(TreatmentNote).where(
+        TreatmentNote.patient_id == patient_id,
+        TreatmentNote.branch_id == branch_id,
+    )
+    if doctor_id:
+        q = q.where(TreatmentNote.doctor_id == doctor_id)
     rows = (await db.execute(
-        select(TreatmentNote).where(
-            TreatmentNote.patient_id == patient_id,
-            TreatmentNote.branch_id == branch_id,
-        ).order_by(TreatmentNote.visit_date.asc(), TreatmentNote.created_at.asc())
+        q.order_by(TreatmentNote.visit_date.asc(), TreatmentNote.created_at.asc())
     )).scalars().all()
     status = "completed" if (rows and rows[-1].is_final) else ("active" if rows else "none")
     return {
@@ -226,10 +232,13 @@ async def list_patients(
             TreatmentNote.created_at.asc(),
         )
     )).scalars().all()
-    latest: dict[uuid.UUID, TreatmentNote] = {}
+    # One treatment THREAD per (patient, doctor) — a patient can run two
+    # treatments at once (e.g. dental with Srinivas + skin with Lakshmi) and
+    # collapsing to one row per patient hid one of them (prod 2026-07-03).
+    latest: dict[tuple[uuid.UUID, uuid.UUID], TreatmentNote] = {}
     for n in notes:
-        latest[n.patient_id] = n  # last wins = newest
-    pat_ids = list(latest.keys())
+        latest[(n.patient_id, n.doctor_id)] = n  # last wins = newest
+    pat_ids = list({pid for (pid, _did) in latest.keys()})
     if not pat_ids:
         return {"patients": []}
     pats = {
@@ -253,7 +262,7 @@ async def list_patients(
         )).scalars().all()
     }
     out = []
-    for pid, n in latest.items():
+    for (pid, _did), n in latest.items():
         active = not n.is_final
         if status == "active" and not active:
             continue
@@ -283,17 +292,19 @@ async def list_patients(
 async def list_followups(
     patient_id: uuid.UUID,
     branch_id: uuid.UUID,
+    doctor_id: uuid.UUID | None = None,
     user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await assert_branch_access(user, str(branch_id), db)
-    rows = (await db.execute(
-        select(FollowupTask).where(
-            FollowupTask.patient_id == patient_id,
-            FollowupTask.branch_id == branch_id,
-            FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"]),
-        ).order_by(FollowupTask.created_at.asc())
-    )).scalars().all()
+    q = select(FollowupTask).where(
+        FollowupTask.patient_id == patient_id,
+        FollowupTask.branch_id == branch_id,
+        FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"]),
+    )
+    if doctor_id:  # one thread per (patient, doctor) treatment
+        q = q.where(FollowupTask.doctor_id == doctor_id)
+    rows = (await db.execute(q.order_by(FollowupTask.created_at.asc()))).scalars().all()
     return {
         "thread": [
             {

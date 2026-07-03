@@ -282,20 +282,22 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "check_availability and the booking.\n"
     "1) Your OPENING line already asked the doctor's question (\"{message}\"). Do "
     "NOT ask it again — just listen to their answer and respond warmly in one line.\n"
-    "2) THE MAIN PURPOSE of this call is to BOOK the next visit. The doctor has asked "
-    "this patient to come back around {target_date}. So after they answer, you MUST "
-    "proactively tell them the doctor wants them to come for a follow-up on that date "
-    "and ask to book it — DO THIS EVEN IF they say they feel fine / 'nothing to worry' "
-    "/ 'no problem'. NEVER end the call without offering this booking. On agreement, "
-    "FIRST ask what time of day suits them (\"ఏ టైమ్ వీలవుతుందండి?\") — NEVER pick a "
-    "time yourself; the patient chooses the time, you check it with "
+    "2) BOOKING — only on a GOOD report. The doctor has asked this patient to come "
+    "back around {target_date}, so IF their answer is fine/normal (\"అంతా బాగానే "
+    "ఉంది\"), tell them the doctor wants them back on that date and offer to book. "
+    "On agreement, FIRST ask what time of day suits them (\"ఏ టైమ్ వీలవుతుందండి?\") — "
+    "NEVER pick a time yourself; the patient chooses the time, you check it with "
     "check_availability. Then assign a slot with {doctor} within 2 days of that date "
     "and confirm in one breath. SPEAK the date using the words BEFORE the parenthesis "
     "(e.g. 'ఇరవై తొమ్మిది'); the value in parentheses is the ISO date for the tools "
     "ONLY — never read the parenthesis or digits aloud.\n"
     "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
-    "triage. If the patient reports ANY problem or pain, say warmly: 'I will inform "
-    "the doctor and they will get back to you as soon as possible.' Do not advise.\n"
+    "triage. IF the patient reports ANY problem, pain, or discomfort: say warmly "
+    "'I will inform the doctor and they will get back to you as soon as possible', "
+    "and do NOT push the booking — the doctor will decide the next step when they "
+    "get back. (Vinay 2026-07-03: a problem report ends with inform-doctor, not a "
+    "sales pitch.) Book in this case ONLY if the patient THEMSELVES explicitly asks "
+    "for an appointment. Do not advise.\n"
     "4) BOOKING — the patient is ALREADY on record, so keep it tight (this OVERRIDES "
     "the normal new-patient details flow):\n"
     "   - The patient's name is '{patient}'. Do NOT ask their name, do NOT ask their "
@@ -321,12 +323,14 @@ DOCTOR_ADVICE_PROMPT_EXTRA = (
     "concern and wrote a message. RELAY it warmly and faithfully in the clinic's "
     "language — do NOT add, interpret, or invent any medical content of your own "
     "(RULE 7). The doctor's message: \"{message}\".\n"
-    "After relaying, ask if they have more concerns; if a target date "
-    "({target_date}) is given, offer to book within 2 days of it (SPEAK the date "
-    "using the words before the parenthesis; the value in parentheses is the ISO "
-    "for the tools only — never read it aloud). If they report a new problem, say "
-    "'I will inform the doctor and get back to you as soon as possible.' Two short "
-    "sentences per reply."
+    "After relaying, ask if they have more concerns. Offer a booking ONLY if the "
+    "doctor's message itself asks them to come in (then a target date "
+    "{target_date} may be given — book within 2 days of it; SPEAK the date using "
+    "the words before the parenthesis; the parenthesis is the ISO for tools only) "
+    "OR the patient explicitly asks for an appointment — never push one otherwise. "
+    "If they report a new problem, say 'I will inform the doctor and get back to "
+    "you as soon as possible' and do NOT offer a booking. Two short sentences per "
+    "reply."
 )
 
 _FOLLOWUP_CALLTYPES = {"next_visit_book", "doctor_advice"}
@@ -1126,6 +1130,36 @@ class VachanamAgent(Agent):
                 for t, d, p in rows
             ]
         }
+
+    @function_tool()
+    async def log_clinic_question(self, context: RunContext, question: str) -> dict:
+        """Log a clinic-information question the CLINIC FAQ could not answer
+        (fees, timings, facilities, services...). Call this when the caller asks
+        about the clinic and the answer is not in your CLINIC FAQ or clinic
+        info — the clinic reviews these to improve its FAQ. Then tell the
+        caller the clinic will check with the doctor and get back to them.
+        Never log booking requests or medical questions here."""
+        from backend.models.schema import ClinicQuestion
+
+        q = " ".join((question or "").split())[:300]
+        if not q:
+            return {"logged": False}
+        try:
+            self._db.add(ClinicQuestion(
+                branch_id=self._state.branch_id,
+                question=q,
+                caller_last4=(self._state.patient_phone or "")[-4:] or None,
+            ))
+            await self._db.commit()
+        except Exception as e:  # noqa: BLE001 — logging must never break the call
+            logger.warning("clinic_question_log_failed: %s", e)
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            return {"logged": False}
+        return {"logged": True, "next": "Tell the caller the clinic will check "
+                "with the doctor and get back to them."}
 
     @function_tool()
     async def reschedule_booking(
@@ -2009,16 +2043,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     _td = _spoken_target_date(inbound_followup.get("target_date", ""), lang_code)
                     caller_prompt_extra += (
                         "\n\nPENDING FOLLOW-UP: your opening already asked the doctor's "
-                        "question. After the patient answers, ALWAYS tell them the doctor "
-                        f"wants them back around {_td} for a follow-up with "
+                        "question. IF the patient's answer is fine/normal, tell them the "
+                        f"doctor wants them back around {_td} for a follow-up with "
                         f"{inbound_followup['doctor_name']} and OFFER TO BOOK it — book "
                         f"with {inbound_followup['doctor_name']}, never ask which doctor. "
                         "On agreement, FIRST ask what time of day suits them — NEVER "
                         "pick a time yourself; the patient chooses, you check it with "
                         "check_availability. The patient is already in our records — do "
-                        "NOT ask their name or age; book on their existing record. Do "
-                        "NOT end without offering it. Speak the date using the words "
-                        "BEFORE the parenthesis; the parenthesis is the ISO for tools only."
+                        "NOT ask their name or age; book on their existing record. "
+                        "IF instead they report a problem/pain: say you will inform the "
+                        "doctor and they will get back soon, and do NOT push the booking "
+                        "— book only if the patient explicitly asks. Speak the date "
+                        "using the words BEFORE the parenthesis; the parenthesis is the "
+                        "ISO for tools only."
                     )
                     try:
                         state.followup_task_id = UUID(inbound_followup["task_id"])

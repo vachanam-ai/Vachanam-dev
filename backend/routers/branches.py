@@ -261,14 +261,33 @@ async def get_faq(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """The clinic's FAQ (agent answers these on calls) + the fill-in template."""
+    """The clinic's FAQ (agent answers these on calls) + the fill-in template
+    + recent caller questions the FAQ could NOT answer (grow the FAQ from
+    real calls)."""
     await assert_branch_access(current_user, branch_id, db)
     branch = (
         await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
-    return {"faq": getattr(branch, "faq", None) or [], "template": FAQ_TEMPLATE}
+    from backend.models.schema import ClinicQuestion
+
+    asked = (
+        await db.execute(
+            select(ClinicQuestion)
+            .where(ClinicQuestion.branch_id == uuid.UUID(branch_id))
+            .order_by(ClinicQuestion.created_at.desc())
+            .limit(30)
+        )
+    ).scalars().all()
+    return {
+        "faq": getattr(branch, "faq", None) or [],
+        "template": FAQ_TEMPLATE,
+        "asked": [
+            {"question": a.question, "at": a.created_at.isoformat() if a.created_at else None}
+            for a in asked
+        ],
+    }
 
 
 @router.put("/{branch_id}/faq")
