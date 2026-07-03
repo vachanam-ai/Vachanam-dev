@@ -17,12 +17,13 @@ from agent.i18n import LANGUAGES, get_lang, get_lines
 from agent.i18n.lines import Lines
 from agent.prompts.system_prompt import DoctorContext, build_system_prompt
 
-EXPECTED = {"te", "hi", "ta", "kn", "ml", "mr", "bn", "or"}
+EXPECTED = {"te", "en", "hi", "ta", "kn", "ml", "mr", "bn", "or"}
 
 # Each internal code -> the Unicode script its letters must belong to.
 SCRIPT_OF = {
-    "te": "TELUGU", "hi": "DEVANAGARI", "ta": "TAMIL", "kn": "KANNADA",
-    "ml": "MALAYALAM", "mr": "DEVANAGARI", "bn": "BENGALI", "or": "ORIYA",
+    "te": "TELUGU", "en": "LATIN", "hi": "DEVANAGARI", "ta": "TAMIL",
+    "kn": "KANNADA", "ml": "MALAYALAM", "mr": "DEVANAGARI", "bn": "BENGALI",
+    "or": "ORIYA",
 }
 # Shared Indic punctuation/joiners allowed in any script.
 _SHARED = {0x0964, 0x0965, 0x200C, 0x200D}
@@ -43,7 +44,9 @@ def test_stt_tts_codes_correct():
     assert get_lang("hi").default_voice == "niharika"
 
 
-@pytest.mark.parametrize("bad", [None, "", "zz", "EN", "  ", "klingon"])
+# "EN" left this list 2026-07-03 — English became a real language (per-caller
+# language mapping) and now resolves case-insensitively instead of falling back.
+@pytest.mark.parametrize("bad", [None, "", "zz", "FR", "  ", "klingon"])
 def test_unknown_language_falls_back_to_telugu(bad):
     assert get_lang(bad).code == "te"
     assert get_lines(bad) is get_lines("te")

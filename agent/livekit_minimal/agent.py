@@ -63,7 +63,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa
 import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
-from agent.i18n import get_lang, get_lines, get_welcome  # noqa: E402
+from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack, get_welcome  # noqa: E402
 from agent.i18n.transliterate import spoken_name  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
@@ -83,8 +83,10 @@ from agent.tools.booking_tools import (  # noqa: E402
     check_availability,
     confirm_booking,
     find_bookings_by_phone,
+    get_preferred_language,
     recognize_caller_name,
     route_to_doctor,
+    set_preferred_language,
 )
 from backend.config import settings  # noqa: E402
 from backend.database import AsyncSessionLocal, get_loop_engine  # noqa: E402
@@ -209,20 +211,47 @@ def _cancel_on_shutdown(task):
     return _cb
 
 
+def _voice_for_lang(branch, lang_code: str) -> str:
+    """The TTS voice_id to speak `lang_code` for this branch. Keeps the clinic's
+    chosen voice, EXCEPT when that voice is a cloned voice registered for a
+    different language — a Telugu clone speaking English sounds broken, so fall
+    back to the target language's default catalog voice."""
+    cfg = get_lang(lang_code)
+    v = (getattr(branch, "tts_voice", None) or "").strip()
+    if not v:
+        return cfg.default_voice
+    for cv in getattr(branch, "cloned_voices", None) or []:
+        if not isinstance(cv, dict) or cv.get("voice_id") != v:
+            continue
+        clone_lang = (cv.get("language") or "").lower().strip()
+        if clone_lang and clone_lang != cfg.code:
+            return cfg.default_voice
+    return v
+
+
 KNOWN_CALLER_BOOKING_EXTRA = (
     "\n\nCALLER IDENTIFICATION: this number belongs to an EXISTING patient, "
     "{name}, with no upcoming booking. The greeting already welcomed them by "
-    "name. After they state the concern, ask ONCE whether the appointment is "
-    "for THEMSELVES or for SOMEONE ELSE (spoken naturally in the call's "
-    "language, e.g. 'is this appointment for you, or for someone else?').\n"
+    "name.\n"
+    "WHO IS THE PATIENT: LISTEN for a relation word first. If the caller "
+    "ALREADY said who it is for ('for my father', 'my son needs...', 'నా "
+    "అమ్మకి', 'mere bhai ke liye'), that IS the answer — it is for SOMEONE "
+    "ELSE; do NOT ask 'for you or someone else?'. Only when they did NOT say, "
+    "ask ONCE whether the appointment is for THEMSELVES or for SOMEONE ELSE "
+    "(spoken naturally in the call's language).\n"
     "- FOR THEMSELVES: do NOT ask their name or age again — you already know "
     "them as {name}. Take only the concern (route_to_doctor) and their "
     "preferred time, then confirm_booking with patient_name='{name}' and "
     "different_person=false.\n"
-    "- FOR SOMEONE ELSE: take that person's NAME and AGE. The phone number is "
-    "OPTIONAL — do NOT insist on it (spoken digits are often misheard); if not "
-    "given, book under this caller's number. Call confirm_booking with that "
-    "person's name and age and different_person=true."
+    "- FOR SOMEONE ELSE: take that person's NAME and AGE. Then ask ONE "
+    "question about the number: should the booking be on THIS number they are "
+    "calling from, or on that person's own number? (e.g. 'ఈ నంబర్ మీదే బుక్ "
+    "చేయమంటారా, లేక వాళ్ళ నంబర్ వేరే ఉందా?'). If they say this number (or have "
+    "no other), omit patient_phone — it defaults to the caller's number. If "
+    "they give a different number, apply the PHONE NUMBER RULES (exactly 10 "
+    "digits, read back in English digits for confirmation) and pass it as "
+    "patient_phone. Then confirm_booking with that person's name and age and "
+    "different_person=true."
 )
 
 REBOOK_PROMPT_EXTRA = (
@@ -631,14 +660,41 @@ class VachanamAgent(Agent):
         calendar_service: CalendarService | None,
         meta_service: MetaService,
         transfer_to: str,
+        lang_code: str = "te",
+        agent_factory=None,   # callable(lang_code) -> VachanamAgent, for switch_language
+        switch_ack: str | None = None,  # spoken by on_enter right after a language switch
+        stt=None,             # per-agent STT override (language switch handoff)
+        tts=None,             # per-agent TTS override (language switch handoff)
     ) -> None:
-        super().__init__(instructions=instructions)
+        # Only pass stt/tts to livekit when actually overriding — an explicit
+        # None would DISABLE the session-level pipeline, not inherit it.
+        overrides = {}
+        if stt is not None:
+            overrides["stt"] = stt
+        if tts is not None:
+            overrides["tts"] = tts
+        super().__init__(instructions=instructions, **overrides)
         self._state = state
         self._db = db
         self._room = room
         self._calendar = calendar_service
         self._meta = meta_service
         self._transfer_to = transfer_to
+        self._lang_code = lang_code
+        self._agent_factory = agent_factory
+        self._switch_ack = switch_ack
+
+    async def on_enter(self) -> None:
+        """Fires when this agent becomes active. For the initial agent it's a
+        no-op (greeting is driven by the entrypoint). For an agent created by
+        switch_language it speaks a short deterministic acknowledgement in the
+        NEW language so the caller never hears dead air while the STT/TTS
+        pipelines are being swapped."""
+        if self._switch_ack:
+            try:
+                await self.session.say(sanitize_for_tts(self._switch_ack))
+            except Exception as e:  # noqa: BLE001 — ack is best-effort (RULE 8)
+                logger.warning("switch_ack_failed: %s", e)
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         """ECHO GUARD (self-talk loop). A phone line can bounce the agent's own
@@ -1020,6 +1076,9 @@ class VachanamAgent(Agent):
                 patient_age=patient_age,
                 patient_gender=patient_gender,
                 different_person=different_person,
+                # Caller's language mapping: stamped on a patient row created
+                # this call so a pre-booking switch still sticks for the future.
+                preferred_language=self._state.preferred_language,
             )
         except Exception as e:
             logger.error("confirm_booking_failed: %s", e)
@@ -1160,6 +1219,80 @@ class VachanamAgent(Agent):
             return {"logged": False}
         return {"logged": True, "next": "Tell the caller the clinic will check "
                 "with the doctor and get back to them."}
+
+    @function_tool()
+    async def switch_language(self, context: RunContext, language: str) -> object:
+        """Switch the CALL's spoken language. Call ONLY when the caller
+        EXPLICITLY asks to talk in another language ('can you speak English?',
+        'Hindi mein baat karo'). NEVER call it just because the caller mixed
+        words from another language.
+
+        Args:
+            language: te | en | hi | ta | kn | ml | mr | bn | or
+        """
+        code = (language or "").strip().lower()
+        # The LLM sometimes passes the language NAME instead of the code.
+        _names = {c.name.lower(): c.code for c in LANGUAGES.values()}
+        code = _names.get(code, code)
+        if code not in LANGUAGES:
+            supported = ", ".join(sorted(LANGUAGES))
+            raise ToolError(
+                f"'{language}' is not supported. Supported codes: {supported}. "
+                "Apologise briefly and continue in the current language."
+            )
+        if code == self._lang_code:
+            return {"success": True, "already_speaking": code}
+        if self._agent_factory is None:
+            # Defensive: factory is always wired in the entrypoint; without it a
+            # pipeline swap is impossible, so keep the call alive in the current
+            # language rather than half-switching (RULE 8).
+            raise ToolError(
+                "Language switching is not available on this call. Apologise "
+                "and continue in the current language."
+            )
+        # Persist the mapping FIRST (survives even if the handoff has trouble):
+        # all patient rows on this phone, branch-scoped. 0 rows = caller not on
+        # record yet — state.preferred_language makes confirm_booking stamp it
+        # on the row it creates later this call.
+        try:
+            if self._state.patient_phone:
+                await set_preferred_language(
+                    self._state.branch_id, self._state.patient_phone, code, self._db
+                )
+        except Exception as e:  # noqa: BLE001 — mapping is best-effort, switch anyway
+            logger.warning("set_preferred_language_failed: %s", e)
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+        self._state.preferred_language = code
+        self._state.language = code
+        # Spoken fillers must match the new language immediately.
+        try:
+            ud = getattr(self.session, "userdata", None)
+            if isinstance(ud, dict):
+                ud["fillers"] = get_lines(code).fillers
+                ud["language"] = code
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info(
+            "language_switched from=%s to=%s branch_id=%s",
+            self._lang_code, code, str(self._state.branch_id),
+        )
+        # LiveKit agent handoff: returning (new_agent, result) swaps the active
+        # agent — the new one carries its OWN Sarvam STT + smallest TTS in the
+        # target language plus rebuilt instructions. Its on_enter speaks the
+        # acknowledgement deterministically.
+        new_agent = self._agent_factory(code)
+        return new_agent, {
+            "success": True,
+            "language": code,
+            "note": (
+                "The switch was already acknowledged out loud by the system. "
+                "Do NOT acknowledge it again — continue the conversation in the "
+                "new language from where it left off, one short line."
+            ),
+        }
 
     @function_tool()
     async def reschedule_booking(
@@ -1700,7 +1833,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # service-gate path and the main call path speak the clinic's language.
     # get_lang/get_lines fall back to Telugu for None/unknown/legacy rows, so a
     # bad value can never break a live call (RULE 8).
-    lang_code = getattr(branch, "language", None) or "te"
+    branch_lang_code = getattr(branch, "language", None) or "te"
+    lang_code = branch_lang_code
+    # PER-CALLER LANGUAGE MAPPING (Vinay 2026-07-03): a caller who once asked
+    # "can you speak English/Hindi?" is mapped (Patient.preferred_language) and
+    # every later call — inbound AND outbound reminder/follow-up (patient_phone
+    # is the dialed number there) — starts in THEIR language, not the branch
+    # default. Branch context still comes from the DID (RULE 5); only the
+    # spoken language is per-caller. Lookup is branch-scoped (RULE 1) and can
+    # never block the call (RULE 8).
+    try:
+        if state.patient_phone:
+            _pref = await get_preferred_language(branch.id, state.patient_phone, db)
+            if _pref and _pref in LANGUAGES:
+                lang_code = _pref
+                state.preferred_language = _pref
+                logger.info("caller_lang_mapped lang=%s branch_id=%s", _pref, str(branch.id))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("pref_lang_lookup_failed: %s", e)
     lang_cfg = get_lang(lang_code)
     lines = get_lines(lang_code)
 
@@ -1857,7 +2007,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         emergency_contact = branch.emergency_contact or ""
         # smallest.ai voice_id (clinic-chosen or cloned); fall back to the
         # language's default smallest voice when unset (TTS provider = smallest).
-        tts_voice = (getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice
+        # Clinic's chosen voice, unless it's a clone registered for a different
+        # language than this CALL speaks (per-caller mapping may differ from the
+        # branch language) — then the target language's default voice.
+        tts_voice = _voice_for_lang(branch, lang_code)
         state.branch_id = branch_id
 
         # INSTANT CLIP (kills the silence between answer and first word — see
@@ -1881,6 +2034,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # welcome bridge + live greeting below.
         _stored_short = getattr(branch, "welcome_short_audio", None)
         _is_outbound_greet = is_reminder or is_rebook_call or is_followup
+        # The stored clip is pre-rendered in the BRANCH language; skip it when
+        # this caller is mapped to a different language (a Telugu clip opening a
+        # Hindi call sounds broken) — the live greeting covers the open instead.
+        if _stored_short and lang_code != branch_lang_code:
+            _stored_short = None
         if _is_outbound_greet and _stored_short:
             _welcome_task = asyncio.create_task(
                 play_stored_welcome(ctx.room, _stored_short)
@@ -2065,20 +2223,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             except Exception as e:
                 logger.warning("caller_lookup_failed: %s", e)
 
-        instructions = (
-            build_system_prompt(
-                clinic_name=branch_name,
-                doctors=doctor_contexts,
-                emergency_contact=emergency_contact,
-                plan=state.plan or "clinic",
-                language=lang_code,
-                clinic_address=getattr(branch, "address", None),
-                faq=getattr(branch, "faq", None),
+        # Instructions are composed by a FUNCTION of the language so the
+        # switch_language handoff can rebuild the FULL prompt (system + date
+        # table + brevity + caller/call-type extras) in the new language —
+        # only the language-dependent parts change; extras carry over verbatim
+        # (their Telugu sample phrases are style references under the PRIMARY
+        # LANGUAGE directive).
+        extra_tail = ""
+
+        def _compose_instructions(lc: str) -> str:
+            return (
+                build_system_prompt(
+                    clinic_name=branch_name,
+                    doctors=doctor_contexts,
+                    emergency_contact=emergency_contact,
+                    plan=state.plan or "clinic",
+                    language=lc,
+                    clinic_address=getattr(branch, "address", None),
+                    faq=getattr(branch, "faq", None),
+                )
+                + date_context
+                + get_lines(lc).brevity
+                + caller_prompt_extra
+                + extra_tail
             )
-            + date_context
-            + lines.brevity
-            + caller_prompt_extra
-        )
+
         # Outbound calls carry the doctor in metadata — pre-select so tools
         # never fail with "Unknown doctor" no matter how the LLM names them.
         if meta.get("doctor_id"):
@@ -2087,14 +2256,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             except ValueError:
                 pass
         if is_reminder:
-            instructions += REMINDER_PROMPT_EXTRA.format(
+            extra_tail += REMINDER_PROMPT_EXTRA.format(
                 token_id=meta.get("token_id", ""),
                 doctor=meta.get("doctor_name", ""),
                 time=meta.get("appointment_time", ""),
             )
             state.call_type = "reminder"
         elif is_rebook_call:
-            instructions += REBOOK_PROMPT_EXTRA.format(
+            extra_tail += REBOOK_PROMPT_EXTRA.format(
                 cancelled_date=meta.get("cancelled_date", ""),
                 doctor=meta.get("doctor_name", ""),
                 patient=meta.get("patient_name", ""),
@@ -2109,7 +2278,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Treatment follow-up: ask the doctor's question + book ±2 days. Values
             # come from followup_meta (RULE 9 — the allow-listed safe dict), never
             # the raw metadata, so private notes can never reach the prompt.
-            instructions += NEXT_VISIT_PROMPT_EXTRA.format(
+            extra_tail += NEXT_VISIT_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
                 doctor=followup_meta.get("doctor_name", "the doctor"),
                 patient=followup_meta.get("patient_name", "the patient"),
@@ -2119,13 +2288,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
             state.call_type = "next_visit_book"
         elif meta.get("call_type") == "doctor_advice":
-            instructions += DOCTOR_ADVICE_PROMPT_EXTRA.format(
+            extra_tail += DOCTOR_ADVICE_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
                 target_date=_spoken_target_date(
                     followup_meta.get("target_date", ""), lang_code
                 ),
             )
             state.call_type = "doctor_advice"
+
+        instructions = _compose_instructions(lang_code)
 
         # Reuse the prewarmed CalendarService (Google client build is the slow
         # part of pre-session setup); rebuild only if prewarm missed it.
@@ -2143,6 +2314,38 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 logger.critical("calendar_service_init_failed: %s", e)
                 calendar_service = None
 
+        def _agent_for_lang(lc: str) -> VachanamAgent:
+            """Build the handoff agent for a mid-call language switch: full
+            prompt, Sarvam STT and smallest TTS all in the target language,
+            sharing this call's state/db/room. Used by switch_language."""
+            cfg2 = get_lang(lc)
+            return VachanamAgent(
+                instructions=_compose_instructions(lc),
+                state=state,
+                db=db,
+                room=ctx.room,
+                calendar_service=calendar_service,
+                meta_service=MetaService(),
+                transfer_to=emergency_contact,
+                lang_code=lc,
+                agent_factory=_agent_for_lang,
+                switch_ack=get_switch_ack(lc),
+                stt=sarvam.STT(
+                    api_key=settings.sarvam_api_key,
+                    model="saaras:v3",
+                    language=cfg2.stt_code,
+                    flush_signal=True,
+                ),
+                tts=_HttpSmallestTTS(
+                    api_key=settings.smallest_api_key,
+                    model=settings.smallest_model,
+                    voice_id=_voice_for_lang(branch, lc),
+                    language=cfg2.tts_code,
+                    sample_rate=settings.smallest_sample_rate,
+                    output_format="wav",
+                ),
+            )
+
         vachanam_agent = VachanamAgent(
             instructions=instructions,
             state=state,
@@ -2151,6 +2354,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             calendar_service=calendar_service,
             meta_service=MetaService(),
             transfer_to=emergency_contact,
+            lang_code=lang_code,
+            agent_factory=_agent_for_lang,
         )
 
         logger.info("lat_pre_session_build answer_to_build=%.2fs", _perf.monotonic() - _t_answer)
@@ -2181,12 +2386,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             stt=sarvam.STT(
                 api_key=settings.sarvam_api_key,
                 model="saaras:v3",
-                # STRICT per-call clinic language (Vinay 2026-06-17): auto-detect
+                # ONE language at a time (Vinay 2026-06-17): auto-detect
                 # ("unknown") was tried but rejected — shared words across Indian
                 # languages ("amma", numbers) make Sarvam mis-infer the language and
-                # degrade transcription. A true mid-call switch is also not feasible
-                # here (LiveKit session.stt is read-only — no hot-swap), so we keep
-                # one fixed language per call for reliable understanding.
+                # degrade transcription. The ONLY way the call changes language is
+                # the switch_language tool (explicit caller ask, 2026-07-03): an
+                # AGENT HANDOFF carrying its own STT/TTS — never a hot-swap of this
+                # session pipeline and never speech-based auto-detection.
                 language=lang_cfg.stt_code,
                 flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
             ),

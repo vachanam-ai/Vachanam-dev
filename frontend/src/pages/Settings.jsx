@@ -29,6 +29,7 @@ const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 // never renders empty. The backend still validates the chosen code on PATCH.
 const LANGUAGES = [
   { code: "te", name: "Telugu", native_name: "తెలుగు" },
+  { code: "en", name: "English", native_name: "English" },
   { code: "hi", name: "Hindi", native_name: "हिन्दी" },
   { code: "ta", name: "Tamil", native_name: "தமிழ்" },
   { code: "kn", name: "Kannada", native_name: "ಕನ್ನಡ" },

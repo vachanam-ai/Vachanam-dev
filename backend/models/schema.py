@@ -229,6 +229,11 @@ class Patient(Base):
     # Exactly one patient per phone is the owner (is_primary). Family members
     # sharing the phone are is_primary=False. NULL-phone rows: each its own primary.
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Per-caller spoken-language mapping (2026-07-03): set when the caller
+    # explicitly asks the agent to switch languages; every later call (inbound
+    # + outbound reminders/follow-ups) to this phone starts in this language.
+    # NULL = clinic's Branch.language. Codes = agent.i18n.LANGUAGES keys.
+    preferred_language: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     # DPDP s.8(7) retention: set by the data_retention job when this patient's PII
     # is erased (name/phone/age/gender cleared) after the retention window. NULL =

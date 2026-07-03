@@ -115,6 +115,47 @@ LINES: dict[str, Lines] = {
         ),
     ),
 
+    # ── English (Indian) — for per-caller language mapping (2026-07-03) ──────
+    "en": Lines(
+        service_blocked=(
+            "Hello! Sorry, this service is currently unavailable. "
+            "Please call the clinic directly. Thank you."
+        ),
+        fillers=("Okay,", "Sure,", "Alright,"),
+        disclosure_greeting=(
+            "I am this clinic's AI assistant. How can I help you today?"
+        ),
+        known_caller_greeting=(
+            "Hello {patient}! Nice to hear from you again. I'm the AI assistant "
+            "from {clinic}. How can I help you this time?"
+        ),
+        reminder_greeting=(
+            "Hello {patient}, this is a quick call from {clinic}. Just a reminder "
+            "about your appointment today at {time} with {doctor}. Will you be coming?"
+        ),
+        rebook_greeting=(
+            "Hello {patient}, this is a quick call from {clinic}. {doctor} is not "
+            "available on {date}, so your appointment was cancelled — sorry about "
+            "that. Would you like to book another day?"
+        ),
+        cap_warning="We're almost out of time — shall we quickly confirm your booking?",
+        cap_goodbye="Thank you, have a good day!",
+        followup_greeting_q=(
+            "Hello {patient}, this is a quick follow-up call from {clinic}. "
+            "The doctor asked me to check one thing with you. {message}"
+        ),
+        followup_greeting_noq=(
+            "Hello {patient}, this is a quick call from {clinic}. "
+            "How are you feeling after the treatment?"
+        ),
+        inbound_followup_greeting=(
+            "I am this clinic's AI assistant. The doctor asked me to check one "
+            "thing with you. {message}"
+        ),
+        followup_name_prefix="{patient}, ",
+        brevity=_BREVITY_EN,
+    ),
+
     # ── Hindi — first-pass ────────────────────────────────────────────────────
     "hi": Lines(
         service_blocked=(
@@ -370,6 +411,7 @@ def get_lines(code: str | None) -> Lines:
 # ("namaskaram <clinic> clinic ki swagatham"); the rest are first-pass.
 WELCOME: dict[str, str] = {
     "te": "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం.",
+    "en": "Hello, welcome to {clinic} clinic.",
     "hi": "नमस्ते, {clinic} क्लिनिक में आपका स्वागत है।",
     "ta": "வணக்கம், {clinic} கிளினிக்கிற்கு வரவேற்கிறோம்.",
     "kn": "ನಮಸ್ಕಾರ, {clinic} ಕ್ಲಿನಿಕ್‌ಗೆ ಸ್ವಾಗತ.",
@@ -384,3 +426,25 @@ def get_welcome(code: str | None) -> str:
     """Pre-session welcome line for a Branch.language code (falls back to Telugu).
     Takes a {clinic} placeholder."""
     return WELCOME.get((code or "").lower().strip(), WELCOME[DEFAULT_LANG])
+
+
+# ── Mid-call language-switch acknowledgement (spoken deterministically by the
+# NEW agent's on_enter right after the caller explicitly asks to switch, so
+# there is never dead air while the STT/TTS pipelines are swapped). Short,
+# spoken in the TARGET language. te/en natural; others first-pass.
+SWITCH_ACK: dict[str, str] = {
+    "te": "సరే అండి, తెలుగులో మాట్లాడుకుందాం. చెప్పండి.",
+    "en": "Sure, we can continue in English. Please go ahead.",
+    "hi": "जी, अब हम हिंदी में बात करेंगे। बताइए।",
+    "ta": "சரி, இனி தமிழில் பேசலாம். சொல்லுங்க.",
+    "kn": "ಸರಿ, ಇನ್ನು ಕನ್ನಡದಲ್ಲಿ ಮಾತಾಡೋಣ. ಹೇಳಿ.",
+    "ml": "ശരി, ഇനി മലയാളത്തിൽ സംസാരിക്കാം. പറയൂ.",
+    "mr": "ठीक आहे, आता आपण मराठीत बोलूया. सांगा.",
+    "bn": "ঠিক আছে, এবার আমরা বাংলায় কথা বলব। বলুন।",
+    "or": "ଠିକ୍ ଅଛି, ଏବେ ଆମେ ଓଡ଼ିଆରେ କଥା ହେବା। କୁହନ୍ତୁ।",
+}
+
+
+def get_switch_ack(code: str | None) -> str:
+    """Spoken confirmation for a just-switched call language (falls back to Telugu)."""
+    return SWITCH_ACK.get((code or "").lower().strip(), SWITCH_ACK[DEFAULT_LANG])

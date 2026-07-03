@@ -48,6 +48,10 @@ class SessionState:
 
     # Quality / feedback-loop signals (written to CallLog at call end).
     language: str | None = None          # clinic voice language code
+    # Caller's mapped spoken language (Patient.preferred_language). Loaded at
+    # call start; updated by the switch_language tool; confirm_booking persists
+    # it on a patient row created later in the same call.
+    preferred_language: str | None = None
     transfer_requested: bool = False     # set when request_human_transfer fires
     fail_reason: str | None = None       # set by tools on a known miss (out_of_scope, no_slot, ...)
 

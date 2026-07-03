@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import redis.asyncio as aioredis
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from agent.session_state import SessionState
@@ -715,6 +715,7 @@ async def confirm_booking(
     patient_gender: str | None = None,
     different_person: bool = False,
     exclude_token_id: UUID | None = None,  # reschedule: ignore the booking being replaced
+    preferred_language: str | None = None,  # caller's mapped call language (agent.i18n code)
 ) -> dict:
     """Persist the booking: write DB record, create Calendar event, send WhatsApp.
 
@@ -825,6 +826,11 @@ async def confirm_booking(
             patient.age = patient_age
         if patient_gender:
             patient.gender = patient_gender
+    # Persist the caller's language mapping on the booked record so a patient
+    # who switched language BEFORE their first booking (no row existed yet for
+    # set_preferred_language to update) still gets future calls in it.
+    if preferred_language and getattr(patient, "preferred_language", None) != preferred_language:
+        patient.preferred_language = preferred_language
 
     # 1b. Duplicate guard at PHONE level: same phone + doctor + date already
     # confirmed. Name-level matching alone failed (STT spells the same name
@@ -1182,6 +1188,55 @@ async def recognize_caller_name(
     # No primary flagged (legacy row) but exactly one name -> safe to greet.
     distinct = {n for n, _ in named}
     return next(iter(distinct)) if len(distinct) == 1 else None
+
+
+async def get_preferred_language(
+    branch_id: UUID, phone: str | None, db: AsyncSession
+) -> str | None:
+    """The caller's mapped spoken language (Patient.preferred_language), matched
+    on the LAST 10 DIGITS of their phone. Primary record wins on a shared family
+    phone; falls back to any row with a mapping. None = use Branch.language.
+    RULE 1: branch-scoped."""
+    digits = _phone_digits(phone)
+    if len(digits) < 10:
+        return None
+    last10 = digits[-10:]
+    rows = (
+        await db.execute(
+            select(Patient.preferred_language, Patient.is_primary).where(
+                and_(Patient.branch_id == branch_id, Patient.phone.like(f"%{last10}"))
+            )
+        )
+    ).all()
+    for lang, is_primary in rows:
+        if is_primary and lang:
+            return lang
+    return next((lang for lang, _ in rows if lang), None)
+
+
+async def set_preferred_language(
+    branch_id: UUID, phone: str | None, language: str, db: AsyncSession
+) -> int:
+    """Map this phone to a spoken language (caller explicitly asked to switch).
+    Updates ALL patient rows on the phone so the mapping is consistent whichever
+    row later becomes primary. Commits. Returns rows updated (0 = no patient
+    record yet — the caller's confirm_booking persists it on the new row).
+    RULE 1: branch-scoped."""
+    from agent.i18n import LANGUAGES
+
+    if language not in LANGUAGES:
+        raise ValueError(f"unsupported language: {language}")
+    digits = _phone_digits(phone)
+    if len(digits) < 10:
+        return 0
+    last10 = digits[-10:]
+    result = await db.execute(
+        update(Patient)
+        .where(and_(Patient.branch_id == branch_id, Patient.phone.like(f"%{last10}")))
+        .values(preferred_language=language)
+    )
+    await db.commit()
+    return result.rowcount or 0
 
 
 def _generate_slots(start: time, end: time, duration_minutes: int) -> list[time]:

@@ -142,6 +142,22 @@ def build_system_prompt(
             f"switches fully to another language, mirror them.\n\n"
         )
 
+    # Explicit-ask language switching (Vinay 2026-07-03). This complements the
+    # directive above: the directive covers what the LLM outputs; the tool swaps
+    # the actual STT/TTS pipelines AND maps the caller to that language for all
+    # future calls. Explicit ask ONLY — Indian languages share too many words
+    # for speech-based auto-detect (rejected 2026-06-17).
+    language_directive += (
+        "LANGUAGE SWITCHING: if the caller EXPLICITLY asks to talk in another "
+        "language ('Can you speak English?', 'Hindi mein baat kar sakte ho?', "
+        "'మీకు ఇంగ్లీష్ వచ్చా?'), call switch_language with its code — te (Telugu), "
+        "en (English), hi (Hindi), ta (Tamil), kn (Kannada), ml (Malayalam), "
+        "mr (Marathi), bn (Bengali), or (Odia). The switch is remembered for "
+        "their future calls. Switch ONLY on an explicit request — NEVER because "
+        "they mixed some words of another language. If they ask for a language "
+        "not in that list, apologise briefly and continue in the current one.\n\n"
+    )
+
     doctor_list = "\n".join(
         f"  - {d.name} ({d.specialization}), keywords: {', '.join(d.routing_keywords)}, "
         f"booking: {d.booking_type}, default: {d.is_default}"

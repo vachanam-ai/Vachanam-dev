@@ -35,6 +35,9 @@ class LangConfig:
 # (the *-IN codes). Telugu first (reference/default).
 LANGUAGES: dict[str, LangConfig] = {
     "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "padmaja"),
+    # Indian English (Saaras en-IN / smallest "en") — added 2026-07-03 for the
+    # per-caller language mapping ("can you speak English?").
+    "en": LangConfig("en", "English", "English", "Latin", "en-IN", "en", "niharika"),
     "hi": LangConfig("hi", "Hindi", "हिन्दी", "Devanagari", "hi-IN", "hi", "niharika"),
     "ta": LangConfig("ta", "Tamil", "தமிழ்", "Tamil", "ta-IN", "ta", "padmaja"),
     "kn": LangConfig("kn", "Kannada", "ಕನ್ನಡ", "Kannada", "kn-IN", "kn", "padmaja"),
