@@ -17,6 +17,7 @@ order (last-added = outermost). We add SecurityHeadersMiddleware AFTER
 CORSMiddleware so it executes FIRST (outermost), ensuring every response —
 including CORS preflight 204s — carries the security headers.
 """
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -111,10 +112,34 @@ async def lifespan(app: FastAPI):
         )
         # M2: dispatch treatment follow-up calls (next_visit_book at/after 09:00
         # on the scheduled day; doctor_advice ASAP). Calling hours 09:00-20:00 IST.
+        # 5 min, not 15: a 15-min first-fire lost the race with Render free
+        # tier's ~15-min idle sleep — on a quiet afternoon the job NEVER fired
+        # and a doctor_advice task sat pending for hours (prod 2026-07-03).
         scheduler.add_job(
-            run_next_visit_followups, IntervalTrigger(minutes=15),
+            run_next_visit_followups, IntervalTrigger(minutes=5),
             id="next_visit_followups", replace_existing=True,
         )
+        # SELF KEEP-ALIVE: ping our own PUBLIC url so Render's idle detector
+        # sees traffic and never sleeps the instance (its in-process scheduler
+        # dies with it — missed reminders/follow-ups). Render sets
+        # RENDER_EXTERNAL_URL automatically; absent locally → job not added.
+        # The external GitHub-cron ping stays as the cold-start waker, but its
+        # schedules get throttled by hours, so we can't rely on it alone.
+        _self_url = os.getenv("RENDER_EXTERNAL_URL")
+        if _self_url:
+            async def _self_ping() -> None:
+                import httpx
+
+                try:
+                    async with httpx.AsyncClient(timeout=15) as hc:
+                        await hc.get(f"{_self_url.rstrip('/')}/health")
+                except Exception as e:  # noqa: BLE001 — keep-alive must never crash
+                    logger.warning("self_ping_failed", error=str(e)[:120])
+
+            scheduler.add_job(
+                _self_ping, IntervalTrigger(minutes=5),
+                id="self_keepalive", replace_existing=True,
+            )
         # H5: pause expired trials once a day.
         scheduler.add_job(
             run_trial_pause, IntervalTrigger(hours=6),
