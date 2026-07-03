@@ -359,8 +359,11 @@ async def clone_branch_voice(
         )
     clone_language = language or (getattr(branch, "language", None) or "te")
     try:
+        _tag_cfg = _LANGUAGES.get(clone_language)
         voice_id = smallest_voice.clone_voice(
-            display_name.strip(), file.filename or "sample.wav", audio, language=clone_language
+            display_name.strip(), file.filename or "sample.wav", audio,
+            language=clone_language,
+            tag=(_tag_cfg.name if _tag_cfg else None),  # "Tamil" chip in their dashboard
         )
     except smallest_voice.VoiceServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))

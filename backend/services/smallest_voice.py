@@ -99,7 +99,13 @@ def list_voices(language: str | None = None) -> list[dict]:
 _WAVES_BASE = "https://api.smallest.ai"
 
 
-def clone_voice(display_name: str, filename: str, audio_bytes: bytes, language: str = "en") -> str:
+def clone_voice(
+    display_name: str,
+    filename: str,
+    audio_bytes: bytes,
+    language: str = "en",
+    tag: str | None = None,
+) -> str:
     """Instant voice clone (lightning-v3.1) from a short sample → new voice_id.
 
     The SDK's add_voice clones onto the RETIRED lightning-large model (410
@@ -112,14 +118,29 @@ def clone_voice(display_name: str, filename: str, audio_bytes: bytes, language: 
         raise VoiceServiceError("smallest.ai is not configured (SMALLEST_API_KEY missing)")
     import httpx
 
+    # tags = cosmetic label in smallest's own dashboard (e.g. "Tamil"). Their
+    # tags-field contract is undocumented, so if the API rejects the field we
+    # retry once WITHOUT it — a pretty label must never fail a clone.
+    data = {"displayName": display_name, "language": language}
+    if tag:
+        data["tags"] = tag
     try:
         r = httpx.post(
             f"{_WAVES_BASE}/waves/v1/voice-cloning",
             headers={"Authorization": f"Bearer {settings.smallest_api_key}"},
-            data={"displayName": display_name, "language": language},
+            data=data,
             files={"file": (filename, audio_bytes, "audio/wav")},
             timeout=90.0,
         )
+        if r.status_code >= 400 and tag and "tag" in r.text.lower():
+            logger.warning("smallest_clone_tags_rejected", body=r.text[:160])
+            r = httpx.post(
+                f"{_WAVES_BASE}/waves/v1/voice-cloning",
+                headers={"Authorization": f"Bearer {settings.smallest_api_key}"},
+                data={"displayName": display_name, "language": language},
+                files={"file": (filename, audio_bytes, "audio/wav")},
+                timeout=90.0,
+            )
     except Exception as e:  # noqa: BLE001 — network/timeout
         logger.error("smallest_clone_request_failed", error=str(e)[:200])
         raise VoiceServiceError(f"Voice cloning request failed: {str(e)[:160]}")

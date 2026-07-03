@@ -37,7 +37,7 @@ async def test_clone_sends_iso_code_not_language_name(db, monkeypatch):
 
     seen = {}
 
-    def fake_clone(display_name, filename, audio_bytes, language="en"):
+    def fake_clone(display_name, filename, audio_bytes, language="en", tag=None):
         seen["language"] = language
         return "voice_test123"
 
@@ -74,7 +74,7 @@ async def test_clone_explicit_language_choice_wins(db, monkeypatch):
 
     seen = {}
 
-    def fake_clone(display_name, filename, audio_bytes, language="en"):
+    def fake_clone(display_name, filename, audio_bytes, language="en", tag=None):
         seen["language"] = language
         return "voice_test456"
 
