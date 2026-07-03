@@ -67,13 +67,15 @@ def test_voice_for_lang_keeps_catalog_voice():
     assert _voice_for_lang(b, "en") == "padmaja"
 
 
-def test_voice_for_lang_keeps_clinic_voice_across_switch():
-    """Vinay live test 2026-07-03: the voice must NOT change when the caller
-    switches language — smallest voices (incl. clones) are multilingual."""
+def test_voice_for_lang_clone_is_language_bound():
+    """Measured 2026-07-03 (smallest live API): a te clone speaking en returned
+    0.45s of noise for a full sentence — gibberish on a real call. A clone may
+    ONLY voice its registered language; other languages use that language's
+    default catalog voice."""
     b = _branch("clone123", [{"voice_id": "clone123", "name": "Sree", "language": "te"}])
-    assert _voice_for_lang(b, "en") == "clone123"
-    assert _voice_for_lang(b, "hi") == "clone123"
     assert _voice_for_lang(b, "te") == "clone123"
+    assert _voice_for_lang(b, "en") == get_lang("en").default_voice
+    assert _voice_for_lang(b, "hi") == get_lang("hi").default_voice
 
 
 def test_voice_for_lang_no_voice_set_uses_language_default():

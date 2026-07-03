@@ -237,13 +237,25 @@ def _phone_override_error(
 
 
 def _voice_for_lang(branch, lang_code: str) -> str:
-    """The TTS voice_id to speak `lang_code` for this branch: the clinic's
-    chosen voice, else the language's default catalog voice. The clinic voice is
-    kept across a mid-call language switch — smallest.ai voices (including
-    clones) are multilingual, and the voice CHANGING mid-call is what actually
-    sounds broken (Vinay live test 2026-07-03)."""
+    """The TTS voice_id to speak `lang_code` for this branch. A CLONED voice is
+    language-bound: measured 2026-07-03 against smallest's live API, the te
+    clone produced 0.45s of noise for an English test sentence ("random shit,
+    no language" on a real call) while catalog niharika spoke the same Hindi
+    sentence fine. So: the clinic's voice is used ONLY for the language the
+    clone was registered with; any other language falls back to that language's
+    default catalog voice. (Keeping one voice across languages needs per-
+    language clones — future feature.) Catalog voices are multilingual."""
+    cfg = get_lang(lang_code)
     v = (getattr(branch, "tts_voice", None) or "").strip()
-    return v or get_lang(lang_code).default_voice
+    if not v:
+        return cfg.default_voice
+    for cv in getattr(branch, "cloned_voices", None) or []:
+        if not isinstance(cv, dict) or cv.get("voice_id") != v:
+            continue
+        clone_lang = (cv.get("language") or "").lower().strip()
+        if clone_lang and clone_lang != cfg.code:
+            return cfg.default_voice
+    return v
 
 
 KNOWN_CALLER_BOOKING_EXTRA = (
