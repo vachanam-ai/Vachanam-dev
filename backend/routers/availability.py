@@ -248,12 +248,18 @@ async def mark_unavailable(
     if not doctor:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
+    # B9: the token cascade must never touch PAST-dated bookings even when the
+    # leave range starts before today (M10 only rejected ranges ENTIRELY in the
+    # past). Clamp the cancel lower bound to branch-local today; unavailability
+    # rows still cover the full requested range.
+    cancel_from = max(body.date_from, branch_today)
+
     # Capture what will be cancelled for per-token audit rows (before cascade)
     pre_tokens_result = await db.execute(
         select(Token).where(
             Token.branch_id == branch_uuid,     # Rule 1 — mandatory
             Token.doctor_id == doctor_uuid,
-            Token.date >= body.date_from,
+            Token.date >= cancel_from,          # B9: match the cascade's clamp
             Token.date <= body.date_to,
             Token.status == "confirmed",
         )
@@ -271,6 +277,7 @@ async def mark_unavailable(
         date_to=body.date_to,
         user_id=current_user.user_id,
         reason=body.reason,
+        min_cancel_date=branch_today,  # B9
     )
 
     logger.info(

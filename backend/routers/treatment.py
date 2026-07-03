@@ -37,7 +37,16 @@ class NoteIn(BaseModel):
     @field_validator("visit_date")
     @classmethod
     def _not_future(cls, v: date) -> date:
-        if v > date.today():
+        # B7: this Pydantic check runs against server-UTC today, but clinics
+        # live in branch-local time (IST is UTC+5:30). Between 00:00-05:30 IST
+        # server-UTC "today" is still the previous calendar day, so a legit
+        # same-day note was rejected as "future". Allow +1 day of slack here
+        # (covers every branch tz up to UTC+14) and enforce the real
+        # branch-local "not future" bound in the route where the branch tz is
+        # known (see create_note / edit_note).
+        from datetime import timedelta
+
+        if v > date.today() + timedelta(days=1):
             raise ValueError("visit_date cannot be in the future")
         return v
 
@@ -78,6 +87,19 @@ async def _load_doctor(doctor_id: uuid.UUID, branch_id: uuid.UUID, db: AsyncSess
     return doc
 
 
+async def _assert_visit_not_future(
+    visit_date: date, branch_id: uuid.UUID, db: AsyncSession
+) -> None:
+    """B7: reject a visit_date after the BRANCH-local today. The Pydantic
+    validator allows +1 day slack (server-UTC vs branch tz); the real bound is
+    enforced here, where the branch timezone is available."""
+    from backend.routers.queue import _branch_today
+
+    branch_today = await _branch_today(branch_id, db)
+    if visit_date > branch_today:
+        raise HTTPException(status_code=422, detail="visit_date cannot be in the future")
+
+
 @router.post("/patients/{patient_id}/treatment-notes", status_code=201, response_model=NoteOut)
 async def create_note(
     patient_id: uuid.UUID,
@@ -88,6 +110,7 @@ async def create_note(
     await assert_branch_access(user, str(body.branch_id), db)
     await _load_patient(patient_id, body.branch_id, db)
     await _load_doctor(body.doctor_id, body.branch_id, db)
+    await _assert_visit_not_future(body.visit_date, body.branch_id, db)  # B7
     if body.next_reporting_date and body.next_reporting_date < body.visit_date:
         raise HTTPException(status_code=422, detail="next_reporting_date before visit_date")
     is_final = resolve_is_final(body.is_final, body.next_steps)
@@ -127,6 +150,7 @@ async def edit_note(
 ) -> NoteOut:
     await assert_branch_access(user, str(body.branch_id), db)
     await _load_doctor(body.doctor_id, body.branch_id, db)
+    await _assert_visit_not_future(body.visit_date, body.branch_id, db)  # B7
     if body.next_reporting_date and body.next_reporting_date < body.visit_date:
         raise HTTPException(status_code=422, detail="next_reporting_date before visit_date")
     note = (await db.execute(

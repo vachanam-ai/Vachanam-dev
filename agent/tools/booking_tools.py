@@ -28,6 +28,19 @@ logger = structlog.get_logger()
 # Token holds are NOT affected — that counter is the all-day queue sequence.
 SLOT_HOLD_TTL_SECONDS = 900
 
+# B5: atomic "seed the token counter forward to the DB floor, then increment".
+# Runs server-side in ONE step so concurrent assigns after a Redis eviction can
+# never both read a stale value and hand out the same number. ARGV[1] = the DB
+# confirmed count (the floor); returns the newly-assigned token number.
+_TOKEN_SEED_INCR_LUA = """
+local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+local floor = tonumber(ARGV[1])
+if floor > cur then
+  redis.call('SET', KEYS[1], floor)
+end
+return redis.call('INCR', KEYS[1])
+"""
+
 # iter1 #12: the spoken complaint is fully attacker-controlled (the caller can
 # say anything, including "ignore your instructions and ..."). Before it reaches
 # the routing LLM prompt we strip control/newline characters (which a prompt
@@ -504,9 +517,16 @@ async def assign_token(
     if doctor.booking_type == "token":
         appointment_time = None  # token queue has no clock time — ignore strays
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
-        # Midnight of booking_date + 2h buffer
-        midnight = datetime.combine(booking_date + timedelta(days=1), time(0, 0))
-        ttl_seconds = int((midnight - datetime.now()).total_seconds()) + 7200
+        # B15: TTL = midnight-after-booking_date + 2h, measured in the BRANCH
+        # timezone. The old `datetime.now()` was the server clock (UTC on Fly),
+        # so the "~2h after midnight" intent actually landed ~07:30 IST next
+        # day; for future-dated bookings the key legitimately lives for days
+        # (RULE 9 booking keys expire same day). Both endpoints in branch tz now.
+        now_branch = await _branch_now(branch_id, db)
+        midnight = datetime.combine(
+            booking_date + timedelta(days=1), time(0, 0), tzinfo=now_branch.tzinfo
+        )
+        ttl_seconds = int((midnight - now_branch).total_seconds()) + 7200
 
         # Floor the counter against the DB confirmed count BEFORE incrementing
         # (Redis-restart safety, FIXLOG #14 for the token path). If the key was
@@ -536,11 +556,18 @@ async def assign_token(
         if db_confirmed >= limit:
             return {"success": False, "reason": "full"}
 
+        # B5: the seed-forward MUST be atomic. The old GET -> (SET floor) ->
+        # INCR was three round-trips: after a Redis eviction two concurrent
+        # assigns could both read cur=0, both SET the floor, and both INCR to
+        # the SAME number — two callers holding one token (the second confirm
+        # then fails the num_taken pre-check / unique index, forcing the real
+        # caller to redo assign). Do floor+increment in one Lua script so the
+        # whole operation is a single atomic step. DB pre-check + partial unique
+        # index remain the backstop.
         async with _redis() as r:
-            cur = int(await r.get(redis_key) or 0)
-            if db_confirmed > cur:
-                await r.set(redis_key, db_confirmed)  # seed forward, no number reuse
-            token_number = await r.incr(redis_key)
+            token_number = int(
+                await r.eval(_TOKEN_SEED_INCR_LUA, 1, redis_key, str(db_confirmed))
+            )
             await r.expire(redis_key, max(ttl_seconds, 7200))
 
         logger.info(
@@ -942,6 +969,9 @@ async def confirm_booking(
                 booking_date=booking_date,
                 appointment_time=appointment_time,
                 doctor_name=doctor_name,
+                # B12: use the doctor's real slot length so the calendar block
+                # matches the appointment (the shim hardcoded 30 min).
+                slot_duration_minutes=doctor.slot_duration_minutes,
             )
 
         # RULE 8: never let a slow/misconfigured calendar hang the LIVE call. A

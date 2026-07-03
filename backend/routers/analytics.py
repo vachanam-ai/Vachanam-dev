@@ -252,12 +252,20 @@ async def analytics_overview(
         )
     ).scalar_one()
 
+    # B8: bucket "new patients today" in the BRANCH tz, not UTC. func.date() on
+    # the created_at timestamptz truncates in the session (UTC) zone while
+    # `today` is branch-local (_branch_today), so 00:00-05:30 IST the count was
+    # wrong and inconsistent with every other "today" on this page (same class
+    # as the M13 CallLog fix below). timezone(tz, ts) converts to local first.
+    _patient_tz = (
+        await db.execute(select(Branch.timezone).where(Branch.id == branch_uuid))
+    ).scalar_one_or_none() or "Asia/Kolkata"
     new_patients_today = (
         await db.execute(
             select(func.count()).select_from(Patient).where(
                 and_(
                     Patient.branch_id == branch_uuid,
-                    func.date(Patient.created_at) == today,
+                    func.date(func.timezone(_patient_tz, Patient.created_at)) == today,
                 )
             )
         )

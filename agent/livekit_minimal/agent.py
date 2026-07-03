@@ -819,6 +819,13 @@ class VachanamAgent(Agent):
             self._state.token_held = True
             self._state.token_number = result["token_number"]
             self._state.token_redis_key = result["redis_key"]
+            # B4: token_confirmed is a per-BOOKING latch, not a per-call one. A
+            # single call can hold several sequential bookings (family cap = 2,
+            # plus reschedules). If a prior booking left it True, this NEW hold
+            # must reset it — otherwise RULE 3 shutdown cleanup skips releasing
+            # this hold, and the cancel/end-call guards (which key off
+            # not token_confirmed) go inert for exactly the in-progress booking.
+            self._state.token_confirmed = False
             # APPOINTMENT (schedule) doctors have NO patient-facing queue number —
             # the returned token_number is an internal slot index. Surfacing it to
             # the LLM is exactly how it gets spoken as a "token number" on schedule
@@ -921,6 +928,50 @@ class VachanamAgent(Agent):
         resolved = await self._resolve_doctor_id(doctor_id)
         parsed_date = self._parse_date(booking_date)
         parsed_time = self._parse_time(appointment_time)
+
+        # B2: the confirm time MUST match the atomically-held slot. state
+        # .token_redis_key encodes the held slot as slot:<doc>:<branch>:<date>:
+        # <HHMM> — the only slot the Redis gate actually protected. Two hazards
+        # the DB re-count alone can't close:
+        #   (A) the LLM omits appointment_time at confirm -> a slot doctor would
+        #       be written with appointment_time=NULL (no reminder, calendar
+        #       defaults to 12:00, queue shows no time). Inherit the held time.
+        #   (B) the LLM confirms a DIFFERENT time than it held -> the atomic gate
+        #       protected the OLD time; the new time is guarded only by a TOCTOU
+        #       re-count that two concurrent callers can both pass. Release the
+        #       stale hold (RULE 3) and re-acquire the new time atomically.
+        held_key = self._state.token_redis_key or ""
+        if self._state.token_held and held_key.startswith("slot:"):
+            held_hhmm = held_key.rsplit(":", 1)[-1]  # 'HHMM'
+            held_time = None
+            if len(held_hhmm) == 4 and held_hhmm.isdigit():
+                held_time = time_cls(int(held_hhmm[:2]), int(held_hhmm[2:]))
+            if parsed_time is None and held_time is not None:
+                # (A) adopt the held slot's time as the confirm time.
+                parsed_time = held_time
+                appointment_time = held_time.strftime("%H:%M")
+            elif (
+                parsed_time is not None
+                and held_time is not None
+                and parsed_time != held_time
+            ):
+                # (B) confirm time drifted off the hold — re-gate atomically.
+                await self._release_hold({"redis_key": held_key})
+                self._clear_hold()
+                rehold = await assign_token(
+                    doctor_id=resolved,
+                    branch_id=self._state.branch_id,
+                    booking_date=parsed_date,
+                    db=self._db,
+                    appointment_time=parsed_time,
+                )
+                if not rehold.get("success"):
+                    return rehold  # slot full / past / off-grid — surfaced to LLM
+                self._state.token_held = True
+                self._state.token_confirmed = False  # B4: fresh hold, fresh state
+                self._state.token_number = rehold["token_number"]
+                self._state.token_redis_key = rehold.get("redis_key")
+
         # RULE 2 (race-proof): if the LLM skipped assign_token there is no
         # server-side hold, and confirm_booking's DB re-count is TOCTOU under
         # concurrency (bug-bounty T1). Acquire the atomic Redis hold NOW — same
@@ -938,6 +989,7 @@ class VachanamAgent(Agent):
             if not held.get("success"):
                 return held  # full / past_slot / outside_hours — surfaced to LLM
             self._state.token_held = True
+            self._state.token_confirmed = False  # B4: fresh hold -> fresh latch
             self._state.token_number = held["token_number"]
             self._state.token_redis_key = held.get("redis_key")
         # The number reserved by assign_token (held server-side) is the truth —
@@ -1165,10 +1217,28 @@ class VachanamAgent(Agent):
             )
         except Exception as e:
             logger.error("reschedule_confirm_failed: %s", e)
+            # B1: confirm_booking core did db.add()+flush() of a 'confirmed'
+            # Token BEFORE the calendar write raised. That row is pending in THIS
+            # still-open session; any later commit (a retry, a cancel, a
+            # follow-up complete) would persist a phantom booking with no
+            # calendar event. Roll the session back — mirroring the tool-wrapper
+            # confirm_booking (FIXLOG #67) — BEFORE releasing the hold, so the
+            # stray row can never ride a subsequent commit.
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
             await self._release_hold(assigned)  # RULE 3: don't leak the new hold
             self._clear_hold()  # so shutdown cleanup doesn't DECR it a 2nd time
             return {"success": False, "step": "confirm", "error": "booking_failed"}
         if not confirmed.get("success"):
+            # B1: an in-band failure path (dup guard / capacity) may return
+            # after the core flushed the Token. Roll back so no half-written row
+            # survives to a later commit on this session.
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
             await self._release_hold(assigned)  # RULE 3: dup guard / capacity etc.
             self._clear_hold()
             return {"success": False, "step": "confirm", **confirmed}
@@ -1664,6 +1734,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 bool(getattr(org, "hard_block_on_exhaust", False)),
                 used_min,
                 trial_ends_at=getattr(org, "trial_ends_at", None),
+                # B3: honor the trial grant + super-admin minutes_adjustment so
+                # the gate blocks at the SAME bucket the dashboard shows.
+                adjustment=int(getattr(org, "minutes_adjustment", 0) or 0),
             )
     except Exception as e:
         # iter1 #23: fail CLOSED for a known terminal status, fail OPEN otherwise.
@@ -1762,7 +1835,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # post-answer silence). RULE 8: any failure is swallowed; the real greeting
         # still plays regardless.
         _welcome_task = None
-        _used_stored_welcome = False
+        # B18: `_used_stored_welcome` removed — it was set to False and never
+        # flipped True since the stored welcome became outbound-only, so the
+        # `if not _used_stored_welcome` guard below was always-True dead code.
         # The pre-rendered clip is OUTBOUND-ONLY now (Vinay 2026-06-25: inbound calls
         # don't want a welcome clip — the original live greeting is good enough).
         # OUTBOUND (reminder/rebook/followup) plays the instant welcome-ONLY mask to
@@ -2179,6 +2254,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     finally:
                         await r.aclose()
                 # Call log — analytics + minute metering (Rule 9: last-4 only).
+                # B14: compute duration OUTSIDE both try blocks. It used to be
+                # assigned inside the CallLog try (after an import + a
+                # db.rollback that can throw on a torn connection); if that
+                # raised before the assignment, the later CallQuality block
+                # referenced an unbound `duration` -> NameError -> the quality
+                # row was silently dropped for every such teardown.
+                started = state.call_start or datetime_cls.now(timezone_utc)
+                duration = max(
+                    0,
+                    int((datetime_cls.now(timezone_utc) - started).total_seconds()),
+                )
+
                 # FINALIZE the at-start row (TD-027/F6) with the real duration +
                 # booking outcome. Fall back to an INSERT if the start row was
                 # never written (start-time metering failure).
@@ -2187,18 +2274,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
                     from backend.models.schema import CallLog
 
-                    started = state.call_start or datetime_cls.now(timezone_utc)
-                    duration = max(
-                        0,
-                        int((datetime_cls.now(timezone_utc) - started).total_seconds()),
-                    )
                     await db.rollback()  # clear any failed tx before logging
                     if state.call_log_id is not None:
                         # Finalize the agent-written at-start row (agent logging on).
+                        # B11: also refresh call_type — the start row was written
+                        # BEFORE the type was refined from the generic
+                        # "outbound"/"inbound_booking" to reminder / cascade_rebook
+                        # / next_visit_book / doctor_advice, so analytics that
+                        # segment by call_type undercounted those activities.
                         await db.execute(
                             _sa_update(CallLog)
                             .where(CallLog.id == state.call_log_id)
                             .values(
+                                call_type=state.call_type or "inbound",
                                 duration_seconds=duration,
                                 booking_made=state.token_confirmed,
                             )
@@ -2448,10 +2536,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     )
                 else:
                     _greeting = lines.disclosure_greeting.format(clinic=branch_name)
-                # When the pre-rendered welcome already spoke the full greeting +
-                # disclosure (Option 1), don't repeat it live — only record consent.
-                if not _used_stored_welcome:
-                    await session.say(sanitize_for_tts(_greeting))
+                # B18: the live greeting always plays (the stored welcome is
+                # outbound-only and never spoke the full greeting+disclosure
+                # inbound). The old `if not _used_stored_welcome` guard was dead.
+                await session.say(sanitize_for_tts(_greeting))
 
             # DPDP s.5 demonstrable notice: the greeting just spoken contains the
             # AI-assistant / data-processing disclosure. Record that notice was

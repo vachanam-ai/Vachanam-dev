@@ -208,6 +208,10 @@ export default function Treatments() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["treatment-notes", patientId, branchId] });
       qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
+      // B25: a note with a follow-up question enqueues a next_visit_book task —
+      // refresh the follow-up thread so it appears immediately (the reply
+      // mutation already does this; note create/edit didn't).
+      qc.invalidateQueries({ queryKey: ["followups", patientId, branchId] });
       resetForm();
       toast.success(isFinal ? "Treatment marked complete" : "Visit note added");
     },

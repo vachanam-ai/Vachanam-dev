@@ -135,6 +135,28 @@ async def test_create_event_raises_on_http_error(svc) -> None:
         )
 
 
+# ── Test 4b (bounty B6): non-HttpError also wraps into CalendarWriteFailed ─────
+
+
+@pytest.mark.asyncio
+async def test_b6_non_http_error_wraps_into_calendar_write_failed(svc) -> None:
+    """A socket timeout / auth refresh / SSL error during events().insert must
+    ALSO surface as CalendarWriteFailed, so the retry/enqueue wrappers catch it
+    (otherwise the walk-in route 500s post-commit and no retry task is queued)."""
+    s, mock = svc
+    mock.events().insert().execute.side_effect = TimeoutError("socket timed out")
+
+    with pytest.raises(CalendarWriteFailed):
+        await s.create_booking_event(
+            calendar_id="cal_id",
+            patient_first_name="Test",
+            patient_phone_last4="0002",
+            appointment_dt=datetime(2026, 6, 20, 12, 0),
+            duration_minutes=20,
+            doctor_name="Dr B",
+        )
+
+
 # ── Test 5: delete_event treats 404 as success ────────────────────────────────
 
 

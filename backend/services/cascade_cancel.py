@@ -53,8 +53,17 @@ async def cascade_for_unavailability(
     date_to: date,
     user_id: str,
     reason: Optional[str] = None,
+    min_cancel_date: Optional[date] = None,
 ) -> dict:
     """Mark doctor unavailable for [date_from, date_to] and cascade-cancel existing tokens.
+
+    B9: `min_cancel_date` (branch-local today) clamps the LOWER bound of the
+    token cascade only. Unavailability rows still cover the full [from, to]
+    range (harmless for past dates), but the token cancel/rebook must never
+    touch PAST-dated confirmed bookings — those are patients who already came
+    but were never marked attended; cancelling them corrupts show-rate
+    analytics and fires "your appointment on <past date> was cancelled" rebook
+    calls. When None, no clamp (backward compatible).
 
     Returns:
         {
@@ -63,6 +72,9 @@ async def cascade_for_unavailability(
             "followups_scheduled": int, # FollowupTask rows inserted
         }
     """
+    cancel_from = date_from
+    if min_cancel_date is not None and min_cancel_date > cancel_from:
+        cancel_from = min_cancel_date
     unavailable_dates_count = 0
     cancelled_tokens: list[Token] = []
     followups_scheduled_count = 0
@@ -105,7 +117,7 @@ async def cascade_for_unavailability(
         .where(
             Token.branch_id == branch_id,        # Rule 1 — mandatory
             Token.doctor_id == doctor_id,
-            Token.date >= date_from,
+            Token.date >= cancel_from,            # B9: never cancel past bookings
             Token.date <= date_to,
             Token.status == "confirmed",
         )

@@ -100,6 +100,11 @@ async def edit_patient(
     if patient is None:
         raise HTTPException(status_code=404, detail="patient not found in branch")
 
+    # B13: min_length=1 passes a whitespace-only " ", which strips to "" and was
+    # saved as the patient's name (also dodges the dup guard and lower("")
+    # comparisons). Reject an all-whitespace name post-strip.
+    if body.name is not None and not body.name.strip():
+        raise HTTPException(status_code=422, detail="name cannot be empty")
     new_name = body.name.strip() if body.name is not None else patient.name
     new_phone = patient.phone
     if body.phone is not None:

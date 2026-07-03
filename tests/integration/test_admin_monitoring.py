@@ -91,6 +91,41 @@ async def test_monitoring_aggregates_for_super_admin(seeded, client):
     assert "transcript" not in body  # no transcript field at all
 
 
+async def test_b23_daily_trend_buckets_in_ist(seeded, client, db):
+    """B23: a call at 02:00 IST on a PAST day (which is the previous UTC calendar
+    day) must land on that IST day's bucket, not the UTC-previous day (which is
+    05:30 off from every other IST series). Uses an isolated past day so the
+    fixture's same-day rows don't mask the boundary."""
+    from zoneinfo import ZoneInfo
+
+    ist = ZoneInfo("Asia/Kolkata")
+    ist_day = (datetime.now(ist) - timedelta(days=3)).date()
+    created_ist = datetime(ist_day.year, ist_day.month, ist_day.day, 2, 0, tzinfo=ist)
+    created_utc = created_ist.astimezone(timezone.utc)
+    utc_day = created_utc.date()
+    assert utc_day != ist_day  # sanity: 02:00 IST is the previous UTC day
+
+    db.add(CallQuality(
+        branch_id=seeded.id, language="te", duration_seconds=42, turns=1,
+        booking_made=True, created_at=created_utc,
+    ))
+    await db.commit()
+
+    r = await client.get(
+        "/admin/monitoring", params={"days": 14},
+        headers={"Authorization": f"Bearer {_jwt('super_admin', True)}"},
+    )
+    assert r.status_code == 200, r.text
+    daily = {row["date"]: row for row in r.json()["daily"]}
+    assert daily.get(ist_day.isoformat(), {}).get("calls", 0) >= 1, (
+        "IST-early call must bucket onto its IST day"
+    )
+    # and NOT on the UTC-previous day (the old, wrong bucket)
+    assert daily.get(utc_day.isoformat(), {}).get("calls", 0) == 0, (
+        "call must not appear under the UTC-previous-day bucket"
+    )
+
+
 async def test_monitoring_blocks_non_admin(client):
     r = await client.get(
         "/admin/monitoring", params={"days": 14},

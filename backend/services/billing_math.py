@@ -120,9 +120,20 @@ def next_cycle_start(today: date) -> date:
     return date(today.year, today.month + 1, 1)
 
 
-def minutes_exhausted(plan: str, minutes_used: float) -> bool:
-    """True when the org has used up its included bucket (hard-block trigger)."""
-    inc = included_minutes(plan)
+def minutes_exhausted(
+    plan: str, minutes_used: float, status: str = "active", adjustment: int = 0
+) -> bool:
+    """True when the org has used up its INCLUDED bucket for the month
+    (hard-block trigger).
+
+    B3: the bucket is the SAME one the dashboard shows — `included_minutes_for`,
+    which honors the 500-min trial grant (#166) and the super-admin
+    `minutes_adjustment` (#169). Comparing against the plain plan bucket blocked
+    trial/adjusted orgs early (e.g. a solo-plan trial cut off at 100 min while
+    the donut still showed 400 remaining) and let a negative adjustment block
+    later than the dashboard implied.
+    """
+    inc = included_minutes_for(plan, status, adjustment)
     return inc > 0 and minutes_used >= inc
 
 
@@ -132,6 +143,7 @@ def call_blocked(
     hard_block_on_exhaust: bool,
     minutes_used: float,
     trial_ends_at=None,
+    adjustment: int = 0,
 ) -> str | None:
     """Why an incoming call for this org must NOT be served, or None.
 
@@ -154,6 +166,10 @@ def call_blocked(
             ends = ends.replace(tzinfo=timezone.utc)
         if ends < now:
             return "trial_expired"
-    if hard_block_on_exhaust and minutes_exhausted(plan, minutes_used):
+    # B3: thread status + adjustment so the hard-block bucket matches the
+    # trial grant and super-admin adjustment the dashboard already honors.
+    if hard_block_on_exhaust and minutes_exhausted(
+        plan, minutes_used, status, adjustment
+    ):
         return "minutes_exhausted"
     return None
