@@ -54,6 +54,7 @@ from livekit.agents import (  # noqa: E402
     metrics,
 )
 from livekit.agents import llm as lk_llm  # noqa: E402
+from livekit.agents import stt as lk_stt  # noqa: E402
 from livekit.agents import tts as lk_tts  # noqa: E402
 from livekit.agents import utils as _lk_utils  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS as _DEFAULT_CONN  # noqa: E402
@@ -64,6 +65,7 @@ import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
 from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack, get_welcome  # noqa: E402
+from agent.i18n.backchannels import suppress_backchannel  # noqa: E402
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
@@ -741,6 +743,37 @@ class VachanamAgent(Agent):
                 )
             except Exception as e:  # noqa: BLE001 — ack is best-effort (RULE 8)
                 logger.warning("switch_ack_failed: %s", e)
+
+    async def stt_node(self, audio, model_settings):
+        """BACKCHANNEL FILTER (Vinay 2026-07-04): while the agent is SPEAKING,
+        drop transcript events that are pure listening noises ("hmm", "okay",
+        "acha", "ఆ", "हाँ"...) BEFORE livekit's interruption gate counts their
+        words (min_interruption_words=1 means any word cuts the agent — a
+        deliberate setting so REAL interruptions stop it fast; this filter is
+        the language-aware exception the 2026-06-24 note planned). When the
+        agent is silent the same word is a real short turn and passes through.
+        Multi-word content ("okay cancel it", "no no wait") always passes."""
+        async for ev in Agent.default.stt_node(self, audio, model_settings):
+            try:
+                if getattr(ev, "type", None) in (
+                    lk_stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                    lk_stt.SpeechEventType.FINAL_TRANSCRIPT,
+                ):
+                    alts = getattr(ev, "alternatives", None) or []
+                    text = alts[0].text if alts else ""
+                    speaking = False
+                    try:
+                        speaking = self.session.agent_state == "speaking"
+                    except Exception:  # noqa: BLE001 — no session yet
+                        speaking = False
+                    if suppress_backchannel(text, speaking):
+                        logger.info(
+                            "backchannel_suppressed text=%r", (text or "")[:40]
+                        )
+                        continue
+            except Exception as e:  # noqa: BLE001 — filter must NEVER eat real speech
+                logger.warning("backchannel_filter_error: %s", e)
+            yield ev
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         """ECHO GUARD (self-talk loop). A phone line can bounce the agent's own
