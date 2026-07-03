@@ -109,6 +109,11 @@ class Branch(Base):
     # Settings voice picker for that language and can be selected as tts_voice.
     # Tenant-scoped (RULE 1) — a clinic only ever sees its own clones.
     cloned_voices: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    # Clinic FAQ answered by the voice agent on calls: list of {"q","a"} in the
+    # clinic's own words (fees, timings, parking, insurance, reports...). NULL/
+    # empty → agent keeps the old "please confirm at the clinic" fallback.
+    # Injected into the system prompt sanitized + capped (RULE 6).
+    faq: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     # Spoken language for this clinic's voice agent (clinic-selectable). Drives
     # the Sarvam STT/TTS language codes AND the per-language spoken lines +
     # system-prompt directive. Short code (te/hi/ta/kn/ml/mr/bn/or); see

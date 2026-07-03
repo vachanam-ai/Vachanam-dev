@@ -8,9 +8,11 @@ import {
   fetchBranchSettings,
   fetchPlan,
   fetchStaff,
+  getBranchFaq,
   getBranchVoices,
   registerClonedVoice,
   removeClonedVoice,
+  saveBranchFaq,
   setBranchVoice,
   testCalendar,
   updateBranchSettings
@@ -184,6 +186,30 @@ export default function Settings() {
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not add voice")
   });
+  // Clinic FAQ the agent answers on calls. Pre-seed the editor with the
+  // standard Indian-clinic template when the clinic hasn't saved one yet.
+  const [faqRows, setFaqRows] = useState(null); // null until loaded
+  const faqQuery = useQuery({
+    queryKey: ["branch-faq", branchId],
+    queryFn: () => getBranchFaq(branchId),
+    enabled: Boolean(branchId)
+  });
+  useEffect(() => {
+    if (faqQuery.data && faqRows === null) {
+      setFaqRows(
+        faqQuery.data.faq?.length ? faqQuery.data.faq : faqQuery.data.template
+      );
+    }
+  }, [faqQuery.data, faqRows]);
+  const faqSave = useMutation({
+    mutationFn: () => saveBranchFaq(branchId, faqRows ?? []),
+    onSuccess: (d) => {
+      qc.setQueryData(["branch-faq", branchId], d);
+      toast.success("FAQ saved — the agent will answer these from the next call");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not save the FAQ")
+  });
+
   // Clone a voice from an uploaded audio sample (smallest.ai instant clone).
   const [uploadName, setUploadName] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
@@ -538,6 +564,50 @@ export default function Settings() {
                 registerClone.mutate();
               }}>
               {registerClone.isPending ? "Adding…" : "Add & use this voice"}
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      {/* Clinic FAQ — the agent answers these on calls */}
+      <Section id="faq" title="Clinic FAQ"
+        sub="Answers your AI agent gives when callers ask about fees, timings, parking, insurance, reports and more. Leave a row blank to skip it.">
+        <div className="space-y-3">
+          {(faqRows ?? []).map((row, i) => (
+            <div key={i} className="rounded-xl border border-hairline p-3">
+              <div className="flex items-start justify-between gap-2">
+                <input className="field flex-1 !py-1.5 text-sm font-medium"
+                  value={row.q}
+                  placeholder="Question callers ask…"
+                  onChange={(e) => {
+                    const next = [...faqRows];
+                    next[i] = { ...next[i], q: e.target.value };
+                    setFaqRows(next);
+                  }} />
+                <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-xs"
+                  onClick={() => setFaqRows(faqRows.filter((_, j) => j !== i))}>
+                  Remove
+                </button>
+              </div>
+              <textarea className="field mt-2 min-h-[60px] text-sm"
+                value={row.a}
+                placeholder="Your clinic's answer (spoken by the agent)…"
+                onChange={(e) => {
+                  const next = [...faqRows];
+                  next[i] = { ...next[i], a: e.target.value };
+                  setFaqRows(next);
+                }} />
+            </div>
+          ))}
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button type="button" className="btn-ghost flex-1 min-h-[44px]"
+              onClick={() => setFaqRows([...(faqRows ?? []), { q: "", a: "" }])}>
+              + Add a question
+            </button>
+            <button type="button" className="btn-primary flex-1 min-h-[44px]"
+              disabled={faqSave.isPending || faqRows === null}
+              onClick={() => faqSave.mutate()}>
+              {faqSave.isPending ? "Saving…" : "Save FAQ"}
             </button>
           </div>
         </div>

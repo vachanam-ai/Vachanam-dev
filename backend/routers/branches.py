@@ -99,6 +99,38 @@ import re as _re
 _VOICE_ID_RE = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+# Standard Indian-clinic FAQ template (web-researched 2026-07-03: consultation
+# fee, timings/Sunday, payment modes, free-followup window, location/parking,
+# insurance, reports, what to bring, home visits, services). Clinics fill the
+# answers in Settings; unanswered rows are skipped at prompt time.
+FAQ_TEMPLATE: list[dict] = [
+    {"q": "What are the clinic timings? Are you open on Sundays?", "a": ""},
+    {"q": "What is the consultation fee?", "a": ""},
+    {"q": "Is a follow-up visit free? Within how many days?", "a": ""},
+    {"q": "Where exactly is the clinic located? Any landmark?", "a": ""},
+    {"q": "Is parking available?", "a": ""},
+    {"q": "What payment methods do you accept (cash / UPI / card)?", "a": ""},
+    {"q": "Do you accept health insurance?", "a": ""},
+    {"q": "When will test reports be ready? Can I get them on WhatsApp?", "a": ""},
+    {"q": "What should I bring for the first visit (old reports, ID)?", "a": ""},
+    {"q": "Do you do home visits?", "a": ""},
+    {"q": "What treatments/services does the clinic offer?", "a": ""},
+]
+
+_FAQ_MAX_ITEMS = 30
+_FAQ_Q_MAX = 200
+_FAQ_A_MAX = 500
+
+
+class FaqItem(BaseModel):
+    q: str
+    a: str = ""
+
+
+class FaqUpdate(BaseModel):
+    faq: list[FaqItem]
+
+
 class VoiceUpdate(BaseModel):
     tts_voice: str | None = None   # smallest voice_id (omit to change language only)
     language: str | None = None    # optional: also set the clinic's spoken language
@@ -221,6 +253,59 @@ async def list_branch_voices(
         "current": getattr(branch, "tts_voice", None),
         "voices": cloned + catalog,
     }
+
+
+@router.get("/{branch_id}/faq")
+async def get_faq(
+    branch_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """The clinic's FAQ (agent answers these on calls) + the fill-in template."""
+    await assert_branch_access(current_user, branch_id, db)
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    return {"faq": getattr(branch, "faq", None) or [], "template": FAQ_TEMPLATE}
+
+
+@router.put("/{branch_id}/faq")
+async def save_faq(
+    branch_id: str,
+    body: FaqUpdate,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Save the clinic FAQ (org_admin). The agent speaks these answers, so cap
+    sizes (RULE 6: they reach TTS via the LLM) and strip whitespace."""
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can edit the FAQ")
+    if len(body.faq) > _FAQ_MAX_ITEMS:
+        raise HTTPException(status_code=422, detail=f"At most {_FAQ_MAX_ITEMS} FAQ entries")
+    cleaned = []
+    for item in body.faq:
+        q = item.q.strip()
+        a = item.a.strip()
+        if not q:
+            continue  # empty question row from the editor — drop silently
+        if len(q) > _FAQ_Q_MAX or len(a) > _FAQ_A_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Question ≤{_FAQ_Q_MAX} chars, answer ≤{_FAQ_A_MAX} chars",
+            )
+        cleaned.append({"q": q, "a": a})
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    branch.faq = cleaned  # reassign — JSONB change tracking
+    await db.commit()
+    logger.info("branch_faq_saved", branch_id=branch_id, items=len(cleaned))
+    return {"faq": cleaned, "template": FAQ_TEMPLATE}
 
 
 class ClonedVoiceRegister(BaseModel):

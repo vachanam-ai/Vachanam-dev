@@ -96,6 +96,7 @@ def build_system_prompt(
     cancelled_date: str | None = None,
     language: str = "te",
     clinic_address: str | None = None,
+    faq: list[dict] | None = None,
 ) -> str:
     """Build the system prompt for a specific clinic's voice agent.
 
@@ -178,6 +179,35 @@ def build_system_prompt(
             "clinic is, do NOT invent an address, area, or landmark — say the clinic "
             "will share the exact location once the appointment is confirmed."
         )
+
+    # CLINIC FAQ — the clinic's own answers to common caller questions (fees,
+    # timings, parking, insurance, reports...). Grounded like the address:
+    # answer ONLY from these, in the call's language, and fall back to
+    # "confirm at the clinic" for anything not covered (HARD RULE 2). Only
+    # answered rows are injected; sanitized to plain single-line text (RULE 6)
+    # and capped so a huge FAQ can't blow up the prompt.
+    faq_line = ""
+    if faq:
+        _faq_rows = []
+        _budget = 2000
+        for item in faq:
+            q = " ".join(str(item.get("q") or "").split())
+            a = " ".join(str(item.get("a") or "").split())
+            if not q or not a:
+                continue  # unanswered template rows are skipped
+            row = f"\n  Q: {q}\n  A: {a}"
+            if _budget - len(row) < 0:
+                break
+            _budget -= len(row)
+            _faq_rows.append(row)
+        if _faq_rows:
+            faq_line = (
+                "\nCLINIC FAQ — when the caller asks any of these, answer from the "
+                "clinic's answer below (spoken naturally in the call's language, one "
+                "short line), then continue the booking. Never contradict or extend "
+                "these answers; anything NOT covered here → they can confirm at the "
+                "clinic." + "".join(_faq_rows)
+            )
 
     recording_sentence = ""
     if _cfg.settings.recording_allowed:
@@ -310,7 +340,7 @@ list above is complete and never changes during the call. So:
 
 EMERGENCY CONTACT: {emergency_contact}
 If the patient mentions a medical concern that needs attention, acknowledge it and continue
-with booking the appointment at the clinic. Do not suggest 108. Do not diagnose.{address_line}
+with booking the appointment at the clinic. Do not suggest 108. Do not diagnose.{address_line}{faq_line}
 
 HANDLING DIFFERENT CALLERS — people call in every mood and state. You stay the SAME
 warm, calm, patient receptionist with every one of them. Never match anger, never

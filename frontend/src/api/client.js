@@ -116,6 +116,10 @@ export const cloneBranchVoice = (branchId, displayName, file, language) => {
 };
 export const deleteBranchVoiceClone = (branchId) =>
   api.delete(`/branches/${branchId}/voice-clone`).then((r) => r.data);
+export const getBranchFaq = (branchId) =>
+  api.get(`/branches/${branchId}/faq`).then((r) => r.data);
+export const saveBranchFaq = (branchId, faq) =>
+  api.put(`/branches/${branchId}/faq`, { faq }).then((r) => r.data);
 export const registerClonedVoice = (branchId, payload) =>
   api.post(`/branches/${branchId}/cloned-voices`, payload).then((r) => r.data);
 export const removeClonedVoice = (branchId, voiceId) =>

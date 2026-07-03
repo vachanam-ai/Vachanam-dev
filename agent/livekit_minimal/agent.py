@@ -2036,6 +2036,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 plan=state.plan or "clinic",
                 language=lang_code,
                 clinic_address=getattr(branch, "address", None),
+                faq=getattr(branch, "faq", None),
             )
             + date_context
             + lines.brevity

@@ -17,6 +17,7 @@ order (last-added = outermost). We add SecurityHeadersMiddleware AFTER
 CORSMiddleware so it executes FIRST (outermost), ensuring every response —
 including CORS preflight 204s — carries the security headers.
 """
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -67,21 +68,28 @@ async def lifespan(app: FastAPI):
     # and double-dispatch reminder/rebook calls and calendar writes. A Postgres
     # session-level advisory lock makes exactly one process the scheduler
     # leader; the lock auto-releases if that process dies (another then wins).
-    scheduler = None
-    leader_conn = None
     SCHED_LOCK_KEY = 0x7661636861  # "vacha"
-    try:
+    # Leadership state shared with shutdown; the retry task may mutate it later.
+    lead: dict = {"scheduler": None, "conn": None, "got": False, "retry": None}
+
+    async def _try_lock():
+        """Acquire the leader lock on a dedicated conn, or None if held."""
         import backend.database as _db_module
 
-        leader_conn = await _db_module.engine.raw_connection()
-        got = await leader_conn.driver_connection.fetchval(
-            "SELECT pg_try_advisory_lock($1)", SCHED_LOCK_KEY
-        )
-    except Exception as e:
-        got = False
-        logger.warning("scheduler_leader_lock_failed", error=str(e))
+        conn = await _db_module.engine.raw_connection()
+        try:
+            ok = await conn.driver_connection.fetchval(
+                "SELECT pg_try_advisory_lock($1)", SCHED_LOCK_KEY
+            )
+        except Exception:
+            await conn.close()
+            raise
+        if not ok:
+            await conn.close()
+            return None
+        return conn
 
-    if got:
+    def _build_scheduler():
         from backend.jobs.call_scoring import run_call_scoring
         from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
         from backend.jobs.calendar_writer import requeue_stale_in_progress
@@ -174,25 +182,57 @@ async def lifespan(app: FastAPI):
                 id="vobiz_cdr_sync", replace_existing=True,
             )
         scheduler.start()
+        return scheduler
+
+    try:
+        _conn = await _try_lock()
+    except Exception as e:
+        _conn = None
+        logger.warning("scheduler_leader_lock_failed", error=str(e))
+    if _conn is not None:
+        lead.update(conn=_conn, got=True, scheduler=_build_scheduler())
         logger.info("scheduler_started_as_leader")
     else:
-        logger.info("scheduler_skipped_not_leader")
+        # ROLLING-DEPLOY FIX (prod 2026-07-03): the once-only check left NOBODY
+        # leader — Render starts the new instance while the OLD one still holds
+        # the lock and drains; the new instance gave up forever, the old died,
+        # and pg_locks showed zero advisory locks → no scheduler anywhere, so a
+        # doctor_advice follow-up sat pending for 2h with attempt_count=0.
+        # Keep retrying until we win (or shut down).
+        logger.info("scheduler_skipped_not_leader_will_retry")
+
+        async def _retry_leader() -> None:
+            while True:
+                await asyncio.sleep(60)
+                try:
+                    c2 = await _try_lock()
+                except Exception as e:  # noqa: BLE001 — transient DB errors
+                    logger.warning("leader_retry_failed", error=str(e)[:120])
+                    continue
+                if c2 is not None:
+                    lead.update(conn=c2, got=True, scheduler=_build_scheduler())
+                    logger.info("scheduler_started_as_leader_after_retry")
+                    return
+
+        lead["retry"] = asyncio.create_task(_retry_leader())
 
     yield
 
-    if scheduler is not None:
-        scheduler.shutdown(wait=False)
-    if leader_conn is not None:
+    if lead["retry"] is not None:
+        lead["retry"].cancel()
+    if lead["scheduler"] is not None:
+        lead["scheduler"].shutdown(wait=False)
+    if lead["conn"] is not None:
         try:
             # Explicit unlock (T5): closing a pooled connection returns it to
             # the pool with the session-level advisory lock STILL held, so a
             # graceful in-process restart could never elect a new leader.
             # pg_advisory_unlock releases it before the connection goes back.
-            if got:
-                await leader_conn.driver_connection.fetchval(
+            if lead["got"]:
+                await lead["conn"].driver_connection.fetchval(
                     "SELECT pg_advisory_unlock($1)", SCHED_LOCK_KEY
                 )
-            await leader_conn.close()
+            await lead["conn"].close()
         except Exception as e:
             logger.warning("scheduler_leader_unlock_failed", error=str(e))
     await close_rate_limiter()
