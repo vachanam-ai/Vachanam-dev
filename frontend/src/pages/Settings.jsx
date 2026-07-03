@@ -454,7 +454,6 @@ export default function Settings() {
             <option key={v.voice_id} value={v.voice_id}>
               {v.display_name}
               {v.cloned ? " · your cloned voice" : v.gender ? ` · ${v.gender}` : ""}
-              {v.languages?.length ? ` · ${v.languages.join("/")}` : ""}
             </option>
           ))}
         </select>
