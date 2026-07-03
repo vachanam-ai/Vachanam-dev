@@ -345,11 +345,11 @@ async def clone_branch_voice(
 
     from backend.services import smallest_voice
 
-    # Clone in the clinic's spoken language so the voice matches the agent
-    # (smallest tags voices by full language name, e.g. "telugu").
-    _code = (getattr(branch, "language", None) or "te")
-    _lang_cfg = _LANGUAGES.get(_code) or _LANGUAGES.get("te")
-    clone_language = (_lang_cfg.name.lower() if _lang_cfg else "english")
+    # Clone in the clinic's spoken language so the voice matches the agent.
+    # smallest's cloning API takes the ISO code — it 400s on full names now
+    # ("Invalid language. Supported: en, hi, mr, kn, ta, ... te, pa, or",
+    # prod 2026-07-03; it previously accepted "telugu").
+    clone_language = (getattr(branch, "language", None) or "te")
     try:
         voice_id = smallest_voice.clone_voice(
             display_name.strip(), file.filename or "sample.wav", audio, language=clone_language
