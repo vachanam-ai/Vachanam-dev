@@ -64,7 +64,7 @@ import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
 from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack, get_welcome  # noqa: E402
-from agent.i18n.transliterate import spoken_name  # noqa: E402
+from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -1666,16 +1666,32 @@ class VachanamAgent(Agent):
                 ).scalar_one_or_none()
                 cal_id = doc_cal or branch_cal
                 if cal_id:
-                    await self._calendar.delete_event(cal_id, token.google_calendar_event_id)
+                    # HARD CAP (live 2026-07-03 18:18Z): this delete's retry
+                    # backoff blocked _do_cancel for 36s — the caller heard
+                    # dead air and the LLM apologised "I can't cancel" while
+                    # the DB cancel had ALREADY succeeded. The DB row is the
+                    # booking truth; the calendar event is cleanup — never let
+                    # it stall or fail the cancel (mirror of RULE 4's spirit).
+                    async with asyncio.timeout(5):
+                        await self._calendar.delete_event(
+                            cal_id, token.google_calendar_event_id
+                        )
             except Exception as e:
                 logger.warning("cancel_calendar_delete_failed: %s", e)
 
         logger.info(
-            "booking_cancelled_for_reschedule token=%s branch_id=%s",
+            "booking_cancelled token=%s branch_id=%s",
             token_id[-8:],
             str(self._state.branch_id),
         )
-        return {"success": True}
+        return {
+            "success": True,
+            "instruction": (
+                "The cancellation SUCCEEDED — the booking is cancelled. Tell "
+                "the caller it is done, in one short line. Do NOT say it "
+                "failed or that you cannot cancel."
+            ),
+        }
 
     @staticmethod
     def _check_end_allowed(state: SessionState, abandon_pending_booking: bool) -> None:
@@ -2133,6 +2149,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # OUTBOUND (reminder/rebook/followup) plays the instant welcome-ONLY mask to
         # cover session.start; INBOUND (incl. missed-call callback) uses the live
         # welcome bridge + live greeting below.
+        # Clinic name rendered in the CALL language's script (cached HTTP hop;
+        # no-op when scripts already match, i.e. every default-language call).
+        # Needed here for the welcome clip AND later for every greeting line.
+        _spk_clinic = await spoken_text(branch_name, lang_code)
         _stored_short = getattr(branch, "welcome_short_audio", None)
         _is_outbound_greet = is_reminder or is_rebook_call or is_followup
         # The stored clip is pre-rendered in the BRANCH language; skip it when
@@ -2157,7 +2177,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             _welcome_task = asyncio.create_task(
                 play_welcome(
                     ctx.room,
-                    sanitize_for_tts(get_welcome(lang_code).format(clinic=branch_name)),
+                    sanitize_for_tts(get_welcome(lang_code).format(clinic=_spk_clinic)),
                     _welcome_tts,
                 )
             )
@@ -2800,8 +2820,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # names, not spelled letters (fix 2026-06-23: "Srinivas" → "S R I N I").
         # spoken_name() is best-effort and cached; it no-ops for already-Indic
         # names and falls back to the raw name on any failure.
-        _spk_patient = await spoken_name(meta.get("patient_name", ""), lang_code)
-        _spk_doctor = await spoken_name(meta.get("doctor_name", ""), lang_code)
+        # spoken_text handles EVERY direction (Latin→Indic, Indic→Latin,
+        # Indic→Indic via a Latin hop) — the old spoken_name skipped English
+        # targets, so the en agent greeted with raw Telugu glyphs ("శ్రీ
+        # వెంకటేశ్వర" spelled wrongly, live 2026-07-03/04).
+        _spk_patient = await spoken_text(meta.get("patient_name", ""), lang_code)
+        _spk_doctor = await spoken_text(meta.get("doctor_name", ""), lang_code)
+        _spk_caller = (
+            await spoken_text(caller_greeting_name, lang_code)
+            if caller_greeting_name else caller_greeting_name
+        )
         logger.info("lat_greeting answer_to_greeting=%.2fs", _perf.monotonic() - _t_answer)
         if is_reminder:
             # Raw "16:30" gets read digit-by-digit by TTS. For Telugu speak it in
@@ -2817,7 +2845,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 sanitize_for_tts(
                     lines.reminder_greeting.format(
                         patient=_spk_patient,
-                        clinic=branch_name,
+                        clinic=_spk_clinic,
                         doctor=_spk_doctor,
                         time=_spoken_time,
                     )
@@ -2836,7 +2864,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 sanitize_for_tts(
                     lines.rebook_greeting.format(
                         patient=_spk_patient,
-                        clinic=branch_name,
+                        clinic=_spk_clinic,
                         doctor=_spk_doctor,
                         date=spoken_date,
                     )
@@ -2851,15 +2879,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             _fu_msg = (followup_meta.get("message") or "").strip()
             if _fu_msg and lines.followup_greeting_q:
                 _fg = lines.followup_greeting_q.format(
-                    patient=_spk_patient, clinic=branch_name, message=_fu_msg
+                    patient=_spk_patient, clinic=_spk_clinic, message=_fu_msg
                 )
             elif lines.followup_greeting_noq:
                 _fg = lines.followup_greeting_noq.format(
-                    patient=_spk_patient, clinic=branch_name
+                    patient=_spk_patient, clinic=_spk_clinic
                 )
             else:
                 _fg = lines.known_caller_greeting.format(
-                    patient=_spk_patient, clinic=branch_name
+                    patient=_spk_patient, clinic=_spk_clinic
                 )
             # Uninterruptible: the patient often says "చెప్పండి/హా/hello" right after the
             # intro, which barged in and cut off the doctor's QUESTION (2026-06-25).
@@ -2888,7 +2916,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     _ifg_pre = _ifg_raw[: -len("{message}")].strip()
                     if caller_greeting_name and lines.followup_name_prefix:
                         _ifg_pre = (
-                            lines.followup_name_prefix.format(patient=caller_greeting_name)
+                            lines.followup_name_prefix.format(patient=_spk_caller)
                             + _ifg_pre
                         )
                     await session.say(sanitize_for_tts(_ifg_pre), allow_interruptions=False)
@@ -2902,10 +2930,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # Returning patient → greet by name; new caller → standard greeting.
                 if caller_greeting_name:
                     _greeting = lines.known_caller_greeting.format(
-                        patient=caller_greeting_name, clinic=branch_name
+                        patient=_spk_caller, clinic=_spk_clinic
                     )
                 else:
-                    _greeting = lines.disclosure_greeting.format(clinic=branch_name)
+                    _greeting = lines.disclosure_greeting.format(clinic=_spk_clinic)
                 # B18: the live greeting always plays (the stored welcome is
                 # outbound-only and never spoke the full greeting+disclosure
                 # inbound). The old `if not _used_stored_welcome` guard was dead.

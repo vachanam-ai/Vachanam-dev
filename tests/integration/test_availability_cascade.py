@@ -252,14 +252,21 @@ async def _seed_token(
 async def test_post_unavailability_creates_rows_for_date_range(
     client, db: AsyncSession, clinic, org_admin_jwt
 ):
-    """POST with 3-day range must create 3 DoctorUnavailability rows."""
+    """POST with 3-day range must create 3 DoctorUnavailability rows.
+
+    Dates are RELATIVE to today — hardcoded 2026-07-01..03 rotted into 'past
+    dates' the moment the calendar rolled past them (failed 2026-07-04)."""
     doctor = await _seed_doctor(db, clinic["branch_id"])
+    from datetime import timedelta
+
+    d1 = date.today() + timedelta(days=1)
+    d3 = date.today() + timedelta(days=3)
 
     r = await client.post(
         f"/availability/{clinic['branch_id']}/{doctor.id}",
         json={
-            "date_from": "2026-07-01",
-            "date_to": "2026-07-03",
+            "date_from": d1.isoformat(),
+            "date_to": d3.isoformat(),
             "reason": "Conference",
         },
         headers=_auth(org_admin_jwt),
@@ -278,7 +285,7 @@ async def test_post_unavailability_creates_rows_for_date_range(
     rows = result.scalars().all()
     assert len(rows) == 3
     dates_in_db = {r.date for r in rows}
-    assert dates_in_db == {date(2026, 7, 1), date(2026, 7, 2), date(2026, 7, 3)}
+    assert dates_in_db == {d1, d1 + timedelta(days=1), d3}
 
 
 @pytest.mark.asyncio

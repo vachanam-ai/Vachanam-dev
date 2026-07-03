@@ -31,6 +31,86 @@ _SARVAM_URL = "https://api.sarvam.ai/transliterate"
 _LATIN = re.compile(r"[A-Za-z]")
 _cache: dict[tuple[str, str], str] = {}
 
+# Unicode block start -> Sarvam language code, for detecting the SOURCE script
+# of a stored name (clinic/patient names are stored in whatever script the
+# owner typed / STT produced). Marathi shares Devanagari with Hindi — hi-IN is
+# an acceptable source label for transliteration purposes.
+_BLOCKS: tuple[tuple[int, int, str], ...] = (
+    (0x0900, 0x097F, "hi-IN"),  # Devanagari (hi/mr)
+    (0x0980, 0x09FF, "bn-IN"),  # Bengali
+    (0x0B00, 0x0B7F, "od-IN"),  # Oriya
+    (0x0B80, 0x0BFF, "ta-IN"),  # Tamil
+    (0x0C00, 0x0C7F, "te-IN"),  # Telugu
+    (0x0C80, 0x0CFF, "kn-IN"),  # Kannada
+    (0x0D00, 0x0D7F, "ml-IN"),  # Malayalam
+)
+
+
+def _detect_script(text: str) -> str:
+    """Sarvam code of the first Indic letter found, else en-IN (Latin/other)."""
+    for ch in text:
+        o = ord(ch)
+        for lo, hi, code in _BLOCKS:
+            if lo <= o <= hi:
+                return code
+    return "en-IN"
+
+
+async def _sarvam_hop(text: str, src: str, tgt: str) -> str | None:
+    """One Sarvam transliteration hop, or None on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.post(
+                _SARVAM_URL,
+                headers={"api-subscription-key": settings.sarvam_api_key},
+                json={
+                    "input": text,
+                    "source_language_code": src,
+                    "target_language_code": tgt,
+                    "spoken_form": True,
+                },
+            )
+            resp.raise_for_status()
+            out = (resp.json().get("transliterated_text") or "").strip()
+            return out or None
+    except Exception as exc:  # noqa: BLE001 — RULE 8
+        logger.warning("transliterate_hop_failed", src=src, tgt=tgt, error=str(exc))
+        return None
+
+
+async def spoken_text(text: str | None, lang_code: str | None) -> str:
+    """Render a stored name (clinic/patient/doctor) in the CALL language's
+    script so the TTS pronounces it instead of mangling foreign glyphs.
+
+    Live bug (2026-07-03): the English agent greeted "I'm the AI assistant
+    from శ్రీ వెంకటేశ్వర" — the en TTS garbled the Telugu glyphs ("clinic name
+    spelled very wrongly"). Sarvam supports Latin<->Indic only, so Indic→Indic
+    goes via a Latin hop. Best-effort with cache; any failure returns the
+    original text (RULE 8)."""
+    text = (text or "").strip()
+    if not text:
+        return text
+    lang = get_lang(lang_code)
+    src = _detect_script(text)
+    tgt = lang.stt_code if lang.code != "or" else "od-IN"
+    if src == tgt or (src == "hi-IN" and tgt == "mr-IN"):
+        return text  # already in the call's script (mr shares Devanagari)
+
+    key = (text, f"{src}>{tgt}")
+    if key in _cache:
+        return _cache[key]
+
+    if src == "en-IN" or tgt == "en-IN":
+        out = await _sarvam_hop(text, src, tgt)
+    else:
+        # Indic -> Indic: Sarvam refuses direct, hop through Latin.
+        latin = await _sarvam_hop(text, src, "en-IN")
+        out = await _sarvam_hop(latin, "en-IN", tgt) if latin else None
+
+    result = out or text
+    _cache[key] = result
+    return result
+
 
 async def spoken_name(name: str | None, lang_code: str | None) -> str:
     """Return ``name`` rendered in the call language's script for TTS.
