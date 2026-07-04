@@ -62,7 +62,10 @@ def check_availability(doctor_id: str, booking_date: str,
 
 def assign_token(doctor_id: str, booking_date: str, appointment_time: str = "") -> dict:
     """Hold a slot before confirming."""
-    return {"success": True, "token_number": 4,
+    # Both sim doctors are booking_type=appointment → announce time_only, never
+    # a token number (prod contract; sim previously omitted this and misled the
+    # model into speaking "token number 4" for a schedule doctor).
+    return {"success": True, "announce": "time_only",
             "appointment_time": appointment_time or "16:30"}
 
 
@@ -72,8 +75,9 @@ def confirm_booking(doctor_id: str, patient_name: str, complaint: str,
                     patient_age: int = 0, patient_gender: str = "",
                     different_person: bool = False) -> dict:
     """Finalize the booking after explicit confirmation."""
-    return {"success": True, "token_id": "tok-123", "token_number": 4,
-            "instruction": "Booked. Confirm date+time once, then stop."}
+    return {"success": True, "token_id": "tok-123", "announce": "time_only",
+            "instruction": ("Booked. Appointment doctor — confirm date+time once, "
+                            "NEVER say a token/queue number. Then stop.")}
 
 
 def find_my_bookings() -> dict:
@@ -86,6 +90,7 @@ def find_my_bookings() -> dict:
 def reschedule_booking(old_token_id: str, new_date: str, new_time: str = "") -> dict:
     """Atomically move a booking."""
     return {"success": True, "new_date": new_date, "new_time": new_time or "16:30",
+            "announce": "time_only",
             "instruction": "The reschedule SUCCEEDED. Tell the caller it is done."}
 
 

@@ -67,8 +67,10 @@ LINES: dict[str, Lines] = {
         # The welcome clip already said "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం" — so
         # this does NOT repeat namaskaram/clinic; it discloses the AI (legal) and
         # goes straight to "how can I help". Minimal అండి (Vinay 2026-06-24).
+        # Trimmed 2026-07-04 (Vinay: persona-sim R1 "greeting a bit long") — same
+        # Vinay-validated words minus the redundant "మీకు నేను"; disclosure intact.
         disclosure_greeting=(
-            "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని, చెప్పండి, మీకు నేను ఎలా సహాయం చేయగలను?"
+            "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని. చెప్పండి, ఎలా సహాయం చేయగలను?"
         ),
         # Leading namaskaram dropped from these three OUTBOUND bodies — the welcome
         # clip already said "నమస్కారం, {clinic} క్లినిక్‌కి స్వాగతం" (Vinay 2026-06-24:
