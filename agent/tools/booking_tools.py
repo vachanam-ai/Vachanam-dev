@@ -1153,6 +1153,80 @@ async def find_bookings_by_phone(
     ]
 
 
+async def queue_position_by_phone(
+    branch_id: UUID, phone: str | None, db: AsyncSession
+) -> dict:
+    """Live queue position for the caller's TODAY token-queue bookings.
+
+    Token doctors only — a slot doctor's booking has a clock time, there is no
+    queue to report. "Now serving" is DERIVED, not stored: the highest
+    token_number the receptionist has marked attended today. Position = count
+    of still-confirmed tokens with a lower number (attended are already in,
+    no_shows are skipped by the queue), so it needs no new state and no staff
+    behaviour change. RULE 1: every query branch-scoped.
+    """
+    digits = _phone_digits(phone)
+    if len(digits) < 10:
+        return {"found": False, "reason": "caller number unknown"}
+    last10 = digits[-10:]
+    today_local = (await _branch_now(branch_id, db)).date()
+
+    rows = (
+        await db.execute(
+            select(Token, Doctor, Patient)
+            .join(Doctor, Token.doctor_id == Doctor.id)
+            .join(Patient, Token.patient_id == Patient.id)
+            .where(
+                and_(
+                    Token.branch_id == branch_id,  # RULE 1
+                    Patient.phone.like(f"%{last10}"),
+                    Token.date == today_local,
+                    Token.status == "confirmed",
+                    Doctor.booking_type == "token",
+                    Token.token_number.is_not(None),
+                )
+            )
+            .order_by(Token.token_number)
+        )
+    ).all()
+    if not rows:
+        return {"found": False, "reason": "no token-queue booking today"}
+
+    entries = []
+    for t, d, p in rows:
+        now_serving = (
+            await db.execute(
+                select(func.max(Token.token_number)).where(
+                    Token.branch_id == branch_id,
+                    Token.doctor_id == d.id,
+                    Token.date == today_local,
+                    Token.status == "attended",
+                )
+            )
+        ).scalar_one_or_none()
+        ahead = (
+            await db.execute(
+                select(func.count()).select_from(Token).where(
+                    Token.branch_id == branch_id,
+                    Token.doctor_id == d.id,
+                    Token.date == today_local,
+                    Token.status == "confirmed",
+                    Token.token_number < t.token_number,
+                )
+            )
+        ).scalar_one()
+        entries.append(
+            {
+                "patient_name": p.name,
+                "doctor": d.name,
+                "token_number": t.token_number,
+                "now_serving": now_serving,  # None → queue not started yet
+                "patients_ahead": ahead,
+            }
+        )
+    return {"found": True, "queue": entries}
+
+
 async def recognize_caller_name(
     branch_id: UUID, phone: str | None, db: AsyncSession
 ) -> str | None:

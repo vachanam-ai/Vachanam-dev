@@ -86,6 +86,7 @@ from agent.tools.booking_tools import (  # noqa: E402
     confirm_booking,
     find_bookings_by_phone,
     get_preferred_language,
+    queue_position_by_phone,
     recognize_caller_name,
     route_to_doctor,
     set_preferred_language,
@@ -1280,6 +1281,26 @@ class VachanamAgent(Agent):
                 for t, d, p in rows
             ]
         }
+
+    @function_tool()
+    async def get_queue_status(self, context: RunContext) -> dict:
+        """Live queue position for the caller's TODAY token-queue booking.
+        Use when the caller asks when their turn comes, which token is
+        running now, or how many people are ahead ("నా టోకెన్ ఎప్పుడు?",
+        "ఎన్నో నంబర్ నడుస్తోంది?"). Matches the number they are calling from.
+        Token-queue doctors only — for a slot-doctor booking just restate
+        their appointment time from find_my_bookings instead."""
+        result = await queue_position_by_phone(
+            self._state.branch_id, self._state.patient_phone, self._db
+        )
+        if result.get("found"):
+            result["instruction"] = (
+                "Tell them which token is running now and how many people are "
+                "ahead of theirs. now_serving null means the queue has not "
+                "started yet — say so. NEVER promise minutes or an exact time; "
+                "speak only in token positions."
+            )
+        return result
 
     @function_tool()
     async def log_clinic_question(self, context: RunContext, question: str) -> dict:

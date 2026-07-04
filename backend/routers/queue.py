@@ -323,6 +323,81 @@ async def _update_status(
     return StatusResponse(status=new_status, token_id=token_id)
 
 
+# ── Waiting-room TV display (PUBLIC — deliberately no JWT) ───────────────────
+# Shows ONLY doctor names + now-serving token + waiting count for TOKEN doctors.
+# Zero patient PII (no names, no phones), so exposure of the branch UUID leaks
+# nothing DPDP-protected. "Now serving" is derived from the receptionist's
+# attendance marks — no new state.
+
+
+class DisplayDoctor(BaseModel):
+    doctor_name: str
+    now_serving: int | None  # None → queue not started yet
+    waiting: int
+
+
+class DisplayResponse(BaseModel):
+    clinic_name: str
+    date: str
+    doctors: list[DisplayDoctor]
+
+
+@router.get(
+    "/{branch_id}/display",
+    response_model=DisplayResponse,
+    dependencies=[Depends(queue_today_limit)],
+)
+async def queue_display(
+    branch_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> DisplayResponse:
+    """Public queue board for the waiting-room TV (token doctors only)."""
+    try:
+        branch_uuid = uuid.UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid branch_id format")
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == branch_uuid))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    today = await _branch_today(branch_uuid, db)
+    rows = (
+        await db.execute(
+            select(Doctor.name, Token.token_number, Token.status)
+            .join(Doctor, Token.doctor_id == Doctor.id)
+            .where(
+                Token.branch_id == branch_uuid,  # MANDATORY — final tripwire
+                Token.date == today,
+                Doctor.booking_type == "token",
+                Token.token_number.is_not(None),
+                Token.status.in_(["confirmed", "attended"]),
+            )
+            .order_by(Doctor.name, Token.token_number)
+        )
+    ).all()
+
+    boards: dict[str, DisplayDoctor] = {}
+    for doctor_name, token_number, status in rows:
+        board = boards.setdefault(
+            doctor_name,
+            DisplayDoctor(doctor_name=doctor_name, now_serving=None, waiting=0),
+        )
+        if status == "attended":
+            board.now_serving = max(board.now_serving or 0, token_number)
+        else:
+            board.waiting += 1
+
+    return DisplayResponse(
+        clinic_name=branch.name,
+        date=str(today),
+        doctors=list(boards.values()),
+    )
+
+
 # ── Walk-in registration (receptionist desk) ─────────────────────────────────
 
 

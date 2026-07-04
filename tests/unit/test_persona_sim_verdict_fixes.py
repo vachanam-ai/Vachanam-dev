@@ -118,6 +118,15 @@ def test_te_greeting_trimmed_disclosure_intact():
     assert g in _prompt()
 
 
+def test_queue_status_prompt_block():
+    """Gap B (2026-07-04): caller asks "నా టోకెన్ ఎప్పుడు?" → get_queue_status,
+    answer in token positions only — never promise minutes."""
+    p = _prompt()
+    assert "QUEUE STATUS" in p
+    assert "get_queue_status" in p
+    assert "NEVER promise minutes" in p
+
+
 def test_sim_fake_tools_carry_announce_contract():
     """Sim harness misled the model: fake confirm_booking returned
     token_number 4 with no announce field, so the agent spoke a token number
