@@ -344,28 +344,45 @@ async def test_user_a_exhausting_quota_does_not_affect_user_b(client, redis):
     Spec §6.2 + §6.3 — /queue/{branch}/today is 60/min per user.
     The two users share an IP but their counters are independent because the
     key_func returns `user:<sub>` when JWT is present.
+
+    FIXLOG #260: the 60-request burn phase calls the limiter dependency
+    DIRECTLY (same key-derivation path — the JWT rides the Request headers).
+    The old version drove 61 full HTTP requests, which took >60s on slower
+    machines, so the sliding window expired mid-test and the 61st request
+    legitimately passed — a timing flake, not a limiter bug. The 61st call
+    and user B still go through real HTTP.
     """
+    from starlette.requests import Request as _StarReq
+
+    from backend.middleware.rate_limit import queue_today_limit
+
     user_a_id = str(uuid.uuid4())
     user_b_id = str(uuid.uuid4())
     shared_branch = str(uuid.uuid4())
     jwt_a = _make_jwt(user_id=user_a_id, branch_ids=[shared_branch])
     jwt_b = _make_jwt(user_id=user_b_id, branch_ids=[shared_branch])
 
-    # User A: hit the queue endpoint 61 times (limit is 60/min per user)
-    # Note: each request will likely return 4xx because the branch doesn't exist
-    # in the DB for this test. The point is the LIMITER counts the 61st.
-    a_statuses = []
-    for _ in range(61):
-        r = await client.get(
-            f"/queue/{shared_branch}/today",
-            headers={"Authorization": f"Bearer {jwt_a}"},
-        )
-        a_statuses.append(r.status_code)
+    def _dep_request(token: str) -> _StarReq:
+        return _StarReq({
+            "type": "http", "method": "GET",
+            "path": f"/queue/{shared_branch}/today",
+            "headers": [(b"authorization", f"Bearer {token}".encode())],
+            "client": ("testclient", 123), "query_string": b"",
+            "scheme": "http", "server": ("testserver", 80),
+        })
 
-    assert a_statuses[60] == 429, (
-        f"User A's 61st request must be 429 (got {a_statuses[60]}). "
-        f"Per-user /queue rate limit is not 60/min or not user-keyed. "
-        f"First 5 statuses: {a_statuses[:5]}, last 5: {a_statuses[-5:]}"
+    # User A: consume the full 60/min quota in milliseconds (no window slide).
+    for _ in range(60):
+        await queue_today_limit(_dep_request(jwt_a), None)
+
+    # 61st request over REAL HTTP must be throttled.
+    r_a = await client.get(
+        f"/queue/{shared_branch}/today",
+        headers={"Authorization": f"Bearer {jwt_a}"},
+    )
+    assert r_a.status_code == 429, (
+        f"User A's 61st request must be 429 (got {r_a.status_code}). "
+        f"Per-user /queue rate limit is not 60/min or not user-keyed."
     )
 
     # User B: single request from SAME IP — must NOT be 429
