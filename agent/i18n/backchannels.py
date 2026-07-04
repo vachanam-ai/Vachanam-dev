@@ -23,8 +23,9 @@ _TOKENS: frozenset[str] = frozenset({
     "ok", "okay", "kay", "hmm", "hmmm", "hm", "mm", "mmm", "mhm", "mmhm",
     "uh", "huh", "uhhuh", "aha", "ah", "aah", "oh", "ohh", "oho", "um",
     "right", "haan", "han", "ha", "haa", "aa", "acha", "accha", "achha",
+    "alage", "alagey",
     # Telugu
-    "ఓకే", "ఆ", "ఆఁ", "ఊ", "హా", "హ్మ్", "అచ్చా", "ఓహో", "హు",
+    "ఓకే", "ఆ", "ఆఁ", "ఊ", "హా", "హ్మ్", "అచ్చా", "ఓహో", "హు", "అలాగే",
     # Hindi / Marathi (Devanagari)
     "हाँ", "हां", "हा", "हम्म", "हम्", "अच्छा", "अच्छ", "ओके", "ओह", "अहा",
     # Tamil

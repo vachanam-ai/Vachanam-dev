@@ -112,3 +112,11 @@ async def test_stt_node_drops_backchannels_only_while_speaking(monkeypatch):
     )
     got = [e async for e in a.stt_node(None, None)]
     assert len(got) == 4
+
+
+def test_alagey_is_backchannel_mid_speech_but_consent_when_silent():
+    """Vinay 2026-07-04: 'okay/aha/alagey' mid-dictation must not interrupt;
+    the SAME word after a completed question is consent and must pass."""
+    for t in ("అలాగే", "alagey", "okay"):
+        assert suppress_backchannel(t, agent_speaking=True), t
+        assert not suppress_backchannel(t, agent_speaking=False), t
