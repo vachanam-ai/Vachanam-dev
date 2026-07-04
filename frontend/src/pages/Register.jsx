@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { requestOtp } from "../api/client.js";
+import { requestOtp, setTurnstileToken } from "../api/client.js";
+import Turnstile, { resetTurnstile } from "../components/Turnstile.jsx";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
@@ -129,6 +130,7 @@ export default function Register() {
       }
     } catch (e) {
       toast.error(e?.response?.data?.detail ?? "Could not send code");
+      resetTurnstile(); // tokens are single-use — re-solve for the next try
     } finally {
       setBusy(false);
     }
@@ -154,6 +156,7 @@ export default function Register() {
       navigate(roleHome(me.role), { replace: true });
     } catch (err) {
       toast.error(err?.response?.data?.detail ?? "Registration failed");
+      resetTurnstile();
     } finally {
       setBusy(false);
     }
@@ -224,6 +227,7 @@ export default function Register() {
                 ))}
               </div>
             </div>
+            <Turnstile onToken={setTurnstileToken} />
             <button className="btn-primary w-full py-3" disabled={busy}>
               {busy ? "Sending code…" : "Create account"}
             </button>
@@ -256,6 +260,7 @@ export default function Register() {
                 maxLength={6} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
                 placeholder="······" />
             </Field>
+            <Turnstile onToken={setTurnstileToken} />
             <button className="btn-primary w-full py-3" disabled={busy}>
               {busy ? "Creating clinic…" : "Create clinic & start trial"}
             </button>

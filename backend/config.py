@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # token (bounce F7). Was 24h (config drift). Override via env if needed.
     jwt_expire_hours: int = 8
 
+    # Cloudflare Turnstile (bot protection on public auth endpoints).
+    # Empty = feature OFF (dev/tests); set the secret in prod to enforce.
+    turnstile_secret_key: str = ""
+
     # Payment
     razorpay_key_id: str = ""
     razorpay_key_secret: str = ""

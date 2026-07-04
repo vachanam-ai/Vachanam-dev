@@ -3,7 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
-import { forgotPassword, resetPassword } from "../api/client.js";
+import { forgotPassword, resetPassword, setTurnstileToken } from "../api/client.js";
+import Turnstile, { resetTurnstile } from "../components/Turnstile.jsx";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
@@ -72,6 +73,7 @@ export default function Login() {
       navigate(roleHome(me.role), { replace: true });
     } catch (err) {
       toast.error(err?.response?.data?.detail ?? "Invalid email or password");
+      resetTurnstile(); // tokens are single-use — re-solve for the next try
     } finally {
       setBusy(false);
     }
@@ -89,6 +91,7 @@ export default function Login() {
       toast.success("If that account exists, we emailed a reset code");
     } catch {
       toast.error("Could not send the reset code — try again");
+      resetTurnstile();
     } finally {
       setFpBusy(false);
     }
@@ -167,6 +170,7 @@ export default function Login() {
                 <input className="field" type="password" value={password} required
                   onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
               </div>
+              <Turnstile onToken={setTurnstileToken} />
               <button className="btn-primary w-full py-3" disabled={busy}>
                 {busy ? "Signing in…" : "Sign in"}
               </button>
@@ -194,6 +198,7 @@ export default function Login() {
                   </div>
                 </>
               )}
+              {fpStage === "request" && <Turnstile onToken={setTurnstileToken} />}
               <button className="btn-primary w-full py-3" disabled={fpBusy}>
                 {fpBusy
                   ? "Working…"

@@ -14,9 +14,20 @@ export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 export const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
+// Cloudflare Turnstile token (bot protection). Pages set it via the widget;
+// the interceptor attaches it only on the four protected auth endpoints.
+let turnstileToken = "";
+export const setTurnstileToken = (t) => { turnstileToken = t || ""; };
+const TURNSTILE_PATHS = new Set([
+  "/auth/login", "/auth/register", "/auth/request-otp", "/auth/forgot-password",
+]);
+
 api.interceptors.request.use((config) => {
   const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (turnstileToken && TURNSTILE_PATHS.has(config.url)) {
+    config.headers["X-Turnstile-Token"] = turnstileToken;
+  }
   return config;
 });
 

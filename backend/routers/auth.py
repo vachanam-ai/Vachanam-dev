@@ -37,6 +37,7 @@ from backend.middleware.rate_limit import (
     record_failed_login,
 )
 from backend.models.schema import User
+from backend.services.turnstile import require_turnstile
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -258,7 +259,7 @@ def _verify_password(password: str, password_hash: str) -> bool:
     "/register",
     response_model=TokenResponse,
     status_code=201,
-    dependencies=[Depends(auth_google_limit)],
+    dependencies=[Depends(auth_google_limit), Depends(require_turnstile)],
 )
 async def register_clinic(request: Request, body: RegisterRequest) -> TokenResponse:
     """Self-serve clinic signup: creates Organization (14-day trial) + Branch +
@@ -415,7 +416,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
 @router.post(
     "/login",
     response_model=TokenResponse,
-    dependencies=[Depends(auth_google_limit)],
+    dependencies=[Depends(auth_google_limit), Depends(require_turnstile)],
 )
 async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
     """Email + password sign-in. Same blocklist + failed-login accounting as
@@ -461,7 +462,7 @@ async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
 @router.post(
     "/request-otp",
     response_model=OtpResponse,
-    dependencies=[Depends(auth_google_limit)],
+    dependencies=[Depends(auth_google_limit), Depends(require_turnstile)],
 )
 async def request_otp(request: Request, body: OtpRequest) -> OtpResponse:
     """Issue OTP codes to phone and/or email for signup verification.
@@ -521,7 +522,7 @@ class ResetPasswordRequest(BaseModel):
 @router.post(
     "/forgot-password",
     response_model=OtpResponse,
-    dependencies=[Depends(auth_google_limit)],
+    dependencies=[Depends(auth_google_limit), Depends(require_turnstile)],
 )
 async def forgot_password(request: Request, body: ForgotPasswordRequest) -> OtpResponse:
     """Email a password-reset code. ALWAYS returns the same shape regardless of
