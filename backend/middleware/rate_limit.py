@@ -279,7 +279,7 @@ def _make_limiter(times: int, seconds: int) -> Limiter:
 # plain functions. When a class __call__ is used, FastAPI >= 0.110 treats
 # unknown parameters as query/body parameters → 422 validation errors.
 
-def _make_endpoint_limiter(times: int, seconds: int):
+def _make_endpoint_limiter(times: int, seconds: int, name: str = ""):
     """Return a FastAPI dependency function that rate-limits by user or IP.
 
     Each call to this factory creates an independent Limiter with its own
@@ -287,6 +287,12 @@ def _make_endpoint_limiter(times: int, seconds: int):
     the module-level Redis client is replaced (e.g., between pytest tests
     that each get a fresh event loop) so stale Redis references never linger
     in the bucket cache.
+
+    ``name`` namespaces the Redis bucket (``rl:<name>:<user-or-ip>``). Without
+    it every limiter sharing a key writes ONE ZSET per client — an
+    unauthenticated 24/7 poller (the /queue display TV, IP-keyed) would fill
+    ``rl:ip:<clinic-ip>`` and 429 every login from the same clinic WiFi
+    (auth is IP-keyed too at login time, with a far smaller limit).
     """
     _limiter: Limiter | None = None
     _limiter_redis_id: int | None = None  # id() of the Redis client at build time
@@ -319,6 +325,8 @@ def _make_endpoint_limiter(times: int, seconds: int):
                 return  # trusted IP — no counting
 
         key = await user_or_ip_key(request)
+        if name:
+            key = f"{name}:{key}"
         try:
             limiter = await _get_limiter()
             ok = await limiter.try_acquire_async(key, blocking=False)
@@ -354,14 +362,14 @@ def _make_endpoint_limiter(times: int, seconds: int):
 # Test ``test_rate_limit_module_exists_with_per_endpoint_limits`` asserts
 # these exact names exist on this module.
 
-auth_google_limit = _make_endpoint_limiter(times=5, seconds=60)
-create_order_limit = _make_endpoint_limiter(times=10, seconds=60)
-verify_payment_limit = _make_endpoint_limiter(times=30, seconds=60)
-whatsapp_webhook_limit = _make_endpoint_limiter(times=1000, seconds=60)
-razorpay_webhook_limit = _make_endpoint_limiter(times=100, seconds=60)
-queue_today_limit = _make_endpoint_limiter(times=60, seconds=60)
-admin_limit = _make_endpoint_limiter(times=30, seconds=60)
-default_limit = _make_endpoint_limiter(times=100, seconds=60)
+auth_google_limit = _make_endpoint_limiter(times=5, seconds=60, name="auth")
+create_order_limit = _make_endpoint_limiter(times=10, seconds=60, name="order")
+verify_payment_limit = _make_endpoint_limiter(times=30, seconds=60, name="verifypay")
+whatsapp_webhook_limit = _make_endpoint_limiter(times=1000, seconds=60, name="wawh")
+razorpay_webhook_limit = _make_endpoint_limiter(times=100, seconds=60, name="rzpwh")
+queue_today_limit = _make_endpoint_limiter(times=60, seconds=60, name="queue")
+admin_limit = _make_endpoint_limiter(times=30, seconds=60, name="admin")
+default_limit = _make_endpoint_limiter(times=100, seconds=60, name="default")
 
 
 # ── IP blocklist helpers (spec §5.6) ─────────────────────────────────────
