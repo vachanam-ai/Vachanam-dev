@@ -114,7 +114,7 @@ def test_te_greeting_trimmed_disclosure_intact():
     """R1 "greeting a bit long": drop the redundant మీకు నేను; AI disclosure
     (DPDP s.5) stays. Prompt STEP-0 quote stays in sync with lines.py."""
     g = get_lines("te").disclosure_greeting
-    assert g == "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని. చెప్పండి, ఎలా సహాయం చేయగలను?"
+    assert g == "నేను ఈ క్లినిక్ ఏఐ అసిస్టెంట్‌ని. చెప్పండి, మీకు ఎలా సహాయం చేయగలను?"
     assert g in _prompt()
 
 
