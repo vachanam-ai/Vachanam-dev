@@ -41,3 +41,17 @@ def test_reminder_extra_gates_cancel_claims_on_tool_success():
     assert "cancel_booking" in t
     assert "success=true" in t
     assert "NEVER claim a cancellation" in t
+
+
+def test_receptionist_playbook_block_present():
+    """2026-07-04 receptionist-role pass (docs/research/receptionist-rules-te.md
+    R6/R8 + role research): booking close-with-what-next, messy openings
+    (noise / silent caller / wrong number), and message-taking discipline."""
+    p = _prompt()
+    assert "RECEPTIONIST PLAYBOOK" in p
+    assert "CLOSE WITH WHAT-NEXT" in p
+    assert "SILENT CALLER" in p
+    assert "BACKGROUND NOISE" in p
+    assert "WRONG NUMBER" in p
+    assert "MESSAGE FOR THE DOCTOR/CLINIC" in p
+    assert "log_clinic_question" in p
