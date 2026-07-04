@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
+import { setTurnstileResetter, setTurnstileToken } from "../api/client.js";
 
-export const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
+export const TURNSTILE_ON = Boolean(import.meta.env.VITE_TURNSTILE_SITE_KEY);
+const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
 
 let scriptPromise = null;
 function loadScript() {
@@ -21,8 +23,12 @@ function loadScript() {
 /**
  * Cloudflare Turnstile widget. Renders nothing when VITE_TURNSTILE_SITE_KEY
  * is unset (dev / feature off — backend skips verification too).
- * onToken(token) fires on solve and onToken("") on expiry, so the caller
- * always holds a current token to send as X-Turnstile-Token.
+ *
+ * Token lifecycle lives in api/client.js: this component feeds every fresh
+ * token in via setTurnstileToken and registers a resetter; the axios
+ * interceptor consumes the token on use and resets THIS widget (by id) so
+ * the next submit always carries a fresh solve. `onToken` (optional) lets a
+ * page disable its submit button until a token exists.
  */
 export default function Turnstile({ onToken }) {
   const ref = useRef(null);
@@ -31,19 +37,30 @@ export default function Turnstile({ onToken }) {
   cb.current = onToken;
 
   useEffect(() => {
-    if (!TURNSTILE_SITE_KEY) return;
+    if (!TURNSTILE_ON) return;
     let cancelled = false;
+    const emit = (t) => {
+      setTurnstileToken(t);
+      cb.current?.(t);
+    };
     loadScript().then(() => {
       if (cancelled || !ref.current || widgetId.current !== null) return;
       widgetId.current = window.turnstile.render(ref.current, {
-        sitekey: TURNSTILE_SITE_KEY,
-        callback: (t) => cb.current(t),
-        "expired-callback": () => cb.current(""),
-        "error-callback": () => cb.current(""),
+        sitekey: SITE_KEY,
+        callback: emit,
+        "expired-callback": () => emit(""),
+        "error-callback": () => emit(""),
+      });
+      // interceptor resets THIS widget after consuming its token
+      setTurnstileResetter(() => {
+        emit("");
+        window.turnstile.reset(widgetId.current);
       });
     }).catch(() => {}); // script blocked → backend fail-open policy decides
     return () => {
       cancelled = true;
+      setTurnstileResetter(null);
+      emit("");
       if (widgetId.current !== null && window.turnstile) {
         try { window.turnstile.remove(widgetId.current); } catch { /* gone */ }
         widgetId.current = null;
@@ -51,13 +68,6 @@ export default function Turnstile({ onToken }) {
     };
   }, []);
 
-  if (!TURNSTILE_SITE_KEY) return null;
+  if (!TURNSTILE_ON) return null;
   return <div ref={ref} className="my-3" />;
-}
-
-/** Reset the (single) widget after a failed submit — tokens are single-use. */
-export function resetTurnstile() {
-  if (TURNSTILE_SITE_KEY && window.turnstile) {
-    try { window.turnstile.reset(); } catch { /* not rendered */ }
-  }
 }

@@ -34,12 +34,15 @@ async def verify_turnstile(token: str | None, ip: str | None) -> bool:
                 _SITEVERIFY,
                 data={"secret": secret, "response": token, "remoteip": ip or ""},
             )
-            ok = bool(resp.json().get("success"))
+            body = resp.json()
+            ok = bool(body.get("success"))
     except Exception as exc:  # noqa: BLE001 — Cloudflare outage must not kill login
         logger.error("turnstile_verify_unavailable", error=str(exc))
         return True  # fail OPEN (RULE 8)
     if not ok:
-        logger.warning("turnstile_rejected", ip=ip)
+        # error-codes tells reused token ("timeout-or-duplicate") apart from a
+        # bot verdict or a key mismatch — essential for prod debugging.
+        logger.warning("turnstile_rejected", ip=ip, codes=body.get("error-codes"))
     return ok
 
 

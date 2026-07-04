@@ -16,8 +16,13 @@ export const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
 // Cloudflare Turnstile token (bot protection). Pages set it via the widget;
 // the interceptor attaches it only on the four protected auth endpoints.
+// Tokens are SINGLE-USE: once attached, the token is cleared and the widget
+// reset here — pages never manage token lifecycle themselves. (Reusing a
+// token gets Cloudflare's "timeout-or-duplicate" rejection → 403.)
 let turnstileToken = "";
+let turnstileReset = null;
 export const setTurnstileToken = (t) => { turnstileToken = t || ""; };
+export const setTurnstileResetter = (fn) => { turnstileReset = fn; };
 const TURNSTILE_PATHS = new Set([
   "/auth/login", "/auth/register", "/auth/request-otp", "/auth/forgot-password",
 ]);
@@ -27,6 +32,8 @@ api.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   if (turnstileToken && TURNSTILE_PATHS.has(config.url)) {
     config.headers["X-Turnstile-Token"] = turnstileToken;
+    turnstileToken = ""; // consumed — a second submit needs a fresh solve
+    try { turnstileReset?.(); } catch { /* widget unmounted */ }
   }
   return config;
 });
