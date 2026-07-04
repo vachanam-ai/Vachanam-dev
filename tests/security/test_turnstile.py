@@ -87,6 +87,29 @@ async def test_cloudflare_outage_fails_open(monkeypatch):
     await ts.require_turnstile(_req({"X-Turnstile-Token": "any"}))
 
 
+async def test_cors_preflight_allows_turnstile_header(redis):
+    """FIXLOG #263: X-Turnstile-Token missing from CORS allow_headers made the
+    browser preflight reject EVERY gated auth call from the real frontend —
+    widget said Success!, request never left the browser."""
+    import httpx as _httpx
+
+    from backend.main import app
+
+    transport = _httpx.ASGITransport(app=app, client=("testclient", 123))
+    async with _httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+        r = await ac.options(
+            "/auth/login",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,x-turnstile-token",
+            },
+        )
+    assert r.status_code == 200, r.text
+    allowed = r.headers.get("access-control-allow-headers", "").lower()
+    assert "x-turnstile-token" in allowed
+
+
 async def test_login_endpoint_gated_end_to_end(monkeypatch, redis):
     """Enforced + no token → /auth/login 403 before any credential check."""
     import httpx as _httpx
