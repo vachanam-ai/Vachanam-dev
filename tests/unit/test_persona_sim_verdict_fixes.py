@@ -77,11 +77,14 @@ def test_age_question_is_short():
     assert 'simply "వయసు ఎంతండి?"' in p
 
 
-def test_phone_confirm_confusion_gets_detailed_rephrase():
-    """Caller confused by the number-confirm question gets the full-detail
-    version (booking + reminder calls go to this number) once."""
+def test_phone_confirm_folded_into_single_readback():
+    """SUPERSEDED by FIXLOG #271: the standalone number-confirm question (and
+    its confused-caller rephrase) is gone — the question itself was the
+    confusion. The number now rides the single step-6 readback ("ఇదే నంబర్‌కి")
+    where the caller can still object."""
     p = _prompt()
-    assert "రిమైండర్ కాల్స్ కూడా ఆ నంబర్‌కే వస్తాయి" in p
+    assert "ఇదే నంబర్‌కి" in p
+    assert "THE ONE CONFIRMATION" in p
 
 
 def test_message_leaver_insistence_routes_to_human_transfer():

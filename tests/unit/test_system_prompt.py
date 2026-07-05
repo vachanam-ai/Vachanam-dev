@@ -165,6 +165,25 @@ def test_system_prompt_has_availability_grounding_and_name_readback():
     assert "DETAILS CONFIRM" in prompt
 
 
+def test_system_prompt_single_confirmation_no_stacked_yes_questions():
+    """FIXLOG #271 (live call 2026-07-05: agent asked 3 yes-questions before one
+    booking, and re-asked 'shall I go ahead?' after the caller already said yes
+    to a reschedule). Exactly ONE confirmation question per booking; reschedule
+    never re-asks after a yes."""
+    prompt = _make_prompt()
+    assert "THE ONE CONFIRMATION" in prompt
+    # The standalone details/phone confirm questions are explicitly banned
+    # (the phrases still appear once — as quoted don't-say examples).
+    assert 'Do NOT ask "ఈ డిటైల్స్ కన్ఫర్మ్ చేయమంటారా?"' in prompt
+    assert "stacking confirmation questions" in prompt
+    # Readback carries the number implicitly so the caller can object.
+    assert "ఇదే నంబర్‌కి" in prompt
+    # Reschedule: one yes-question max, no post-availability re-ask.
+    assert "ONE yes-question maximum" in prompt
+    # Post-success close repeats no numbers (time was in the readback).
+    assert "NO numbers" in prompt
+
+
 def test_system_prompt_contains_greeting_with_ai_disclosure():
     """STEP 0 embeds the spoken greeting; the AI self-identification is the DPDP
     s.5 disclosure that must always be in it. (2026-06-25: disclosure now in Telugu

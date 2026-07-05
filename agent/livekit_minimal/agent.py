@@ -544,6 +544,41 @@ async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
 
 
 
+# Unicode block → smallest.ai language code. Guards the synth boundary: if the
+# LLM drifts and emits text in a script that doesn't match the session's TTS
+# language (live call 2026-07-05: Telugu reply after an English switch), smallest
+# reads the script under the wrong language model and the caller hears garbled
+# "wrong-language" audio. Speaking the DETECTED script's language is always the
+# lesser evil (RULE 8). Latin text carries no signal (te calls are code-mixed) —
+# keep the configured language.
+_SCRIPT_LANGS = (
+    ((0x0C00, 0x0C7F), "te"),
+    ((0x0900, 0x097F), "hi"),   # Devanagari — hi unless the call is already mr
+    ((0x0B80, 0x0BFF), "ta"),
+    ((0x0C80, 0x0CFF), "kn"),
+    ((0x0D00, 0x0D7F), "ml"),
+    ((0x0980, 0x09FF), "bn"),
+    ((0x0B00, 0x0B7F), "or"),
+)
+
+
+def _detect_script_lang(text: str, configured: str) -> str:
+    """Language whose script dominates `text`, else `configured`."""
+    counts: dict[str, int] = {}
+    for ch in text:
+        cp = ord(ch)
+        for (lo, hi), lang in _SCRIPT_LANGS:
+            if lo <= cp <= hi:
+                counts[lang] = counts.get(lang, 0) + 1
+                break
+    if not counts:
+        return configured
+    best = max(counts, key=counts.get)  # type: ignore[arg-type]
+    if best == "hi" and configured == "mr":
+        return "mr"  # Devanagari is shared; trust the session's choice
+    return best
+
+
 class _RawRestChunked(lk_tts.ChunkedStream):
     """Synthesize ONE utterance via the RAW smallest.ai REST /tts (WAV) and emit it
     as PCM frames — the exact path the welcome clip uses (reliable + correct speed).
@@ -561,11 +596,21 @@ class _RawRestChunked(lk_tts.ChunkedStream):
         from backend.services.welcome_synth import synth_wav
 
         opts = self._mytts._opts
+        # Script guard (FIXLOG #270): text in a different script than the session
+        # language must be synthesized AS its own language or it comes out as
+        # garbled foreign-sounding audio. ponytail: voice_id stays the session's
+        # voice — swapping to the matching-language clinic voice per utterance
+        # needs _voice_for_lang plumbing; add if accent complaints appear.
+        lang = _detect_script_lang(self._input_text, opts.language)
+        if lang != opts.language:
+            logger.warning(
+                "tts_script_lang_mismatch configured=%s detected=%s", opts.language, lang
+            )
         # speed 1.1: Vinay 2026-07-05 — wants the agent a touch quicker than
         # natural (smallest speed >1 = faster). Bump to 1.2 if still too slow;
         # drop to 1.0 if phone calls sound rushed.
         wav = await asyncio.to_thread(
-            synth_wav, self._input_text, opts.voice_id, opts.language, 1.1
+            synth_wav, self._input_text, opts.voice_id, lang, 1.1
         )
         wf = wave.open(io.BytesIO(wav), "rb")
         sr = wf.getframerate()
