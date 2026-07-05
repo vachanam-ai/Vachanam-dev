@@ -68,8 +68,17 @@ async def test_spoken_text_falls_back_to_original_on_failure(monkeypatch):
 
 
 def test_greetings_use_transliterated_clinic_and_caller():
-    """No greeting may feed the raw stored clinic/caller name to TTS."""
+    """No greeting may feed the raw stored clinic/caller name to TTS.
+
+    Greeting composition moved to greeting.py (FIXLOG #264): agent.py must hand
+    the greeting helpers ONLY the spoken (transliterated) forms, never the raw
+    stored names."""
     src = inspect.getsource(agent_mod)
     assert "clinic=branch_name" not in src
     assert "patient=caller_greeting_name" not in src
-    assert src.count("clinic=_spk_clinic") >= 7
+    # Every greeting-helper call site rides on the spoken forms.
+    assert src.count("_spk_clinic") >= 4
+    assert "inbound_greeting_texts(" in src and "outbound_greeting_texts(" in src
+    assert "spk_caller=_spk_caller" in src
+    # The raw names must not be format args anywhere in the module.
+    assert "clinic=branch.name" not in src

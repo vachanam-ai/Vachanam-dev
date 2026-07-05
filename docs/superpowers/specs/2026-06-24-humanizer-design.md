@@ -50,7 +50,7 @@ and from real conversations.
 
 ### C4 — De-identification gate (`backend/services/deidentify.py`, reuse retention logic)
 - `assert_deidentified(text)` raises if `text` contains a phone pattern, a likely
-  personal name, an age, or other quasi-identifier; strips/placeholders any that
+  personal name, an age, or other quasi-identifier; strips/placeholdersany that
   slip through. Hard precondition for every bank write. Tested with PII samples
   that MUST be rejected.
 

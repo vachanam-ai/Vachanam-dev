@@ -56,6 +56,7 @@ from livekit.agents import (  # noqa: E402
 from livekit.agents import llm as lk_llm  # noqa: E402
 from livekit.agents import stt as lk_stt  # noqa: E402
 from livekit.agents import tts as lk_tts  # noqa: E402
+from livekit.agents.llm import ChatContext  # noqa: E402
 from livekit.agents import utils as _lk_utils  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS as _DEFAULT_CONN  # noqa: E402
 from livekit.plugins import google, noise_cancellation, openai, sarvam, silero, smallestai  # noqa: E402
@@ -64,7 +65,7 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa
 import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
-from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack, get_welcome  # noqa: E402
+from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack  # noqa: E402
 from agent.i18n.backchannels import suppress_backchannel  # noqa: E402
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
@@ -76,8 +77,14 @@ from agent.prompts.system_prompt import (  # noqa: E402
 # booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
-from agent.services.telugu_dates import telugu_date, telugu_time  # noqa: E402
-from agent.livekit_minimal.welcome_audio import play_stored_welcome, play_welcome  # noqa: E402
+from agent.services.telugu_dates import telugu_date  # noqa: E402
+from agent.livekit_minimal.greeting import (  # noqa: E402
+    inbound_greeting_texts,
+    outbound_greeting_texts,
+    play_wavs,
+    synth_and_play,
+    synth_wavs,
+)
 from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
@@ -1861,6 +1868,62 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     _warm_task = asyncio.create_task(_warm_db_pool())
 
+    # OUTBOUND INSTANT OPENING (Vinay 2026-07-05: "the moment we trigger call,
+    # trigger all other process — by the time the caller lifts we're ready").
+    # Ring time is free compute: resolve branch + caller language and synthesize
+    # the FULL real greeting (reminder/rebook/follow-up, patient name, time, in
+    # the clinic's voice) WHILE the phone rings. The instant they answer, the
+    # pre-synthesized real opening plays (<0.5s) — no canned mask, no synth wait.
+    # RULE 8: any failure here just means the live session.say fallback speaks
+    # the same segments after connect.
+    _out_greet: dict = {}
+
+    async def _outbound_greet_prep() -> None:
+        try:
+            if not meta.get("branch_id"):
+                return
+            async with AsyncSessionLocal() as _gdb:
+                _gbr = (
+                    await _gdb.execute(
+                        select(Branch).where(Branch.id == UUID(meta["branch_id"]))
+                    )
+                ).scalars().first()
+                if _gbr is None:
+                    return
+                _glang = getattr(_gbr, "language", None) or "te"
+                try:
+                    _gpref = await get_preferred_language(_gbr.id, outbound_number, _gdb)
+                    if _gpref and _gpref in LANGUAGES:
+                        _glang = _gpref
+                except Exception:  # noqa: BLE001 — RULE 8
+                    pass
+            if is_followup and followup_meta.get("message"):
+                followup_meta["message"] = await _localize_message(
+                    followup_meta["message"], _glang
+                )
+                followup_meta["_localized"] = True  # skip the post-answer re-hop
+            _gclinic = (getattr(_gbr, "name_spoken", None) or "").strip() or _gbr.name
+            texts = outbound_greeting_texts(
+                _glang,
+                _gclinic,
+                await spoken_text(meta.get("patient_name", ""), _glang),
+                await spoken_text(meta.get("doctor_name", ""), _glang),
+                meta,
+                followup_meta,
+                is_reminder=is_reminder,
+                is_rebook=is_rebook_call,
+                is_followup=is_followup,
+            )
+            wavs = await synth_wavs(texts, _voice_for_lang(_gbr, _glang), _glang)
+            _out_greet.update(texts=texts, wavs=wavs, lang=_glang)
+            logger.info("outbound_greet_prep_ok segments=%d lang=%s", len(texts), _glang)
+        except Exception as _ge:  # noqa: BLE001 — RULE 8: fall back to live greeting
+            logger.warning("outbound_greet_prep_failed: %s", _ge)
+
+    _greet_prep_task = (
+        asyncio.create_task(_outbound_greet_prep()) if outbound_number else None
+    )
+
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
         try:
@@ -2027,7 +2090,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # A doctor may write the follow-up note in English; speak it in the call's
     # language (clear Telugu), not fast English over a Telugu TTS (Vinay 2026-06-25).
-    if is_followup and followup_meta.get("message"):
+    if (
+        is_followup
+        and followup_meta.get("message")
+        and not followup_meta.get("_localized")  # ring-time prep already did it
+    ):
         followup_meta["message"] = await _localize_message(
             followup_meta["message"], lang_code
         )
@@ -2184,55 +2251,138 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         tts_voice = _voice_for_lang(branch, lang_code)
         state.branch_id = branch_id
 
-        # INSTANT CLIP (kills the silence between answer and first word — see
-        # welcome_audio). A SHORT "namaskaram <clinic> clinic ki swagatham" bridge,
-        # synth'd + published into the room the moment the branch is resolved, run
-        # concurrently with the rest of setup, then awaited+unpublished right before
-        # the AgentSession is built. Deliberately SHORT (not the full greeting):
-        # the real greeting (reminder/rebook/disclosure) is still spoken AFTER
-        # session.start so STT is live and the patient can be heard when they reply.
-        # Applies to inbound AND outbound (outbound reminder/rebook had the worst
-        # post-answer silence). RULE 8: any failure is swallowed; the real greeting
-        # still plays regardless.
+        # REAL GREETING AT ANSWER (Vinay 2026-07-05: "within 2 seconds the agent
+        # needs to speak... not prerecorded message but original conversation").
+        # The full per-call opening (clinic welcome + disclosure / greet-by-name /
+        # reminder / doctor's question) is synthesized fresh and streamed on a
+        # temporary track CONCURRENT with session.start() — first audio ~1s after
+        # pickup. OUTBOUND: the greeting was synthesized during RING time
+        # (_outbound_greet_prep); it plays the instant they answer. The old canned
+        # welcome bridge + welcome_short_audio mask are gone (superseded). RULE 8:
+        # any failure → _welcome_task returns False and the live session.say
+        # fallback below speaks the SAME composed segments after session.start.
         _welcome_task = None
-        # B18: `_used_stored_welcome` removed — it was set to False and never
-        # flipped True since the stored welcome became outbound-only, so the
-        # `if not _used_stored_welcome` guard below was always-True dead code.
-        # The pre-rendered clip is OUTBOUND-ONLY now (Vinay 2026-06-25: inbound calls
-        # don't want a welcome clip — the original live greeting is good enough).
-        # OUTBOUND (reminder/rebook/followup) plays the instant welcome-ONLY mask to
-        # cover session.start; INBOUND (incl. missed-call callback) uses the live
-        # welcome bridge + live greeting below.
+        _greet_texts: list[str] | None = None
         # Clinic name rendered in the CALL language's script (cached HTTP hop;
-        # no-op when scripts already match, i.e. every default-language call).
-        # Needed here for the welcome clip AND later for every greeting line.
+        # no-op when scripts already match). Needed for the greeting AND later
+        # for every spoken line.
         _spk_clinic = await spoken_text(branch_name, lang_code)
-        _stored_short = getattr(branch, "welcome_short_audio", None)
         _is_outbound_greet = is_reminder or is_rebook_call or is_followup
-        # The stored clip is pre-rendered in the BRANCH language; skip it when
-        # this caller is mapped to a different language (a Telugu clip opening a
-        # Hindi call sounds broken) — the live greeting covers the open instead.
-        if _stored_short and lang_code != branch_lang_code:
-            _stored_short = None
-        if _is_outbound_greet and _stored_short:
-            _welcome_task = asyncio.create_task(
-                play_stored_welcome(ctx.room, _stored_short)
-            )
+
+        # The LLM has NO clock: without this it guesses today's date (wrong
+        # year even), books "tomorrow" in the past, and the past-date guard
+        # then refuses everything. Branch-local time, not server time.
+        # (Moved above the greeting: the caller lookup below needs now_b.)
+        try:
+            from zoneinfo import ZoneInfo
+
+            now_b = datetime_cls.now(ZoneInfo(branch.timezone or "Asia/Kolkata"))
+        except Exception:
+            now_b = datetime_cls.now()
+        # Explicit date table (build_date_context) — LLM weekday math was
+        # off-by-one (booked Tuesday on Wednesday's date); now it looks up.
+        date_context = build_date_context(now_b)
+
+        # CALLER IDENTIFICATION (requirement 2026-06-14): on a normal INBOUND
+        # call, look the caller up by their number BEFORE the greeting so the
+        # instant opening itself welcomes a returning patient by name. Skip for
+        # outbound/reminder/rebook (those already know the patient from dispatch
+        # metadata). RULE 1: the lookup is branch-scoped; a failure must never
+        # block answering (RULE 8).
+        caller_greeting_name: str | None = None
+        caller_prompt_extra = ""
+        inbound_followup: dict | None = None  # missed-call callback (set below)
+        if not outbound_number and not is_reminder and not is_rebook_call and state.patient_phone:
+            try:
+                _caller_rows = await find_bookings_by_phone(
+                    state.branch_id, state.patient_phone, db
+                )
+                caller_greeting_name, caller_prompt_extra = _build_caller_context(
+                    _caller_rows, now_b.date()
+                )
+                # No active booking gave a name, but the caller may be a past
+                # patient — recognise them by their stored Patient record so a
+                # returning caller is greeted by name even years later, not
+                # asked "who are you?". Only when nothing ambiguous is on file.
+                if caller_greeting_name is None and not caller_prompt_extra:
+                    _known = await recognize_caller_name(
+                        state.branch_id, state.patient_phone, db
+                    )
+                    if _known:
+                        caller_greeting_name = _known
+                        caller_prompt_extra = KNOWN_CALLER_BOOKING_EXTRA.format(
+                            name=_known
+                        )
+                # MISSED-CALL CALLBACK: if this caller has a pending follow-up the
+                # doctor scheduled, the agent proactively raises the doctor's question
+                # + offers the booking (instead of a plain inbound). Booking marks the
+                # task complete (state.followup_task_id), stopping the outbound retry.
+                inbound_followup = await _inbound_pending_followup(
+                    state.branch_id, state.patient_phone, db
+                )
+                if inbound_followup:
+                    # Speak the doctor's note in the call's language (translate English).
+                    if inbound_followup.get("message"):
+                        inbound_followup["message"] = await _localize_message(
+                            inbound_followup["message"], lang_code
+                        )
+                    # The GREETING (below) deterministically asks the doctor's question;
+                    # this extra just drives the booking offer + locks the doctor.
+                    _td = _spoken_target_date(inbound_followup.get("target_date", ""), lang_code)
+                    caller_prompt_extra += (
+                        "\n\nPENDING FOLLOW-UP: your opening already asked the doctor's "
+                        "question. IF the patient's answer is fine/normal, tell them the "
+                        f"doctor wants them back around {_td} for a follow-up with "
+                        f"{inbound_followup['doctor_name']} and OFFER TO BOOK it — book "
+                        f"with {inbound_followup['doctor_name']}, never ask which doctor. "
+                        "On agreement, FIRST ask what time of day suits them — NEVER "
+                        "pick a time yourself; the patient chooses, you check it with "
+                        "check_availability. The patient is already in our records — do "
+                        "NOT ask their name or age; book on their existing record. "
+                        "IF instead they report a problem/pain: say you will inform the "
+                        "doctor and they will get back soon, and do NOT push the booking "
+                        "— book only if the patient explicitly asks. Speak the date "
+                        "using the words BEFORE the parenthesis; the parenthesis is the "
+                        "ISO for tools only."
+                    )
+                    try:
+                        state.followup_task_id = UUID(inbound_followup["task_id"])
+                        state.doctor_id = UUID(inbound_followup["doctor_id"])
+                    except (ValueError, KeyError):
+                        pass
+            except Exception as e:
+                logger.warning("caller_lookup_failed: %s", e)
+
+        # Names enter the greeting in the CALL'S script so the TTS speaks them
+        # as names, not spelled letters (fix 2026-06-23).
+        _spk_caller = (
+            await spoken_text(caller_greeting_name, lang_code)
+            if caller_greeting_name else None
+        )
+        if _is_outbound_greet:
+            # Pre-synthesized during ring time — play instantly. Language guard:
+            # if the authoritative post-answer resolution disagrees with the prep
+            # (row changed mid-ring), skip the clip; live fallback covers it.
+            if _greet_prep_task is not None:
+                try:
+                    await asyncio.wait_for(_greet_prep_task, timeout=2.0)
+                except Exception as _gw:  # noqa: BLE001
+                    logger.warning("outbound_greet_prep_wait: %s", _gw)
+            if _out_greet.get("wavs") and _out_greet.get("lang") == lang_code:
+                _greet_texts = _out_greet["texts"]
+                _welcome_task = asyncio.create_task(
+                    play_wavs(ctx.room, _out_greet["wavs"], t_answer=_t_answer)
+                )
         elif branch_name:
-            # Inbound: original live short welcome bridge (reused warm TTS where possible).
-            _welcome_tts = ctx.proc.userdata.get("welcome_tts") or smallestai.TTS(
-                api_key=settings.smallest_api_key,
-                model=settings.smallest_model,
-                voice_id=tts_voice,
-                language=lang_cfg.tts_code,
-                sample_rate=settings.smallest_sample_rate,
-                output_format="pcm",
+            _greet_texts = inbound_greeting_texts(
+                lang_code,
+                _spk_clinic,
+                spk_caller=_spk_caller,
+                followup_message=(inbound_followup or {}).get("message") or None,
             )
             _welcome_task = asyncio.create_task(
-                play_welcome(
-                    ctx.room,
-                    sanitize_for_tts(get_welcome(lang_code).format(clinic=_spk_clinic)),
-                    _welcome_tts,
+                synth_and_play(
+                    ctx.room, _greet_texts, tts_voice, lang_code, t_answer=_t_answer
                 )
             )
         state.emergency_contact = emergency_contact
@@ -2315,88 +2465,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             for d in doctors
         ]
 
-        # The LLM has NO clock: without this it guesses today's date (wrong
-        # year even), books "tomorrow" in the past, and the past-date guard
-        # then refuses everything. Branch-local time, not server time.
-        try:
-            from zoneinfo import ZoneInfo
-
-            now_b = datetime_cls.now(ZoneInfo(branch.timezone or "Asia/Kolkata"))
-        except Exception:
-            now_b = datetime_cls.now()
-        # Explicit date table (build_date_context) — LLM weekday math was
-        # off-by-one (booked Tuesday on Wednesday's date); now it looks up.
-        date_context = build_date_context(now_b)
-
-        # CALLER IDENTIFICATION (requirement 2026-06-14): on a normal INBOUND
-        # call, look the caller up by their number BEFORE the greeting so we can
-        # welcome a returning patient by name and hand the agent their future
-        # bookings (new-vs-existing handling). Skip for outbound/reminder/rebook
-        # (those already know the patient from dispatch metadata). RULE 1: the
-        # lookup is branch-scoped; a failure must never block answering (RULE 8).
-        caller_greeting_name: str | None = None
-        caller_prompt_extra = ""
-        inbound_followup: dict | None = None  # missed-call callback (set below)
-        if not outbound_number and not is_reminder and not is_rebook_call and state.patient_phone:
-            try:
-                _caller_rows = await find_bookings_by_phone(
-                    state.branch_id, state.patient_phone, db
-                )
-                caller_greeting_name, caller_prompt_extra = _build_caller_context(
-                    _caller_rows, now_b.date()
-                )
-                # No active booking gave a name, but the caller may be a past
-                # patient — recognise them by their stored Patient record so a
-                # returning caller is greeted by name even years later, not
-                # asked "who are you?". Only when nothing ambiguous is on file.
-                if caller_greeting_name is None and not caller_prompt_extra:
-                    _known = await recognize_caller_name(
-                        state.branch_id, state.patient_phone, db
-                    )
-                    if _known:
-                        caller_greeting_name = _known
-                        caller_prompt_extra = KNOWN_CALLER_BOOKING_EXTRA.format(
-                            name=_known
-                        )
-                # MISSED-CALL CALLBACK: if this caller has a pending follow-up the
-                # doctor scheduled, the agent proactively raises the doctor's question
-                # + offers the booking (instead of a plain inbound). Booking marks the
-                # task complete (state.followup_task_id), stopping the outbound retry.
-                inbound_followup = await _inbound_pending_followup(
-                    state.branch_id, state.patient_phone, db
-                )
-                if inbound_followup:
-                    # Speak the doctor's note in the call's language (translate English).
-                    if inbound_followup.get("message"):
-                        inbound_followup["message"] = await _localize_message(
-                            inbound_followup["message"], lang_code
-                        )
-                    # The GREETING (below) deterministically asks the doctor's question;
-                    # this extra just drives the booking offer + locks the doctor.
-                    _td = _spoken_target_date(inbound_followup.get("target_date", ""), lang_code)
-                    caller_prompt_extra += (
-                        "\n\nPENDING FOLLOW-UP: your opening already asked the doctor's "
-                        "question. IF the patient's answer is fine/normal, tell them the "
-                        f"doctor wants them back around {_td} for a follow-up with "
-                        f"{inbound_followup['doctor_name']} and OFFER TO BOOK it — book "
-                        f"with {inbound_followup['doctor_name']}, never ask which doctor. "
-                        "On agreement, FIRST ask what time of day suits them — NEVER "
-                        "pick a time yourself; the patient chooses, you check it with "
-                        "check_availability. The patient is already in our records — do "
-                        "NOT ask their name or age; book on their existing record. "
-                        "IF instead they report a problem/pain: say you will inform the "
-                        "doctor and they will get back soon, and do NOT push the booking "
-                        "— book only if the patient explicitly asks. Speak the date "
-                        "using the words BEFORE the parenthesis; the parenthesis is the "
-                        "ISO for tools only."
-                    )
-                    try:
-                        state.followup_task_id = UUID(inbound_followup["task_id"])
-                        state.doctor_id = UUID(inbound_followup["doctor_id"])
-                    except (ValueError, KeyError):
-                        pass
-            except Exception as e:
-                logger.warning("caller_lookup_failed: %s", e)
+        # (now_b/date_context + caller identification moved ABOVE the greeting —
+        # the instant opening needs the caller's name and branch-local clock.)
 
         # Instructions are composed by a FUNCTION of the language so the
         # switch_language handoff can rebuild the FULL prompt (system + date
@@ -2523,8 +2593,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ),
             )
 
+        # The instant greeting bypasses the session pipeline — seed it into the
+        # agent's chat history so the LLM knows exactly what was already said
+        # and never re-greets or re-discloses.
+        _seed_ctx = None
+        if _greet_texts and _welcome_task is not None:
+            _seed_ctx = ChatContext.empty()
+            _seed_ctx.add_message(role="assistant", content=" ".join(_greet_texts))
         vachanam_agent = VachanamAgent(
             instructions=instructions,
+            chat_ctx=_seed_ctx,
             state=state,
             db=db,
             room=ctx.room,
@@ -2853,9 +2931,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 logger.warning("tts_warm_failed: %s", str(_e)[:100])
 
         _tts_warm_task = asyncio.create_task(_warm_session_tts())
+        _pre_greeted = False
         if _welcome_task is not None:
             try:
-                await _welcome_task
+                _pre_greeted = bool(await _welcome_task)
             except Exception as _we:  # noqa: BLE001
                 logger.warning("welcome_await_failed: %s", _we)
         _t_pre_start_await = _perf.monotonic()
@@ -2866,137 +2945,67 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             _perf.monotonic() - _t_pre_start_await,
         )
 
-        # RULE 6: single short opening utterance, sanitized. (The short welcome
-        # clip already played pre-session; this is the real greeting, spoken with
-        # STT live so the patient's reply is heard.)
+        # RULE 6: opening utterances sanitized. Normally the instant greeting
+        # already played (pre_greeted) and there is NOTHING to re-speak — the
+        # blocks below are the RULE 8 fallback that speaks the SAME composed
+        # segments live (STT up) when the pre-greet clip failed.
         #
         # Names enter the greeting in the CALL'S script so the TTS speaks them as
         # names, not spelled letters (fix 2026-06-23: "Srinivas" → "S R I N I").
-        # spoken_name() is best-effort and cached; it no-ops for already-Indic
-        # names and falls back to the raw name on any failure.
         # spoken_text handles EVERY direction (Latin→Indic, Indic→Latin,
         # Indic→Indic via a Latin hop) — the old spoken_name skipped English
         # targets, so the en agent greeted with raw Telugu glyphs ("శ్రీ
         # వెంకటేశ్వర" spelled wrongly, live 2026-07-03/04).
         _spk_patient = await spoken_text(meta.get("patient_name", ""), lang_code)
         _spk_doctor = await spoken_text(meta.get("doctor_name", ""), lang_code)
-        _spk_caller = (
-            await spoken_text(caller_greeting_name, lang_code)
-            if caller_greeting_name else caller_greeting_name
-        )
         logger.info("lat_greeting answer_to_greeting=%.2fs", _perf.monotonic() - _t_answer)
-        if is_reminder:
-            # Raw "16:30" gets read digit-by-digit by TTS. For Telugu speak it in
-            # Telugu words; for other languages a clean "04:30 PM" reads naturally
-            # (Telugu number-words inside e.g. a Hindi sentence would be wrong).
-            _appt_raw = meta.get("appointment_time", "")
-            try:
-                _t = time_cls.fromisoformat(_appt_raw)
-                _spoken_time = telugu_time(_t) if lang_code == "te" else _t.strftime("%I:%M %p").lstrip("0")
-            except (ValueError, TypeError):
-                _spoken_time = _appt_raw
-            await session.say(
-                sanitize_for_tts(
-                    lines.reminder_greeting.format(
-                        patient=_spk_patient,
-                        clinic=_spk_clinic,
-                        doctor=_spk_doctor,
-                        time=_spoken_time,
-                    )
-                )
+        if _pre_greeted:
+            logger.info("greeting_pre_played segments=%d", len(_greet_texts or []))
+        elif _is_outbound_greet:
+            # RULE 8 fallback — ring-time pre-synth failed; speak the SAME
+            # composed opening live (time/date wording, doctor's-question
+            # segmentation and follow-up frame all live in
+            # greeting.outbound_greeting_texts). Follow-up segments stay
+            # uninterruptible (patient's "హా/చెప్పండి" barged the doctor's
+            # question out, 2026-06-25); reminder/rebook stay interruptible.
+            _fb_texts = _greet_texts or outbound_greeting_texts(
+                lang_code,
+                _spk_clinic,
+                _spk_patient,
+                _spk_doctor,
+                meta,
+                followup_meta,
+                is_reminder=is_reminder,
+                is_rebook=is_rebook_call,
+                is_followup=is_followup,
             )
-        elif is_rebook_call:
-            # ISO date would be read digit-by-digit by TTS. Telugu → Telugu words;
-            # other languages → a readable "12 June" (loan month name reads fine).
-            _raw_date = meta.get("cancelled_date", "")
-            try:
-                _d = date_cls.fromisoformat(_raw_date)
-                spoken_date = telugu_date(_d) if lang_code == "te" else _d.strftime("%d %B").lstrip("0")
-            except ValueError:
-                spoken_date = _raw_date
-            await session.say(
-                sanitize_for_tts(
-                    lines.rebook_greeting.format(
-                        patient=_spk_patient,
-                        clinic=_spk_clinic,
-                        doctor=_spk_doctor,
-                        date=spoken_date,
-                    )
+            for _seg in _fb_texts:
+                await session.say(
+                    sanitize_for_tts(_seg), allow_interruptions=not is_followup
                 )
-            )
-        elif is_followup:
-            # Outbound treatment follow-up — open the FOLLOW-UP purpose, NOT the
-            # inbound "welcome back, how can I help" (wrong frame — we called them).
-            # If the doctor set a question, ask it in the opening; else a generic
-            # post-treatment check-in. Falls back to known_caller_greeting only if
-            # the language has no follow-up line yet.
-            _fu_msg = (followup_meta.get("message") or "").strip()
-            if _fu_msg and lines.followup_greeting_q:
-                _fg = lines.followup_greeting_q.format(
-                    patient=_spk_patient, clinic=_spk_clinic, message=_fu_msg
-                )
-            elif lines.followup_greeting_noq:
-                _fg = lines.followup_greeting_noq.format(
-                    patient=_spk_patient, clinic=_spk_clinic
-                )
-            else:
-                _fg = lines.known_caller_greeting.format(
-                    patient=_spk_patient, clinic=_spk_clinic
-                )
-            # Uninterruptible: the patient often says "చెప్పండి/హా/hello" right after the
-            # intro, which barged in and cut off the doctor's QUESTION (2026-06-25).
-            # The opening question must always be delivered in full.
-            # Speak the doctor's QUESTION as its own short utterance: one long
-            # single-shot synth rushed/garbled the message (prod 2026-07-03,
-            # "read fast and broken"); short utterances keep Bulbul's prosody.
-            if _fu_msg and lines.followup_greeting_q and _fg.endswith(_fu_msg):
-                _fg_pre = _fg[: -len(_fu_msg)].strip()
-                await session.say(sanitize_for_tts(_fg_pre), allow_interruptions=False)
-                await session.say(sanitize_for_tts(_fu_msg), allow_interruptions=False)
-            else:
-                await session.say(sanitize_for_tts(_fg), allow_interruptions=False)
         else:
-            if inbound_followup and lines.inbound_followup_greeting and inbound_followup.get("message"):
-                # MISSED-CALL CALLBACK: short welcome played (no "how can I help"); now
-                # disclose the AI + deliver the doctor's question, uninterruptible so it
-                # lands. The prompt extra then drives the booking offer. (Consent still
-                # recorded below — the disclosure was served.)
-                # Greet by NAME when recognized (prod 2026-07-03: "not speaking my
-                # name") and speak the doctor's question as its OWN short utterance
-                # — one long single-shot synth rushed/garbled ("fast and broken").
-                _ifg_raw = lines.inbound_followup_greeting
-                _ifg_msg = inbound_followup["message"]
-                if _ifg_raw.endswith("{message}"):
-                    _ifg_pre = _ifg_raw[: -len("{message}")].strip()
-                    if caller_greeting_name and lines.followup_name_prefix:
-                        _ifg_pre = (
-                            lines.followup_name_prefix.format(patient=_spk_caller)
-                            + _ifg_pre
-                        )
-                    await session.say(sanitize_for_tts(_ifg_pre), allow_interruptions=False)
-                    await session.say(sanitize_for_tts(_ifg_msg), allow_interruptions=False)
-                else:
-                    await session.say(
-                        sanitize_for_tts(_ifg_raw.format(message=_ifg_msg)),
-                        allow_interruptions=False,
-                    )
-            else:
-                # Returning patient → greet by name; new caller → standard greeting.
-                if caller_greeting_name:
-                    _greeting = lines.known_caller_greeting.format(
-                        patient=_spk_caller, clinic=_spk_clinic
-                    )
-                else:
-                    _greeting = lines.disclosure_greeting.format(clinic=_spk_clinic)
-                # B18: the live greeting always plays (the stored welcome is
-                # outbound-only and never spoke the full greeting+disclosure
-                # inbound). The old `if not _used_stored_welcome` guard was dead.
-                await session.say(sanitize_for_tts(_greeting))
+            # RULE 8 fallback — instant greeting failed; speak the SAME composed
+            # segments live (welcome + disclosure / greet-by-name / doctor's
+            # question). Missed-call-callback segments stay uninterruptible so
+            # the doctor's question always lands in full (2026-06-25).
+            _fb_texts = _greet_texts or inbound_greeting_texts(
+                lang_code,
+                _spk_clinic,
+                spk_caller=_spk_caller,
+                followup_message=(inbound_followup or {}).get("message") or None,
+            )
+            _uninterruptible = bool((inbound_followup or {}).get("message"))
+            for _seg in _fb_texts:
+                await session.say(
+                    sanitize_for_tts(_seg), allow_interruptions=not _uninterruptible
+                )
 
-            # DPDP s.5 demonstrable notice: the greeting just spoken contains the
-            # AI-assistant / data-processing disclosure. Record that notice was
-            # served on this inbound call (own short-lived session — never touch
-            # the live call's DB session; fire-and-forget, must never break a call).
+        if not _is_outbound_greet:
+            # DPDP s.5 demonstrable notice: the opening (instant clip or the
+            # fallback just spoken) contains the AI-assistant / data-processing
+            # disclosure. Record that notice was served on this inbound call
+            # (own short-lived session — never touch the live call's DB session;
+            # fire-and-forget, must never break a call).
             try:
                 import backend.database as _dbm
                 from backend.models.schema import Consent as _Consent
@@ -3149,40 +3158,8 @@ def _prewarm(proc) -> None:
     except Exception as e:  # noqa: BLE001 — prewarm best-effort; entrypoint rebuilds
         logger.warning("prewarm_calendar_failed: %s", e)
 
-    # WELCOME-TTS WARMUP (2026-06-24 start-latency fix). The instant welcome clip
-    # was synth'd on a FRESH smallest.ai TTS every call — a COLD connection whose
-    # first frame took several seconds, so the caller heard ~7s of silence before
-    # the first word (warm ttfb is ~0.2s). Build ONE smallest TTS here, warm it
-    # with a tiny synth, and reuse it for the welcome clip. Times the cold synth
-    # so the logs confirm the cost. Best-effort; the entrypoint falls back to a
-    # fresh instance if this is missing.
-    try:
-        import asyncio as _aio
-        import time as _t
-
-        from agent.i18n.languages import get_lang as _get_lang
-
-        async def _warm_welcome_tts():
-            _cfg = _get_lang("te")
-            _w = smallestai.TTS(
-                api_key=settings.smallest_api_key,
-                model=settings.smallest_model,
-                voice_id=_cfg.default_voice,
-                language=_cfg.tts_code,
-                sample_rate=settings.smallest_sample_rate,
-                output_format="pcm",
-            )
-            _s = _t.monotonic()
-            async for _ev in _w.synthesize("నమస్కారం"):
-                break  # first frame = connection warm
-            logger.info("prewarm_welcome_tts_cold_synth_s=%.2f", _t.monotonic() - _s)
-            return _w
-
-        proc.userdata["welcome_tts"] = _aio.run(
-            _aio.wait_for(_warm_welcome_tts(), timeout=12)
-        )
-    except Exception as e:  # noqa: BLE001 — best-effort warmup
-        logger.warning("prewarm_welcome_tts_failed: %s", str(e)[:140])
+    # (The welcome-TTS warmup went with the canned welcome clip — the instant
+    # greeting synthesizes over raw REST per call; see greeting.py.)
 
 
 if __name__ == "__main__":
