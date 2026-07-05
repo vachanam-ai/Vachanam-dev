@@ -34,7 +34,7 @@ from backend.config import settings
 logger = structlog.get_logger()
 
 _TTS_URL = "https://api.smallest.ai/waves/v1/tts"
-_SPEED = 1.0  # matches the live agent — Vinay picked natural rate in the 07-05 A/B
+_SPEED = 1.1  # matches the live agent — Vinay 07-05: slightly quicker than natural
 
 
 def normalize_pcm(pcm: bytes, peak_target: float = 0.89, max_gain: float = 6.0) -> bytes:

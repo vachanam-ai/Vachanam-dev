@@ -561,11 +561,11 @@ class _RawRestChunked(lk_tts.ChunkedStream):
         from backend.services.welcome_synth import synth_wav
 
         opts = self._mytts._opts
-        # speed 1.0: Vinay A/B'd the tts-shootout samples 2026-07-05 — natural
-        # rate beat the 0.9 slowdown (0.9 dated from 2026-06-25 "rushed" note,
-        # pre-normalization). Drop back to 0.9 if phone calls sound rushed again.
+        # speed 1.1: Vinay 2026-07-05 — wants the agent a touch quicker than
+        # natural (smallest speed >1 = faster). Bump to 1.2 if still too slow;
+        # drop to 1.0 if phone calls sound rushed.
         wav = await asyncio.to_thread(
-            synth_wav, self._input_text, opts.voice_id, opts.language, 1.0
+            synth_wav, self._input_text, opts.voice_id, opts.language, 1.1
         )
         wf = wave.open(io.BytesIO(wav), "rb")
         sr = wf.getframerate()
