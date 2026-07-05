@@ -37,6 +37,26 @@ _TTS_URL = "https://api.smallest.ai/waves/v1/tts"
 _SPEED = 0.9  # matches the live agent — default rate sounded rushed on the phone
 
 
+def normalize_pcm(pcm: bytes, peak_target: float = 0.89, max_gain: float = 6.0) -> bytes:
+    """Peak-normalize 16-bit PCM. Measured 2026-07-05 (Vinay: "voice is low"):
+    smallest voices differ ~13 dB — padmaja (our te default) RMS 1107 vs anitha
+    4971 — and clinic-cloned voices are arbitrary. Bring every voice to a
+    consistent, phone-loud level. Gain capped so a near-silent/noisy clip is
+    never blasted into hiss."""
+    import numpy as np
+
+    a = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
+    if a.size == 0:
+        return pcm
+    peak = float(np.abs(a).max())
+    if peak < 1.0:
+        return pcm
+    gain = min(peak_target * 32767.0 / peak, max_gain)
+    if gain <= 1.02:  # already loud enough — don't touch
+        return pcm
+    return np.clip(a * gain, -32768, 32767).astype(np.int16).tobytes()
+
+
 # ---------------------------------------------------------------- composition
 
 def inbound_greeting_texts(
@@ -171,7 +191,7 @@ async def play_wavs(room: rtc.Room, wav_items, t_answer: float | None = None) ->
             wav = item if isinstance(item, (bytes, bytearray)) else await item
             wf = wave.open(io.BytesIO(wav), "rb")
             sr, ch, n = wf.getframerate(), wf.getnchannels(), wf.getnframes()
-            pcm = wf.readframes(n)
+            pcm = normalize_pcm(wf.readframes(n))
             wf.close()
             if source is None:
                 sr0, ch0 = sr, ch

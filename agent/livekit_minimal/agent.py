@@ -570,7 +570,11 @@ class _RawRestChunked(lk_tts.ChunkedStream):
         sr = wf.getframerate()
         ch = wf.getnchannels()
         n = wf.getnframes()
-        pcm = wf.readframes(n)
+        # Loudness: smallest voices differ ~13 dB (padmaja vs anitha, measured
+        # 2026-07-05, Vinay "voice is low") — normalize every utterance so any
+        # catalog/cloned voice lands at consistent phone volume.
+        from agent.livekit_minimal.greeting import normalize_pcm
+        pcm = normalize_pcm(wf.readframes(n))
         wf.close()
         output_emitter.initialize(
             request_id=_lk_utils.shortuuid(),

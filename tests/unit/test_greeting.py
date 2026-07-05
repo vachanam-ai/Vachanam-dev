@@ -126,6 +126,17 @@ def test_synth_sanitizes_at_boundary(monkeypatch):
     assert "*" not in sent["text"]
 
 
+def test_normalize_pcm_boosts_quiet_and_leaves_loud():
+    import numpy as np
+
+    quiet = (np.sin(np.linspace(0, 200, 4800)) * 1500).astype(np.int16).tobytes()
+    out = np.frombuffer(g.normalize_pcm(quiet), dtype=np.int16)
+    assert np.abs(out).max() > 8000  # boosted (max_gain-capped), audible on a phone
+    loud = (np.sin(np.linspace(0, 200, 4800)) * 30000).astype(np.int16).tobytes()
+    assert g.normalize_pcm(loud) == loud  # already loud — untouched
+    assert g.normalize_pcm(b"") == b""  # empty/silence never crashes
+
+
 # ------------------------------------------------------------------- playback
 
 def _fake_room():
