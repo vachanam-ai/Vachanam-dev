@@ -1,5 +1,25 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-05 — VOICE FIRST-IMPRESSION OVERHAUL (deployed: Fly agent + master pushed).**
+> (1) **Instant REAL greeting** (FIXLOG #264): canned welcome clip + outbound
+> welcome_short_audio mask DELETED; the actual per-call opening (welcome +
+> disclosure / greet-by-name / reminder / doctor's question) synthesizes fresh
+> and streams on a temp track CONCURRENT with session.start — first audio ~1s
+> after pickup (`lat_first_word`); outbound pre-synthesizes during RING.
+> Greeting seeded into chat_ctx; session.say fallback speaks SAME segments
+> (single source: `agent/livekit_minimal/greeting.py`).
+> (2) **Per-language clinic voices** (FIXLOG #265): ONE cloned voice per
+> language, upsert semantics; call-language clone always wins in
+> `_voice_for_lang`; catalog = RULE 8 fallback only. Settings "Clinic voices"
+> card with in-browser mic recording (`frontend/src/lib/recorder.js`).
+> (3) **Loudness** (FIXLOG #266): peak normalization on both TTS paths;
+> A/B voice samples in `sandbox/tts-shootout/samples` — ⏳ Vinay to pick
+> default voice. (4) **Turn latency** (FIXLOG #267): measured breakdown
+> EOU 1.12–1.35s + Gemini ttft 1.46–1.78s + TTS ttfb 0.34–0.65s; `lat_eou`
+> now logs `transcription_delay` to attribute the EOU overshoot — next real
+> call decides the one targeted change. Suite: **616 passed, 2 skipped**.
+> ⚠ Next real call: verify `lat_first_word` <2s + read new lat_eou fields.
+
 > **2026-06-15 (late) — TTS PROVIDER SWITCH.** Replaced Sarvam Bulbul TTS with
 > **smallest.ai Waves Lightning v3.1** (STT stays Sarvam Saaras). Per-clinic voice
 > from the smallest catalog (`GET /branches/{id}/voices`) + **voice cloning**
