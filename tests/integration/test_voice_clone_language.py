@@ -136,6 +136,48 @@ async def test_clone_registers_named_voice_visible_cross_language(db, monkeypatc
                 e["voice_id"] == "voice_sree789" and e["display_name"] == "sreelekha"
                 for e in entries
             ), f"cloned voice not named/visible in the te picker: {entries}"
-            assert v.json()["current"] == "voice_sree789"
+            # Per-language voices (2026-07-05): a ta clone must NOT hijack the
+            # te branch's current voice — it serves ta calls via _voice_for_lang.
+            assert v.json()["current"] is None
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+async def test_clone_upserts_one_voice_per_language(db, monkeypatch):
+    """FIXLOG #265 (Vinay: 'clinic will record 1 version per language'): a new
+    clone for a language REPLACES that language's previous clone (remote delete
+    best-effort), and a same-language clone becomes the branch voice."""
+    org_id = uuid.uuid4()
+    db.add(Organization(id=org_id, name="Org", owner_phone="+919000099080",
+                        owner_email=f"o-{org_id}@c.com", plan="clinic"))
+    await db.flush()
+    br = Branch(id=uuid.uuid4(), org_id=org_id, name="C",
+                whatsapp_number="+910000000080", language="te")
+    db.add(br)
+    await db.commit()
+
+    ids = iter(["voice_te_v1", "voice_te_v2", "voice_hi_v1"])
+    deleted = []
+    monkeypatch.setattr(smallest_voice, "clone_voice", lambda *a, **k: next(ids))
+    monkeypatch.setattr(smallest_voice, "delete_cloned_voice", deleted.append)
+
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            for lang in ("te", "te", "hi"):
+                r = await ac.post(
+                    f"/branches/{br.id}/voice-clone",
+                    data={"display_name": f"v-{lang}", "language": lang},
+                    files={"file": ("sample.wav", b"RIFF0000WAVE", "audio/wav")},
+                )
+                assert r.status_code == 200, r.text
+        await db.refresh(br)
+        langs = sorted((c["language"], c["voice_id"]) for c in br.cloned_voices)
+        # One voice per language; the te re-clone replaced v1.
+        assert langs == [("hi", "voice_hi_v1"), ("te", "voice_te_v2")]
+        assert deleted == ["voice_te_v1"]  # replaced clone removed at smallest
+        # te clone (branch language) is the branch voice; hi clone didn't hijack it.
+        assert br.tts_voice == "voice_te_v2"
     finally:
         app.dependency_overrides.pop(get_current_user, None)

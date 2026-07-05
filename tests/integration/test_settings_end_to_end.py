@@ -170,13 +170,16 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     from backend.services.telephony import branch_outbound_trunk_id
     assert branch_outbound_trunk_id(row) == "ST_madhapur"
 
-    # Cloned voice: register a dashboard voice_id → it becomes the agent voice
-    # and shows in the picker tagged cloned (catalog mocked, no live smallest call).
+    # Cloned voice: register a dashboard voice_id IN THE BRANCH'S LANGUAGE (ta
+    # after the PATCH above) → it becomes the agent voice and shows in the
+    # picker tagged cloned. Per-language model (FIXLOG #265): a different-
+    # language voice would be stored for ITS language without hijacking
+    # tts_voice, and registering never rewrites branch.language.
     with patch("backend.services.smallest_voice.list_voices", return_value=[{"voice_id": "padmaja", "display_name": "Padmaja"}]):
         reg = await client.post(
             f"/branches/{bid}/cloned-voices",
             headers=_auth(owner),
-            json={"voice_id": "voice_abc123", "name": "Dr Vinay", "language": "te"},
+            json={"voice_id": "voice_abc123", "name": "Dr Vinay", "language": "ta"},
         )
         assert reg.status_code == 200, reg.text
         assert reg.json()["tts_voice"] == "voice_abc123"  # set as current

@@ -247,23 +247,36 @@ def _phone_override_error(
 
 
 def _voice_for_lang(branch, lang_code: str) -> str:
-    """The TTS voice_id to speak `lang_code` for this branch. A CLONED voice is
-    language-bound: measured 2026-07-03 against smallest's live API, the te
-    clone produced 0.45s of noise for an English test sentence ("random shit,
-    no language" on a real call) while catalog niharika spoke the same Hindi
-    sentence fine. So: the clinic's voice is used ONLY for the language the
-    clone was registered with; any other language falls back to that language's
-    default catalog voice. (Keeping one voice across languages needs per-
-    language clones — future feature.) Catalog voices are multilingual."""
+    """The TTS voice_id to speak `lang_code` for this branch. Vinay 2026-07-05:
+    the agent speaks ONLY clinic-provided voices — one clone per language — so
+    the clinic's clone REGISTERED FOR this language always wins (that's what a
+    language switch inherits too). A cloned voice is language-bound (the te
+    clone spoke 0.45s of noise for an English sentence, measured 2026-07-03),
+    so a clone never crosses languages. Order: clinic clone for THIS language →
+    the clinic's chosen tts_voice unless it's a clone of ANOTHER language →
+    the language's catalog default (RULE 8 — a language the clinic hasn't
+    voiced yet must still get a working call; logged for the Settings badge)."""
     cfg = get_lang(lang_code)
+    clones = [
+        cv for cv in (getattr(branch, "cloned_voices", None) or [])
+        if isinstance(cv, dict) and cv.get("voice_id")
+    ]
+    for cv in clones:
+        if (cv.get("language") or "").lower().strip() == cfg.code:
+            return cv["voice_id"]
     v = (getattr(branch, "tts_voice", None) or "").strip()
     if not v:
+        logger.info("voice_fallback_catalog lang=%s reason=no_clinic_voice", cfg.code)
         return cfg.default_voice
-    for cv in getattr(branch, "cloned_voices", None) or []:
-        if not isinstance(cv, dict) or cv.get("voice_id") != v:
+    for cv in clones:
+        if cv.get("voice_id") != v:
             continue
         clone_lang = (cv.get("language") or "").lower().strip()
         if clone_lang and clone_lang != cfg.code:
+            logger.info(
+                "voice_fallback_catalog lang=%s reason=clinic_voice_is_%s_bound",
+                cfg.code, clone_lang,
+            )
             return cfg.default_voice
     return v
 

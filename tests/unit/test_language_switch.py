@@ -81,3 +81,16 @@ def test_voice_for_lang_clone_is_language_bound():
 def test_voice_for_lang_no_voice_set_uses_language_default():
     b = _branch(None, [])
     assert _voice_for_lang(b, "hi") == get_lang("hi").default_voice
+
+
+def test_voice_for_lang_per_language_clone_wins():
+    """FIXLOG #265 (Vinay 2026-07-05): the agent speaks ONLY clinic voices —
+    the clone registered for the CALL's language always wins, even when the
+    branch's tts_voice is a catalog voice or another language's clone."""
+    b = _branch("padmaja", [
+        {"voice_id": "clone_te", "name": "Sree", "language": "te"},
+        {"voice_id": "clone_hi", "name": "Sree-hi", "language": "hi"},
+    ])
+    assert _voice_for_lang(b, "te") == "clone_te"
+    assert _voice_for_lang(b, "hi") == "clone_hi"   # switch inherits clinic voice
+    assert _voice_for_lang(b, "en") == "padmaja"    # catalog voices are multilingual

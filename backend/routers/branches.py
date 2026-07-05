@@ -365,12 +365,19 @@ async def register_cloned_voice(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    lst = [c for c in (branch.cloned_voices or []) if c.get("voice_id") != body.voice_id]
+    # ONE clinic voice PER language (Vinay 2026-07-05: the agent speaks only
+    # clinic-provided voices, one per language) — registering for a language
+    # REPLACES that language's previous voice. Never rewrites branch.language:
+    # adding a Hindi voice must not flip a Telugu clinic to Hindi.
+    lst = [
+        c for c in (branch.cloned_voices or [])
+        if c.get("voice_id") != body.voice_id
+        and (c.get("language") or "").lower() != body.language.lower()
+    ]
     lst.append({"voice_id": body.voice_id, "name": body.name.strip(), "language": body.language})
     branch.cloned_voices = lst  # reassign so SQLAlchemy detects the JSONB change
-    if body.set_current:
+    if body.set_current and body.language == (getattr(branch, "language", None) or "te"):
         branch.tts_voice = body.voice_id
-        branch.language = body.language
     await db.commit()
 
     request.state.audit_resource_id = branch_id
@@ -472,12 +479,32 @@ async def clone_branch_voice(
     except smallest_voice.VoiceServiceError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
-    branch.tts_voice = voice_id
+    # ONE clinic voice PER language (Vinay 2026-07-05): a new clone for a
+    # language REPLACES that language's previous clone — delete the replaced
+    # one at smallest.ai best-effort so orphans don't pile up there. tts_voice
+    # (the branch-language voice) is only taken over by a clone in the SAME
+    # language; a Hindi clone must not become the Telugu agent's voice.
+    _replaced = [
+        c for c in (branch.cloned_voices or [])
+        if (c.get("language") or "").lower() == clone_language.lower()
+        and c.get("voice_id") and c.get("voice_id") != voice_id
+    ]
+    for _old in _replaced:
+        try:
+            smallest_voice.delete_cloned_voice(_old["voice_id"])
+        except Exception:  # noqa: BLE001 — best-effort remote cleanup
+            logger.warning("smallest_voice_delete_failed", voice_id=_old["voice_id"])
+    _replaced_ids = {c["voice_id"] for c in _replaced}
+    if clone_language == (getattr(branch, "language", None) or "te"):
+        branch.tts_voice = voice_id
+    elif branch.tts_voice in _replaced_ids:
+        branch.tts_voice = None  # its clone is gone; language default takes over
     # Register the clone so it has a NAME in the picker + a Remove row — without
     # this the voice spoke but "sreelekha" appeared nowhere (prod 2026-07-03).
     # Reassign (not mutate) so SQLAlchemy detects the JSONB change.
     branch.cloned_voices = [
-        c for c in (branch.cloned_voices or []) if c.get("voice_id") != voice_id
+        c for c in (branch.cloned_voices or [])
+        if c.get("voice_id") != voice_id and c.get("voice_id") not in _replaced_ids
     ] + [{"voice_id": voice_id, "name": display_name.strip(), "language": clone_language}]
     await db.commit()
 

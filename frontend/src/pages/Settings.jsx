@@ -20,6 +20,7 @@ import {
 
 const PLAN_LABELS = { solo: "Solo · ₹1,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹15,999/mo" };
 import { useAuth } from "../hooks/useAuth.jsx";
+import { startRecording } from "../lib/recorder.js";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 
@@ -224,10 +225,37 @@ export default function Settings() {
       qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
       setUploadName("");
       setUploadFile(null);
-      toast.success("Voice cloned and set as the clinic voice");
+      setRecPreview(null);
+      toast.success("Voice cloned — the agent now uses it for this language");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not clone voice")
   });
+
+  // Mic-record the clone sample right here (clinics don't have WAV files lying
+  // around — Vinay 2026-07-05: "clinic will record 1 version per language").
+  // recorder.js hands back a WAV File that feeds the same uploadClone mutation.
+  const recRef = useRef(null);
+  const [recording, setRecording] = useState(false);
+  const [recPreview, setRecPreview] = useState(null); // {url, seconds}
+  const toggleRecord = async () => {
+    if (recording) {
+      setRecording(false);
+      const out = await recRef.current.stop();
+      recRef.current = null;
+      if (out.seconds < 5) return toast.error("Too short — record at least 5 seconds");
+      setUploadFile(out.file);
+      setRecPreview(out);
+    } else {
+      try {
+        recRef.current = await startRecording();
+        setRecPreview(null);
+        setRecording(true);
+      } catch {
+        toast.error("Microphone access denied — allow the mic or upload a file instead");
+      }
+    }
+  };
+
   const removeRegistered = useMutation({
     mutationFn: (vid) => removeClonedVoice(branchId, vid),
     onSuccess: (d) => {
@@ -468,10 +496,42 @@ export default function Settings() {
       </Section>
 
       {/* 6 — Voice */}
-      <Section id="voice" title="Agent voice"
-        sub={`Voices below are the best matches for your clinic language (${data?.language ?? "te"}). Pick one, or clone your own. Applies from the next call.`}>
+      <Section id="voice" title="Clinic voices"
+        sub="Your agent speaks ONLY in voices you provide — record one per language below. Languages without your voice use a stock voice until you add yours. Applies from the next call.">
+
+        {/* One clinic voice per language — coverage at a glance */}
+        <div className="space-y-1">
+          {(data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES).map((l) => {
+            const cv = (voices.data?.voices ?? []).find(
+              (v) => v.cloned && (v.languages ?? []).includes(l.code)
+            );
+            return (
+              <div key={l.code}
+                className="flex items-center justify-between rounded-lg bg-teal-mint/40 px-3 py-2">
+                <span className="font-ui text-sm">
+                  {l.name} <span className="text-xs text-slate">{l.native_name}</span>
+                </span>
+                {cv ? (
+                  <span className="flex items-center gap-3 font-ui text-xs">
+                    <span className="text-teal">Your voice · {cv.display_name}</span>
+                    <button type="button"
+                      className="text-danger underline-offset-2 hover:underline"
+                      onClick={() => removeRegistered.mutate(cv.voice_id)}
+                      disabled={removeRegistered.isPending}>
+                      Remove
+                    </button>
+                  </span>
+                ) : (
+                  <span className="font-ui text-xs text-slate">stock voice — add yours below</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Stock-voice picker for the clinic language (fallback / until cloned) */}
         <select
-          className="field"
+          className="field mt-3"
           value={data?.tts_voice ?? ""}
           onChange={(e) => voice.mutate(e.target.value)}
           disabled={voice.isPending || voices.isLoading}
@@ -480,7 +540,7 @@ export default function Settings() {
           {(voices.data?.voices ?? []).map((v) => (
             <option key={v.voice_id} value={v.voice_id}>
               {v.display_name}
-              {v.cloned ? " · your cloned voice" : v.gender ? ` · ${v.gender}` : ""}
+              {v.cloned ? " · your voice" : v.gender ? ` · ${v.gender}` : ""}
             </option>
           ))}
         </select>
@@ -490,34 +550,12 @@ export default function Settings() {
           </p>
         )}
 
-        {/* Registered cloned voices (remove) */}
-        {(voices.data?.voices ?? []).some((v) => v.cloned) && (
-          <div className="mt-3 space-y-1">
-            {(voices.data?.voices ?? [])
-              .filter((v) => v.cloned)
-              .map((v) => (
-                <div key={v.voice_id}
-                  className="flex items-center justify-between rounded-lg bg-teal-mint/40 px-3 py-2">
-                  <span className="font-ui text-sm">
-                    {v.display_name} <span className="text-xs text-slate">· cloned</span>
-                  </span>
-                  <button type="button"
-                    className="font-ui text-xs text-danger underline-offset-2 hover:underline"
-                    onClick={() => removeRegistered.mutate(v.voice_id)}
-                    disabled={removeRegistered.isPending}>
-                    Remove
-                  </button>
-                </div>
-              ))}
-          </div>
-        )}
-
-        {/* Clone your own voice from an uploaded sample — every plan */}
+        {/* Record or upload a sample → instant clone, one per language */}
         <div className="mt-4 rounded-xl border border-hairline p-4">
-          <p className="font-ui text-sm font-medium">Clone your own voice</p>
+          <p className="font-ui text-sm font-medium">Add your voice for a language</p>
           <p className="mt-1 font-ui text-xs text-slate">
-            Upload a clear 5–15s recording (WAV/MP3). We clone it instantly and the agent speaks
-            in it. Pick the language the sample is spoken in.
+            Record 10–15 seconds of natural speech in that language (or upload a WAV/MP3).
+            Re-recording a language replaces its previous voice.
           </p>
           <div className="mt-3 space-y-2">
             <input className="field" placeholder="Voice name (e.g. Dr Vinay)"
@@ -532,13 +570,26 @@ export default function Settings() {
                 <option key={l.code} value={l.code}>{l.name}</option>
               ))}
             </select>
+            <button type="button"
+              className={`w-full min-h-[44px] rounded-xl border font-ui text-sm font-medium transition ${
+                recording ? "border-danger bg-danger/10 text-danger" : "border-hairline hover:border-teal-light/60"
+              }`}
+              onClick={toggleRecord}>
+              {recording ? "■ Stop recording" : "● Record with microphone"}
+            </button>
+            {recPreview && (
+              <div className="flex items-center gap-2">
+                <audio controls src={recPreview.url} className="h-9 flex-1" />
+                <span className="font-ui text-xs text-slate">{Math.round(recPreview.seconds)}s</span>
+              </div>
+            )}
             <input type="file" accept="audio/*" className="field"
-              onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)} />
+              onChange={(e) => { setUploadFile(e.target.files?.[0] ?? null); setRecPreview(null); }} />
             <button type="button" className="btn-primary w-full min-h-[44px]"
-              disabled={uploadClone.isPending}
+              disabled={uploadClone.isPending || recording}
               onClick={() => {
                 if (!uploadName.trim()) return toast.error("Give the voice a name");
-                if (!uploadFile) return toast.error("Choose an audio file");
+                if (!uploadFile) return toast.error("Record or choose an audio file");
                 uploadClone.mutate();
               }}>
               {uploadClone.isPending ? "Cloning…" : "Clone & use this voice"}
