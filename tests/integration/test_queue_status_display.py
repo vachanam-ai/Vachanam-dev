@@ -86,7 +86,11 @@ async def test_display_is_public_and_pii_free(clinic, client):
         assert f"P{n}" not in r.text  # zero patient PII on a public board
 
 
-async def test_display_unknown_branch_404_bad_uuid_400(client):
+async def test_display_unknown_branch_404_bad_uuid_400(db, client):
+    # `db` is required even though unused: it patches backend.database to the
+    # TEST engine. Without it this endpoint's get_db hit the REAL DATABASE_URL
+    # (found 2026-07-05 when the sales-vertical columns made prod schema drift
+    # from the model) — an integration test must never touch prod.
     r = await client.get(f"/queue/{uuid.uuid4()}/display")
     assert r.status_code == 404
     r = await client.get("/queue/not-a-uuid/display")
