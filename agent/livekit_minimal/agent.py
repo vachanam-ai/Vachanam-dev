@@ -2739,7 +2739,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             m = ev.metrics
             tn = type(m).__name__
             if tn == "EOUMetrics":
-                logger.info("lat_eou end_of_utterance_delay=%.2fs", getattr(m, "end_of_utterance_delay", 0.0))
+                # Measured 2026-07-04: eou 1.12-1.35s vs max_endpointing_delay=0.6
+                # — the missing ~0.5-0.75s is EITHER the Silero silence window or
+                # Sarvam's final-transcript wait. transcription_delay splits them
+                # so the next tuning step is attributed, not guessed (FIXLOG #267).
+                logger.info(
+                    "lat_eou end_of_utterance_delay=%.2fs transcription_delay=%.2fs turn_completed_delay=%.2fs",
+                    getattr(m, "end_of_utterance_delay", 0.0),
+                    getattr(m, "transcription_delay", 0.0),
+                    getattr(m, "on_user_turn_completed_delay", 0.0),
+                )
             elif tn == "LLMMetrics":
                 logger.info("lat_llm ttft=%.2fs", getattr(m, "ttft", 0.0))
             elif tn == "TTSMetrics":
