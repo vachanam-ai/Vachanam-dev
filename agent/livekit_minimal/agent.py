@@ -606,11 +606,10 @@ class _RawRestChunked(lk_tts.ChunkedStream):
             logger.warning(
                 "tts_script_lang_mismatch configured=%s detected=%s", opts.language, lang
             )
-        # speed 1.1: Vinay 2026-07-05 — wants the agent a touch quicker than
-        # natural (smallest speed >1 = faster). Bump to 1.2 if still too slow;
-        # drop to 1.0 if phone calls sound rushed.
+        # speed 1.0: Vinay 2026-07-06 — normal speed (1.1 sounded rushed on
+        # phone). Bump back up only if it sounds too slow.
         wav = await asyncio.to_thread(
-            synth_wav, self._input_text, opts.voice_id, lang, 1.1
+            synth_wav, self._input_text, opts.voice_id, lang, 1.0
         )
         wf = wave.open(io.BytesIO(wav), "rb")
         sr = wf.getframerate()
