@@ -165,6 +165,32 @@ def test_system_prompt_has_availability_grounding_and_name_readback():
     assert "DETAILS CONFIRM" in prompt
 
 
+def test_system_prompt_bans_mid_flow_reconfirmation():
+    """Live call 2026-07-06: agent asked 'shall I book at X?' at the availability
+    step AND again at the end. The prompt must ban the mid-flow mini-confirm on
+    both a patient-named free time AND a patient-picked offered time — the only
+    yes-question is the step-6 readback."""
+    prompt = _make_prompt()
+    # Named free time → straight to details, no 'shall I book' mini-confirm.
+    assert "go STRAIGHT to PATIENT DETAILS" in prompt
+    assert 'shall i book' in prompt.lower()
+    assert "ONLY yes-question in the whole call is the step-6 readback" in prompt
+    # Picking/accepting an offered time is itself the decision.
+    assert "PATIENT PICKS / ACCEPTS an offered time" in prompt
+    assert "acceptance IS the" in prompt  # '...IS the decision' wraps across a line
+    # Timetable dump reserved for the no-time-given case only.
+    assert "never dump a timetable when the patient already named" in prompt
+
+
+def test_system_prompt_surfaces_existing_booking_upfront():
+    """#279: when check_availability returns ALREADY_BOOKED, the agent must tell
+    the caller immediately and stop — not walk the whole flow first."""
+    prompt = _make_prompt()
+    assert "ALREADY_BOOKED" in prompt
+    assert "EXISTING BOOKING FIRST" in prompt
+    assert "different_person=true" in prompt
+
+
 def test_system_prompt_single_confirmation_no_stacked_yes_questions():
     """FIXLOG #271 (live call 2026-07-05: agent asked 3 yes-questions before one
     booking, and re-asked 'shall I go ahead?' after the caller already said yes

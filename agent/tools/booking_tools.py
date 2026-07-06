@@ -329,6 +329,7 @@ async def check_availability(
     db: AsyncSession,
     query_start: time | None = None,
     query_end: time | None = None,
+    caller_phone: str | None = None,
 ) -> str:
     """Check whether the selected doctor has capacity on the given date.
 
@@ -349,6 +350,45 @@ async def check_availability(
     doctor = result.scalar_one_or_none()
     if not doctor:
         return "Doctor not found."
+
+    # UPFRONT existing-booking surface (FIXLOG #279): if the calling number
+    # already has a confirmed booking with THIS doctor on THIS date, tell the
+    # caller right away instead of walking the whole flow and only discovering
+    # it at confirm_booking. Runs BEFORE the bookable/"finished for today" guard
+    # — an existing booking is the most relevant answer even when the day is
+    # over. Same predicate confirm_booking uses for already_booked — read-only,
+    # so RULE 2 (no double-book) is unaffected; the real guard still lives in
+    # confirm_booking. Informational, not a hard stop: a caller booking for a
+    # DIFFERENT family member may continue.
+    if caller_phone:
+        existing = (await db.execute(
+            select(Token).where(and_(
+                Token.branch_id == branch_id,
+                Token.doctor_id == doctor_id,
+                Token.date == booking_date,
+                Token.status == "confirmed",
+                Token.patient_id.in_(
+                    select(Patient.id).where(and_(
+                        Patient.branch_id == branch_id,
+                        Patient.phone == caller_phone,
+                    ))
+                ),
+            )).order_by(Token.appointment_time.is_(None), Token.appointment_time)
+        )).scalars().first()
+        if existing is not None:
+            when = (
+                existing.appointment_time.strftime("%I:%M %p").lstrip("0")
+                if existing.appointment_time else None
+            )
+            detail = f"at {when}" if when else f"token number {existing.token_number}"
+            return (
+                f"ALREADY_BOOKED: this caller's number already has a confirmed "
+                f"appointment with {doctor.name} on "
+                f"{booking_date.strftime('%d %B')} {detail}. Tell the caller this "
+                f"FIRST, before anything else, and do not run the booking flow. "
+                f"Only continue booking if they say this new appointment is for a "
+                f"DIFFERENT person."
+            )
 
     blocked = await doctor_bookable(doctor, branch_id, booking_date, db)
     if blocked:

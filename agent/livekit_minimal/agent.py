@@ -1004,6 +1004,7 @@ class VachanamAgent(Agent):
             db=self._db,
             query_start=self._parse_time(query_start),
             query_end=self._parse_time(query_end),
+            caller_phone=self._state.patient_phone,  # upfront existing-booking surface (#279)
         )
         return {"availability": availability}
 
