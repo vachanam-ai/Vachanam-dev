@@ -246,6 +246,15 @@ def _phone_override_error(
     return None
 
 
+def _availability_caller_phone(state) -> str | None:
+    """The caller_phone to pass to check_availability for the #279 upfront
+    existing-booking surface — suppressed once the caller is on the
+    reschedule/cancel track (find_my_bookings ran, existing_booking_intent set).
+    Otherwise the caller's OWN booking being moved is flagged as blocking and the
+    reschedule dead-ends (live call 2026-07-06, FIXLOG #281)."""
+    return None if state.existing_booking_intent else state.patient_phone
+
+
 def _voice_for_lang(branch, lang_code: str) -> str:
     """The TTS voice_id to speak `lang_code` for this branch. Vinay 2026-07-05:
     the agent speaks ONLY clinic-provided voices — one clone per language — so
@@ -1005,7 +1014,7 @@ class VachanamAgent(Agent):
             db=self._db,
             query_start=self._parse_time(query_start),
             query_end=self._parse_time(query_end),
-            caller_phone=self._state.patient_phone,  # upfront existing-booking surface (#279)
+            caller_phone=_availability_caller_phone(self._state),
         )
         return {"availability": availability}
 
@@ -1323,6 +1332,10 @@ class VachanamAgent(Agent):
         appointment. status='cancelled_by_clinic' bookings are what rebook
         calls are about — never tell such a patient they have no booking;
         offer to rebook it instead."""
+        # Caller is on the existing-booking track (reschedule/cancel) — suppress
+        # the #279 upfront existing-booking surface so it doesn't flag the very
+        # booking being moved (FIXLOG #281).
+        self._state.existing_booking_intent = True
         phone = phone_number or self._state.patient_phone
         if not phone:
             return {"bookings": [], "note": "caller number unknown — ask for the booking phone number"}

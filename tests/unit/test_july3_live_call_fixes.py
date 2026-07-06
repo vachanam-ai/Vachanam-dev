@@ -9,6 +9,7 @@ switch; Telugu endings in a Hindi call.
 from agent.livekit_minimal.agent import (
     KNOWN_CALLER_BOOKING_EXTRA,
     VachanamAgent,
+    _availability_caller_phone,
     _phone_override_error,
 )
 from agent.prompts.system_prompt import build_system_prompt
@@ -88,3 +89,25 @@ def test_vachanam_agent_without_chat_ctx_still_constructs():
         transfer_to="",
     )
     assert agent is not None
+
+
+# ── #281: existing-booking surface must NOT fire during reschedule/cancel ──
+
+def test_availability_caller_phone_new_booking_passes_phone():
+    """New-booking track: check_availability gets the caller phone so #279 can
+    surface an existing appointment."""
+    st = SessionState(patient_phone=CALLER)
+    assert _availability_caller_phone(st) == CALLER
+
+
+def test_availability_caller_phone_suppressed_after_find_my_bookings():
+    """Live call 2026-07-06: rescheduling a booking, check_availability for the
+    new slot flagged the caller's OWN moved booking as ALREADY_BOOKED and the
+    reschedule dead-ended. Once existing_booking_intent is set, no phone is
+    passed → no false ALREADY_BOOKED."""
+    st = SessionState(patient_phone=CALLER, existing_booking_intent=True)
+    assert _availability_caller_phone(st) is None
+
+
+def test_existing_booking_intent_defaults_false():
+    assert SessionState().existing_booking_intent is False

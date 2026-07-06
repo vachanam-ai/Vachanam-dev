@@ -54,6 +54,12 @@ class SessionState:
     preferred_language: str | None = None
     transfer_requested: bool = False     # set when request_human_transfer fires
     fail_reason: str | None = None       # set by tools on a known miss (out_of_scope, no_slot, ...)
+    # Set when find_my_bookings runs — the caller is on the EXISTING-booking
+    # (reschedule/cancel) track, not a NEW booking. Suppresses the #279 upfront
+    # "you already have an appointment" surface in check_availability, which
+    # otherwise flags the very booking being MOVED and dead-ends the reschedule
+    # (FIXLOG #281, live call 2026-07-06).
+    existing_booking_intent: bool = False
 
     # Durable metering: CallLog row inserted at call start (TD-027/F6) so a
     # killed worker that never runs the shutdown callback still leaves a record.
