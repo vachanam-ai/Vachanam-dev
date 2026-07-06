@@ -817,11 +817,12 @@ class VachanamAgent(Agent):
     async def stt_node(self, audio, model_settings):
         """BACKCHANNEL FILTER (Vinay 2026-07-04): while the agent is SPEAKING,
         drop transcript events that are pure listening noises ("hmm", "okay",
-        "acha", "ఆ", "हाँ"...) BEFORE livekit's interruption gate counts their
-        words (min_interruption_words=1 means any word cuts the agent — a
-        deliberate setting so REAL interruptions stop it fast; this filter is
-        the language-aware exception the 2026-06-24 note planned). When the
-        agent is silent the same word is a real short turn and passes through.
+        "acha", "ఆ", "हाँ"...) so the LLM never treats a backchannel as a real
+        user turn. (2026-07-06: interruption itself is now VAD-gated —
+        min_interruption_words=0, min_interruption_duration=0.4 — so short
+        backchannels are filtered by LENGTH; this transcript filter still keeps
+        them out of the conversation history / content path.) When the agent is
+        silent the same word is a real short turn and passes through.
         Multi-word content ("okay cancel it", "no no wait") always passes."""
         async for ev in Agent.default.stt_node(self, audio, model_settings):
             try:
@@ -2766,11 +2767,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # what it's saying") because Sarvam's Telugu transcript arrives slower
             # than the false-interruption window, so a real interruption looked
             # "false" and the sentence resumed. Disabled — a detected interruption
-            # now stays stopped. min_interruption_words=1 + 0.2s = yield on the
-            # first word. (Trade-off: a lone backchannel can cut the agent; revisit
-            # with a Telugu-aware backchannel filter if it becomes an issue.)
-            min_interruption_duration=0.2,
-            min_interruption_words=1,
+            # now stays stopped.
+            # 2026-07-06 (Vinay real-call): interrupting the agent took 1-2s.
+            # Root cause from Fly lat_* — min_interruption_words=1 held the stop
+            # until Sarvam transcribed the first Telugu WORD (transcription_delay
+            # 0.65-0.85s) on top of VAD (0.2s). Interruption was transcript-gated.
+            # Fix: words=0 → yield on VAD speech alone (no transcript wait), and
+            # duration 0.2->0.4s so a short backchannel ("haan"/"mm", <0.4s) is
+            # filtered by LENGTH instead of by waiting for a transcript. Barge-in
+            # ~1-2s -> ~0.4s; the 2026-06-22 backchannel guard is preserved by
+            # duration. Raise duration toward 0.6 if longer backchannels cut in.
+            min_interruption_duration=0.4,
+            min_interruption_words=0,
             resume_false_interruption=False,
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
