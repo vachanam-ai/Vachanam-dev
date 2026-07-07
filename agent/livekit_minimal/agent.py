@@ -3321,6 +3321,62 @@ def _start_render_keepalive() -> None:
     logger.info("render_keepalive_started url=%s interval=300s", url)
 
 
+_db_keepalive_started = False
+
+
+def _keepalive_dsn(raw: str) -> str:
+    """asyncpg-connectable DSN from the app's DATABASE_URL: drop the +asyncpg
+    driver tag and the libpq sslmode query param (asyncpg takes ssl= instead,
+    passed separately)."""
+    import re
+
+    dsn = (raw or "").strip().strip('"').replace("postgresql+asyncpg://", "postgresql://")
+    dsn = re.sub(r"[?&]sslmode=[^&]+", "", dsn)
+    return dsn
+
+
+def _start_db_keepalive() -> None:
+    """Keep Neon serverless from scaling its compute to zero between calls, so
+    the first call after an idle stretch doesn't pay a ~3-5s cold DB wake on
+    branch resolution (live 2026-07-07: pre_session_build 4.55s on the first
+    post-deploy call = ~5s of dead-air greeting, caller hung up). ponytail: a
+    lightweight SELECT 1 on its own connection every 3 min (under Neon's default
+    5-min autosuspend); best-effort, never on the call path (FIXLOG #285)."""
+    global _db_keepalive_started
+    if _db_keepalive_started:
+        return
+    from backend.config import settings as _s
+
+    dsn = _keepalive_dsn(getattr(_s, "database_url", "") or "")
+    if not dsn:
+        return
+    _db_keepalive_started = True
+
+    import asyncio
+    import threading
+    import time
+
+    async def _ping() -> None:
+        import asyncpg
+
+        conn = await asyncpg.connect(dsn, ssl=True, timeout=15)
+        try:
+            await conn.execute("SELECT 1")
+        finally:
+            await conn.close()
+
+    def _loop() -> None:
+        while True:
+            try:
+                asyncio.run(_ping())
+            except Exception as e:  # noqa: BLE001 — keepalive is best-effort
+                logger.warning("db_keepalive_ping_failed: %s", str(e)[:120])
+            time.sleep(180)
+
+    threading.Thread(target=_loop, name="db-keepalive", daemon=True).start()
+    logger.info("db_keepalive_started interval=180s")
+
+
 def _prewarm(proc) -> None:
     """Load the Silero VAD model ONCE per worker process (latency fix).
 
@@ -3360,6 +3416,7 @@ if __name__ == "__main__":
     # NOT in _prewarm — prewarm runs in the job subprocess, which may not spawn
     # until the first call, and Render sleeps precisely when there are NO calls.
     _start_render_keepalive()
+    _start_db_keepalive()  # keep Neon warm so the first call isn't a cold-DB stall
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
