@@ -277,6 +277,55 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
     assert confirmed_rows[0].appointment_time == time(11, 0)
 
 
+async def test_reschedule_twice_in_one_call_with_stale_token(clinic, db, redis):
+    """FIXLOG #283 (live call 2026-07-07): the caller rescheduled, then changed
+    the time AGAIN. The second reschedule reused the ORIGINAL token id, which the
+    first reschedule had already cancelled -> 'not_reschedulable_cancelled_by_patient'.
+    The stale-token recovery must reschedule the CURRENT confirmed booking instead."""
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+
+    assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=time(10, 0))
+    confirmed = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="Waffler",
+        patient_phone="+919666444429", complaint="skin", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        patient_age=30, appointment_time=time(10, 0), source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+    assert confirmed["success"]
+    original_token_id = confirmed["token_id"]
+
+    state = SessionState(session_id="t3")
+    state.branch_id = branch.id
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+        transfer_to="",
+    )
+
+    # First move 10:00 -> 11:00 (cancels the original token, makes a new one).
+    r1 = await agent._do_reschedule(original_token_id, day.isoformat(), "11:00")
+    assert r1["success"], r1
+
+    # Second move, reusing the STALE original id -> must recover, not fail.
+    r2 = await agent._do_reschedule(original_token_id, day.isoformat(), "12:00")
+    assert r2["success"], r2
+
+    rows = (
+        await db.execute(
+            select(Token.appointment_time, Token.status).where(
+                and_(Token.doctor_id == doc.id, Token.branch_id == branch.id, Token.date == day)
+            )
+        )
+    ).all()
+    confirmed_rows = [r for r in rows if r.status == "confirmed"]
+    assert len(confirmed_rows) == 1  # still exactly one live booking
+    assert confirmed_rows[0].appointment_time == time(12, 0)
+
+
 # â”€â”€ Bug 26: rebook call said "you don't have any booking" â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 

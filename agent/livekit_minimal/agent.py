@@ -1617,7 +1617,35 @@ class VachanamAgent(Agent):
             return {"success": False, "error": "booking_not_found"}
         old_token, patient = row
         if old_token.status != "confirmed":
-            return {"success": False, "error": f"not_reschedulable_{old_token.status}"}
+            # The passed token is STALE — a prior reschedule in THIS same call
+            # already moved it (that reschedule cancels the old token and creates
+            # a NEW confirmed one), but the LLM still holds the ORIGINAL id from
+            # find_my_bookings. Rescheduling again then failed
+            # "not_reschedulable_cancelled_by_patient" (live call 2026-07-07,
+            # FIXLOG #283). Recover deterministically: reschedule the patient's
+            # CURRENT confirmed booking with the SAME doctor (the replacement)
+            # instead of failing. RULE 1: branch + patient + doctor scoped.
+            replacement = (
+                await self._db.execute(
+                    select(Token)
+                    .where(
+                        and_(
+                            Token.branch_id == self._state.branch_id,
+                            Token.doctor_id == old_token.doctor_id,
+                            Token.patient_id == old_token.patient_id,
+                            Token.status == "confirmed",
+                        )
+                    )
+                    .order_by(Token.date.desc(), Token.appointment_time.desc())
+                )
+            ).scalars().first()
+            if replacement is None:
+                return {"success": False, "error": f"not_reschedulable_{old_token.status}"}
+            logger.info(
+                "reschedule_stale_token_recovered old=%s new=%s",
+                str(old_token.id), str(replacement.id),
+            )
+            old_token = replacement
 
         booking_date = self._parse_date(new_date)
         appt_time = self._parse_time(new_time)
