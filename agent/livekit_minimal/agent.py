@@ -80,6 +80,7 @@ from agent.services.meta_stub import MetaService  # noqa: E402
 from agent.services.telugu_dates import telugu_date  # noqa: E402
 from agent.livekit_minimal.greeting import (  # noqa: E402
     inbound_greeting_texts,
+    normalize_pcm,
     outbound_greeting_texts,
     play_wavs,
     synth_and_play,
@@ -134,18 +135,75 @@ MAX_DIFFERENT_PERSON_BOOKINGS_PER_CALL = 2
 _FALLBACK_FILLERS = get_lines("te").fillers
 
 
+def _wav_to_pcm(wav: bytes) -> tuple[bytes, int, int]:
+    """Decode a WAV clip to (normalized PCM bytes, sample_rate, channels)."""
+    import io
+    import wave
+
+    wf = wave.open(io.BytesIO(wav), "rb")
+    sr, ch, n = wf.getframerate(), wf.getnchannels(), wf.getnframes()
+    pcm = normalize_pcm(wf.readframes(n))
+    wf.close()
+    return pcm, sr, ch
+
+
+async def _pcm_frames(pcm: bytes, sr: int, ch: int):
+    """Yield 10ms AudioFrames from cached PCM — fed to session.say(audio=...)
+    so a pre-rendered filler plays with ZERO TTS latency."""
+    from livekit import rtc
+
+    spf = sr // 100
+    fb = spf * 2 * ch
+    for i in range(0, len(pcm), fb):
+        chunk = pcm[i : i + fb]
+        if len(chunk) < fb:
+            chunk = chunk + b"\x00" * (fb - len(chunk))
+        yield rtc.AudioFrame(
+            data=chunk, sample_rate=sr, num_channels=ch, samples_per_channel=spf
+        )
+
+
+async def cache_filler_clips(session, texts, voice_id: str, lang_code: str) -> None:
+    """Pre-render the lookup fillers ONCE at session start and stash the decoded
+    PCM on session.userdata['filler_clips'] (Vinay 2026-07-06: "cache a response
+    and speak it instantly while checking"). _say_lookup_filler then replays the
+    cached audio with no live synth. Best-effort — on any failure the filler
+    falls back to live session.say(text). Never blocks or breaks the call."""
+    try:
+        wavs = await synth_wavs(list(texts), voice_id, lang_code)
+        clips = []
+        for text, wav in zip(texts, wavs):
+            pcm, sr, ch = _wav_to_pcm(wav)
+            clips.append({"text": text, "pcm": pcm, "sr": sr, "ch": ch})
+        ud = getattr(session, "userdata", None)
+        if isinstance(ud, dict):
+            ud["filler_clips"] = clips
+        logger.info("filler_clips_cached=%d", len(clips))
+    except Exception as e:  # noqa: BLE001 — a filler must never affect booking
+        logger.warning("filler_cache_failed: %s", str(e)[:120])
+
+
 def _say_lookup_filler(context) -> None:
     """Speak a short 'let me check' filler over the dead air while a lookup tool
-    runs. Picks the clinic-language fillers off the session userdata (falls back
-    to Telugu). Non-blocking and fully guarded — it must NEVER affect booking."""
+    runs. Plays a PRE-CACHED clip (instant, no synth) when available; otherwise
+    live-synthesizes the clinic-language filler. Non-blocking and fully guarded —
+    it must NEVER affect booking."""
     try:
-        fillers = None
         sess = getattr(context, "session", None)
         ud = getattr(sess, "userdata", None)
         if ud is None:
             ud = getattr(context, "userdata", None)
-        if isinstance(ud, dict):
-            fillers = ud.get("fillers")
+        ud = ud if isinstance(ud, dict) else {}
+        clips = ud.get("filler_clips") or []
+        if clips:
+            clip = random.choice(clips)
+            context.session.say(
+                clip["text"],
+                audio=_pcm_frames(clip["pcm"], clip["sr"], clip["ch"]),
+                add_to_chat_ctx=False,
+            )
+            return
+        fillers = ud.get("fillers")
         context.session.say(
             sanitize_for_tts(random.choice(fillers or _FALLBACK_FILLERS)),
             add_to_chat_ctx=False,
@@ -2713,8 +2771,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
-            # speaks the clinic's language (falls back to Telugu).
-            userdata={"fillers": lines.fillers, "language": lang_code},
+            # speaks the clinic's language (falls back to Telugu). filler_clips is
+            # filled by cache_filler_clips at session start = instant playback.
+            userdata={"fillers": lines.fillers, "language": lang_code,
+                      "filler_clips": []},
             stt=sarvam.STT(
                 api_key=settings.sarvam_api_key,
                 model="saaras:v3",
@@ -3024,6 +3084,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 logger.warning("tts_warm_failed: %s", str(_e)[:100])
 
         _tts_warm_task = asyncio.create_task(_warm_session_tts())
+        # Pre-render the lookup fillers in the clinic voice so the "okay అండి /
+        # ఒక్క నిమిషం" ack plays INSTANTLY when a slot lookup runs (Vinay
+        # 2026-07-06), no per-call TTS latency. Best-effort, never blocks.
+        _filler_cache_task = asyncio.create_task(
+            cache_filler_clips(session, lines.fillers, tts_voice, lang_code)
+        )
         _pre_greeted = False
         if _welcome_task is not None:
             try:
