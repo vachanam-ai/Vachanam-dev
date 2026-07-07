@@ -1655,6 +1655,35 @@ class VachanamAgent(Agent):
 
         booking_date = self._parse_date(new_date)
         appt_time = self._parse_time(new_time)
+        # ALREADY AT THAT TIME (torture #286): the caller repeated the time the
+        # booking is already at ("12:30కి మార్చండి" while booked at 12:30), or
+        # the LLM re-fired an identical reschedule whose #283 recovery resolved
+        # to the moved booking. Without this, assign_token counts their OWN
+        # confirmed row against max_concurrent and refuses their own slot as
+        # "full". Nothing to move — succeed as a no-op.
+        if (
+            old_token.date == booking_date
+            and (
+                (appt_time is None and old_token.appointment_time is None)
+                or old_token.appointment_time == appt_time
+            )
+        ):
+            return {
+                "success": True,
+                "new_token_number": old_token.token_number,
+                "new_date": booking_date.isoformat(),
+                "new_time": (
+                    old_token.appointment_time.strftime("%H:%M")
+                    if old_token.appointment_time else None
+                ),
+                "old_cancelled": False,
+                "already_at_requested_time": True,
+                "instruction": (
+                    "The appointment is ALREADY at exactly this date/time — "
+                    "nothing needed to change. Tell the caller it is confirmed "
+                    "for that time, in one short line. Do NOT say it failed."
+                ),
+            }
         # Release any hold THIS session already placed before re-assigning. The
         # caller often first asks to "book" the new time (the LLM assigns a hold),
         # then we steer them to reschedule the existing booking instead. That
