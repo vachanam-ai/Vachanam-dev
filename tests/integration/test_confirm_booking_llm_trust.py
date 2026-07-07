@@ -129,6 +129,37 @@ async def test_phone_override_without_flag_is_rejected_loudly(clinic, db, redis)
     assert forged is None
 
 
+async def test_confirm_sets_existing_booking_intent_for_same_call_change(clinic, db, redis):
+    """FIXLOG #284 (Vinay 2026-07-07): after a booking is confirmed the caller
+    must be able to change/reschedule it in the SAME call. A confirmed booking
+    flips existing_booking_intent so the #279 upfront existing-booking surface no
+    longer flags the booking just made (which would dead-end the change)."""
+    from agent.livekit_minimal.agent import _availability_caller_phone
+
+    branch, doc = clinic["branch"], clinic["doc"]
+    state = _state(branch.id)
+    agent = _agent(state, db)
+    assert state.existing_booking_intent is False
+    # Before booking, a new-booking lookup still surfaces #279 (phone passed).
+    assert _availability_caller_phone(state) == state.patient_phone
+
+    r = await agent.confirm_booking(
+        context=None,
+        doctor_id=str(doc.id),
+        patient_name="Selfy",
+        complaint="fever",
+        booking_date=_tomorrow().isoformat(),
+        token_number=1,
+        followup_consent=False,
+        patient_phone=None,  # defaults to caller-ID
+        patient_age=30,
+    )
+    assert r.get("success"), r
+    # After confirming, further "change it" must NOT be blocked by ALREADY_BOOKED.
+    assert state.existing_booking_intent is True
+    assert _availability_caller_phone(state) is None
+
+
 async def test_third_different_person_booking_refused(clinic, db, redis):
     """#11: the 3rd family booking on one call is refused (cap = 2)."""
     from livekit.agents.llm import ToolError

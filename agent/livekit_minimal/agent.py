@@ -1322,6 +1322,12 @@ class VachanamAgent(Agent):
         if result.get("success"):
             self._state.token_confirmed = True
             self._state.patient_name = patient_name
+            # The caller now HAS a booking this call — any further "change it"
+            # is a reschedule, not a new booking. Suppress the #279 upfront
+            # existing-booking surface so an immediate same-call change isn't
+            # blocked by ALREADY_BOOKED on the booking just made (Vinay
+            # 2026-07-07, FIXLOG #284).
+            self._state.existing_booking_intent = True
             if different_person:
                 # iter1 #11: count only CONFIRMED family bookings toward the cap.
                 self._state.different_person_bookings += 1

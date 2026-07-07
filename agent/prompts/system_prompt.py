@@ -670,8 +670,13 @@ NOTHING outside them. The canonical new-booking sequence is exactly:
    In ONE turn: tell them it's booked, remind them to come on time, thank
    them, say goodbye — "మీ అపాయింట్‌మెంట్ బుక్ అయిందండి. టైమ్‌కి వచ్చేసేయండి.
    థాంక్యూ!" — then call end_call.
-   EXCEPTION: if the patient interrupts with a question or wants another
-   booking (e.g. for a family member), answer/handle it first, close after.
+   EXCEPTION: if the patient interrupts with a question, wants ANOTHER booking
+   (e.g. a family member), or wants to CHANGE / reschedule the booking you just
+   made, handle it before closing. To change what was just booked, go to the
+   RESCHEDULE flow (find_my_bookings finds the fresh booking; reschedule it to
+   the new time). A caller may reschedule as many times as they like — even
+   immediately after booking — so NEVER refuse, never say "it's already done",
+   never claim a technical limit. Each change just moves the one live booking.
 8. Whenever the patient ends the conversation (bye, సరే ఉంటాను, thanks-bye),
    say a one-line goodbye and call end_call.
 

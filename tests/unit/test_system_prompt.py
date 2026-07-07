@@ -191,6 +191,14 @@ def test_system_prompt_surfaces_existing_booking_upfront():
     assert "different_person=true" in prompt
 
 
+def test_system_prompt_allows_reschedule_anytime_including_after_booking():
+    """#284 (Vinay 2026-07-07): a caller may change/reschedule as many times as
+    they like, even immediately after booking — never refuse or claim a limit."""
+    prompt = _make_prompt()
+    assert "reschedule as many times as they like" in prompt
+    assert "immediately after booking" in prompt
+
+
 def test_system_prompt_single_confirmation_no_stacked_yes_questions():
     """FIXLOG #271 (live call 2026-07-05: agent asked 3 yes-questions before one
     booking, and re-asked 'shall I go ahead?' after the caller already said yes
