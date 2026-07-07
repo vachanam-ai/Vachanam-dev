@@ -1646,7 +1646,21 @@ class VachanamAgent(Agent):
                 )
             ).scalars().first()
             if replacement is None:
-                return {"success": False, "error": f"not_reschedulable_{old_token.status}"}
+                # Nothing confirmed left — the caller cancelled it, then said
+                # "no wait, move it to X" (torture #287). Guide the model to a
+                # fresh booking at the requested time instead of a bare error
+                # it would speak as a "technical issue".
+                return {
+                    "success": False,
+                    "error": f"not_reschedulable_{old_token.status}",
+                    "instruction": (
+                        "This booking is CANCELLED — there is nothing to move. "
+                        "The caller wants the appointment after all: offer to "
+                        "BOOK a fresh appointment at the requested date/time "
+                        "(check_availability then the normal booking tools). "
+                        "Do NOT call this a technical problem."
+                    ),
+                }
             logger.info(
                 "reschedule_stale_token_recovered old=%s new=%s",
                 str(old_token.id), str(replacement.id),
@@ -1870,6 +1884,44 @@ class VachanamAgent(Agent):
                         "cancelled and nothing more is needed — NEVER say "
                         "they have no booking. On a rebook call, also call "
                         "decline_rebook so the clinic stops calling them."
+                    ),
+                }
+            if token.status == "cancelled_by_patient":
+                # STALE id (torture #287): a reschedule earlier in THIS call
+                # cancelled this token and created a replacement, but the LLM
+                # still holds the original id ("11:00కి మార్చండి... అసలు వద్దు,
+                # క్యాన్సిల్ చేసేయండి"). Cancel the patient's CURRENT confirmed
+                # booking with the same doctor instead (mirror of the #283
+                # reschedule recovery — RULE 1 scoped). No replacement = the
+                # caller repeated "cancel" — answer gracefully, never a bare
+                # error the model reads out as a "technical issue".
+                replacement = (
+                    await self._db.execute(
+                        select(Token)
+                        .where(
+                            _and(
+                                Token.branch_id == self._state.branch_id,
+                                Token.doctor_id == token.doctor_id,
+                                Token.patient_id == token.patient_id,
+                                Token.status == "confirmed",
+                            )
+                        )
+                        .order_by(Token.date.desc(), Token.appointment_time.desc())
+                    )
+                ).scalars().first()
+                if replacement is not None:
+                    logger.info(
+                        "cancel_stale_token_recovered old=%s new=%s",
+                        str(token.id), str(replacement.id),
+                    )
+                    return await self._do_cancel(str(replacement.id))
+                return {
+                    "success": False,
+                    "error": "already_cancelled",
+                    "instruction": (
+                        "This booking is ALREADY cancelled — nothing more to "
+                        "do. Tell the caller it is already cancelled, in one "
+                        "short line. Do NOT call this a technical problem."
                     ),
                 }
             return {"success": False, "error": f"not_cancellable_{token.status}"}

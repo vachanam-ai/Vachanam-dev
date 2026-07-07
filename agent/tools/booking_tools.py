@@ -681,6 +681,13 @@ async def assign_token(
                 "success": False,
                 "reason": "off_grid_time",
                 "nearest_slots": [s.strftime("%H:%M") for s in nearest],
+                # Every refusal carries a spoken instruction — bare results get
+                # read out as a "technical issue" (torture #287).
+                "instruction": (
+                    "That exact time is not on the doctor's slot grid. Offer "
+                    "the nearest_slots above as a simple choice — do NOT call "
+                    "this a technical problem."
+                ),
             }
 
         max_per_slot = doctor.max_concurrent_per_slot or 1

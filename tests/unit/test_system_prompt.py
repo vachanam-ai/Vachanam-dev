@@ -351,3 +351,24 @@ def test_system_prompt_address_not_invented_when_absent():
     prompt = _make_prompt(clinic_address=None)
     assert "CLINIC ADDRESS" in prompt
     assert "do NOT invent an address" in prompt
+
+
+def test_system_prompt_exploratory_ask_is_not_a_booking_command():
+    """#287 (torture round 2): "what if I come Thursday at 12?" is an
+    availability QUESTION — answer + offer, never book on a hypothetical."""
+    prompt = _make_prompt()
+    assert "EXPLORATORY ASK" in prompt
+    assert "Booking on a hypothetical is a serious" in prompt
+
+
+def test_system_prompt_audio_chaos_rules_pinned():
+    """#287: the audio-reality conduct rules (long pauses/fragments, background
+    noise, multiple voices, silence, language gap, no tools on fragments) must
+    never be edited away — they are the phone-line survival kit."""
+    prompt = _make_prompt()
+    assert "INCOMPLETE UTTERANCES" in prompt          # pauses / trailing off
+    assert "NO TOOLS ON FRAGMENTS" in prompt          # half-sentence tool calls
+    assert "BACKGROUND NOISE / SEVERAL VOICES" in prompt
+    assert "SILENT CALLER" in prompt
+    assert "UNINTELLIGIBLE STREAK" in prompt
+    assert "FAILURE RECOVERY" in prompt               # never freeze, never loop
