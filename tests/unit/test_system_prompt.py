@@ -403,3 +403,17 @@ def test_mic_gate_wired_around_welcome_clip():
     assert gate_off != -1, "mic gate disable missing"
     assert gate_on != -1, "mic gate re-enable missing"
     assert gate_off < clip_await < gate_on, "gate must wrap the clip await"
+
+
+def test_system_prompt_performance_prosody_rules():
+    """#292 (Vinay 2026-07-08): 'add life to voice' — the LLM must WRITE the
+    performance (punctuation = prosody for lightning_v3.1's semantic pauses),
+    react like a human first, and vary sentence melody. Sanitizer is verified
+    to preserve ... ! ? , so this markup reaches the TTS intact."""
+    prompt = _make_prompt()
+    assert "WRITE THE PERFORMANCE, NOT A TRANSCRIPT" in prompt
+    assert "thinking pause" in prompt
+    assert "REACT LIKE A HUMAN FIRST" in prompt
+    assert "MELODY" in prompt
+    # reaction word REPLACES the plain ok — guards against filler stacking
+    assert "IN PLACE of a plain" in prompt
