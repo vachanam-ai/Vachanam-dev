@@ -729,10 +729,13 @@ class _HttpSmallestTTS(smallestai.TTS):
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
-    """Gemini-only (Vinay 2026-06-25): primary gemini-2.5-flash, fallback
-    gemini-3.1-flash-lite. If the primary is overloaded/slow, the FallbackAdapter
-    swaps to the faster Flash-lite. thinking is disabled on both to keep TTFT low
-    (2.5-flash uses thinking_budget; gemini-3 uses thinking_level).
+    """Gemini-only. Primary gemini-3.1-flash-lite, fallback gemini-2.5-flash
+    (Vinay 2026-07-08: flash-lite promoted to primary for lower TTFT — the
+    ~1.4s 2.5-flash ttft was the biggest chunk of the felt turn lag; flash-lite
+    is materially faster and already carried every fallback turn well). If
+    flash-lite is overloaded/slow the FallbackAdapter swaps to 2.5-flash.
+    thinking is minimised on both (gemini-3 uses thinking_level; 2.5-flash uses
+    thinking_budget).
     """
     from google.genai import types as genai_types
 
@@ -740,13 +743,13 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
         llm=[
             google.LLM(
                 api_key=settings.gemini_api_key,
-                model="gemini-2.5-flash",
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                model="gemini-3.1-flash-lite",
+                thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
             ),
             google.LLM(
                 api_key=settings.gemini_api_key,
-                model="gemini-3.1-flash-lite",
-                thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
+                model="gemini-2.5-flash",
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
         ],
         attempt_timeout=10.0,
