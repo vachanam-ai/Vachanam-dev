@@ -372,3 +372,34 @@ def test_system_prompt_audio_chaos_rules_pinned():
     assert "SILENT CALLER" in prompt
     assert "UNINTELLIGIBLE STREAK" in prompt
     assert "FAILURE RECOVERY" in prompt               # never freeze, never loop
+
+
+def test_system_prompt_conversational_humanity_rules():
+    """#290 (live 2026-07-08): the call felt mechanical — agent repeated a
+    sentence VERBATIM (turns 7 vs 12), burned whole turns on bare "అర్థమైంది"
+    acknowledgements (turns 5, 17), and never recovered a barge-in-cut thought
+    (turns 19/22/42). These three anti-mechanical rules must stay pinned."""
+    prompt = _make_prompt()
+    assert "NEVER REPEAT A SENTENCE VERBATIM" in prompt
+    assert "REPHRASE it shorter" in prompt
+    assert "AN ACKNOWLEDGEMENT ALONE IS A WASTED TURN" in prompt
+    assert "MOVE the call forward" in prompt
+    assert "IF THE CALLER INTERRUPTS YOU" in prompt
+    assert "do not" in prompt and "resume or re-read" in prompt
+
+
+def test_mic_gate_wired_around_welcome_clip():
+    """#289 (live 2026-07-08, "intros colliding"): session STT goes live while
+    the uninterruptible greeting clip still plays; an early 'hello' produced a
+    spoken reply OVER the clip. The entrypoint must gate session audio input
+    (set_audio_enabled False -> await clip -> True) around the welcome await."""
+    import inspect
+    import agent.livekit_minimal.agent as ag
+
+    src = inspect.getsource(ag)
+    gate_off = src.find("session.input.set_audio_enabled(False)")
+    clip_await = src.find("_pre_greeted = bool(await _welcome_task)")
+    gate_on = src.find("session.input.set_audio_enabled(True)")
+    assert gate_off != -1, "mic gate disable missing"
+    assert gate_on != -1, "mic gate re-enable missing"
+    assert gate_off < clip_await < gate_on, "gate must wrap the clip await"

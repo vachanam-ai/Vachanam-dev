@@ -3207,10 +3207,28 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         _pre_greeted = False
         if _welcome_task is not None:
+            # MIC GATE (#289, live 2026-07-08): the raw greeting clip is
+            # uninterruptible, but session.start() often finishes WHILE the clip
+            # is still playing — STT goes live, an early "hello" gets an LLM
+            # reply on the session track OVER the clip = two openings colliding.
+            # Hold the session's audio input until the clip finishes; speech
+            # during our own intro is safe to drop (a human receptionist doesn't
+            # process words spoken over her greeting either). RULE 8: gate is
+            # best-effort — a gate failure must never block answering.
+            try:
+                session.input.set_audio_enabled(False)
+            except Exception as _mg:  # noqa: BLE001
+                logger.warning("mic_gate_disable_failed: %s", _mg)
             try:
                 _pre_greeted = bool(await _welcome_task)
             except Exception as _we:  # noqa: BLE001
                 logger.warning("welcome_await_failed: %s", _we)
+            finally:
+                try:
+                    session.input.set_audio_enabled(True)
+                    logger.info("mic_gate_open after_clip=True")
+                except Exception as _mg:  # noqa: BLE001
+                    logger.warning("mic_gate_enable_failed: %s", _mg)
         _t_pre_start_await = _perf.monotonic()
         await _start_task
         logger.info(
