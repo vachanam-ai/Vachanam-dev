@@ -986,6 +986,20 @@ class VachanamAgent(Agent):
             except ValueError:
                 pass  # probably a name — try matching below
             needle = doctor_id.strip().lower().removeprefix("dr.").removeprefix("dr").strip()
+            if needle and not needle.isascii():
+                # LIVE 2026-07-08: patient asked for "డాక్టర్ లక్ష్మి" by name; the
+                # LLM passed the NATIVE-SCRIPT name, DB names are Latin
+                # ("Lakshmi") → substring never matched → "Unknown doctor" killed
+                # the whole booking. Transliterate the needle to Latin before
+                # matching (cached Sarvam hop; on failure returns input — RULE 8,
+                # we then fall through to the instructive error below).
+                try:
+                    _latin = await spoken_text(needle, "en")
+                    _latin = _latin.strip().lower().removeprefix("dr.").removeprefix("dr").strip()
+                    if _latin and _latin.isascii():
+                        needle = _latin
+                except Exception as _tx:  # noqa: BLE001
+                    logger.warning("doctor_needle_transliterate_failed: %s", _tx)
             if needle:
                 result = await self._db.execute(
                     select(Doctor).where(
@@ -995,7 +1009,8 @@ class VachanamAgent(Agent):
                         )
                     )
                 )
-                matches = [doc for doc in result.scalars() if needle in doc.name.lower()]
+                doctors = list(result.scalars())
+                matches = [doc for doc in doctors if needle in doc.name.lower()]
                 if len(matches) == 1:
                     return matches[0].id
                 if len(matches) > 1:
@@ -1006,6 +1021,18 @@ class VachanamAgent(Agent):
                         f"'{doctor_id}' matches multiple doctors: {names}. Use the "
                         "exact doctor_id returned by route_to_doctor or "
                         "find_my_bookings instead of a name."
+                    )
+                if not matches and doctors and self._state.doctor_id is None:
+                    # Self-healing dead-end (was a bare "Unknown doctor" that
+                    # ended the call): tell the LLM the REAL names so its next
+                    # tool call succeeds instead of apologising to the patient.
+                    names = ", ".join(d.name for d in doctors)
+                    raise ToolError(
+                        f"No doctor matches '{doctor_id}'. Active doctors here: "
+                        f"{names}. Retry the SAME tool call now, passing the "
+                        "matching name from that list EXACTLY as written (or the "
+                        "doctor_id from route_to_doctor). Do not tell the patient "
+                        "there is a problem — just retry with the listed name."
                     )
         if self._state.doctor_id:
             return self._state.doctor_id
