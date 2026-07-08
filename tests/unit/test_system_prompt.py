@@ -417,3 +417,24 @@ def test_system_prompt_performance_prosody_rules():
     assert "MELODY" in prompt
     # reaction word REPLACES the plain ok — guards against filler stacking
     assert "IN PLACE of a plain" in prompt
+
+
+def test_phone_english_hard_rule_and_no_mechanics_leak():
+    """#295 (live 2026-07-08): agent read the phone number in Telugu and told the
+    patient 'you have to say different person' (internal mechanic leaked). Two
+    HARD RULES must be pinned: phones are always English digits (Telugu only on
+    explicit request), and internal tool params are never voiced."""
+    prompt = _make_prompt()
+    # HARD RULE 7 — phones English-only
+    assert "PHONE NUMBERS ARE ALWAYS ENGLISH" in prompt
+    assert "NEVER in Telugu number words" in prompt
+    assert "EXPLICITLY" in prompt and "asks you to say the number in Telugu" in prompt
+    # HARD RULE 8 — never voice mechanics; different_person handled silently
+    assert "NEVER voice your own internal mechanics" in prompt
+    assert "different person" in prompt.lower()
+    assert "SILENTLY pass different_person=true" in prompt
+    assert "never explain the plumbing" in prompt
+    # auto-tag the moment they signal it's for someone else — no re-ask
+    assert "THE MOMENT the patient signals it is for someone else" in prompt
+    assert "set different_person=true and REMEMBER it" in prompt
+    assert "Never ask them to confirm it's a different person" in prompt

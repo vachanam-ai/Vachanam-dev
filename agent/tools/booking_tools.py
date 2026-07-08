@@ -921,7 +921,11 @@ async def confirm_booking(
             "patient wants THAT existing booking moved, call "
             "reschedule_booking(old_token_id=existing_token_id, ...) with the "
             "existing_token_id from this response. NEVER invent a different "
-            "reason like 'slot not available'.",
+            "reason like 'slot not available'. BUT if you are booking for a "
+            "DIFFERENT person (a friend/family member, not the existing patient), "
+            "retry this SAME confirm_booking with different_person=true — never "
+            "speak this to the patient, never mention 'different person' or any "
+            "internal rule; just retry silently.",
         }
 
     # 1b-2. TIME-CLASH guard across ALL doctors. The per-doctor guard above only
