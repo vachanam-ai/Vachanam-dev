@@ -427,8 +427,8 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     prompt = _make_prompt()
     # HARD RULE 7 — phones English-only
     assert "PHONE NUMBERS ARE ALWAYS ENGLISH" in prompt
-    assert "NEVER in Telugu number words" in prompt
-    assert "EXPLICITLY" in prompt and "asks you to say the number in Telugu" in prompt
+    assert "NEVER Telugu number words" in prompt
+    assert "EXPLICITLY" in prompt and "asks for it in Telugu" in prompt
     # HARD RULE 8 — never voice mechanics; different_person handled silently
     assert "NEVER voice your own internal mechanics" in prompt
     assert "different person" in prompt.lower()
@@ -438,3 +438,9 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     assert "THE MOMENT the patient signals it is for someone else" in prompt
     assert "set different_person=true and REMEMBER it" in prompt
     assert "Never ask them to confirm it's a different person" in prompt
+    # #296: friend booking must pass booking_for_other + never surface caller's own
+    assert "pass booking_for_other=true to check_availability" in prompt
+    assert "that is the caller's" in prompt.lower() or "it is the caller" in prompt.lower()
+    # phone digit-by-digit hard rule (never joined)
+    assert "PHONE NUMBERS ARE ALWAYS ENGLISH, DIGIT BY DIGIT" in prompt
+    assert "NEVER write the ten digits joined" in prompt

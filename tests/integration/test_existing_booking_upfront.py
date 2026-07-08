@@ -183,3 +183,34 @@ async def test_directive_allows_different_person_continue(db, redis):
 
     out = await check_availability(doc.id, br.id, date.today(), db, caller_phone=CALLER)
     assert "DIFFERENT person" in out
+
+
+async def test_booking_for_other_suppresses_caller_already_booked(db, redis):
+    """#296: caller has a confirmed slot with the doctor that day; booking for a
+    FRIEND (booking_for_other) must NOT surface the caller's own ALREADY_BOOKED —
+    the helper passes caller_phone=None, so check_availability returns capacity."""
+    from agent.livekit_minimal.agent import _availability_caller_phone
+    from agent.session_state import SessionState
+
+    org, br = await _org_branch(db, "friend")
+    doc = await _slot_doctor(db, br)
+    await _seed_confirmed(db, br, doc, CALLER, appt_time=time(15, 0),
+                          on=date(2026, 7, 10))
+    await db.commit()
+
+    st = SessionState(session_id="friend296")
+    st.branch_id = br.id
+    st.patient_phone = CALLER
+    # normal booking → caller phone flows (would surface ALREADY_BOOKED)
+    assert _availability_caller_phone(st) == CALLER
+    # friend booking → suppressed
+    st.booking_for_other = True
+    assert _availability_caller_phone(st) is None
+
+    # and check_availability with caller_phone=None does NOT flag
+    res = await check_availability(
+        doctor_id=doc.id, branch_id=br.id, booking_date=date(2026, 7, 10),
+        db=db, query_start=time(10, 0), query_end=time(11, 0),
+        caller_phone=_availability_caller_phone(st),
+    )
+    assert "ALREADY_BOOKED" not in str(res)

@@ -304,13 +304,30 @@ def _phone_override_error(
     return None
 
 
+_DIGIT_RUN = re.compile(r"\d{2,}")
+
+
+def _space_digit_runs(s: str) -> str:
+    """Insert spaces between the digits of any 2+-digit run so TTS speaks them
+    one by one ("9 6 6 6") instead of as a cardinal ("ninety-six crore"). Used
+    in the TTS path for phone numbers; single digits are left alone."""
+    return _DIGIT_RUN.sub(lambda m: " ".join(m.group()), s)
+
+
 def _availability_caller_phone(state) -> str | None:
     """The caller_phone to pass to check_availability for the #279 upfront
     existing-booking surface — suppressed once the caller is on the
     reschedule/cancel track (find_my_bookings ran, existing_booking_intent set).
     Otherwise the caller's OWN booking being moved is flagged as blocking and the
-    reschedule dead-ends (live call 2026-07-06, FIXLOG #281)."""
-    return None if state.existing_booking_intent else state.patient_phone
+    reschedule dead-ends (live call 2026-07-06, FIXLOG #281).
+
+    Also suppressed when booking for someone else (#296): the caller's own
+    booking that day is irrelevant to a friend's slot — surfacing it made the
+    agent tell a friend-booker "YOU already have an appointment" and refuse
+    (live call 2026-07-08 13:46)."""
+    if state.existing_booking_intent or getattr(state, "booking_for_other", False):
+        return None
+    return state.patient_phone
 
 
 def _voice_for_lang(branch, lang_code: str) -> str:
@@ -864,6 +881,23 @@ class VachanamAgent(Agent):
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
 
+    async def tts_node(self, text, model_settings):
+        """Space out multi-digit runs before they reach TTS. A joined number like
+        "9666444428" is read by the te/en TTS as an Indian cardinal ("తొంభై ఆరు
+        కోట్ల..." / "ninety-six crore...") — live 2026-07-08, a phone number came
+        out as "96 crores 66 lakhs". Isolating each digit forces digit-by-digit
+        speech ("9 6 6 6...") no matter how the LLM formatted it, and it is
+        chunk-safe: every digit is spaced individually, so a number split across
+        stream chunks still comes out right. Single stray digits (a bare "3"
+        o'clock) are untouched — only runs of 2+."""
+
+        async def _spaced():
+            async for chunk in text:
+                yield _space_digit_runs(chunk)
+
+        async for frame in super().tts_node(_spaced(), model_settings):
+            yield frame
+
     async def on_enter(self) -> None:
         """Fires when this agent becomes active. For the initial agent it's a
         no-op (greeting is driven by the entrypoint). For an agent created by
@@ -1087,9 +1121,15 @@ class VachanamAgent(Agent):
         booking_date: str,
         query_start: str | None = None,
         query_end: str | None = None,
+        booking_for_other: bool = False,
     ) -> dict:
         """Check whether the doctor has capacity on a date (YYYY-MM-DD).
-        Optional query_start/query_end are HH:MM strings for slot doctors."""
+        Optional query_start/query_end are HH:MM strings for slot doctors.
+        Pass booking_for_other=true when the appointment is for a friend/family
+        member (not the caller) — this stops the caller's OWN booking that day
+        from being surfaced as a blocker."""
+        if booking_for_other:
+            self._state.booking_for_other = True
         _say_lookup_filler(context)  # cover the DB lookup beat (no dead air)
         resolved = await self._resolve_doctor_id(doctor_id)
         availability = await check_availability(

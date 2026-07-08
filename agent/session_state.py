@@ -61,6 +61,13 @@ class SessionState:
     # (FIXLOG #281, live call 2026-07-06).
     existing_booking_intent: bool = False
 
+    # Set when the caller is booking for someone else (friend/family). Like the
+    # flag above, it suppresses the caller's own ALREADY_BOOKED surface — a
+    # friend's slot has nothing to do with the caller's own booking that day
+    # (#296, live call 2026-07-08 13:46: agent told a friend-booker "YOU already
+    # have an appointment" and refused).
+    booking_for_other: bool = False
+
     # Durable metering: CallLog row inserted at call start (TD-027/F6) so a
     # killed worker that never runs the shutdown callback still leaves a record.
     call_log_id: UUID | None = None
