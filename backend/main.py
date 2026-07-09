@@ -357,8 +357,18 @@ async def health() -> dict:
     Returns 200 with env tag. Does NOT touch DB or Redis — health endpoint
     must stay fast and unauthenticated to avoid cascading failures.
     Phase 10 adds: /health/deep that probes DB + Redis on demand.
+
+    `build` is the short commit the instance is actually running (Render sets
+    RENDER_GIT_COMMIT). Without it there is no way to tell from outside whether
+    a push actually redeployed — which mattered for #299, where the whole cost
+    fix lives in this process's schedulers. Short SHA only; the repo is private
+    and a 7-char hash reveals nothing exploitable.
     """
-    return {"status": "ok", "env": settings.app_env, "service": "vachanam-api"}
+    out = {"status": "ok", "env": settings.app_env, "service": "vachanam-api"}
+    commit = os.getenv("RENDER_GIT_COMMIT", "")
+    if commit:
+        out["build"] = commit[:7]
+    return out
 
 
 @app.get("/health/voice-plane", tags=["health"])
