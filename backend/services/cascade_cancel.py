@@ -176,6 +176,13 @@ async def cascade_for_unavailability(
 
     await db.commit()
 
+    if followups_scheduled_count:
+        # #299: the cascade job is parked in Redis until its cached next-due
+        # time. Drop it so these fresh rebook calls go out on the next tick.
+        from backend.jobs import wake_gate
+
+        await wake_gate.clear_next_at("cascade")
+
     # M14: release the Redis slot keys for cancelled SLOT-doctor tokens. The
     # DB count drops to 0 but check_availability uses max(redis, db); if the
     # org_admin later REMOVES the unavailability, those slots would still read

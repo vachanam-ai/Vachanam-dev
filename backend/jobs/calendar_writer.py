@@ -202,13 +202,37 @@ async def _process_one_task(db, task: CalendarWriteTask, svc: GoogleCalendarServ
             )
 
 
+async def _next_pending_epoch(db) -> float | None:
+    """When the earliest pending calendar task next becomes attemptable, or None
+    if the queue is empty. Respects retry backoff (next_attempt_at)."""
+    row = (
+        await db.execute(
+            select(CalendarWriteTask.next_attempt_at)
+            .where(CalendarWriteTask.status == "pending")
+            .order_by(CalendarWriteTask.next_attempt_at.asc())
+            .limit(1)
+        )
+    ).first()
+    return row[0].timestamp() if row else None
+
+
 async def run_calendar_writer() -> None:
     """APScheduler entry point — drains up to BATCH pending tasks per tick.
 
     Opens its own AsyncSessionLocal so no session state bleeds between runs.
     Each call to _process_one_task commits independently; a failure in one
     task does not roll back others.
+
+    #299: an empty queue must not wake Postgres every 30s (that alone pinned
+    Neon's compute on 24/7). The next attemptable time is parked in Redis;
+    ticks before it are a Redis read only. Enqueue clears the key, so a fresh
+    task is still picked up on the very next tick.
     """
+    from backend.jobs import wake_gate
+
+    if not await wake_gate.should_run_scheduled("calendar"):
+        return
+
     async with AsyncSessionLocal() as db:
         stmt = (
             select(CalendarWriteTask)
@@ -223,6 +247,7 @@ async def run_calendar_writer() -> None:
         tasks = result.scalars().all()
 
         if not tasks:
+            await wake_gate.set_next_at("calendar", await _next_pending_epoch(db))
             return
 
         logger.info("calendar_writer_tick", pending_count=len(tasks))
@@ -231,6 +256,8 @@ async def run_calendar_writer() -> None:
         svc = GoogleCalendarService()
         for task in tasks:
             await _process_one_task(db, task, svc)
+
+        await wake_gate.set_next_at("calendar", await _next_pending_epoch(db))
 
 
 async def requeue_stale_in_progress() -> None:

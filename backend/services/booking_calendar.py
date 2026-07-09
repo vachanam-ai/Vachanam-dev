@@ -97,6 +97,14 @@ async def _enqueue_calendar_task(
     )
     await db.commit()
 
+    if status == "pending":
+        # #299: the writer job is parked in Redis until its cached next-attempt
+        # time. Drop that key so this fresh task is picked up on the very next
+        # 30s tick instead of waiting out the safety ceiling. Best-effort.
+        from backend.jobs import wake_gate
+
+        await wake_gate.clear_next_at("calendar")
+
 
 async def write_booking_calendar(
     db,

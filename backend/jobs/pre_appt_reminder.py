@@ -60,11 +60,55 @@ def appointment_in_window(
     return lo <= appt <= hi
 
 
+async def _next_due_epoch(db, branches) -> float | None:
+    """UTC epoch at which the EARLIEST pending reminder becomes due, across all
+    branches — or None when nothing is pending. A reminder becomes due once its
+    appointment is within WINDOW_MAX minutes, so due = appointment - WINDOW_MAX.
+
+    Used to park the job in Redis until that moment, so idle ticks never touch
+    Postgres and Neon's compute can suspend (FIXLOG #299)."""
+    soonest: float | None = None
+    for branch in branches:
+        tz = ZoneInfo(branch.timezone or "Asia/Kolkata")
+        today = datetime.now(tz).date()
+        row = (
+            await db.execute(
+                select(Token.date, Token.appointment_time)
+                .join(Doctor, Token.doctor_id == Doctor.id)
+                .where(
+                    and_(
+                        Token.branch_id == branch.id,  # RULE 1
+                        Token.date >= today,
+                        Token.status == "confirmed",
+                        Token.reminder_sent.is_(False),
+                        Token.appointment_time.is_not(None),
+                        Doctor.booking_type == "appointment",
+                        Doctor.pre_appointment_reminder.is_(True),
+                    )
+                )
+                .order_by(Token.date, Token.appointment_time)
+                .limit(1)
+            )
+        ).first()
+        if not row:
+            continue
+        appt = datetime.combine(row[0], row[1], tzinfo=tz)
+        due = (appt - timedelta(minutes=WINDOW_MAX)).timestamp()
+        soonest = due if soonest is None else min(soonest, due)
+    return soonest
+
+
 async def run_pre_appt_reminders() -> None:
     from backend.config import settings as _settings
+    from backend.jobs import wake_gate
 
     if not _settings.voice_plane_configured:
         logger.warning("pre_appt_reminder_skipped_no_voice_plane")  # M15
+        return
+
+    # #299: nothing is due yet — answer from Redis and leave Postgres asleep.
+    # Fail-open: an unknown/absent key or any Redis trouble runs the DB pass.
+    if not await wake_gate.should_run_scheduled("reminders"):
         return
 
     async with _db_module.AsyncSessionLocal() as db:
@@ -119,6 +163,11 @@ async def run_pre_appt_reminders() -> None:
                 if ok:
                     token.reminder_sent = True
                     await db.commit()
+
+        # #299: park until the next reminder is genuinely due, so every tick
+        # before then is a Redis read and Postgres can suspend. Capped by
+        # wake_gate.SAFETY_SECONDS, so a stale value self-heals within the hour.
+        await wake_gate.set_next_at("reminders", await _next_due_epoch(db, branches))
 
 
 async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> bool:

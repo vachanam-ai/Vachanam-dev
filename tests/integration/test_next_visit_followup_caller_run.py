@@ -50,7 +50,7 @@ async def _seed(db, *, is_final=False, next_reporting=date(2026, 6, 25), phone="
 
 
 @pytest.mark.asyncio
-async def test_run_dispatch_success_marks_completed(db, monkeypatch):
+async def test_run_dispatch_success_marks_completed(db, monkeypatch, redis):
     br, doc, pat, note, task = await _seed(db)
     seen = {}
 
@@ -75,7 +75,7 @@ async def test_run_dispatch_success_marks_completed(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_dispatch_failure_stays_pending_for_retry(db, monkeypatch):
+async def test_run_dispatch_failure_stays_pending_for_retry(db, monkeypatch, redis):
     br, doc, pat, note, task = await _seed(db)
 
     async def fake_dispatch(*a, **k):
@@ -91,7 +91,7 @@ async def test_run_dispatch_failure_stays_pending_for_retry(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_final_note_completes_without_dialing(db, monkeypatch):
+async def test_run_final_note_completes_without_dialing(db, monkeypatch, redis):
     br, doc, pat, note, task = await _seed(db, is_final=True)
     called = {"n": 0}
 

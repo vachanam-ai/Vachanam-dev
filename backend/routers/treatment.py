@@ -346,6 +346,13 @@ async def doctor_reply(
     db.add(task)
     await db.commit()
     await db.refresh(task)
+
+    # #299: doctor_advice dials ASAP — drop the follow-up job's parked due time
+    # so it runs on the very next tick instead of waiting it out.
+    from backend.jobs import wake_gate
+
+    await wake_gate.clear_next_at("followups")
+
     logger.info(
         "followup_doctor_reply_created",
         branch_id=str(body.branch_id),

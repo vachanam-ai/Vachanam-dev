@@ -7,7 +7,7 @@ ASAP. RULE 9: metadata carries ONLY operational fields + the doctor's message
 from __future__ import annotations
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 import structlog
 from sqlalchemy import select
@@ -62,9 +62,42 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
         return False
 
 
+async def _next_due_epoch(db, now_ist: datetime) -> float | None:
+    """When the earliest pending voice follow-up becomes dialable, or None when
+    none are pending. A task is due once scheduled_date has arrived and we are
+    inside calling hours — so a future task's due moment is CALL_START_H on its
+    scheduled day (#299)."""
+    row = (
+        await db.execute(
+            select(FollowupTask.scheduled_date)
+            .where(
+                FollowupTask.status == "pending",
+                FollowupTask.channel == "voice",
+                FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"]),
+            )
+            .order_by(FollowupTask.scheduled_date.asc())
+            .limit(1)
+        )
+    ).first()
+    if not row:
+        return None
+    sched = row[0] or now_ist.date()
+    if sched <= now_ist.date():
+        return now_ist.timestamp()  # due now (or overdue) — keep ticking
+    return datetime.combine(sched, dtime(CALL_START_H), tzinfo=IST).timestamp()
+
+
 async def run_next_visit_followups(now: datetime | None = None) -> int:
+    from backend.jobs import wake_gate
+
     now_ist = (now or datetime.now(IST)).astimezone(IST)
     if not (CALL_START_H <= now_ist.hour < CALL_END_H):
+        return 0
+    # #299: the next task isn't dialable yet ⇒ answer from Redis and leave
+    # Postgres asleep. Schedule-driven (not producer-driven), so a task created
+    # by ANY path is still picked up: the job recomputes the due time from the
+    # database on every real pass, and wake_gate fails open on Redis trouble.
+    if not await wake_gate.should_run_scheduled("followups"):
         return 0
     dispatched = 0
     async with AsyncSessionLocal() as db:
@@ -109,4 +142,8 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
                 # tick retries (self-healing). Never marked done before a real dispatch.
                 t.status = "unreachable" if t.attempt_count >= (t.max_attempts or 3) else "pending"
             await db.commit()   # COMMIT PER TASK
+
+        # #299: park until the next follow-up is actually dialable. Capped by
+        # wake_gate.SAFETY_SECONDS, so nothing sleeps longer than an hour.
+        await wake_gate.set_next_at("followups", await _next_due_epoch(db, now_ist))
     return dispatched

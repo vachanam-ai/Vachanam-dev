@@ -1138,6 +1138,17 @@ async def confirm_booking(
         except Exception as e:
             logger.error("whatsapp_confirmation_failed", error=str(e), token_id=str(token.id))
 
+    # #299: this booking may be due for a reminder sooner than the time the
+    # reminder job has parked itself until. Drop that cached time so the next
+    # tick recomputes from Postgres — which is awake right now anyway, since we
+    # just wrote this booking. Best-effort; the safety ceiling covers a failure.
+    try:
+        from backend.jobs import wake_gate
+
+        await wake_gate.clear_next_at("reminders")
+    except Exception as e:  # noqa: BLE001 — never fail a booking over a cache key
+        logger.warning("reminder_gate_invalidate_failed", error=str(e)[:120])
+
     # Tell the LLM, unambiguously, what to SAY — the prompt rule alone has been
     # ignored (a queue number spoken for an appointment doctor). For appointment
     # doctors the internal token_number means nothing to the patient: confirm the

@@ -41,7 +41,7 @@ async def _seed_in_window(db):
 
 
 @pytest.mark.asyncio
-async def test_failed_dispatch_leaves_reminder_unsent_for_retry(db, monkeypatch):
+async def test_failed_dispatch_leaves_reminder_unsent_for_retry(db, monkeypatch, redis):
     monkeypatch.setenv("LIVEKIT_URL", "wss://x")  # voice_plane_configured -> True
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     tok = await _seed_in_window(db)
@@ -57,7 +57,7 @@ async def test_failed_dispatch_leaves_reminder_unsent_for_retry(db, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_successful_dispatch_marks_reminder_sent(db, monkeypatch):
+async def test_successful_dispatch_marks_reminder_sent(db, monkeypatch, redis):
     monkeypatch.setenv("LIVEKIT_URL", "wss://x")
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     tok = await _seed_in_window(db)

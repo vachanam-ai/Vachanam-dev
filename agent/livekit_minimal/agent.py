@@ -65,7 +65,13 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa
 import redis.asyncio as aioredis  # noqa: E402
 from sqlalchemy import and_, select  # noqa: E402
 
-from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack  # noqa: E402
+from agent.i18n import (  # noqa: E402
+    LANGUAGES,
+    get_lang,
+    get_lines,
+    get_switch_ack,
+)
+from agent.i18n.languages import DEFAULT_LANG  # noqa: E402
 from agent.i18n.backchannels import suppress_backchannel  # noqa: E402
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
@@ -312,6 +318,38 @@ def _space_digit_runs(s: str) -> str:
     one by one ("9 6 6 6") instead of as a cardinal ("ninety-six crore"). Used
     in the TTS path for phone numbers; single digits are left alone."""
     return _DIGIT_RUN.sub(lambda m: " ".join(m.group()), s)
+
+
+async def _end_call_with_notice(ctx, reason: str, t_answer: float | None = None) -> None:
+    """RULE 8: never leave a caller with dead ringing. When the database is
+    unreachable we cannot resolve the branch, its language, or anything else —
+    so answer the call, speak the default-language 'service unavailable, please
+    call the clinic directly' line on a raw track (no DB, no LLM, no session),
+    and hang up. Live 2026-07-09: Neon hit its data-transfer quota, every
+    entrypoint DB query raised, and callers heard endless ringing (FIXLOG #298).
+
+    Best-effort throughout — a failure here must still end the call, never raise.
+    """
+    logger.error("call_ended_with_notice reason=%s", reason)
+    lang = DEFAULT_LANG
+    try:
+        cfg = get_lang(lang)
+        await synth_and_play(
+            ctx.room,
+            [get_lines(lang).service_blocked],
+            cfg.default_voice,
+            lang,
+            t_answer=t_answer,
+        )
+        await asyncio.sleep(1.0)  # let the audio tail flush before teardown
+    except Exception as e:  # noqa: BLE001 — notice is best-effort
+        logger.error("end_call_notice_playback_failed: %s", e)
+    try:
+        lkapi = api.LiveKitAPI()
+        await lkapi.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+        await lkapi.aclose()
+    except Exception as e:  # noqa: BLE001
+        logger.error("end_call_notice_hangup_failed: %s", e)
 
 
 def _availability_caller_phone(state) -> str | None:
@@ -2326,51 +2364,64 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # no dialed DID — the dispatch metadata carries the branch_id; relying on
     # the DID fallback would resolve the WRONG tenant the moment a second
     # clinic exists (caller's number must never pick the branch).
+    #
+    # RULE 8 (#298): if the DB is unreachable (Neon transfer quota exhausted,
+    # live 2026-07-09) EVERY query below raises and kills the entrypoint before
+    # the call is ever answered — the caller hears endless ringing. Catch it,
+    # answer, speak the "call the clinic directly" notice, and hang up.
     branches = []
-    if outbound_number and meta.get("branch_id"):
-        try:
-            meta_branch_uuid = UUID(meta["branch_id"])
-            result = await db.execute(select(Branch).where(Branch.id == meta_branch_uuid))
+    try:
+        if outbound_number and meta.get("branch_id"):
+            try:
+                meta_branch_uuid = UUID(meta["branch_id"])
+                result = await db.execute(select(Branch).where(Branch.id == meta_branch_uuid))
+                branches = result.scalars().all()
+            except ValueError:
+                logger.error("outbound_branch_id_invalid: %s", meta.get("branch_id"))
+        if not branches:
+            # RULE 5 guard (bounce F4): the DID came from a fallback, not the actual
+            # dialed number. Resolving a branch from it is only safe when exactly one
+            # clinic exists — with two clinics the fallback DID would serve caller A
+            # the tenant context of clinic B (whose attribute was dropped). If more
+            # than one branch exists, refuse rather than risk a cross-tenant leak.
+            if did_from_fallback:
+                from sqlalchemy import func as _func
+
+                total_branches = (
+                    await db.execute(select(_func.count()).select_from(Branch))
+                ).scalar_one()
+                if total_branches != 1:
+                    logger.error(
+                        "did_fallback_refused matches=%d branches — multi-tenant, "
+                        "cannot resolve tenant without dialed DID; aborting call",
+                        total_branches,
+                    )
+                    await db.close()
+                    ctx.shutdown()
+                    return
+
+            # Normalize the dialed DID to the same canonical form Settings stores
+            # (bug-bounty M11) — a format difference (spaces, missing +91) otherwise
+            # fails the match and aborts every inbound call to that clinic.
+            from backend.services.validators import normalize_did
+
+            did_norm = normalize_did(did)
+            # .first() not .one_or_none(): a DB-level partial-unique index guarantees at
+            # most one branch per DID, but if that invariant were ever violated we must
+            # NOT crash the call — and must NOT silently serve an ambiguous tenant.
+            result = await db.execute(
+                select(Branch)
+                .where(Branch.did_number.in_([did, did_norm]))
+                .limit(2)
+            )
             branches = result.scalars().all()
-        except ValueError:
-            logger.error("outbound_branch_id_invalid: %s", meta.get("branch_id"))
-    if not branches:
-        # RULE 5 guard (bounce F4): the DID came from a fallback, not the actual
-        # dialed number. Resolving a branch from it is only safe when exactly one
-        # clinic exists — with two clinics the fallback DID would serve caller A
-        # the tenant context of clinic B (whose attribute was dropped). If more
-        # than one branch exists, refuse rather than risk a cross-tenant leak.
-        if did_from_fallback:
-            from sqlalchemy import func as _func
-
-            total_branches = (
-                await db.execute(select(_func.count()).select_from(Branch))
-            ).scalar_one()
-            if total_branches != 1:
-                logger.error(
-                    "did_fallback_refused matches=%d branches — multi-tenant, "
-                    "cannot resolve tenant without dialed DID; aborting call",
-                    total_branches,
-                )
-                await db.close()
-                ctx.shutdown()
-                return
-
-        # Normalize the dialed DID to the same canonical form Settings stores
-        # (bug-bounty M11) — a format difference (spaces, missing +91) otherwise
-        # fails the match and aborts every inbound call to that clinic.
-        from backend.services.validators import normalize_did
-
-        did_norm = normalize_did(did)
-        # .first() not .one_or_none(): a DB-level partial-unique index guarantees at
-        # most one branch per DID, but if that invariant were ever violated we must
-        # NOT crash the call — and must NOT silently serve an ambiguous tenant.
-        result = await db.execute(
-            select(Branch)
-            .where(Branch.did_number.in_([did, did_norm]))
-            .limit(2)
-        )
-        branches = result.scalars().all()
+    except Exception as _dbe:  # noqa: BLE001 — any resolve failure: notice, not silence
+        try:
+            await db.close()
+        except Exception:  # noqa: BLE001
+            pass
+        await _end_call_with_notice(ctx, f"db_unavailable: {str(_dbe)[:140]}", _t_answer)
+        return
     if len(branches) != 1:
         logger.error(
             "did_resolution_failed did=...%s matches=%d — aborting call",
@@ -2378,7 +2429,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             len(branches),
         )
         await db.close()
-        ctx.shutdown()
+        # RULE 8 (#298): was a silent ctx.shutdown() — the caller heard ringing,
+        # then nothing. Give them a spoken next step instead.
+        await _end_call_with_notice(ctx, "did_resolution_failed", _t_answer)
         return
     branch = branches[0]
 
@@ -3490,60 +3543,6 @@ def _start_render_keepalive() -> None:
     logger.info("render_keepalive_started url=%s interval=300s", url)
 
 
-_db_keepalive_started = False
-
-
-def _keepalive_dsn(raw: str) -> str:
-    """asyncpg-connectable DSN from the app's DATABASE_URL: drop the +asyncpg
-    driver tag and the libpq sslmode query param (asyncpg takes ssl= instead,
-    passed separately)."""
-    import re
-
-    dsn = (raw or "").strip().strip('"').replace("postgresql+asyncpg://", "postgresql://")
-    dsn = re.sub(r"[?&]sslmode=[^&]+", "", dsn)
-    return dsn
-
-
-def _start_db_keepalive() -> None:
-    """Keep Neon serverless from scaling its compute to zero between calls, so
-    the first call after an idle stretch doesn't pay a ~3-5s cold DB wake on
-    branch resolution (live 2026-07-07: pre_session_build 4.55s on the first
-    post-deploy call = ~5s of dead-air greeting, caller hung up). ponytail: a
-    lightweight SELECT 1 on its own connection every 3 min (under Neon's default
-    5-min autosuspend); best-effort, never on the call path (FIXLOG #285)."""
-    global _db_keepalive_started
-    if _db_keepalive_started:
-        return
-    from backend.config import settings as _s
-
-    dsn = _keepalive_dsn(getattr(_s, "database_url", "") or "")
-    if not dsn:
-        return
-    _db_keepalive_started = True
-
-    import asyncio
-    import threading
-    import time
-
-    async def _ping() -> None:
-        import asyncpg
-
-        conn = await asyncpg.connect(dsn, ssl=True, timeout=15)
-        try:
-            await conn.execute("SELECT 1")
-        finally:
-            await conn.close()
-
-    def _loop() -> None:
-        while True:
-            try:
-                asyncio.run(_ping())
-            except Exception as e:  # noqa: BLE001 — keepalive is best-effort
-                logger.warning("db_keepalive_ping_failed: %s", str(e)[:120])
-            time.sleep(180)
-
-    threading.Thread(target=_loop, name="db-keepalive", daemon=True).start()
-    logger.info("db_keepalive_started interval=180s")
 
 
 def _prewarm(proc) -> None:
@@ -3585,7 +3584,12 @@ if __name__ == "__main__":
     # NOT in _prewarm — prewarm runs in the job subprocess, which may not spawn
     # until the first call, and Render sleeps precisely when there are NO calls.
     _start_render_keepalive()
-    _start_db_keepalive()  # keep Neon warm so the first call isn't a cold-DB stall
+    # NO db keepalive (#299). It existed to stop Neon suspending its compute so
+    # the first call after idle skipped a ~2-4s cold wake (#285) — but Neon only
+    # suspends after 5 min of total query silence, so a 3-min ping pinned the
+    # compute ON 24/7: ~$19/month at 0.25 CU with zero calls, which exhausted the
+    # plan and took the clinic offline on 2026-07-09. The cold wake is paid only
+    # on the first call after a quiet stretch; a busy clinic never sees it.
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,

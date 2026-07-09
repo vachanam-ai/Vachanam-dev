@@ -45,3 +45,9 @@ async def sync_note_followup(note: TreatmentNote, followup_question: str | None,
         status="pending", created_by_user_id=created_by,
     ))
     await db.commit()
+
+    # #299: the follow-up job is parked in Redis until its cached due time.
+    # Drop it so this new task is picked up on the next tick.
+    from backend.jobs import wake_gate
+
+    await wake_gate.clear_next_at("followups")

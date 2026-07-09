@@ -33,13 +33,38 @@ RETRY_BACKOFF_MIN = 30
 BATCH_LIMIT = 10  # per run — keeps concurrent outbound calls bounded
 
 
+async def _next_cascade_epoch(db) -> float | None:
+    """When the earliest still-dialable cascade task is next due, or None when
+    the queue is empty. Lets the 60s tick answer from Redis (#299)."""
+    row = (
+        await db.execute(
+            select(FollowupTask.scheduled_at)
+            .where(
+                and_(
+                    FollowupTask.task_type == "cascade_rebook",
+                    FollowupTask.status.in_(["pending", "in_progress"]),
+                    FollowupTask.attempt_count < FollowupTask.max_attempts,
+                )
+            )
+            .order_by(FollowupTask.scheduled_at.asc())
+            .limit(1)
+        )
+    ).first()
+    return row[0].timestamp() if row else None
+
+
 async def run_cascade_rebook_calls() -> None:
     from backend.config import settings as _settings
+    from backend.jobs import wake_gate
 
     if not _settings.voice_plane_configured:
         # M15: warn (not silent) — a Render deploy missing LIVEKIT_* would
         # otherwise drop doctor-leave callbacks with no signal at all.
         logger.warning("cascade_rebook_skipped_no_voice_plane")
+        return
+
+    # #299: no cascade task due ⇒ answer from Redis, leave Postgres asleep.
+    if not await wake_gate.should_run_scheduled("cascade"):
         return
 
     now = datetime.now(timezone.utc)
@@ -78,6 +103,10 @@ async def run_cascade_rebook_calls() -> None:
                 task.status = "in_progress"
             await db.commit()
             await _dispatch_rebook_call(task, patient, doctor, token, branch)
+
+        # #299: park until the next cascade task is actually due (retry backoff
+        # included), so idle ticks never touch Postgres.
+        await wake_gate.set_next_at("cascade", await _next_cascade_epoch(db))
 
 
 async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:

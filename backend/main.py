@@ -90,25 +90,27 @@ async def lifespan(app: FastAPI):
         return conn
 
     def _build_scheduler():
-        from backend.jobs.call_scoring import run_call_scoring
         from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
-        from backend.jobs.calendar_writer import requeue_stale_in_progress
         from backend.jobs.data_retention import run_data_retention
-        from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
+        from backend.jobs.maintenance import run_hourly_maintenance
         from backend.jobs.next_visit_followup_caller import run_next_visit_followups
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
         from backend.jobs.trial_pause import run_pending_plan_changes, run_trial_pause
-        from backend.jobs.vobiz_cdr_sync import run_vobiz_cdr_sync
 
         scheduler = AsyncIOScheduler()
+        # #299: calendar_writer / pre_appt_reminders / cascade_rebook keep their
+        # fast ticks, but each now answers "is there work?" from Redis
+        # (backend/jobs/wake_gate.py) and touches Postgres only when there is.
+        # Neon's compute stays awake 5 min after ANY query, so an unconditional
+        # 30s poll pinned it on 24/7 (~$19/mo at 0.25 CU with zero calls) and
+        # exhausted the plan on 2026-07-09.
+        # 60s, not 30s: each tick is now a Redis GET, and this is only the RETRY
+        # queue — a booking's calendar event is written inline at confirm_booking
+        # (RULE 4). Halving the tick halves the Upstash command spend for no
+        # loss: a failed write still retries within a minute.
         scheduler.add_job(
-            run_calendar_writer, IntervalTrigger(seconds=30),
+            run_calendar_writer, IntervalTrigger(seconds=60),
             id="calendar_writer", replace_existing=True,
-        )
-        # M2: requeue tasks stranded in_progress by a crash (every 5 min).
-        scheduler.add_job(
-            requeue_stale_in_progress, IntervalTrigger(seconds=300),
-            id="calendar_requeue_stale", replace_existing=True,
         )
         scheduler.add_job(
             run_pre_appt_reminders, IntervalTrigger(seconds=60),
@@ -159,28 +161,22 @@ async def lifespan(app: FastAPI):
             run_pending_plan_changes, IntervalTrigger(hours=6),
             id="pending_plan_changes", replace_existing=True,
         )
-        # TD-027/F6: reconcile call-metering rows stranded by a crashed worker.
-        scheduler.add_job(
-            run_finalize_stale_calls, IntervalTrigger(minutes=30),
-            id="finalize_stale_calls", replace_existing=True,
-        )
         # DPDP s.8(7): erase patient PII past the retention window (daily).
         scheduler.add_job(
             run_data_retention, IntervalTrigger(hours=24),
             id="data_retention", replace_existing=True,
         )
-        # Feedback loop: LLM-as-judge scores captured transcripts (hourly batch).
+        # #299 ONE HOURLY POSTGRES WAKE for everything unconditional:
+        # requeue_stale_in_progress (was 5 min), finalize_stale_calls (was
+        # 30 min), call_scoring (was 1 h) and vobiz_cdr_sync (was 3 min — on its
+        # own enough to pin Neon's compute on permanently). Neon keeps compute
+        # running 5 min after ANY query, so what costs money is the NUMBER of
+        # distinct wakes, not the frequency: four staggered jobs burned ~20 min
+        # of compute per hour, one shared tick burns ~5.
         scheduler.add_job(
-            run_call_scoring, IntervalTrigger(hours=1),
-            id="call_scoring", replace_existing=True,
+            run_hourly_maintenance, IntervalTrigger(hours=1),
+            id="hourly_maintenance", replace_existing=True,
         )
-        # Authoritative call/minute metering from Vobiz CDRs (agent-independent).
-        # Only scheduled when Vobiz creds are present.
-        if settings.vobiz_auth_id and settings.vobiz_auth_token:
-            scheduler.add_job(
-                run_vobiz_cdr_sync, IntervalTrigger(minutes=3),
-                id="vobiz_cdr_sync", replace_existing=True,
-            )
         scheduler.start()
         return scheduler
 
