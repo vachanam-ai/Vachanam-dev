@@ -3,7 +3,11 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # AI
-    sarvam_api_key: str           # Sarvam Saaras v3 — STT only now
+    # STT — Soniox stt-rt-v5 primary when this key is set (Vinay 2026-07-10:
+    # better + cheaper, ~$0.12/hr real-time Telugu). Empty key = agent falls
+    # back to Sarvam Saaras so a missing/revoked key can never block calls.
+    soniox_api_key: str = ""
+    sarvam_api_key: str           # Sarvam Saaras v3 — STT fallback
     openai_api_key: str
     gemini_api_key: str
 

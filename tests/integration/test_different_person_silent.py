@@ -4,7 +4,7 @@ already_booked instruction and told the patient 'you must say different person'
 the LLM to retry SILENTLY with different_person=true and never voice it. Proof
 at the tool layer; the prompt HARD RULES are pinned in test_system_prompt.py."""
 import uuid
-from datetime import date, time
+from datetime import date, time, timedelta
 
 import pytest
 import pytest_asyncio
@@ -27,6 +27,10 @@ class _Meta:
 pytestmark = pytest.mark.asyncio
 
 PHONE = "+919666012345"
+# Dynamic: a hardcoded date silently rotted into the past when the calendar
+# rolled over (2026-07-10) and the past-date guard fired before the
+# different-person path — pin "tomorrow" instead.
+BOOK_DATE = date.today() + timedelta(days=1)
 
 
 @pytest_asyncio.fixture
@@ -47,7 +51,7 @@ async def setup(db):
     pat = Patient(branch_id=br.id, name="Caller", phone=PHONE, is_primary=True)
     db.add(pat); await db.flush()
     tok = Token(branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
-                date=date(2026, 7, 9), status="confirmed", source="voice",
+                date=BOOK_DATE, status="confirmed", source="voice",
                 appointment_time=time(12, 30))
     db.add(tok); await db.flush()
     return br, doc
@@ -59,7 +63,7 @@ async def test_already_booked_instruction_says_retry_silently(setup, db, redis):
     br, doc = setup
     res = await confirm_booking(
         doctor_id=doc.id, branch_id=br.id, patient_name="Prasanna",
-        patient_phone=PHONE, complaint="skin", booking_date=date(2026, 7, 9),
+        patient_phone=PHONE, complaint="skin", booking_date=BOOK_DATE,
         token_number=1, followup_consent=False, appointment_time=time(12, 30),
         source='voice', calendar_service=_Cal(), meta_service=_Meta(),
         db=db, patient_age=25, different_person=False,
@@ -76,7 +80,7 @@ async def test_different_person_true_books_through(setup, db, redis):
     br, doc = setup
     res = await confirm_booking(
         doctor_id=doc.id, branch_id=br.id, patient_name="Prasanna",
-        patient_phone=PHONE, complaint="skin", booking_date=date(2026, 7, 9),
+        patient_phone=PHONE, complaint="skin", booking_date=BOOK_DATE,
         token_number=2, followup_consent=False, appointment_time=time(12, 30),
         source='voice', calendar_service=_Cal(), meta_service=_Meta(),
         db=db, patient_age=25, different_person=True,

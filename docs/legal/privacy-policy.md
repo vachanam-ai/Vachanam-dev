@@ -1,7 +1,7 @@
 # Vachanam Privacy Policy
 
 **Effective date:** 2026-06-04
-**Last updated:** 2026-06-04
+**Last updated:** 2026-07-10
 
 This policy explains, in plain language, what personal data Vachanam collects, why we collect it, who sees it, how long we keep it, and what rights you have. If any part is unclear, email us at privacy@vachanam.in and we will explain it in Telugu, Hindi, or English -- whichever you prefer.
 
@@ -39,6 +39,8 @@ We collect different data depending on your role. We collect only what is needed
 - We do NOT record your phone call. Audio is processed in real time to understand your words, then discarded. No voice recording is stored anywhere.
 - We do NOT store your full medical history, diagnosis, prescriptions, test results, or Aadhaar/PAN number.
 - We do NOT ask you to create an account or set a password.
+
+**About call transcripts:** a text transcript of the conversation (what was said, not the audio) may be kept for up to 90 days to monitor and improve call quality. Phone numbers are masked in the transcript before it is saved, it is visible only to your own clinic, and it is automatically deleted after the 90-day window by a daily software job.
 
 ### If you are a doctor
 
@@ -112,11 +114,11 @@ We use the following third-party services to operate Vachanam. Each service proc
 
 | Service | What it processes | Where data is processed | Their privacy policy |
 |---|---|---|---|
-| **Sarvam AI** | Converts your voice to text (speech-to-text) during your call. Audio is streamed in real time and not stored by Sarvam beyond the duration of the call. | India | [sarvam.ai/privacy](https://sarvam.ai/privacy) |
+| **Soniox** | Converts your voice to text (speech-to-text) during your call. Audio is streamed in real time and not stored beyond the duration of the call. | United States | [soniox.com/privacy](https://soniox.com/legal/privacy-policy) |
+| **Sarvam AI** | Backup speech-to-text, used only when Soniox is unavailable. Same real-time streaming, no storage beyond the call. | India | [sarvam.ai/privacy](https://sarvam.ai/privacy) |
 | **smallest.ai (Waves)** | Converts the AI agent's responses (which include your name) back into voice (text-to-speech) during your call. Text is processed in real time and not stored after the call. | Global | [smallest.ai/privacy](https://smallest.ai) |
 | **Google (Calendar API + OAuth)** | Creates a calendar event for your doctor with your first name and last 4 digits of your phone number. Also handles staff login via Google accounts. | Global (Google Cloud) | [policies.google.com/privacy](https://policies.google.com/privacy) |
-| **Google (Gemini 2.5 Flash)** | Our primary AI language model. Processes the conversation transcript during your call to understand your request and route you to the right doctor. Transcript is processed in real time and not stored by Vachanam after the call ends. Subject to Google's data processing terms. | Global (Google Cloud) | [policies.google.com/privacy](https://policies.google.com/privacy) |
-| **OpenAI (GPT-4o mini)** | Backup AI language model, used only when Google Gemini is temporarily unavailable. Same data as Gemini (real-time conversation transcript). Subject to OpenAI's data processing terms. | Global (OpenAI infrastructure) | [openai.com/privacy](https://openai.com/privacy) |
+| **Google (Gemini)** | Our AI language models (Gemini 3.1 Flash Lite primary, Gemini 2.5 Flash backup). Processes the conversation during your call to understand your request and route you to the right doctor. Subject to Google's data processing terms. | Global (Google Cloud) | [policies.google.com/privacy](https://policies.google.com/privacy) |
 | **Razorpay** | Processes clinic subscription payments. Sees billing amount and clinic owner email for invoicing. Does NOT see any patient data. | India | [razorpay.com/privacy](https://razorpay.com/privacy) |
 | **Resend** | Sends one-time verification codes to clinic staff by email during signup. Sees only the staff/owner email address. Does NOT see any patient data. | Global (US) | [resend.com/legal/privacy-policy](https://resend.com/legal/privacy-policy) |
 | **Neon** | Hosts our PostgreSQL database where appointment and user records are stored. All data encrypted at rest (AES-256 disk encryption managed by Neon). | Singapore | [neon.tech/privacy](https://neon.tech/privacy) |
@@ -143,10 +145,10 @@ We keep data only as long as it serves a clear purpose. Here are the specific re
 | User accounts (staff email, name, role) | Until the clinic owner removes the user, or the user requests deletion + 30 days | Clinic needs active staff accounts; 30-day buffer allows recovery from accidental deletion | Personally identifiable information purged; anonymized audit records retained |
 | Authentication tokens (login sessions) | 8 hours maximum (hard expiry) + immediate revocation on logout | Security: limits damage window if a device is stolen | Automatically expired; revocation records cleared from cache |
 | Voice call audio | NOT STORED | We do not record calls. Audio is processed in real time by Sarvam AI for speech-to-text conversion, then discarded. | Not applicable |
-| Voice call transcripts | NOT STORED | Conversation text exists only in memory during your call for the AI to understand your request. It is not written to any database or file. | Not applicable |
+| Voice call transcripts (text only) | Up to 90 days | Call-quality monitoring and troubleshooting failed bookings. Phone numbers are masked before the transcript is saved; the transcript is visible only to your own clinic. | Transcript text automatically deleted by a daily job; the non-personal quality scores survive |
 | Redis token counters (daily booking counts) | End of calendar day + 1 hour buffer | Prevents double-booking during the day | Automatically expired by Redis TTL |
 
-**Retention enforcement:** We run automated jobs to delete data that has exceeded its retention period. This is not just a written policy -- it is enforced by software. (REQUIRES: backend-engineer to implement `data_retention.py` daily job per this schedule in Phase 6.)
+**Retention enforcement:** We run automated jobs to delete data that has exceeded its retention period. This is not just a written policy -- it is enforced by software: a daily job erases patient personal data after 2 years of inactivity and deletes call transcripts after 90 days.
 
 ---
 
@@ -228,7 +230,7 @@ This privacy policy is effective as of **2026-06-04**.
 - **DPDP Rules:** The Digital Personal Data Protection Rules were notified on 14 November 2025. The full compliance deadline is 13 May 2027. Vachanam is on track to meet this deadline. This policy will be updated as additional guidance is published by the Data Protection Board or the Ministry of Electronics and Information Technology.
 - **Data Fiduciary vs Data Processor:** Under DPDP Act 2023 Chapter II, the clinic is the Data Fiduciary (they decide why patient data is processed -- to manage appointments). Vachanam is the Data Processor (we process patient data on the clinic's documented instructions per our Data Processing Agreement). Both share responsibility for keeping your data safe.
 - **Significant Data Fiduciary (SDF):** The SDF threshold and data localization requirements are pending a separate notification from the central government. Vachanam monitors these developments and will comply when applicable. As of this policy's effective date, Vachanam does not meet the expected SDF threshold.
-- **Data residency:** Speech-to-text (Sarvam AI), telephony (Vobiz), cache (Upstash), and voice compute (Fly.io, LiveKit) operate within India. Text-to-speech (smallest.ai) and the AI language models (Google Gemini, OpenAI) operate globally. Database (Neon) and backend API (Render) operate in Singapore. We choose vendors with the strongest India or near-India data residency available for each function, and every processor and its location is listed in Section 6.
+- **Data residency:** Telephony (Vobiz), cache (Upstash), and voice compute (Fly.io, LiveKit) operate within India. Speech-to-text (Soniox, United States; Sarvam AI backup, India), text-to-speech (smallest.ai) and the AI language models (Google Gemini) operate globally. Database (Neon) and backend API (Render) operate in Singapore. The DPDP Act 2023 permits cross-border transfer of personal data except to countries specifically restricted by the central government (none of our vendors' countries are restricted as of this policy's date). We choose vendors with the strongest India or near-India data residency available for each function, and every processor and its location is listed in Section 6.
 
 ---
 
@@ -238,3 +240,5 @@ This privacy policy is effective as of **2026-06-04**.
 - Response time: 7 calendar days for data subject requests; 48-hour acknowledgment
 
 *Vachanam -- "Healing starts with being heard."*
+
+© 2026 Vachanam (Vinay Rongala), Hyderabad, India. All rights reserved.

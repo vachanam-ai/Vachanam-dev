@@ -195,7 +195,7 @@ async def test_booking_for_other_suppresses_caller_already_booked(db, redis):
     org, br = await _org_branch(db, "friend")
     doc = await _slot_doctor(db, br)
     await _seed_confirmed(db, br, doc, CALLER, appt_time=time(15, 0),
-                          on=date(2026, 7, 10))
+                          on=date.today() + timedelta(days=1))
     await db.commit()
 
     st = SessionState(session_id="friend296")
@@ -209,7 +209,7 @@ async def test_booking_for_other_suppresses_caller_already_booked(db, redis):
 
     # and check_availability with caller_phone=None does NOT flag
     res = await check_availability(
-        doctor_id=doc.id, branch_id=br.id, booking_date=date(2026, 7, 10),
+        doctor_id=doc.id, branch_id=br.id, booking_date=date.today() + timedelta(days=1),
         db=db, query_start=time(10, 0), query_end=time(11, 0),
         caller_phone=_availability_caller_phone(st),
     )

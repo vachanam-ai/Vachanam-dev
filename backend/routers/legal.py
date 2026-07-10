@@ -126,6 +126,7 @@ def _load_doc(filename: str, title: str) -> str | None:
 _PRIVACY_HTML: str | None = _load_doc("privacy-policy.md", "Privacy Policy")
 _TERMS_HTML: str | None = _load_doc("terms-of-service.md", "Terms of Service")
 _DPA_HTML: str | None = _load_doc("data-processing-agreement.md", "Data Processing Agreement")
+_DATA_HANDLING_HTML: str | None = _load_doc("data-handling.md", "How Vachanam Handles Your Data")
 
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=3600"}
 _CONTENT_TYPE = "text/html; charset=utf-8"
@@ -197,3 +198,19 @@ async def data_processing_agreement() -> HTMLResponse:
     Returns 503 if the markdown file is missing or empty at startup.
     """
     return _doc_response(_DPA_HTML, "data-processing-agreement")
+
+
+@router.get(
+    "/data-handling",
+    response_class=HTMLResponse,
+    include_in_schema=True,
+    tags=["legal"],
+    summary="How Vachanam Handles Your Data",
+)
+async def data_handling() -> HTMLResponse:
+    """Render docs/legal/data-handling.md as styled HTML (DPDP transparency doc).
+
+    Public — no authentication required. Cache-Control: public, max-age=3600.
+    Returns 503 if the markdown file is missing or empty at startup.
+    """
+    return _doc_response(_DATA_HANDLING_HTML, "data-handling")

@@ -59,7 +59,7 @@ from livekit.agents import tts as lk_tts  # noqa: E402
 from livekit.agents.llm import ChatContext  # noqa: E402
 from livekit.agents import utils as _lk_utils  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS as _DEFAULT_CONN  # noqa: E402
-from livekit.plugins import google, noise_cancellation, openai, sarvam, silero, smallestai  # noqa: E402
+from livekit.plugins import google, noise_cancellation, openai, sarvam, silero, smallestai, soniox  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
 import redis.asyncio as aioredis  # noqa: E402
@@ -764,6 +764,36 @@ class _HttpSmallestTTS(smallestai.TTS):
 
     def synthesize(self, text, *, conn_options=_DEFAULT_CONN):
         return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
+
+
+def _build_stt(lang_cfg):
+    """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_API_KEY
+    is set (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu vs
+    Sarvam), Sarvam Saaras v3 fallback otherwise so a missing/revoked Soniox
+    key can never take the clinic offline (RULE 8).
+
+    language_hints_strict pins recognition to ONE language per call — same
+    strict-language rule as Sarvam's fixed `language=` (Vinay 2026-06-17:
+    auto-detect degrades on shared Indian-language words). Language change
+    happens ONLY via the switch_language agent handoff, which builds a new
+    STT through this same factory. Endpointing params stay at plugin defaults:
+    tune only from real-call lat_* evidence, never blind.
+    """
+    if settings.soniox_api_key:
+        return soniox.STT(
+            api_key=settings.soniox_api_key,
+            params=soniox.STTOptions(
+                model="stt-rt-v5",
+                language_hints=[lang_cfg.code],
+                language_hints_strict=True,
+            ),
+        )
+    return sarvam.STT(
+        api_key=settings.sarvam_api_key,
+        model="saaras:v3",
+        language=lang_cfg.stt_code,
+        flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
+    )
 
 
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
@@ -2557,7 +2587,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             did[-4:],
         )
         gate_session = AgentSession(
-            stt=sarvam.STT(api_key=settings.sarvam_api_key, model="saaras:v3", language=lang_cfg.stt_code),
+            stt=_build_stt(lang_cfg),
             llm=ctx.proc.userdata.get("llm") or _build_fallback_llm(),
             # TTS = smallest.ai Waves (STT stays Sarvam Saaras). voice falls back
             # to the language's default smallest voice when the clinic hasn't set one.
@@ -2950,12 +2980,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 lang_code=lc,
                 agent_factory=_agent_for_lang,
                 switch_ack=get_switch_ack(lc),
-                stt=sarvam.STT(
-                    api_key=settings.sarvam_api_key,
-                    model="saaras:v3",
-                    language=cfg2.stt_code,
-                    flush_signal=True,
-                ),
+                stt=_build_stt(cfg2),
                 tts=_HttpSmallestTTS(
                     api_key=settings.smallest_api_key,
                     model=settings.smallest_model,
@@ -3013,19 +3038,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # filled by cache_filler_clips at session start = instant playback.
             userdata={"fillers": lines.fillers, "language": lang_code,
                       "filler_clips": []},
-            stt=sarvam.STT(
-                api_key=settings.sarvam_api_key,
-                model="saaras:v3",
-                # ONE language at a time (Vinay 2026-06-17): auto-detect
-                # ("unknown") was tried but rejected — shared words across Indian
-                # languages ("amma", numbers) make Sarvam mis-infer the language and
-                # degrade transcription. The ONLY way the call changes language is
-                # the switch_language tool (explicit caller ask, 2026-07-03): an
-                # AGENT HANDOFF carrying its own STT/TTS — never a hot-swap of this
-                # session pipeline and never speech-based auto-detection.
-                language=lang_cfg.stt_code,
-                flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
-            ),
+            # ONE language at a time (Vinay 2026-06-17): auto-detect was tried
+            # and rejected — shared words across Indian languages ("amma",
+            # numbers) mis-infer the language and degrade transcription. The
+            # ONLY way the call changes language is the switch_language tool
+            # (explicit caller ask, 2026-07-03): an AGENT HANDOFF carrying its
+            # own STT/TTS built through the same _build_stt factory — never a
+            # hot-swap of this session pipeline, never speech auto-detection.
+            stt=_build_stt(lang_cfg),
             llm=ctx.proc.userdata.get("llm") or _build_fallback_llm(),
             # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
             # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice

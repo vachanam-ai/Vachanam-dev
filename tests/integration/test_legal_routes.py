@@ -196,3 +196,32 @@ async def test_privacy_returns_503_when_md_missing(redis, monkeypatch):
             f"Expected 503 when privacy markdown is missing, got {r.status_code}. "
             f"Body: {r.text[:200]}"
         )
+
+
+# ── /data-handling (FIXLOG #301: DPDP transparency doc) ──────────────────────
+
+
+async def test_data_handling_returns_html(client):
+    """GET /data-handling must return 200 HTML with the rendered doc — the
+    DPDP transparency page has to be publicly reachable, like /privacy."""
+    r = await client.get("/data-handling")
+    assert r.status_code == 200, (
+        f"Expected 200 from GET /data-handling, got {r.status_code}. "
+        f"Body: {r.text[:200]}"
+    )
+    assert r.headers.get("content-type", "").startswith("text/html")
+    assert "<h1" in r.text
+    assert "Handles Your Data" in r.text
+
+
+async def test_privacy_policy_matches_reality():
+    """The policy must describe what the code DOES: transcripts ARE stored
+    (masked, 90 days) — the old 'NOT STORED' wording was false; and the STT
+    processor table must name Soniox (primary) + Sarvam (fallback)."""
+    from pathlib import Path
+
+    text = Path("docs/legal/privacy-policy.md").read_text(encoding="utf-8")
+    assert "Soniox" in text
+    assert "Sarvam" in text  # still listed — it is the live fallback
+    assert "90 days" in text  # transcript retention disclosed
+    assert "| Voice call transcripts | NOT STORED |" not in text

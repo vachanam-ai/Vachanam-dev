@@ -1,6 +1,9 @@
 livekit-agents>=1.5.16
 livekit-api>=1.1.0
-livekit-plugins-sarvam>=1.5.17          # STT (Saaras v3) only
+# STT: Soniox stt-rt-v5 primary (Vinay 2026-07-10), Sarvam Saaras v3 fallback
+# when SONIOX_API_KEY is unset — see _build_stt in agent.py.
+livekit-plugins-soniox>=1.6.5
+livekit-plugins-sarvam>=1.5.17
 # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
 livekit-plugins-smallestai>=1.5.18
 livekit-plugins-google>=1.5.17

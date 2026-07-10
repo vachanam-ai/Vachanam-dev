@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import gsap from "gsap";
 import VoicePicker from "../components/VoicePicker.jsx";
+import { API_BASE } from "../api/client.js";
 
 const PLANS = [
   {
@@ -288,6 +289,14 @@ export default function Landing() {
             Talk to us
           </a>
         </div>
+        <p className="mt-8 font-ui text-xs text-teal-pale/70">
+          © 2026 Vachanam · All rights reserved ·{" "}
+          <a href={`${API_BASE}/privacy`} className="underline-offset-4 hover:underline">Privacy</a>
+          {" · "}
+          <a href={`${API_BASE}/terms`} className="underline-offset-4 hover:underline">Terms</a>
+          {" · "}
+          <a href={`${API_BASE}/data-handling`} className="underline-offset-4 hover:underline">How we handle your data</a>
+        </p>
       </section>
     </div>
   );

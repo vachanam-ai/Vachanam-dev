@@ -11,7 +11,7 @@ export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 // backend on its origin) set VITE_API_URL to the API host (e.g.
 // https://api.vachanam.in) so calls go cross-origin to Render. CORS is allowed
 // there via the backend's FRONTEND_URL. Trailing slash trimmed to avoid “//path”.
-const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+export const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 export const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
 
 // Cloudflare Turnstile token (bot protection). Pages set it via the widget;

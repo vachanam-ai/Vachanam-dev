@@ -83,7 +83,7 @@ Repriced 2026-06-16 (Vinay) from the old 7,999/16,999 · ₹3/₹2.50 · 1.49 mo
 
 | Layer | Tool |
 |---|---|
-| STT | Sarvam Saaras v3 (te-IN) — only viable Telugu STT |
+| STT | Soniox stt-rt-v5 primary (Vinay 2026-07-10, real-time Telugu ~$0.12/hr) → Sarvam Saaras v3 fallback when SONIOX_API_KEY unset |
 | TTS | Sarvam Bulbul v3 (kavitha; Telugu script input, never romanized) |
 | LLM | Gemini 2.5 Flash primary → GPT-4o mini auto-fallback |
 | Voice pipeline | LiveKit Agents (chosen 2026-06-10 over Pipecat: outbound works, jitter buffer, scale) |

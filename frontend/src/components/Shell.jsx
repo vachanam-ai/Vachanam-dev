@@ -154,7 +154,7 @@ export default function Shell() {
       </main>
 
       <footer className="border-t border-hairline py-4 text-center font-ui text-xs text-slate">
-        Vachanam · healing starts with being heard
+        © 2026 Vachanam · healing starts with being heard
       </footer>
     </div>
   );
