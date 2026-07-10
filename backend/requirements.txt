@@ -28,4 +28,6 @@ bcrypt>=5.0.0
 # backend threw "No module named 'livekit'" on every scheduled dispatch and
 # reminders silently never fired (FIXLOG #152). Only the API client is needed
 # (no rtc/audio in the backend).
-livekit-api==1.1.0
+# >=1.1.1: livekit-agents 1.6.5 (pulled in by livekit-plugins-soniox, #300)
+# requires livekit-api>=1.1.1 — the old ==1.1.0 pin broke the agent image build.
+livekit-api>=1.1.1,<2
