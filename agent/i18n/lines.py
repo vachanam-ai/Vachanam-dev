@@ -44,6 +44,11 @@ class Lines:
     # follow-up path (lifted verbatim from the validated known_caller_greeting
     # pattern — not new hand-written copy).
     followup_name_prefix: str = ""  # {patient}
+    # Trimmed ONE-sentence inbound intros (Vinay 2026-07-10, verbatim): replace
+    # the welcome+disclosure two-segment opening on the plain inbound path.
+    # Optional — languages without them keep the two-segment composition.
+    inbound_intro: str = ""        # {clinic}
+    inbound_intro_known: str = ""  # {clinic} {patient}
 
 
 # Shared English brevity directive for non-Telugu languages (LLM instruction).
@@ -78,6 +83,17 @@ LINES: dict[str, Lines] = {
         known_caller_greeting=(
             "{patient} గారు! మళ్ళీ కాల్ చేశారు, సంతోషం అండి. {clinic} నుంచి AI "
             "అసిస్టెంట్‌ని మాట్లాడుతున్నాను. చెప్పండి, ఈసారి ఏం కావాలి అండి?"
+        ),
+        # Vinay 2026-07-10 (post-Soniox test call: "intro trim it") — his exact
+        # wording, romanized→Telugu script. One sentence, no "క్లినిక్‌కి స్వాగతం".
+        # AI disclosure (DPDP) stays: "AI అసిస్టెంట్‌ని మాట్లాడుతున్నాను".
+        inbound_intro=(
+            "నమస్కారం, {clinic} నుంచి AI అసిస్టెంట్‌ని మాట్లాడుతున్నాను. "
+            "చెప్పండి, నేను మీకు ఎలా హెల్ప్ చేయగలను?"
+        ),
+        inbound_intro_known=(
+            "నమస్కారం, {clinic} నుంచి AI అసిస్టెంట్‌ని మాట్లాడుతున్నాను. "
+            "చెప్పండి {patient} గారు, నేను మీకు ఎలా హెల్ప్ చేయగలను?"
         ),
         # Gemini-generated (2026-06-24): avoids the loanword "రిమైండర్" (TTS mangled
         # it — "reminmirainder") via గుర్తు చేయడానికి; minimal అండి; no namaskaram

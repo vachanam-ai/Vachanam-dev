@@ -38,17 +38,18 @@ def _wav(sr=24000, ch=1, frames=480) -> bytes:
 
 # ---------------------------------------------------------------- composition
 
-def test_inbound_new_caller_welcome_then_disclosure():
+def test_inbound_new_caller_trimmed_single_intro():
+    # #302 (Vinay 2026-07-10): plain inbound = ONE trimmed sentence, not
+    # welcome + disclosure.
     texts = g.inbound_greeting_texts(TE, CLINIC)
-    assert len(texts) == 2
-    assert texts[0] == get_welcome(TE).format(clinic=CLINIC)
-    assert texts[1] == get_lines(TE).disclosure_greeting.format(clinic=CLINIC)
+    assert len(texts) == 1
+    assert texts[0] == get_lines(TE).inbound_intro.format(clinic=CLINIC)
 
 
 def test_inbound_known_caller_greets_by_name():
     texts = g.inbound_greeting_texts(TE, CLINIC, spk_caller="రమేష్")
-    assert "రమేష్" in texts[1]
-    assert texts[1] == get_lines(TE).known_caller_greeting.format(
+    assert len(texts) == 1  # #302 trimmed single intro
+    assert texts[0] == get_lines(TE).inbound_intro_known.format(
         patient="రమేష్", clinic=CLINIC
     )
 
@@ -203,3 +204,32 @@ def test_play_wavs_partial_failure_false_but_cleans_up(monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ── FIXLOG #302: trimmed one-sentence inbound intro (Vinay 2026-07-10) ───────
+
+
+def test_te_inbound_intro_is_single_trimmed_segment():
+    """Plain te inbound greeting = ONE sentence (Vinay's exact wording), not
+    the old welcome + disclosure pair; AI disclosure (DPDP) must survive."""
+    out = g.inbound_greeting_texts("te", "క్లినిక్")
+    assert len(out) == 1
+    assert out[0].startswith("నమస్కారం")
+    assert "AI అసిస్టెంట్‌ని మాట్లాడుతున్నాను" in out[0]  # disclosure kept
+    assert "స్వాగతం" not in out[0]  # old welcome-clip wording gone
+
+
+def test_te_known_caller_intro_greets_by_name_single_segment():
+    out = g.inbound_greeting_texts("te", "క్లినిక్", spk_caller="రవి")
+    assert len(out) == 1
+    assert "చెప్పండి రవి గారు" in out[0]
+    assert "AI అసిస్టెంట్‌ని మాట్లాడుతున్నాను" in out[0]
+
+
+def test_trim_does_not_touch_followup_or_other_languages():
+    """Follow-up path keeps welcome+message; languages without the trimmed
+    fields keep the two-segment composition."""
+    fup = g.inbound_greeting_texts("te", "క్లినిక్", spk_caller="రవి",
+                                 followup_message="ఎలా ఉన్నారు?")
+    assert len(fup) >= 2
+    assert len(g.inbound_greeting_texts("hi", "Clinic")) == 2

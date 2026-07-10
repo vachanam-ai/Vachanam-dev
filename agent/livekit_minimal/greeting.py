@@ -79,8 +79,14 @@ def inbound_greeting_texts(
         else:
             out.append(raw.format(message=followup_message))
     elif spk_caller:
+        # Trimmed ONE-sentence intro (Vinay 2026-07-10) — replaces the
+        # welcome+greeting pair; carries its own namaskaram + AI disclosure.
+        if lines.inbound_intro_known:
+            return [lines.inbound_intro_known.format(patient=spk_caller, clinic=spk_clinic)]
         out.append(lines.known_caller_greeting.format(patient=spk_caller, clinic=spk_clinic))
     else:
+        if lines.inbound_intro:
+            return [lines.inbound_intro.format(clinic=spk_clinic)]
         out.append(lines.disclosure_greeting.format(clinic=spk_clinic))
     return out
 
