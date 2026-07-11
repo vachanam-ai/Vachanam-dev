@@ -1,5 +1,19 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-11 — SUPPORT SYSTEM PHASE 1 (master, code pushed; migration deploy-gated).**
+> Self-serve support core (FIXLOG #314): a markdown KB (`docs/support/*.md`,
+> audience-filtered) + a Gemini-grounded chatbot (`/support/chat`) that
+> auto-logs ONE ticket per chat — answered→`ai_resolved`, stuck→`open` (the
+> human fallback). New `support_tickets`+`support_messages` (migration `aa24`,
+> **NOT applied to prod** — `/support/*` routes 500 until Vinay applies it).
+> Org-scoped ticket reads (IDOR-walled). Frontend: public `/help` (KB search +
+> chat) + in-app `/tickets` thread + Support nav. `"support"` role value added
+> (no route yet). Bot: RULE 1 (no clinic-data access), RULE 8 (safe refusal),
+> RULE 9 (logs IDs). **Phase 2 next:** support-staff role + provisioning +
+> cross-org admin dashboard + staff replies + live-chat poll + email.
+> **Phase 3:** CSAT + SLA/escalation + macros + demo form. Spec+plan in
+> `docs/superpowers/{specs,plans}/2026-07-11-support-*`. Suite green + build green.
+
 > **2026-07-05 — VOICE FIRST-IMPRESSION OVERHAUL (deployed: Fly agent + master pushed).**
 > (1) **Instant REAL greeting** (FIXLOG #264): canned welcome clip + outbound
 > welcome_short_audio mask DELETED; the actual per-call opening (welcome +
