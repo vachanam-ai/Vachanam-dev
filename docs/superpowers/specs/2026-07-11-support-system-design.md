@@ -2,8 +2,23 @@
 
 **Date:** 2026-07-11
 **Author:** Claude (with Vinay)
-**Status:** Draft for review
+**Status:** Approved — building Phase 1
 **Branch:** master (clinic product feature). Migrations deploy-gated as usual.
+
+## Decisions (2026-07-11, refinement round)
+
+- **Every chat auto-logs a ticket** (full audit trail), not just escalations.
+  AI answered → status `ai_resolved`; AI couldn't → status `open` (needs
+  human). Inbox defaults to the needs-human filter; answered tickets stay
+  searchable. This makes ticket tables part of **Phase 1**.
+- **Support staff = Vachanam platform team**, new role `support`: reads/replies
+  ALL tickets across every clinic, but **locked out of clinic patient PII**
+  (same wall as super_admin, RULE 1) — "super_admin-lite". Created/removed by
+  super_admin (Vinay) in the support dashboard.
+- **Phase 1 build scope (Vinay):** KB + chatbot + Help page + **ticket logs**
+  (auto-created + a clinic-facing "My Tickets" view + a basic platform ticket
+  log). Full admin dashboard, `support` role provisioning, threaded
+  reply/live-chat, and email move to Phase 2.
 
 ## Goal
 
@@ -76,9 +91,11 @@ Two delivery surfaces — **public** and **in-app** — share one engine.
 - `subject` text
 - `category` enum (`billing`, `technical`, `onboarding`, `feature_request`,
   `sales_demo`, `other`)
-- `status` enum (`open`, `pending`, `resolved`, `closed`) default `open`
-  - `open` = awaiting first staff response; `pending` = awaiting user reply;
-    `resolved` = staff marked done (CSAT sent); `closed` = terminal.
+- `status` enum (`ai_resolved`, `open`, `pending`, `resolved`, `closed`)
+  - `ai_resolved` = chatbot answered, auto-logged, no human needed (default
+    inbox filter hides these); `open` = needs human / AI couldn't answer;
+    `pending` = awaiting user reply; `resolved` = staff marked done (CSAT sent);
+    `closed` = terminal.
 - `priority` enum (`low`, `normal`, `high`, `urgent`) default `normal`
 - `sla_due_at` timestamptz — set at create by priority (see SLA below)
 - `first_responded_at` timestamptz nullable
@@ -143,9 +160,13 @@ migration to be applied on prod, but do not apply to prod until Vinay confirms.
   - `POST /support/chat` authed variant — same handler, JWT branch: uses full
     KB + plan/status context. (One route, auth-optional; behaviour forks on
     whether a valid JWT is present.)
-- "Escalate" affordance: the chat UI offers "Still stuck? Create a ticket",
-  which prefills a ticket with the transcript as the first `bot`/`user`
-  messages.
+- **Auto-logging (every chat → ticket):** each chat session creates one ticket
+  and appends the `user`/`bot` turns as `support_messages`. If the bot answered
+  confidently the ticket is `ai_resolved`; if it hit the refusal/"not sure"
+  path it is `open` (needs human) — this IS the fallback. The bot self-reports
+  a boolean `answered` in its structured output to drive the status; a refusal
+  string also forces `open`. One ticket per session (not per message): the
+  first message opens it, later turns append.
 - Cost guard: cap history length + max output tokens; the KB is small so
   context stays cheap (~gemini-flash-lite, thinking off).
 
@@ -191,14 +212,28 @@ migration to be applied on prod, but do not apply to prod until Vinay confirms.
   snippets the admin inbox can insert into a reply. `ponytail:` constant now,
   move to a table only if Vinay wants to edit them without a deploy.
 
-## Admin inbox (super_admin)
+## Admin / support inbox (super_admin + `support` role)
 
-- `GET /support/admin/tickets` — cross-org list with filters (status, priority,
-  category, overdue). **This is the one place super_admin reads across orgs.**
-  Permitted because tickets are a *support* data class, not clinic PII routes.
-  Reuse the admin-guard pattern (`is_admin`/`super_admin`), NOT `forbid_admin`.
-- Admin can reply, set status/priority, insert macros. Replies notify the user.
-- Frontend: a new section under the existing Admin page (or a sibling route).
+- **New role `support`** (platform team, not clinic staff). `user_role` enum
+  gains `"support"`; it's declared `create_constraint=False` in
+  `schema.py`, so adding a value needs no DB enum ALTER (the value isn't
+  DB-enforced). A support user has `org_id = NULL` (platform-level) — they
+  belong to Vachanam, not a clinic.
+- **Access:** `support` and `super_admin` read/reply ALL tickets across orgs
+  (support data class, permitted). **Both are locked out of clinic patient
+  PII** exactly as super_admin is today (`forbid_admin` still guards
+  patients/queue/treatment/analytics). So `support` = super_admin-lite: full
+  ticket inbox, zero patient-data routes. A guard helper `require_support_staff`
+  admits role in (`support`, `super_admin`).
+- **Provisioning (Phase 2):** super_admin adds/removes support users in the
+  support dashboard (`POST/DELETE /support/admin/staff`) — create a platform
+  user with role `support`. Only super_admin can manage staff; `support` staff
+  cannot mint more staff (no privilege escalation).
+- `GET /support/admin/tickets` — cross-org list with filters (status default =
+  needs-human, i.e. exclude `ai_resolved`; priority, category, overdue).
+- Admin/support can reply, set status/priority, insert macros. Replies notify
+  the user.
+- Frontend: a dedicated support dashboard route (super_admin + support only).
 
 ## DPDP / security posture
 
@@ -243,13 +278,17 @@ safe defaults: `SUPPORT_SLA_HOURS` (JSON, defaulted in code),
 
 ## Phasing (each phase ships working software)
 
-- **Phase 1 — Self-serve + bot.** KB corpus + `/support/kb` + `/support/chat`
-  (public+authed, grounded, rate-limited) + public `/help` page + in-app Help
-  page + "contact us → email" (no ticket table yet; contact routes to email).
-  *Highest value, smallest surface, no migration.*
-- **Phase 2 — Ticketing + live-chat-poll.** Migration (2 tables) + ticket CRUD
-  + My Tickets UI + admin inbox + email notifications + chat-widget polling +
-  "escalate from bot to ticket". Contact form now creates a ticket.
+- **Phase 1 — KB + chatbot + Help page + ticket logs (current build).** KB
+  corpus + `/support/kb` + `/support/chat` (public+authed, grounded,
+  rate-limited) + public `/help` page + in-app Help page + the migration (2
+  tables) + **auto-ticket on every chat** (`ai_resolved` vs `open`) + a
+  clinic-facing "My Tickets" log/thread view + a basic platform ticket-log
+  read. Contact affordance = "open a ticket" (creates a ticket) rather than
+  raw email.
+- **Phase 2 — Support dashboard + `support` role + replies/live-chat + email.**
+  `support` role + super_admin provisioning UI (add/remove support staff) +
+  the cross-org admin support dashboard + threaded staff replies +
+  chat-widget polling + Resend notifications (RULE 8).
 - **Phase 3 — CSAT + SLA/escalation + macros + demo form + status link.** CSAT
   flow, SLA job + escalation email, canned macros, "book a demo" public form
   (public lead ticket), UptimeRobot status link.
