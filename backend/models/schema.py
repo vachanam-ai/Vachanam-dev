@@ -703,7 +703,10 @@ class User(Base):
         # 'doctor' added via ALTER TYPE in migration fd4a95d354fa (sub-spec A).
         # create_constraint=False prevents Alembic autogenerate from re-creating
         # the enum type (it already exists in the DB from the initial migration).
-        Enum("super_admin", "org_admin", "receptionist", "doctor", name="user_role", create_constraint=False),
+        # 'support' (Vachanam platform support staff) added for the support
+        # system; no Phase-1 route writes it yet. Phase 2 provisioning needs an
+        # ALTER TYPE ADD VALUE 'support' migration before any row uses it.
+        Enum("super_admin", "org_admin", "receptionist", "doctor", "support", name="user_role", create_constraint=False),
         nullable=False,
     )
     # branch_ids: JSONB list of branch UUID strings this user can access
@@ -856,3 +859,72 @@ class CalendarWriteTask(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class SupportTicket(Base):
+    """A support conversation. NULL org_id = a public lead (contact/demo form,
+    no auth); non-null = a clinic ticket. Org-level only — support is never
+    branch data. Tickets are a SUPPORT data class, distinct from patient PII
+    (super_admin/support staff may read them; RULE 1 patient-PII wall stands)."""
+
+    __tablename__ = "support_tickets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    category: Mapped[str] = mapped_column(
+        Enum("billing", "technical", "onboarding", "feature_request", "sales_demo",
+             "other", name="support_category"),
+        nullable=False, default="other",
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("ai_resolved", "open", "pending", "resolved", "closed", name="support_status"),
+        nullable=False, default="open",
+    )
+    priority: Mapped[str] = mapped_column(
+        Enum("low", "normal", "high", "urgent", name="support_priority"),
+        nullable=False, default="normal",
+    )
+    sla_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    csat_score: Mapped[int | None] = mapped_column(Integer)
+    csat_comment: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(
+        Enum("in_app", "public_chat", "public_form", "email", name="support_source"),
+        nullable=False, default="in_app",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_support_tickets_status_sla", "status", "sla_due_at"),)
+
+
+class SupportMessage(Base):
+    """One turn in a support ticket thread (user / staff / bot / system)."""
+
+    __tablename__ = "support_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("support_tickets.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    sender: Mapped[str] = mapped_column(
+        Enum("user", "staff", "bot", "system", name="support_sender"), nullable=False
+    )
+    sender_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_support_messages_ticket_created", "ticket_id", "created_at"),)
