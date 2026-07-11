@@ -160,18 +160,26 @@ def client_ip(request: Request) -> str:
 
     peer = request.client.host if request.client else "127.0.0.1"
 
-    # Behind Cloudflare (Render fronts every request with its own Cloudflare
-    # edge), CF-Connecting-IP / True-Client-IP carry the AUTHORITATIVE real
-    # client IP — set by Cloudflare, not spoofable by a client coming through it,
-    # and stable per client. The X-Forwarded-For chain's middle entries are
-    # ROTATING Cloudflare edge IPs, so the hops logic below resolves a different
-    # IP on every request and the rate-limit/blocklist counters never accumulate
-    # (the limiter silently never fires). Prefer CF-Connecting-IP when present.
-    cf = request.headers.get("cf-connecting-ip") or request.headers.get(
-        "true-client-ip"
-    )
-    if cf and cf.strip():
-        return cf.strip()
+    # Behind Cloudflare, CF-Connecting-IP / True-Client-IP carry the real client
+    # IP set by the edge. But these are just HTTP headers: the Render origin
+    # (*.onrender.com) is directly reachable, so a client hitting it directly can
+    # FORGE them — rotating the value evades their own rate limit, and sending a
+    # victim's IP with bad logins poisons the blocklist against that victim
+    # (SEC #2, 2026-07-11). So trust them ONLY when a Cloudflare Transform Rule
+    # has stamped the shared `X-Vachanam-Edge` secret, proving the request truly
+    # transited our edge. Without the secret configured, never blind-trust CF
+    # headers — fall through to the spoof-resistant hop logic below.
+    secret = getattr(_s, "cf_origin_secret", "") or ""
+    if secret:
+        import hmac
+
+        edge = request.headers.get("x-vachanam-edge", "")
+        if hmac.compare_digest(edge, secret):
+            cf = request.headers.get("cf-connecting-ip") or request.headers.get(
+                "true-client-ip"
+            )
+            if cf and cf.strip():
+                return cf.strip()
 
     hops = getattr(_s, "trusted_proxy_hops", 0) or 0
     if hops <= 0:

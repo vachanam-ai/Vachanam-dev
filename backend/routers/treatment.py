@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user, forbid_admin
 from backend.middleware.branch_guard import assert_branch_access
+from backend.middleware.rate_limit import default_limit  # SEC #4
 from backend.models.schema import TreatmentNote, Patient, FollowupTask, Doctor
 from backend.services.treatment_logic import resolve_is_final
 
@@ -182,7 +183,7 @@ async def edit_note(
     return note
 
 
-@router.get("/patients/{patient_id}/treatment-notes")
+@router.get("/patients/{patient_id}/treatment-notes", dependencies=[Depends(default_limit)])
 async def list_notes(
     patient_id: uuid.UUID,
     branch_id: uuid.UUID,
@@ -212,7 +213,7 @@ async def list_notes(
     }
 
 
-@router.get("/branches/{branch_id}/treatment-patients")
+@router.get("/branches/{branch_id}/treatment-patients", dependencies=[Depends(default_limit)])
 async def list_patients(
     branch_id: uuid.UUID,
     doctor_id: uuid.UUID | None = None,
@@ -288,7 +289,7 @@ async def list_patients(
 # steps_performed/next_steps (RULE 9 — those are dashboard-only operational notes).
 
 
-@router.get("/patients/{patient_id}/followups")
+@router.get("/patients/{patient_id}/followups", dependencies=[Depends(default_limit)])
 async def list_followups(
     patient_id: uuid.UUID,
     branch_id: uuid.UUID,

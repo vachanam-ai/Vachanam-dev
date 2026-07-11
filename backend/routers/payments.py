@@ -269,7 +269,14 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
     Even on 400 (signature mismatch), the audit row is written before raising.
     Audit failure is caught and logged — never re-raised.
     """
-    client_ip = request.client.host if request.client else None
+    # SEC #6: real proxy-aware client IP for the payment-verify audit record,
+    # not the shared Cloudflare/Render socket peer.
+    from backend.middleware.rate_limit import client_ip as _client_ip
+
+    try:
+        client_ip = _client_ip(request)
+    except Exception:  # noqa: BLE001
+        client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
     # iter1 #5: derive org_id from the TRUSTED server-created order, NOT from the
     # client-supplied req.notes (which is forgeable on this unauthenticated route).

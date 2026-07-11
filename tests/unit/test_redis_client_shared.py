@@ -54,3 +54,15 @@ def test_wake_gate_uses_shared_client_not_fresh():
 
     assert "from_url" not in inspect.getsource(wg)
     assert "from_url" not in inspect.getsource(am)
+
+
+def test_walkin_rollback_uses_shared_client_not_fresh():
+    """SEC #3: the walk-in save-failure rollback must not build a per-call TLS
+    client (the #305 OOM cause) — it uses redis_client.get_redis()."""
+    import inspect
+
+    import backend.routers.queue as q
+
+    src = inspect.getsource(q.create_walkin)
+    assert "from_url" not in src, "walk-in rollback regressed to per-call from_url"
+    assert "get_redis" in src

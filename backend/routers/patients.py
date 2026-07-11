@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user, forbid_admin
 from backend.middleware.branch_guard import assert_branch_access
+from backend.middleware.rate_limit import default_limit  # SEC #4: throttle PII reads
 from backend.models.schema import Patient, Token, Doctor
 from backend.services.validators import normalize_indian_phone
 
@@ -38,7 +39,7 @@ class PatientEdit(BaseModel):
     phone: str | None = None
 
 
-@router.get("/branches/{branch_id}/patients")
+@router.get("/branches/{branch_id}/patients", dependencies=[Depends(default_limit)])
 async def list_patients(
     branch_id: uuid.UUID,
     user: CurrentUser = Depends(get_current_user),

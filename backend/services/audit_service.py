@@ -179,7 +179,16 @@ def audit(action: str, resource_type: str | None = None):
             ip_address: str | None = None
             user_agent: str | None = None
             if request is not None:
-                ip_address = request.client.host if request.client else None
+                # SEC #6: log the proxy-aware REAL client IP, not the shared
+                # Cloudflare/Render socket peer — otherwise every security-event
+                # audit row records the same proxy IP and forensics can't tell
+                # attackers apart.
+                try:
+                    from backend.middleware.rate_limit import client_ip
+
+                    ip_address = client_ip(request)
+                except Exception:  # noqa: BLE001 — audit must never fail on IP
+                    ip_address = request.client.host if request.client else None
                 user_agent = request.headers.get("user-agent")
 
             handler_success = True

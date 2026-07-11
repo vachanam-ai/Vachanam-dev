@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import redis.asyncio as aioredis
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func, update
+from sqlalchemy import select, and_, func, text, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from agent.session_state import SessionState
@@ -1010,6 +1010,18 @@ async def confirm_booking(
                 ),
             }
     else:  # slot doctor — per-slot occupancy
+        # SEC #1 (2026-07-11): the capacity COUNT below is a TOCTOU race — two
+        # concurrent confirms for the same slot both read < capacity and both
+        # INSERT, overbooking a slot even when assign_token's Redis gate was
+        # skipped (the LLM has done exactly that: FIXLOG #19/#32/#33/#36). A
+        # transaction-scoped Postgres advisory lock keyed on THIS slot makes
+        # count-then-insert atomic; it auto-releases at COMMIT/ROLLBACK and,
+        # unlike a unique index, still honours max_concurrent_per_slot > 1.
+        # (Token doctors are already backstopped by uq_token_number_confirmed.)
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"slot:{branch_id}:{doctor_id}:{booking_date}:{appointment_time}"},
+        )
         slot_confirmed = (
             await db.execute(
                 select(func.count()).select_from(Token).where(

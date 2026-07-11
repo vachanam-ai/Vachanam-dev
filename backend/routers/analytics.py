@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
+from backend.middleware.rate_limit import default_limit  # SEC #4
 from backend.models.schema import (
     Branch,
     CallLog,
@@ -146,7 +147,7 @@ class CallQualitySummary(BaseModel):
     failures: list[FailRow]        # fail_reason breakdown (booked calls excluded)
 
 
-@router.get("/analytics/call-quality", response_model=CallQualitySummary)
+@router.get("/analytics/call-quality", response_model=CallQualitySummary, dependencies=[Depends(default_limit)])
 async def analytics_call_quality(
     branch_id: str,
     days: int = Query(default=14, ge=1, le=90),
@@ -209,7 +210,7 @@ async def analytics_call_quality(
     )
 
 
-@router.get("/analytics/overview", response_model=Overview)
+@router.get("/analytics/overview", response_model=Overview, dependencies=[Depends(default_limit)])
 async def analytics_overview(
     branch_id: str,
     days: int = Query(default=14, ge=1, le=90),

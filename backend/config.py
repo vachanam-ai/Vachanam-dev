@@ -83,6 +83,14 @@ class Settings(BaseSettings):
     # trust XFF[0] (fully client-spoofable) nor the bare proxy socket IP. Set to 0
     # when there is NO proxy (direct connections) to use the socket peer as-is.
     trusted_proxy_hops: int = 2
+    # SEC #2: origin secret proving a request actually came through OUR Cloudflare
+    # edge. Set a Cloudflare Transform Rule to inject `X-Vachanam-Edge: <value>`
+    # on every proxied request, and put the same value here. When set, the
+    # CF-Connecting-IP / True-Client-IP headers are trusted ONLY if that secret
+    # header matches — so a client hitting the Render origin directly can't forge
+    # their apparent IP to evade rate limits or poison the blocklist. Empty =
+    # fall back to the spoof-resistant hop logic (never blind-trust CF headers).
+    cf_origin_secret: str = ""
 
     # Voice agent (LiveKit)
     public_url: str = "http://localhost:7860"

@@ -83,15 +83,29 @@ class _CfReq:
 
 
 def test_client_ip_prefers_cf_connecting_ip_and_is_stable(monkeypatch):
-    # trusted_proxy_hops=2 would pick the rotating Cloudflare edge (XFF[-2]) →
-    # a different key every request → counters never accumulate → no 429.
-    # With CF-Connecting-IP preferred, the resolved IP is STABLE across requests.
+    # SEC #2 (2026-07-11): CF-Connecting-IP is trusted ONLY when the request
+    # carries the matching X-Vachanam-Edge secret (proving it came through our
+    # Cloudflare edge). WITH the secret, the resolved IP is the stable real
+    # client (not the rotating edge). Without it, a forged CF header is ignored.
     from backend.config import settings
 
     monkeypatch.setattr(settings, "trusted_proxy_hops", 2, raising=False)
-    ip1 = rl.client_ip(_CfReq("162.158.54.36"))
-    ip2 = rl.client_ip(_CfReq("172.71.124.143"))  # edge rotated
-    assert ip1 == ip2 == "223.0.0.1"  # stable real client, not the edge
+    monkeypatch.setattr(settings, "cf_origin_secret", "edge-secret", raising=False)
+
+    def _stamped(edge_ip):
+        req = _CfReq(edge_ip)
+        req.headers["x-vachanam-edge"] = "edge-secret"
+        return req
+
+    ip1 = rl.client_ip(_stamped("162.158.54.36"))
+    ip2 = rl.client_ip(_stamped("172.71.124.143"))  # edge rotated
+    assert ip1 == ip2 == "223.0.0.1"  # stable real client via authenticated CF header
+
+    # Without the edge secret, the same forged CF-Connecting-IP is NOT trusted —
+    # falls through to the hop logic (XFF[-2] = the rotating edge), never the
+    # attacker-controlled cf value.
+    monkeypatch.setattr(settings, "cf_origin_secret", "", raising=False)
+    assert rl.client_ip(_CfReq("162.158.54.36")) != "223.0.0.1"
 
 
 def test_client_ip_falls_back_to_hops_without_cf_header(monkeypatch):

@@ -52,3 +52,43 @@ def test_memstat_parses_proc_format(tmp_path, monkeypatch):
         lambda p, *a, **k: real_open(fake if p == "/proc/self/status" else p, *a, **k),
     )
     assert ms.process_mem_mb() == {"rss": 200, "peak": 400}
+
+
+# ── SEC #7/#11: diagnostic endpoints gated in production ──────────────────
+
+def test_diagnostics_open_in_dev(monkeypatch):
+    import backend.config as cfg
+    monkeypatch.setattr(cfg.settings, "app_env", "development")
+    r = _client().get("/health/ratelimit")
+    assert r.status_code == 200  # dev: open for debugging
+
+
+def test_diagnostics_require_admin_in_prod(monkeypatch):
+    import backend.config as cfg
+    monkeypatch.setattr(cfg.settings, "app_env", "production")
+    c = _client()
+    for url in ("/health/ratelimit", "/health/voice-plane", "/health/redis"):
+        r = c.get(url)
+        assert r.status_code == 401, f"{url} leaked recon unauthenticated in prod"
+    # a non-admin token is still rejected
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    from jose import jwt
+    tok = jwt.encode({
+        "sub": str(uuid.uuid4()), "email": "o@c.com", "role": "org_admin",
+        "org_id": str(uuid.uuid4()), "branch_ids": [], "is_admin": False,
+        "iat": int(datetime.now(timezone.utc).timestamp()),
+        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+        "jti": str(uuid.uuid4())},
+        cfg.settings.jwt_secret, algorithm="HS256")
+    r = c.get("/health/ratelimit", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 403, "non-admin reached prod diagnostics"
+
+
+def test_public_health_still_open_in_prod(monkeypatch):
+    """UptimeRobot must still get an unauthenticated 200 from /health itself."""
+    import backend.config as cfg
+    monkeypatch.setattr(cfg.settings, "app_env", "production")
+    r = _client().get("/health")
+    assert r.status_code == 200 and r.json()["status"] == "ok"

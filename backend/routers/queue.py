@@ -576,21 +576,20 @@ async def create_walkin(
     except Exception:
         await db.rollback()
         # release the slot hold (token-doctor counter is a sequence — never DECR)
+        # SEC #3 (#305): use the SHARED per-loop client — building a fresh TLS
+        # client per failure leaks memory on the booking host (the exact cause
+        # of the Render 512MB OOM loop). get_redis() caches one per event loop.
         key = assignment.get("redis_key") or ""
         if key.startswith("slot:"):
-            import redis.asyncio as _aioredis
-
-            from backend.config import settings as _settings
+            from backend.redis_client import drop as _drop_redis
+            from backend.redis_client import get_redis as _get_redis
 
             try:
-                _r = _aioredis.from_url(_settings.redis_url, decode_responses=True)
-                try:
-                    if int(await _r.get(key) or 0) > 0:
-                        await _r.decr(key)
-                finally:
-                    await _r.aclose()
+                _r = _get_redis()
+                if int(await _r.get(key) or 0) > 0:
+                    await _r.decr(key)
             except Exception:
-                pass
+                _drop_redis()  # forget a dead socket so it's never reused
         raise HTTPException(status_code=500, detail="Could not save walk-in")
 
     # Hybrid calendar write — never fails the walk-in (Rule 4 handled inside)

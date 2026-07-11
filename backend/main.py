@@ -25,7 +25,7 @@ from pathlib import Path
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -397,7 +397,27 @@ async def health() -> dict:
     return out
 
 
-@app.get("/health/voice-plane", tags=["health"])
+def _diag_guard(request: Request) -> None:
+    """SEC #7/#11: the detailed diagnostics below leak recon (live-call volume,
+    the exact resolved rate-limit key + CF headers = an oracle for crafting a
+    spoofed IP, Redis reachability). Harmless in dev, but in PRODUCTION they
+    must require an admin JWT. Non-prod stays open for easy debugging."""
+    if settings.app_env != "production":
+        return
+    from jose import JWTError, jwt
+
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Admin token required")
+    try:
+        payload = jwt.decode(auth[7:], settings.jwt_secret, algorithms=["HS256"])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if not (payload.get("is_admin") or payload.get("role") == "super_admin"):
+        raise HTTPException(status_code=403, detail="Admin only")
+
+
+@app.get("/health/voice-plane", tags=["health"], dependencies=[Depends(_diag_guard)])
 async def health_voice_plane() -> dict:
     """Diagnostic (Vinay 2026-06-22, missing reminders): confirm THIS host can
     dispatch outbound calls. Returns booleans + a reachability probe only — NO
@@ -429,7 +449,7 @@ async def health_voice_plane() -> dict:
     return out
 
 
-@app.get("/health/ratelimit", tags=["health"])
+@app.get("/health/ratelimit", tags=["health"], dependencies=[Depends(_diag_guard)])
 async def health_ratelimit(request: Request) -> dict:
     """Diagnostic: what client IP + rate-limit key does THIS request resolve to,
     and what is trusted_proxy_hops? If the key VARIES across repeated requests
@@ -448,7 +468,7 @@ async def health_ratelimit(request: Request) -> dict:
     }
 
 
-@app.get("/health/redis", tags=["health"])
+@app.get("/health/redis", tags=["health"], dependencies=[Depends(_diag_guard)])
 async def health_redis() -> dict:
     """Diagnostic: can THIS host reach Redis? Uses the rate-limiter's OWN client
     and does a ping + set/get/del round-trip. Booleans + error class only, no

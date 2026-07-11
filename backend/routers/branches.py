@@ -791,6 +791,28 @@ async def update_branch_settings(
                 "Contact support if this is your number.",
             )
 
+    # SEC #9: a Google Calendar ID, like a DID, must belong to exactly ONE
+    # branch. Our shared service account has writer access to every clinic
+    # calendar shared with it, so if branch B set branch A's calendar_id, B's
+    # bookings (patient name + last-4 + token) would be written into A's
+    # calendar — a cross-tenant PII spill. Reject a calendar already claimed by
+    # a different branch (mirrors the DID guard above).
+    if body.google_calendar_id is not None and body.google_calendar_id.strip():
+        cal_id = body.google_calendar_id.strip()
+        cal_clash = (
+            await db.execute(
+                select(Branch).where(
+                    Branch.google_calendar_id == cal_id, Branch.id != branch.id
+                )
+            )
+        ).scalar_one_or_none()
+        if cal_clash is not None:
+            logger.warning("calendar_id_collision_blocked", branch_id=branch_id)
+            raise HTTPException(
+                status_code=409,
+                detail="This Google Calendar is already linked to another clinic.",
+            )
+
     old_did = branch.did_number  # capture before mutate (G9 trunk cleanup)
     for field in (
         "name", "address", "city", "clinic_phone",

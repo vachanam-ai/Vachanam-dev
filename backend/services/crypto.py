@@ -32,6 +32,16 @@ def _get_fernet() -> Fernet:
     if key:
         _fernet = Fernet(key.encode())
     else:
+        # SEC #5: a JWT-derived key is a dev/test convenience only. In production
+        # it must be a hard failure — deriving at-rest encryption from the JWT
+        # secret means rotating the JWT orphans every stored SIP ciphertext, and
+        # the "secret" is no stronger than a value living in the same env.
+        if settings.app_env == "production":
+            raise RuntimeError(
+                "FIELD_ENCRYPTION_KEY is required in production "
+                "(generate: python -c \"from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())\")"
+            )
         # Derive a stable Fernet key from the JWT secret (dev/test convenience).
         logger.warning(
             "field_encryption_key_unset_deriving_from_jwt_secret — set FIELD_ENCRYPTION_KEY in production"
