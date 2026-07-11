@@ -30,7 +30,11 @@ const NAV = {
   ],
   super_admin: [
     { to: "/admin", label: "Operations" },
-    { to: "/admin/monitoring", label: "Monitoring" }
+    { to: "/admin/monitoring", label: "Monitoring" },
+    { to: "/support-admin", label: "Support" }
+  ],
+  support: [
+    { to: "/support-admin", label: "Support inbox" }
   ]
 };
 
@@ -38,7 +42,8 @@ const ROLE_LABEL = {
   receptionist: "Reception",
   org_admin: "Clinic Owner",
   doctor: "Doctor",
-  super_admin: "Vachanam Ops"
+  super_admin: "Vachanam Ops",
+  support: "Vachanam Support"
 };
 
 

@@ -17,6 +17,7 @@ import Monitoring from "./pages/Monitoring.jsx";
 import TvDisplay from "./pages/TvDisplay.jsx";
 import Help from "./pages/Help.jsx";
 import MyTickets from "./pages/MyTickets.jsx";
+import SupportAdmin from "./pages/SupportAdmin.jsx";
 
 function FullScreenSpinner() {
   return (
@@ -145,6 +146,14 @@ export default function App() {
           element={
             <Protected roles={["super_admin"]}>
               <Monitoring />
+            </Protected>
+          }
+        />
+        <Route
+          path="/support-admin"
+          element={
+            <Protected roles={["super_admin", "support"]}>
+              <SupportAdmin />
             </Protected>
           }
         />

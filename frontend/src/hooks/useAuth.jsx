@@ -17,7 +17,8 @@ export const roleHome = (role) =>
     receptionist: "/queue",
     org_admin: "/dashboard",
     doctor: "/my-schedule",
-    super_admin: "/admin"
+    super_admin: "/admin",
+    support: "/support-admin"
   })[role] ?? "/queue";
 
 export function AuthProvider({ children }) {

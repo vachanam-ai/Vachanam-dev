@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { getKb, sendChat } from "../api/support";
+import { getKb, sendChat, submitContact } from "../api/support";
 import ThemeToggle from "../components/ThemeToggle.jsx";
 
 export default function Help() {
@@ -39,6 +39,17 @@ export default function Help() {
     } finally {
       setBusy(false);
     }
+  };
+
+  // Contact / demo form → a support ticket (a lead when logged out).
+  const [contact, setContact] = useState({ name: "", email: "", subject: "", body: "", category: "sales_demo" });
+  const [sent, setSent] = useState(false);
+  const [cErr, setCErr] = useState("");
+  const submitC = async (e) => {
+    e.preventDefault();
+    setCErr("");
+    try { await submitContact(contact); setSent(true); }
+    catch (x) { setCErr(x.response?.data?.detail || "Could not send — email hello@vachanam.in"); }
   };
 
   // Client-side section search (corpus is small).
@@ -111,6 +122,45 @@ export default function Help() {
             Please don't share patient names, phone numbers, or health details here.
           </p>
         </section>
+
+        <section className="space-y-3">
+          <h2 className="font-display text-lg font-semibold">Contact us / book a demo</h2>
+          {sent ? (
+            <p className="rounded-2xl border border-hairline bg-teal-mint p-4 text-sm">
+              Thanks — we've got your message and will reply by email soon.
+            </p>
+          ) : (
+            <form onSubmit={submitC} className="grid gap-2 sm:grid-cols-2">
+              <input className="input" placeholder="Your name" value={contact.name}
+                onChange={(e) => setContact({ ...contact, name: e.target.value })} />
+              <input className="input" placeholder="Email" required value={contact.email}
+                onChange={(e) => setContact({ ...contact, email: e.target.value })} />
+              <input className="input sm:col-span-2" placeholder="Subject" required value={contact.subject}
+                onChange={(e) => setContact({ ...contact, subject: e.target.value })} />
+              <textarea className="input sm:col-span-2" rows={3} placeholder="How can we help?"
+                required value={contact.body}
+                onChange={(e) => setContact({ ...contact, body: e.target.value })} />
+              <select className="input" value={contact.category}
+                onChange={(e) => setContact({ ...contact, category: e.target.value })}>
+                <option value="sales_demo">Book a demo</option>
+                <option value="billing">Billing</option>
+                <option value="technical">Technical</option>
+                <option value="onboarding">Onboarding</option>
+                <option value="other">Other</option>
+              </select>
+              <button className="btn-primary sm:col-span-1">Send</button>
+              {cErr && <p className="text-sm text-danger sm:col-span-2">{cErr}</p>}
+            </form>
+          )}
+        </section>
+
+        <footer className="border-t border-hairline pt-4 text-sm text-ink-soft">
+          Live status:{" "}
+          <a className="text-teal hover:underline" href="https://stats.uptimerobot.com"
+            target="_blank" rel="noreferrer">status.vachanam.in</a>
+          {" · "}Email us at{" "}
+          <a className="text-teal hover:underline" href="mailto:hello@vachanam.in">hello@vachanam.in</a>
+        </footer>
       </main>
     </div>
   );
