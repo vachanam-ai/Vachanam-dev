@@ -171,6 +171,21 @@ async def require_support_staff(current_user: CurrentUser = Depends(get_current_
     return current_user
 
 
+async def require_support_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Manage the support TEAM: super_admin (Vinay) OR the designated support
+    lead — the `support` user whose email is settings.support_email
+    (support@vachanam.in). Other support staff can read/answer tickets but
+    cannot add or remove staff. This is how support@ 'owns' the desk."""
+    if current_user.role == "super_admin":
+        return current_user
+    if (current_user.role == "support"
+            and (current_user.email or "").lower() == (settings.support_email or "").lower()):
+        return current_user
+    logger.warning("support_admin_denied", user_id=current_user.user_id,
+                   role=current_user.role)
+    raise HTTPException(status_code=403, detail="Support admin access required")
+
+
 async def forbid_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     """Dependency that blocks PLATFORM staff (super_admin + support) from
     PII-touching routes.

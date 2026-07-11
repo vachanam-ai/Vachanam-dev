@@ -76,8 +76,12 @@ function StaffManager() {
   const [staff, setStaff] = useState([]);
   const [form, setForm] = useState({ email: "", name: "", password: "" });
   const [err, setErr] = useState("");
-  const load = () => listStaff().then(setStaff).catch(() => setStaff([]));
+  const [allowed, setAllowed] = useState(true); // hide entirely if not a support admin
+  const load = () =>
+    listStaff().then((s) => { setStaff(s); setAllowed(true); })
+      .catch((x) => { if (x.response?.status === 403) setAllowed(false); else setStaff([]); });
   useEffect(() => { load(); }, []);
+  if (!allowed) return null;
   const add = async (e) => {
     e.preventDefault();
     setErr("");
@@ -163,7 +167,7 @@ export default function SupportAdmin() {
         </div>
       </div>
 
-      {role === "super_admin" && <StaffManager />}
+      {(role === "super_admin" || role === "support") && <StaffManager />}
     </div>
   );
 }

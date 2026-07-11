@@ -20,7 +20,7 @@ from backend.middleware.auth_middleware import (
     CurrentUser,
     get_current_user,
     optional_current_user,
-    require_admin,
+    require_support_admin,
     require_support_staff,
 )
 from backend.middleware.rate_limit import default_limit
@@ -396,7 +396,7 @@ class StaffCreate(BaseModel):
 
 
 @router.get("/admin/staff")
-async def list_staff(_admin: CurrentUser = Depends(require_admin),
+async def list_staff(_admin: CurrentUser = Depends(require_support_admin),
                      db: AsyncSession = Depends(get_db)):
     rows = (
         await db.execute(select(User).where(User.role == "support")
@@ -406,7 +406,7 @@ async def list_staff(_admin: CurrentUser = Depends(require_admin),
 
 
 @router.post("/admin/staff")
-async def create_staff(body: StaffCreate, _admin: CurrentUser = Depends(require_admin),
+async def create_staff(body: StaffCreate, _admin: CurrentUser = Depends(require_support_admin),
                        db: AsyncSession = Depends(get_db)):
     from backend.routers.auth import _hash_password
 
@@ -436,7 +436,7 @@ async def create_staff(body: StaffCreate, _admin: CurrentUser = Depends(require_
 
 
 @router.delete("/admin/staff/{staff_id}")
-async def delete_staff(staff_id: uuid.UUID, _admin: CurrentUser = Depends(require_admin),
+async def delete_staff(staff_id: uuid.UUID, _admin: CurrentUser = Depends(require_support_admin),
                        db: AsyncSession = Depends(get_db)):
     u = (
         await db.execute(select(User).where(User.id == staff_id, User.role == "support"))

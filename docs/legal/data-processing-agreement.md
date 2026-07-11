@@ -152,7 +152,7 @@ Vachanam will provide the Clinic with a written post-mortem report within **14 d
 
 When a Data Principal (patient, doctor, or staff member) exercises their rights under DPDP Act 2023 Sections 11-13 (access, correction, erasure, grievance):
 
-- If the request comes to the Clinic: the Clinic may forward it to Vachanam at hello@vachanam.in. Vachanam will execute the request within 7 calendar days.
+- If the request comes to the Clinic: the Clinic may forward it to Vachanam at privacy@vachanam.in. Vachanam will execute the request within 7 calendar days.
 - If the request comes directly to Vachanam: Vachanam will notify the Clinic and execute the request within 7 calendar days after identity verification.
 
 ### 7.2 Identity verification

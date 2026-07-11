@@ -113,6 +113,32 @@ async def test_super_admin_manages_staff_but_support_cannot(client, db):
     assert r.status_code == 200
 
 
+async def test_support_lead_can_manage_staff(client, db):
+    """The designated support lead (support user whose email == support_email)
+    can add/remove staff; a regular support user cannot."""
+    from datetime import datetime, timedelta, timezone
+    from backend.config import settings
+
+    def _lead_jwt():
+        now = datetime.now(timezone.utc)
+        return jwt.encode({"sub": str(uuid.uuid4()), "email": settings.support_email,
+                           "role": "support", "org_id": None, "branch_ids": [],
+                           "is_admin": False, "iat": int(now.timestamp()),
+                           "exp": int((now + timedelta(hours=8)).timestamp()),
+                           "jti": str(uuid.uuid4())}, settings.jwt_secret, algorithm="HS256")
+
+    lead = _lead_jwt()
+    r = await client.get("/support/admin/staff", headers=_auth(lead))
+    assert r.status_code == 200  # lead may manage the team
+    r = await client.post("/support/admin/staff", headers=_auth(lead),
+                          json={"email": "agent2@vachanam.in", "name": "Agent Two",
+                                "password": "Str0ng!pass"})
+    assert r.status_code == 200
+    # a regular support user (different email) still cannot
+    r = await client.get("/support/admin/staff", headers=_auth(_jwt("support")))
+    assert r.status_code == 403
+
+
 # ── Staff reply + status transitions ─────────────────────────────────────────
 
 async def test_staff_reply_sets_pending_and_first_response(client, db):
