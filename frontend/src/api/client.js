@@ -70,6 +70,10 @@ export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
 export const fetchPlan = () => api.get("/api/plan").then((r) => r.data);
 export const changePlan = (plan) =>
   api.post("/api/plan-change", { plan }).then((r) => r.data);
+export const createPaymentOrder = (plan) =>
+  api.post("/api/create-order", { plan }).then((r) => r.data);
+export const verifyPayment = (payload) =>
+  api.post("/api/verify-payment", payload).then((r) => r.data);
 
 // ── Analytics (owner) ──
 export const fetchAnalytics = (branchId, days = 14) =>

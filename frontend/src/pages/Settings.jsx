@@ -5,6 +5,7 @@ import {
   addStaff,
   changePlan,
   cloneBranchVoice,
+  createPaymentOrder,
   fetchBranchSettings,
   fetchPlan,
   fetchStaff,
@@ -15,10 +16,24 @@ import {
   saveBranchFaq,
   setBranchVoice,
   testCalendar,
-  updateBranchSettings
+  updateBranchSettings,
+  verifyPayment
 } from "../api/client.js";
 
 const PLAN_LABELS = { solo: "Starter · ₹5,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹17,999/mo" };
+const PLAN_PRICES = { solo: 5999, clinic: 9999, multi: 17999 };
+
+// Razorpay checkout script — loaded on demand, once.
+function loadRazorpay() {
+  return new Promise((resolve, reject) => {
+    if (window.Razorpay) return resolve();
+    const s = document.createElement("script");
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Could not load the payment window — check your connection"));
+    document.body.appendChild(s);
+  });
+}
 import { useAuth } from "../hooks/useAuth.jsx";
 import { startRecording } from "../lib/recorder.js";
 
@@ -80,7 +95,7 @@ function InfoBox({ title, children }) {
 }
 
 export default function Settings() {
-  const { branchId } = useAuth();
+  const { branchId, user } = useAuth();
   const qc = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -159,6 +174,51 @@ export default function Settings() {
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change plan")
   });
+
+  // Real payment: server-priced Razorpay order → checkout modal → server-side
+  // signature verify → webhook is the authoritative activation (this refetch
+  // just picks the new status up for the UI).
+  const [paying, setPaying] = useState(false);
+  const payNow = async () => {
+    const planKey = plan.data?.plan ?? "clinic";
+    setPaying(true);
+    try {
+      await loadRazorpay();
+      const order = await createPaymentOrder(planKey);
+      await new Promise((resolve, reject) => {
+        const rzp = new window.Razorpay({
+          key: order.key_id,
+          order_id: order.order_id,
+          amount: order.amount,
+          currency: order.currency,
+          name: "Vachanam",
+          description: `${PLAN_LABELS[planKey]} subscription`,
+          prefill: { email: user?.email ?? "" },
+          theme: { color: "#0f766e" },
+          modal: { ondismiss: () => reject(new Error("Payment window closed")) },
+          handler: async (resp) => {
+            try {
+              await verifyPayment({
+                razorpay_order_id: resp.razorpay_order_id,
+                razorpay_payment_id: resp.razorpay_payment_id,
+                razorpay_signature: resp.razorpay_signature
+              });
+              toast.success("Payment received — your plan is active. Welcome aboard!");
+              plan.refetch();
+              resolve();
+            } catch (e) {
+              reject(new Error(e?.response?.data?.detail ?? "Payment verification failed — if money was deducted it activates automatically in a minute"));
+            }
+          }
+        });
+        rzp.open();
+      });
+    } catch (e) {
+      if (e?.message !== "Payment window closed") toast.error(e?.message ?? "Payment failed");
+    } finally {
+      setPaying(false);
+    }
+  };
 
   // smallest.ai voice catalog for the clinic's language (drives the picker).
   const voices = useQuery({
@@ -355,7 +415,17 @@ export default function Settings() {
           <span className={plan.data?.status === "active" ? "chip-token" : "chip-muted"}>
             {plan.data?.status ?? "—"}
           </span>
+          {plan.data && plan.data.status !== "active" && (
+            <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
+              {paying ? "Opening payment…" : `Activate — pay ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")}`}
+            </button>
+          )}
         </div>
+        {plan.data && plan.data.status !== "active" && (
+          <p className="mt-2 font-ui text-xs text-slate">
+            UPI, card or netbanking via Razorpay. Your line activates the moment payment succeeds.
+          </p>
+        )}
         {plan.data?.pending_plan && (
           <InfoBox title="Scheduled change">
             Switching to <strong>{plan.data.pending_plan}</strong> on{" "}

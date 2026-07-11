@@ -156,6 +156,13 @@ async def lifespan(app: FastAPI):
             run_trial_pause, IntervalTrigger(hours=6),
             id="trial_pause", replace_existing=True,
         )
+        # Day-12 payment nudge: one email when a trial has <2 days left.
+        from backend.jobs.trial_pause import run_trial_nudge
+
+        scheduler.add_job(
+            run_trial_nudge, IntervalTrigger(hours=6),
+            id="trial_nudge", replace_existing=True,
+        )
         # Apply clinic-scheduled plan changes whose effective date (1st of the
         # month) has arrived.
         scheduler.add_job(
