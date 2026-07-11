@@ -82,6 +82,7 @@ export default function Landing() {
             <a href="#how" className="text-ink-soft hover:text-teal">How it works</a>
             <a href="#voices" className="text-ink-soft hover:text-teal">Voices</a>
             <a href="#pricing" className="text-ink-soft hover:text-teal">Pricing</a>
+            <Link to="/help" className="text-ink-soft hover:text-teal">Help</Link>
           </nav>
           <div className="flex items-center gap-3">
             <ThemeToggle />

@@ -15,6 +15,8 @@ import DoctorSchedule from "./pages/DoctorSchedule.jsx";
 import Admin from "./pages/Admin.jsx";
 import Monitoring from "./pages/Monitoring.jsx";
 import TvDisplay from "./pages/TvDisplay.jsx";
+import Help from "./pages/Help.jsx";
+import MyTickets from "./pages/MyTickets.jsx";
 
 function FullScreenSpinner() {
   return (
@@ -48,6 +50,8 @@ export default function App() {
       <Route path="/register" element={user ? <Navigate to={roleHome(role)} replace /> : <Register />} />
       {/* Public waiting-room TV board — no login, no PII (token numbers only) */}
       <Route path="/tv/:branchId" element={<TvDisplay />} />
+      {/* Public help centre — KB search + AI assistant (works logged out or in) */}
+      <Route path="/help" element={<Help />} />
 
       <Route
         element={
@@ -117,6 +121,14 @@ export default function App() {
           element={
             <Protected roles={["org_admin"]}>
               <Settings />
+            </Protected>
+          }
+        />
+        <Route
+          path="/tickets"
+          element={
+            <Protected roles={["org_admin", "receptionist", "doctor"]}>
+              <MyTickets />
             </Protected>
           }
         />

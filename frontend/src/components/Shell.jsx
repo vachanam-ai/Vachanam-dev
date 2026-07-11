@@ -9,7 +9,8 @@ const NAV = {
     { to: "/walk-in", label: "Walk-in" },
     { to: "/treatments", label: "Treatments" },
     { to: "/patients", label: "Patients" },
-    { to: "/availability", label: "Doctor leave" }
+    { to: "/availability", label: "Doctor leave" },
+    { to: "/tickets", label: "Support" }
   ],
   org_admin: [
     { to: "/dashboard", label: "Dashboard" },
@@ -19,11 +20,13 @@ const NAV = {
     { to: "/patients", label: "Patients" },
     { to: "/availability", label: "Doctor leave" },
     { to: "/my-schedule", label: "Doctors" },
-    { to: "/settings", label: "Settings" }
+    { to: "/settings", label: "Settings" },
+    { to: "/tickets", label: "Support" }
   ],
   doctor: [
     { to: "/my-schedule", label: "My Schedule" },
-    { to: "/treatments", label: "Treatments" }
+    { to: "/treatments", label: "Treatments" },
+    { to: "/tickets", label: "Support" }
   ],
   super_admin: [
     { to: "/admin", label: "Operations" },
