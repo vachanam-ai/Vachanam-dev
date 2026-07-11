@@ -70,6 +70,7 @@ Our production logs follow a strict PII discipline:
 | Booking rows (token, date, doctor) | Retained after anonymisation | No longer link to an identifiable person; clinic keeps aggregate statistics |
 | Call transcripts (text, phone-masked) | 90 days | Deleted by the same daily job |
 | Consent records | Same window as the patient data they document | Pruned |
+| Treatment visit notes + follow-up Q&A summary (optional feature; clinic-scoped) | Until patient-record erasure | Deleted / text cleared with the patient record |
 | Temporary token counters (cache) | Same calendar day | Expire automatically |
 | Voice audio | Never stored | — |
 | Staff accounts | Until removed by the clinic owner (+30-day recovery buffer) | PII purged; anonymised audit records kept |

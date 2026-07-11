@@ -56,6 +56,8 @@ We collect different data depending on your role. We collect only what is needed
 - We do NOT store your full medical history, diagnosis, prescriptions, test results, or Aadhaar/PAN number.
 - We do NOT ask you to create an account or set a password.
 
+**If your clinic uses treatment follow-ups** (optional feature): your doctor may record short visit-progress notes (what was done this visit, what comes next) and schedule a follow-up call. The AI's follow-up question and a short summary of your answer are stored for your doctor to read. This data is entered by or visible only to YOUR clinic, is never used for anything except your continuing care, and is erased together with your patient record. Follow-up calls are made only if you agreed to them when booking — if you said no (or withdraw later), the call simply never happens.
+
 **About call transcripts:** a text transcript of the conversation (what was said, not the audio) may be kept for up to 90 days to monitor and improve call quality. Phone numbers are masked in the transcript before it is saved, it is visible only to your own clinic, and it is automatically deleted after the 90-day window by a daily software job.
 
 ### If you are a doctor
@@ -178,6 +180,8 @@ We keep data only as long as it serves a clear purpose. Here are the specific re
 | User accounts (staff email, name, role) | Until the clinic owner removes the user, or the user requests deletion + 30 days | Clinic needs active staff accounts; 30-day buffer allows recovery from accidental deletion | Personally identifiable information purged; anonymized audit records retained |
 | Authentication tokens (login sessions) | 8 hours maximum (hard expiry) + immediate revocation on logout | Security: limits damage window if a device is stolen | Automatically expired; revocation records cleared from cache |
 | Voice call audio | NOT STORED | We do not record calls. Audio is processed in real time by Sarvam AI for speech-to-text conversion, then discarded. | Not applicable |
+| Treatment progress notes (doctor-entered) | Until the patient record is erased (2 years after last activity) | Doctors need continuity of care across visits | Deleted with the patient record |
+| Follow-up question and answer summary | Until the patient record is erased | The doctor reads the patient's response | Question/answer text cleared with the patient record |
 | Voice call transcripts (text only) | Up to 90 days | Call-quality monitoring and troubleshooting failed bookings. Phone numbers are masked before the transcript is saved; the transcript is visible only to your own clinic. | Transcript text automatically deleted by a daily job; the non-personal quality scores survive |
 | Redis token counters (daily booking counts) | End of calendar day + 1 hour buffer | Prevents double-booking during the day | Automatically expired by Redis TTL |
 

@@ -26,7 +26,7 @@ TODAY = date(2026, 6, 22)
 NOW_IN_HOURS = datetime(2026, 6, 22, 10, 0, tzinfo=IST)   # 10:00 IST → inside [9,20)
 
 
-async def _seed(db, *, is_final=False, next_reporting=date(2026, 6, 25), phone="+919000000040"):
+async def _seed(db, *, is_final=False, next_reporting=date(2026, 6, 25), phone="+919000000040", consent=True):
     org_id = uuid.uuid4()
     db.add(Organization(id=org_id, name="Org", owner_phone="+919000099040",
                         owner_email=f"owner-{org_id}@c.com", plan="clinic"))
@@ -35,7 +35,10 @@ async def _seed(db, *, is_final=False, next_reporting=date(2026, 6, 25), phone="
                 whatsapp_number=f"+9100{uuid.uuid4().hex[:9]}", timezone="Asia/Kolkata")
     db.add(br); await db.flush()
     doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="appointment")
-    pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone=phone)
+    # followup_consent=True: these tests exercise the DISPATCH paths; the
+    # consent gate (#303) has its own dedicated test below.
+    pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone=phone,
+                  followup_consent=consent)
     db.add_all([doc, pat]); await db.flush()
     note = TreatmentNote(branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
                          visit_date=date(2026, 6, 21), next_reporting_date=next_reporting,
@@ -105,3 +108,22 @@ async def test_run_final_note_completes_without_dialing(db, monkeypatch, redis):
     await db.refresh(task)
     assert task.status == "completed"
     assert called["n"] == 0   # treatment closed → never dialed
+
+
+@pytest.mark.asyncio
+async def test_no_consent_skips_call_and_completes_task(db, monkeypatch, redis):
+    """#303 (DPDP): followup_consent=False must actually stop the phone from
+    ringing — policy §9 promises withdrawal works. Task closes, zero dispatch."""
+    br, doc, pat, note, task = await _seed(db, consent=False)
+    called = {"n": 0}
+
+    async def fake_dispatch(*a, **k):
+        called["n"] += 1
+        return True
+
+    monkeypatch.setattr(job, "_dispatch", fake_dispatch)
+    n = await job.run_next_visit_followups(now=NOW_IN_HOURS)
+    assert n == 0
+    assert called["n"] == 0
+    await db.refresh(task)
+    assert task.status == "completed"

@@ -17,6 +17,7 @@ Your clinic's data belongs to your clinic. Vachanam stores the minimum needed to
 | Patient first name | Call recordings — audio is converted to text in real time and discarded |
 | Phone number | Medical history, diagnoses, prescriptions, test results |
 | One-line reason for visit ("tooth pain") | Aadhaar, PAN, or any government ID |
+| If you use treatment follow-ups: your own short visit notes + the patient's follow-up answer | Documents, scans, lab reports, prescriptions — we are not an EMR |
 | Token number, doctor, date, time | Payment details of patients (we never collect patient payments) |
 | Age/gender if the patient volunteers it | Anything about a patient who called but did not confirm a booking |
 
@@ -80,7 +81,16 @@ We maintain a written, rehearsed breach-response runbook:
 - We sign a **Data Processing Agreement** with every clinic — it binds us to everything on this page contractually, not just as marketing.
 - We are not an EMR and never become one: no clinical records, no insurance data, no patient billing. If a feature would require them, it doesn't get built.
 
-## 9. How this compares to the big health-tech platforms
+## 9. Treatment follow-ups — the same discipline applies
+
+If your clinic uses the follow-up feature, a little more data exists — all of it yours:
+
+- **Doctor's visit notes** (what was done, what's next): entered by your doctor, visible only inside your clinic, deleted when the patient record is erased.
+- **Follow-up calls are consent-gated in code:** if the patient declined follow-up calls at booking (or withdraws later), the dispatch job skips them — the phone simply never rings. This is enforced by software, with an automated test proving it.
+- **The patient's answer** comes back as a short summary for the doctor — it never appears in logs, notifications, or calendar events, and is cleared with the patient record.
+- Nothing about follow-ups changes the ban list: still no diagnoses fields, no prescriptions, no documents, no lab data.
+
+## 10. How this compares to the big health-tech platforms
 
 Doctors often benchmark against Practo — a fair bar. Structural comparison:
 
@@ -96,7 +106,7 @@ Doctors often benchmark against Practo — a fair bar. Structural comparison:
 
 The honest one-liner for a doctor: *"Practo protects a mountain of health data with a big security team. Vachanam's approach is to never build the mountain — we hold only what a receptionist's register holds, protect it with the same grade of encryption and isolation, and delete it on a timer."*
 
-## 10. Verify us — don't take our word
+## 11. Verify us — don't take our word
 
 - Privacy Policy: **api.vachanam.in/privacy**
 - How we handle data (full lifecycle): **api.vachanam.in/data-handling**
