@@ -127,6 +127,12 @@ _PRIVACY_HTML: str | None = _load_doc("privacy-policy.md", "Privacy Policy")
 _TERMS_HTML: str | None = _load_doc("terms-of-service.md", "Terms of Service")
 _DPA_HTML: str | None = _load_doc("data-processing-agreement.md", "Data Processing Agreement")
 _DATA_HANDLING_HTML: str | None = _load_doc("data-handling.md", "How Vachanam Handles Your Data")
+# Doctor-facing pitch lives under docs/pitch/, not docs/legal/ — reach it via
+# the repo root the same way (served publicly so clinics get a shareable URL).
+_PITCH_HTML: str | None = _load_doc(
+    str(Path("..") / "pitch" / "data-safety-pitch.md"),
+    "How Vachanam Keeps Patient Data Safe",
+)
 
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=3600"}
 _CONTENT_TYPE = "text/html; charset=utf-8"
@@ -214,3 +220,19 @@ async def data_handling() -> HTMLResponse:
     Returns 503 if the markdown file is missing or empty at startup.
     """
     return _doc_response(_DATA_HANDLING_HTML, "data-handling")
+
+
+@router.get(
+    "/data-safety",
+    response_class=HTMLResponse,
+    include_in_schema=True,
+    tags=["legal"],
+    summary="How Vachanam Keeps Patient Data Safe (clinic pitch)",
+)
+async def data_safety_pitch() -> HTMLResponse:
+    """Render docs/pitch/data-safety-pitch.md — the doctor-facing answer to
+    "how do you keep patient data safe?", shareable as a URL.
+
+    Public — no authentication required. Cache-Control: public, max-age=3600.
+    """
+    return _doc_response(_PITCH_HTML, "data-safety-pitch")

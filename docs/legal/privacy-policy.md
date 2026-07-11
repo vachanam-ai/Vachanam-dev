@@ -1,9 +1,25 @@
 # Vachanam Privacy Policy
 
 **Effective date:** 2026-06-04
-**Last updated:** 2026-07-10
+**Last updated:** 2026-07-11
 
 This policy explains, in plain language, what personal data Vachanam collects, why we collect it, who sees it, how long we keep it, and what rights you have. If any part is unclear, email us at privacy@vachanam.in and we will explain it in Telugu, Hindi, or English -- whichever you prefer.
+
+---
+
+## At a Glance
+
+| Question | Answer |
+|---|---|
+| Do you record my call? | **No.** Audio is processed in real time and discarded. |
+| What do you store? | First name, phone, one-line reason for visit, appointment details. |
+| Who owns the data? | The clinic you called (Data Fiduciary). Vachanam only processes it. |
+| Can other clinics see my data? | **Never** — enforced at the database level on every query. |
+| Do you sell data or run ads? | **No**, and we never use patient data to train AI. |
+| How long is data kept? | Identity: 2 years after last visit. Transcripts (text, masked): 90 days. Enforced by software. |
+| Whom do I contact? | privacy@vachanam.in — Grievance Officer: Vinay Rongala. |
+
+**Contents:** 1. Who We Are · 2. Data We Collect · 3. Why We Collect · 4. Legal Basis (DPDP) · 5. Who Sees Your Data · 6. Third-Party Processors · 7. How We Protect Your Data · 8. Retention · 9. Your Rights · 10. Children's Data · 11. Cookies · 12. Changes · 13. Effective Date
 
 ---
 
@@ -134,7 +150,24 @@ We use the following third-party services to operate Vachanam. Each service proc
 
 ---
 
-## 7. How Long We Keep Your Data
+## 7. How We Protect Your Data
+
+Security is layered — no single control is trusted alone.
+
+- **Encryption in transit:** every connection (calls' signalling, dashboard, API) uses TLS.
+- **Encryption at rest:** the database is encrypted with AES-256 on SOC 2–audited infrastructure.
+- **Tenant isolation:** every record carries the clinic's branch ID and every query is scoped to it — one clinic can never read another clinic's data. Automated tests that attempt cross-clinic access run on every code change and must fail.
+- **Least-privilege access:** receptionists, doctors, and owners each see only what their role needs; even Vachanam's platform administrator is locked out of patient-data screens by role checks.
+- **Authentication hardening:** login tokens expire after 8 hours (hard limit), are revoked immediately on logout, and sensitive endpoints are rate-limited against automated attacks.
+- **Audit trail:** every significant action (bookings, access, failures) is written to an append-only audit log retained 7 years — using internal IDs, never names.
+- **Data minimisation in telemetry:** logs show only the last 4 digits of any phone number; no health information ever appears in logs, notifications, or calendar events.
+- **Backups and recovery:** the database keeps a continuous change history enabling point-in-time restore — recovery to any moment within the restore window, not just a nightly snapshot.
+- **Secrets hygiene:** credentials are never stored in source code; production access is limited and audited.
+- **Breach response:** a written, rehearsed runbook — affected clinics notified within 24 hours, the Data Protection Board within 72 hours (see our Data Processing Agreement §7).
+
+---
+
+## 8. How Long We Keep Your Data
 
 We keep data only as long as it serves a clear purpose. Here are the specific retention periods for each type of data.
 
@@ -152,7 +185,7 @@ We keep data only as long as it serves a clear purpose. Here are the specific re
 
 ---
 
-## 8. Your Rights Under the DPDP Act 2023
+## 9. Your Rights Under the DPDP Act 2023
 
 You have rights over your personal data. Here is what you can do and how to do it.
 
@@ -179,7 +212,7 @@ Withdrawing consent for a specific purpose (such as follow-up calls) does not af
 
 ---
 
-## 9. Children's Data
+## 10. Children's Data
 
 Patients under 18 years of age may only book appointments through a parent or legal guardian. The parent or guardian must be the one speaking on the call or must have authorized the booking.
 
@@ -189,7 +222,7 @@ If we become aware that we have collected personal data from a child without ver
 
 ---
 
-## 10. Cookies and Tracking
+## 11. Cookies and Tracking
 
 **We use only essential cookies.** Specifically:
 
@@ -206,7 +239,7 @@ If we ever add analytics in the future, we will update this policy with 30 days 
 
 ---
 
-## 11. Changes to This Policy
+## 12. Changes to This Policy
 
 If we make changes to this privacy policy:
 
@@ -219,7 +252,7 @@ The previous version of this policy will be archived at docs/legal/privacy-polic
 
 ---
 
-## 12. Effective Date
+## 13. Effective Date
 
 This privacy policy is effective as of **2026-06-04**.
 

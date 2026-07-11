@@ -225,3 +225,11 @@ async def test_privacy_policy_matches_reality():
     assert "Sarvam" in text  # still listed — it is the live fallback
     assert "90 days" in text  # transcript retention disclosed
     assert "| Voice call transcripts | NOT STORED |" not in text
+
+
+async def test_data_safety_pitch_returns_html(client):
+    """GET /data-safety — the doctor-facing pitch must be publicly shareable."""
+    r = await client.get("/data-safety")
+    assert r.status_code == 200, r.text[:200]
+    assert r.headers.get("content-type", "").startswith("text/html")
+    assert "Patients" in r.text and "Safe" in r.text
