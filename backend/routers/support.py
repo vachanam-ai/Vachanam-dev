@@ -82,6 +82,7 @@ async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(g
 
     # One ticket per chat SESSION: reuse the caller's ticket if supplied, else open one.
     ticket = None
+    is_new = False
     caller_org = str((user.org_id if user else None) or "")
     if body.ticket_id:
         ticket = (
@@ -102,6 +103,7 @@ async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(g
         )
         db.add(ticket)
         await db.flush()
+        is_new = True
     elif not result["answered"] and ticket.status == "ai_resolved":
         ticket.status = "open"  # a later unanswered turn re-opens for a human
 
@@ -114,6 +116,10 @@ async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(g
         "support_chat", ticket_id=str(ticket.id), answered=result["answered"],
         org_id=str(ticket.org_id) if ticket.org_id else None,
     )
+    # ONE team email per NEW ticket that needs a human (AI couldn't answer).
+    # AI-resolved chats never email (Vinay 2026-07-12, Resend quota). RULE 8.
+    if is_new and ticket.status == "open":
+        await support_email.notify_new_ticket(ticket.id, ticket.subject, ticket.email)
     return {"answer": result["answer"], "answered": result["answered"],
             "ticket_id": str(ticket.id)}
 
@@ -191,7 +197,8 @@ async def add_user_reply(ticket_id: uuid.UUID, body: ReplyBody,
     if t.status in ("ai_resolved", "resolved", "closed", "pending"):
         t.status = "open"
     await db.commit()
-    await support_email.notify_user_reply(t.subject, user.email)  # RULE 8
+    # No team email on replies (Vinay 2026-07-12, Resend quota) — the dashboard
+    # shows the reopened ticket; the SLA sweep still catches anything ignored.
     logger.info("support_user_reply", ticket_id=str(t.id))
     return {"ok": True, "status": t.status}
 

@@ -108,3 +108,29 @@ async def test_authed_chat_works_without_turnstile_token(client, db, monkeypatch
 
     r = await client.post("/support/chat", json={"question": "cost?"})  # anon, no token
     assert r.status_code == 403  # anonymous must pass Turnstile
+
+
+async def test_team_emailed_once_only_for_new_unanswered_ticket(client, monkeypatch):
+    """Resend-quota policy: a NEW ticket the AI couldn't answer emails the team
+    exactly once; an AI-resolved chat emails nobody."""
+    from backend.services import support_email
+    calls = []
+
+    async def fake_notify(ticket_id, subject, from_email):
+        calls.append(str(ticket_id))
+
+    monkeypatch.setattr(support_email, "notify_new_ticket", fake_notify)
+
+    # answered → ai_resolved → NO email
+    r = await client.post("/support/chat", json={"question": "cost of starter?"})
+    assert r.json()["answered"] is True
+    assert calls == []
+
+    # unanswered → open → exactly ONE email
+    r = await client.post("/support/chat", json={"question": "I am stuck, help"})
+    tid = r.json()["ticket_id"]
+    assert calls == [tid]
+
+    # a follow-up turn in the SAME ticket → still just one email (not new)
+    await client.post("/support/chat", json={"question": "still stuck", "ticket_id": tid})
+    assert calls == [tid]

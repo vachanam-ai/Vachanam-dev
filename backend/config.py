@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     # verified in Resend (vachanam.in).
     resend_api_key: str = ""
     resend_from: str = "Vachanam <noreply@vachanam.in>"
+    # Support desk: notifications to the team go TO support_email; support emails
+    # to clinics are sent FROM support_from (support@vachanam.in — a Zoho alias,
+    # domain verified in Resend). Kept separate from resend_from/alert_email so
+    # support mail is branded + isolated from the watchdog channel.
+    support_email: str = "support@vachanam.in"
+    support_from: str = "Vachanam Support <support@vachanam.in>"
 
     # Watchdog (#306): where change-triggered health alerts go, and the Fly
     # Machines API token that lets the watchdog RESTART a dead voice agent

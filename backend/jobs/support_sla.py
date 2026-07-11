@@ -62,8 +62,8 @@ async def run_sla_escalation() -> None:
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {settings.resend_api_key}"},
                 json={
-                    "from": settings.resend_from,
-                    "to": [settings.alert_email or "hello@vachanam.in"],
+                    "from": settings.support_from,
+                    "to": [settings.support_email],
                     "subject": f"{len(overdue)} support ticket(s) past SLA — no reply yet",
                     "text": f"These tickets are overdue and still unanswered:\n\n{lines}\n\n"
                             f"Open the dashboard: {dash}",
