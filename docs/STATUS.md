@@ -9,9 +9,13 @@
 > Org-scoped ticket reads (IDOR-walled). Frontend: public `/help` (KB search +
 > chat) + in-app `/tickets` thread + Support nav. `"support"` role value added
 > (no route yet). Bot: RULE 1 (no clinic-data access), RULE 8 (safe refusal),
-> RULE 9 (logs IDs). **Phase 2 next:** support-staff role + provisioning +
-> cross-org admin dashboard + staff replies + live-chat poll + email.
-> **Phase 3:** CSAT + SLA/escalation + macros + demo form. Spec+plan in
+> RULE 9 (logs IDs). **Phase 2+3 SHIPPED (FIXLOG #315):** `support` role
+> (platform staff, PII-locked via forbid_admin) + super_admin staff provisioning;
+> cross-org support dashboard (list/reply/status/priority/macros); clinic-user
+> reply + CSAT; SLA due-dates + hourly escalation (rides maintenance wake, #299);
+> public contact/demo form → lead ticket. Frontend: SupportAdmin, MyTickets
+> live-poll+reply+CSAT, Help contact form + status link. **Migration `bb25`
+> (ALTER TYPE user_role ADD 'support') applied to prod 2026-07-11.** Spec+plan in
 > `docs/superpowers/{specs,plans}/2026-07-11-support-*`. Suite green + build green.
 
 > **2026-07-05 — VOICE FIRST-IMPRESSION OVERHAUL (deployed: Fly agent + master pushed).**
