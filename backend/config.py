@@ -144,6 +144,10 @@ class Settings(BaseSettings):
     # support mail is branded + isolated from the watchdog channel.
     support_email: str = "support@vachanam.in"
     support_from: str = "Vachanam Support <support@vachanam.in>"
+    # SLA overdue-ticket escalation emails. OFF by default (Vinay 2026-07-12 —
+    # too noisy during early testing). The hourly sweep still runs + logs; set
+    # true to also email support_email a digest of overdue+unanswered tickets.
+    support_sla_email: bool = False
 
     # Watchdog (#306): where change-triggered health alerts go, and the Fly
     # Machines API token that lets the watchdog RESTART a dead voice agent

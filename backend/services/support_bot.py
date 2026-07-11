@@ -19,7 +19,7 @@ logger = structlog.get_logger()
 
 _FALLBACK = (
     "I'm not fully sure about that one — I've logged it so our team can help. "
-    "You can also email hello@vachanam.in and we'll get back to you."
+    "You can also email support@vachanam.in and we'll get back to you."
 )
 
 _SYSTEM = (

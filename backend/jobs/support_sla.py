@@ -46,9 +46,10 @@ async def run_sla_escalation() -> None:
         if fresh:
             overdue.append(t)
 
-    if not overdue or not settings.resend_api_key:
+    if not overdue or not settings.resend_api_key or not settings.support_sla_email:
         if overdue:
-            logger.warning("support_sla_overdue_no_email", count=len(overdue))
+            logger.warning("support_sla_overdue", count=len(overdue),
+                           emailed=False)
         return
 
     lines = "\n".join(

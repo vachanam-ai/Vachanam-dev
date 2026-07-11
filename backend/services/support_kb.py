@@ -47,12 +47,19 @@ _CACHE = load_kb()
 
 
 def kb_text(audience: str) -> str:
-    """Concatenated markdown for one audience. `both` entries always included."""
-    parts = [
-        f"## {e['title']}\n{e['body']}"
-        for e in _CACHE
-        if e["audience"] in (audience, "both")
-    ]
+    """Concatenated markdown for one audience.
+
+    - clinic (logged-in) sees EVERYTHING — a clinic can ask about pricing
+      (public) as well as clinic-only how-tos. (Bug 2026-07-12: clinic users
+      were getting only clinic+both, so the bot refused pricing questions.)
+    - public (logged-out) sees public + both only — clinic-internal how-tos are
+      hidden from anonymous visitors.
+    """
+    if audience == "clinic":
+        keep = lambda a: True  # noqa: E731 — clinic sees all articles
+    else:
+        keep = lambda a: a in ("public", "both")  # noqa: E731
+    parts = [f"## {e['title']}\n{e['body']}" for e in _CACHE if keep(e["audience"])]
     return "\n\n".join(parts)
 
 
