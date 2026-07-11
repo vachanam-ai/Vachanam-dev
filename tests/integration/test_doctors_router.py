@@ -680,3 +680,68 @@ async def test_create_doctor_with_cal_upsert_failure_still_returns_201(
 
     assert r.status_code == 201, r.text
     assert r.json()["name"] == "Dr Resilient"
+
+
+# ---------------------------------------------------------------------------
+# Plan doctor caps (repricing 2026-07-11): Starter 1 / Clinic 5 / Multi inf
+# ---------------------------------------------------------------------------
+
+@pytest_asyncio.fixture
+async def starter_clinic(db: AsyncSession):
+    """Org on the solo/Starter plan (1-doctor cap) + one branch."""
+    org = Organization(
+        name="Starter Clinic",
+        owner_phone="+919000000031",
+        owner_email=f"owner-s-{uuid.uuid4()}@test.com",
+        plan="solo",
+        status="active",
+    )
+    db.add(org)
+    await db.flush()
+    branch = Branch(
+        org_id=org.id,
+        name="Starter Branch",
+        whatsapp_number=f"+91600{str(uuid.uuid4().int)[:7]}",
+        status="active",
+    )
+    db.add(branch)
+    await db.commit()
+    return {"org_id": str(org.id), "branch_id": str(branch.id)}
+
+
+@pytest.mark.asyncio
+async def test_starter_plan_caps_at_one_doctor(client, db: AsyncSession, starter_clinic):
+    """solo/Starter includes exactly 1 doctor: the second POST must 403 with
+    an upgrade message; the first succeeds."""
+    token = _make_jwt(
+        user_id=str(uuid.uuid4()), email="s@test.com", role="org_admin",
+        org_id=starter_clinic["org_id"], branch_ids=[starter_clinic["branch_id"]],
+    )
+    r1 = await client.post(
+        f"/doctors/{starter_clinic['branch_id']}",
+        json={"name": "Dr Only", "booking_type": "token"},
+        headers=_auth(token),
+    )
+    assert r1.status_code == 201, r1.text
+    r2 = await client.post(
+        f"/doctors/{starter_clinic['branch_id']}",
+        json={"name": "Dr Two", "booking_type": "token"},
+        headers=_auth(token),
+    )
+    assert r2.status_code == 403, r2.text
+    assert "Upgrade" in r2.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_clinic_plan_allows_more_doctors_than_starter(
+    client, db: AsyncSession, clinic, org_admin_jwt
+):
+    """clinic plan (cap 5): a second doctor must still be 201 — the cap is
+    per-plan, not global."""
+    for name in ("Dr One", "Dr Two"):
+        r = await client.post(
+            f"/doctors/{clinic['branch_id']}",
+            json={"name": name, "booking_type": "token"},
+            headers=_auth(org_admin_jwt),
+        )
+        assert r.status_code == 201, r.text

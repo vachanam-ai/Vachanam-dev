@@ -55,27 +55,36 @@ Calendar + PWA + Razorpay (WhatsApp deferred to MVP2 — see memory).
 
 ## PRICING (FINAL — change only on Vinay's instruction)
 
-| Plan | Price | Included | Key limits |
-|---|---|---|---|
-| **Solo** | ₹1,999/mo + ₹5/min | 1 DID, 100 free min/mo | 1 doctor, 4-min AI call cap |
-| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,800 min/mo | 3 doctors, extra branch ₹7,999/mo |
-| **Multi** | ₹15,999/mo + ₹5/min | 2 DIDs, 3,600 min/mo | 6 doctors, extra branch ₹7,999/mo |
+Repriced 2026-07-11 (Vinay): every plan holds ≥40% gross margin at WORST CASE
+(full use of included minutes; cost model ₹3/min + ₹1,500 infra/DID/clinic).
+Internal plan keys stay `solo|clinic|multi` (DB enum, Razorpay notes, agent
+cap logic); "Starter" is the DISPLAY name for `solo`.
 
-Overage ₹5/min beyond included on every plan. Extra branch ₹7,999/mo (Clinic &
-Multi) — each extra branch is provisioned as a full new clinic (own DID, Vobiz
+| Plan | Price | Included | Doctors | Languages | Premium |
+|---|---|---|---|---|---|
+| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 1 | te | 4-min AI call cap |
+| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | te+hi+en | voice cloning, follow-up loop |
+| **Multi** | ₹17,999/mo + ₹5/min | 1 DID, 3,000 min (≈1,080 calls) | unlimited | all 8 | own voice per language |
+
+Overage ₹5/min on every plan. Extra DID ₹1,999/mo. Extra branch ₹7,999/mo —
+each extra branch is provisioned as a full new clinic (own DID, Vobiz
 sub-account, trunk, doctors, staff; nothing carries over — RULE 1 isolation).
+Market in CALLS, meter in MINUTES. Single source of truth for plan economics
+AND feature gates: `backend/services/billing_math.py` (PLANS, PLAN_LANGUAGES,
+PREMIUM_VOICE_PLANS, TRIAL_MINUTES).
 
 All prices are **exclusive of 18% GST** (shown as "+18% GST"; B2B clinics reclaim
 it via input credit).
 
-Free trial: 14 days, no card, 500 min. Day 12 Razorpay link; day 14 pause if
-unpaid. (Note: the 500-min trial cap is COPY only — not yet enforced in code;
-trial is time-based via trial_pause. Hard-cap is a TODO if abuse appears.)
+Free trial: 14 days, no card, 300 min (≈100 calls) — HARD-enforced (trials
+always block on exhaust in `call_blocked`, 2026-07-11). Day 12 Razorpay link;
+day 14 pause if unpaid.
 
-Cost (VARIABLE only): ~₹2.0/min (Vobiz + Sarvam + smallest.ai + Gemini + LiveKit)
-+ ₹1,000/mo per DID. Fixed overhead (servers, salaries, misc) is separate and
-dominates at low volume. Variable gross margin at full use ≈ 54%; per-minute ≈ 60%.
-Repriced 2026-06-16 (Vinay) from the old 7,999/16,999 · ₹3/₹2.50 · 1.49 model.
+Cost (VARIABLE only): ~₹2.0/min typical, ₹2.6 worst (Vobiz + Soniox +
+smallest.ai + Gemini + LiveKit); pricing assumes ₹3/min for safety, + ₹1,000/mo
+per DID. Fixed overhead (servers, salaries) separate, dominates at low volume.
+Expected blended gross ≈58% at 60% bucket utilization (≈₹6k profit/clinic/mo).
+History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07-11.
 
 ---
 

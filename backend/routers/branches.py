@@ -36,6 +36,42 @@ LANGUAGE_OPTIONS = [
 ]
 
 
+async def _org_plan(db, branch) -> str:
+    """The owning org's plan key (repricing 2026-07-11 plan gates)."""
+    from backend.models.schema import Organization
+
+    org = (
+        await db.execute(
+            select(Organization).where(Organization.id == branch.org_id)
+        )
+    ).scalar_one_or_none()
+    return (org.plan if org and org.plan else "clinic")
+
+
+def _assert_plan_language(plan: str, language: str) -> None:
+    """Starter = Telugu; Clinic = te/hi/en; Multi = all (PLAN_LANGUAGES)."""
+    from backend.services.billing_math import PLAN_LANGUAGES, PLANS
+
+    allowed = PLAN_LANGUAGES.get(plan, None)
+    if allowed is not None and language not in allowed:
+        name = PLANS[plan].display_name if plan in PLANS else plan
+        raise HTTPException(
+            status_code=403,
+            detail=f"The {name} plan includes {', '.join(allowed)}. Upgrade for more languages.",
+        )
+
+
+def _assert_premium_voice(plan: str) -> None:
+    """Voice cloning is a Clinic/Multi feature (repricing 2026-07-11)."""
+    from backend.services.billing_math import PREMIUM_VOICE_PLANS
+
+    if plan not in PREMIUM_VOICE_PLANS:
+        raise HTTPException(
+            status_code=403,
+            detail="Voice cloning is available on the Clinic and Multi plans. Upgrade to use your own voice.",
+        )
+
+
 class BranchSettings(BaseModel):
     branch_id: str
     name: str
@@ -51,7 +87,7 @@ class BranchSettings(BaseModel):
     doctors_count: int = 0
     staff_count: int = 0
     did_wired: bool | None = None  # set on PATCH when DID trunk sync runs
-    voice_cloning_allowed: bool = True  # included on every plan (UI hint)
+    voice_cloning_allowed: bool = True  # plan-gated UI hint: Clinic/Multi only (2026-07-11)
 
 
 # Voice cloning is included on EVERY plan (Vinay 2026-06-20) — no plan gate.
@@ -72,6 +108,16 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
             select(_f.count()).select_from(User).where(User.branch_ids.contains([branch_id]))
         )
     ).scalar_one()
+    # Plan-aware UI hints (repricing 2026-07-11): the Settings page only offers
+    # what the org's plan includes — languages list filtered, cloning flagged.
+    from backend.services.billing_math import PLAN_LANGUAGES, PREMIUM_VOICE_PLANS
+
+    plan = await _org_plan(db, branch)
+    plan_langs = PLAN_LANGUAGES.get(plan, None)
+    lang_options = (
+        LANGUAGE_OPTIONS if plan_langs is None
+        else [o for o in LANGUAGE_OPTIONS if o["code"] in plan_langs]
+    )
     return BranchSettings(
         branch_id=branch_id,
         name=branch.name,
@@ -83,11 +129,11 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         did_number=branch.did_number,
         emergency_contact=branch.emergency_contact,
         google_calendar_id=branch.google_calendar_id,
-        allowed_languages=LANGUAGE_OPTIONS,
+        allowed_languages=lang_options,
         doctors_count=doctors_count,
         staff_count=staff_count,
         did_wired=did_wired,
-        voice_cloning_allowed=True,
+        voice_cloning_allowed=plan in PREMIUM_VOICE_PLANS,
     )
 
 
@@ -184,6 +230,8 @@ async def update_branch_voice(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
+    if body.language is not None:
+        _assert_plan_language(await _org_plan(db, branch), body.language)
     if body.tts_voice is not None:
         branch.tts_voice = body.tts_voice
     if body.language is not None:
@@ -364,6 +412,7 @@ async def register_cloned_voice(
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
+    _assert_premium_voice(await _org_plan(db, branch))
 
     # ONE clinic voice PER language (Vinay 2026-07-05: the agent speaks only
     # clinic-provided voices, one per language) — registering for a language
@@ -457,6 +506,7 @@ async def clone_branch_voice(
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
+    _assert_premium_voice(await _org_plan(db, branch))
 
     from backend.services import smallest_voice
 

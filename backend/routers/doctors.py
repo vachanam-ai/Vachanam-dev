@@ -31,7 +31,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -343,6 +343,35 @@ async def create_doctor(
     branch = branch_result.scalar_one_or_none()
     if not branch:
         raise HTTPException(status_code=404, detail="Branch not found")
+
+    # Plan doctor cap (repricing 2026-07-11): Starter 1 / Clinic 5 / Multi
+    # unlimited. Counted per ORG (all branches), active doctors only.
+    from backend.models.schema import Organization
+    from backend.services.billing_math import PLANS
+
+    org = (
+        await db.execute(
+            select(Organization).where(Organization.id == branch.org_id)
+        )
+    ).scalar_one_or_none()
+    plan_def = PLANS.get(org.plan if org else "clinic")
+    if plan_def and plan_def.max_doctors is not None:
+        active_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(Doctor)
+                .join(Branch, Doctor.branch_id == Branch.id)
+                .where(Branch.org_id == branch.org_id, Doctor.status == "active")
+            )
+        ).scalar_one()
+        if active_count >= plan_def.max_doctors:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Your {plan_def.display_name} plan includes up to "
+                    f"{plan_def.max_doctors} doctor(s). Upgrade to add more."
+                ),
+            )
 
     # Auto-defaults: appointment → reminders on; token → reminders off
     is_appointment = body.booking_type == "appointment"

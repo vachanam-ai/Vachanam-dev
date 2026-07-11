@@ -126,6 +126,19 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
                             phone_last4=(patient.phone or "")[-4:])
                 await db.commit()
                 continue
+            # PLAN GATE (repricing 2026-07-11): the treatment follow-up voice
+            # loop is a Clinic/Multi feature. Starter tasks close silently —
+            # the clinic UI never offered the loop, so no user-visible break.
+            from backend.models.schema import Organization
+            from backend.services.billing_math import PREMIUM_VOICE_PLANS
+
+            org = (await db.execute(select(Organization).where(
+                Organization.id == branch.org_id))).scalar_one_or_none()
+            if org is not None and org.plan not in PREMIUM_VOICE_PLANS:
+                t.status = "completed"
+                logger.info("followup_skipped_plan", task_id=str(t.id), plan=org.plan)
+                await db.commit()
+                continue
             target_date = None
             if t.treatment_note_id:
                 tn = (await db.execute(select(TreatmentNote).where(

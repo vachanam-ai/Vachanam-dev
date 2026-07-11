@@ -18,7 +18,7 @@ import {
   updateBranchSettings
 } from "../api/client.js";
 
-const PLAN_LABELS = { solo: "Solo · ₹1,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹15,999/mo" };
+const PLAN_LABELS = { solo: "Starter · ₹5,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹17,999/mo" };
 import { useAuth } from "../hooks/useAuth.jsx";
 import { startRecording } from "../lib/recorder.js";
 

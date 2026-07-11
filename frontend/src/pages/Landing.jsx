@@ -6,26 +6,29 @@ import { API_BASE } from "../api/client.js";
 
 const PLANS = [
   {
-    name: "Solo",
-    price: "₹1,999",
-    per: "/month + ₹5/min",
-    tagline: "New clinics, one doctor",
-    points: ["1 AI phone number", "First 100 minutes free", "8 Indian languages", "Token booking + calendar", "Receptionist app"]
+    name: "Starter",
+    key: "solo",
+    price: "₹5,999",
+    per: "/month + ₹5/min after",
+    tagline: "Solo practitioners",
+    points: ["≈250 calls included (700 min)", "1 doctor · 1 AI phone number", "Telugu voice agent", "Token booking + calendar", "Reminder calls + receptionist app"]
   },
   {
     name: "Clinic",
+    key: "clinic",
     price: "₹9,999",
-    per: "/month + ₹5/min",
-    tagline: "2–3 doctors, ~20 calls a day",
+    per: "/month + ₹5/min after",
+    tagline: "Growing clinics, up to 5 doctors",
     popular: true,
-    points: ["1,800 minutes included", "Everything in Solo", "Slot + token doctors", "Follow-up calls", "Owner analytics", "Extra branch ₹7,999/mo"]
+    points: ["≈540 calls included (1,500 min)", "5 doctors", "Telugu + Hindi + English", "AI speaks in YOUR cloned voice", "Treatment follow-up calls", "Owner analytics"]
   },
   {
     name: "Multi",
-    price: "₹15,999",
-    per: "/month + ₹5/min",
-    tagline: "Busy clinics, up to 6 doctors",
-    points: ["2 numbers · 2 branches", "3,600 minutes included", "Multi-doctor routing", "Priority support", "CSV exports", "Extra branch ₹7,999/mo"]
+    key: "multi",
+    price: "₹17,999",
+    per: "/month + ₹5/min after",
+    tagline: "Multi-specialty, unlimited doctors",
+    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "Multi-doctor routing", "CSV exports"]
   }
 ];
 
@@ -260,14 +263,14 @@ export default function Landing() {
                   </li>
                 ))}
               </ul>
-              <Link to={`/register?plan=${p.name.toLowerCase()}`} className={p.popular ? "btn-primary mt-6 w-full" : "btn-ghost mt-6 w-full"}>
+              <Link to={`/register?plan=${p.key}`} className={p.popular ? "btn-primary mt-6 w-full" : "btn-ghost mt-6 w-full"}>
                 Start free trial
               </Link>
             </div>
           ))}
         </div>
         <p data-item className="mt-6 text-center font-ui text-xs text-slate">
-          14-day trial · no card · 500 minutes · payment link arrives only when you&rsquo;re ready
+          14-day trial · no card · 300 minutes (≈100 calls) · payment link arrives only when you&rsquo;re ready
           <br />
           All prices exclude 18% GST.
         </p>

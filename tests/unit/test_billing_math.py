@@ -1,10 +1,13 @@
 """billing_math — the money numbers on the super-admin console must be right.
 
-Pricing per CLAUDE.md (repriced 2026-06-16): solo 1999/100min/Rs5, clinic
-9999/1800/Rs5, multi 15999/3600/Rs5. Variable cost Rs2.0/min + Rs1000/DID/month.
+Pricing per CLAUDE.md (repriced 2026-07-11): solo/Starter 5999/700min/Rs5,
+clinic 9999/1500/Rs5, multi 17999/3000/Rs5. Trial = 300 min, HARD-blocked on
+exhaust. Every plan holds >=40% margin at worst case (Rs3/min + Rs1,500 infra).
 """
 from backend.services.billing_math import (
+    PLAN_LANGUAGES,
     PLANS,
+    PREMIUM_VOICE_PLANS,
     TRIAL_MINUTES,
     call_blocked,
     included_minutes,
@@ -17,76 +20,101 @@ from backend.services.billing_math import (
 
 
 def test_overage_breakdown_solo_1000_minutes():
-    # The #6 scenario: solo plan (100 included), 1000 minutes used.
+    # solo/Starter plan (700 included), 1000 minutes used.
     bd = overage_breakdown("solo", 1000)
-    assert bd["included_minutes"] == 100
-    assert bd["overage_minutes"] == 900
+    assert bd["included_minutes"] == 700
+    assert bd["overage_minutes"] == 300
     assert bd["overage_rate"] == 5.0
-    assert bd["overage_amount"] == 4500.0       # 900 × ₹5
-    assert bd["gst"] == 810.0                    # 18% of 4500
-    assert bd["total_with_gst"] == 5310.0
-    assert bd["amount_paise"] == 531000          # exact paise sent to Razorpay
+    assert bd["overage_amount"] == 1500.0       # 300 × ₹5
+    assert bd["gst"] == 270.0                    # 18% of 1500
+    assert bd["total_with_gst"] == 1770.0
+    assert bd["amount_paise"] == 177000          # exact paise sent to Razorpay
 
 
 def test_overage_breakdown_no_overage_within_bucket():
-    bd = overage_breakdown("clinic", 1200)       # under the 1800 bucket
+    bd = overage_breakdown("clinic", 1200)       # under the 1,500 bucket
     assert bd["overage_minutes"] == 0
     assert bd["overage_amount"] == 0.0
     assert bd["amount_paise"] == 0
 
 
 def test_overage_breakdown_respects_minute_adjustment():
-    # +500 goodwill minutes on solo → bucket 600, so 1000 used = 400 overage.
-    bd = overage_breakdown("solo", 1000, "active", 500)
-    assert bd["included_minutes"] == 600
-    assert bd["overage_minutes"] == 400
-    assert bd["amount_paise"] == int(round(400 * 5 * 1.18 * 100))
+    # +500 goodwill minutes on solo → bucket 1200, so 1500 used = 300 overage.
+    bd = overage_breakdown("solo", 1500, "active", 500)
+    assert bd["included_minutes"] == 1200
+    assert bd["overage_minutes"] == 300
+    assert bd["amount_paise"] == int(round(300 * 5 * 1.18 * 100))
 
 
-def test_trial_org_gets_flat_500_minutes_regardless_of_plan():
-    # Bug (2026-06-23): trial clinics showed the plan's bucket (solo=100) instead
-    # of the 500-min trial grant. The trial allowance is flat across all plans.
-    assert TRIAL_MINUTES == 500
-    assert included_minutes_for("solo", "trial") == 500
-    assert included_minutes_for("clinic", "trial") == 500
-    assert included_minutes_for("multi", "trial") == 500
+def test_trial_org_gets_flat_300_minutes_regardless_of_plan():
+    # The trial allowance is flat across all plans (300 since 2026-07-11).
+    assert TRIAL_MINUTES == 300
+    assert included_minutes_for("solo", "trial") == 300
+    assert included_minutes_for("clinic", "trial") == 300
+    assert included_minutes_for("multi", "trial") == 300
 
 
 def test_non_trial_org_gets_plan_bucket():
-    assert included_minutes_for("solo", "active") == 100
-    assert included_minutes_for("clinic", "active") == 1800
-    assert included_minutes_for("multi", "paused") == 3600
+    assert included_minutes_for("solo", "active") == 700
+    assert included_minutes_for("clinic", "active") == 1500
+    assert included_minutes_for("multi", "paused") == 3000
 
 
 def test_minutes_adjustment_applies_and_floors_at_zero():
     # Super-admin per-clinic override: signed delta on top of the bucket.
-    assert included_minutes_for("solo", "active", 50) == 150
-    assert included_minutes_for("clinic", "active", -300) == 1500
-    assert included_minutes_for("solo", "trial", 100) == 600
+    assert included_minutes_for("solo", "active", 50) == 750
+    assert included_minutes_for("clinic", "active", -300) == 1200
+    assert included_minutes_for("solo", "trial", 100) == 400
     # Never goes negative.
     assert included_minutes_for("solo", "active", -9999) == 0
 
 
 def test_plan_table_matches_claude_md():
-    assert PLANS["solo"].base_rupees == 1999
-    assert PLANS["solo"].included_minutes == 100
+    assert PLANS["solo"].base_rupees == 5999
+    assert PLANS["solo"].included_minutes == 700
     assert PLANS["solo"].overage_per_min == 5.0
+    assert PLANS["solo"].max_doctors == 1
+    assert PLANS["solo"].display_name == "Starter"
     assert PLANS["clinic"].base_rupees == 9999
-    assert PLANS["clinic"].included_minutes == 1800
-    assert PLANS["multi"].base_rupees == 15999
-    assert PLANS["multi"].included_minutes == 3600
+    assert PLANS["clinic"].included_minutes == 1500
+    assert PLANS["clinic"].max_doctors == 5
+    assert PLANS["multi"].base_rupees == 17999
+    assert PLANS["multi"].included_minutes == 3000
     assert PLANS["multi"].overage_per_min == 5.0
+    assert PLANS["multi"].max_doctors is None  # unlimited
+
+
+def test_every_plan_holds_40pct_margin_at_worst_case():
+    """The Vinay invariant (2026-07-11): full use of the included bucket at
+    Rs3/min + Rs1,500 infra (1 DID) must leave >=40% gross margin. This test
+    is the guard that stops a future 'more generous minutes' edit from
+    silently breaking the economics."""
+    WORST_COST_PER_MIN, INFRA = 3.0, 1500.0
+    for key, p in PLANS.items():
+        cost = p.included_minutes * WORST_COST_PER_MIN + INFRA
+        margin = (p.base_rupees - cost) / p.base_rupees
+        assert margin >= 0.399, f"{key}: worst-case margin {margin:.1%} < 40%"
+    # Overage must hold the same bar.
+    for p in PLANS.values():
+        assert (p.overage_per_min - WORST_COST_PER_MIN) / p.overage_per_min >= 0.399
+
+
+def test_plan_feature_gates_shape():
+    assert PLAN_LANGUAGES["solo"] == ["te"]
+    assert PLAN_LANGUAGES["clinic"] == ["te", "hi", "en"]
+    assert PLAN_LANGUAGES["multi"] is None      # all languages
+    assert PREMIUM_VOICE_PLANS == ("clinic", "multi")
 
 
 def test_revenue_active_within_bucket_is_base_only():
-    assert month_revenue("clinic", "active", 1500) == 9999  # under the 1,800 bucket
+    assert month_revenue("clinic", "active", 1400) == 9999  # under the 1,500 bucket
 
 
 def test_revenue_overage_charged():
-    # clinic: 1,800 included, 200 over at Rs5
-    assert month_revenue("clinic", "active", 2000) == 9999 + 1000
-    # multi: 3,600 included, 100 over at Rs5
-    assert month_revenue("multi", "active", 3700) == 15999 + 500
+    # clinic: 1,500 included, 200 over at Rs5
+    assert month_revenue("clinic", "active", 1700) == 9999 + 1000
+    # multi: 3,000 included, 100 over at Rs5
+    assert month_revenue("multi", "active", 3100) == 17999 + 500
 
 
 def test_trial_paused_cancelled_pay_nothing():
@@ -104,38 +132,46 @@ def test_expense_minutes_plus_dids():
 
 
 def test_minutes_exhausted_boundary():
-    assert minutes_exhausted("solo", 99.9) is False
-    assert minutes_exhausted("solo", 100) is True
+    assert minutes_exhausted("solo", 699.9) is False
+    assert minutes_exhausted("solo", 700) is True
     assert minutes_exhausted("unknown", 99999) is False  # no bucket, never blocks
 
 
 def test_call_blocked_matrix():
     assert call_blocked("paused", "clinic", False, 0) == "paused"
     assert call_blocked("cancelled", "clinic", False, 0) == "cancelled"
-    # hard block off -> overage allowed, never blocked
+    # hard block off -> overage allowed, never blocked (paying orgs)
     assert call_blocked("active", "clinic", False, 99999) is None
     # hard block on but bucket not exhausted
-    assert call_blocked("active", "clinic", True, 1799) is None
+    assert call_blocked("active", "clinic", True, 1499) is None
     # hard block on + exhausted
-    assert call_blocked("active", "clinic", True, 1800) == "minutes_exhausted"
-    # hard block applies to trial orgs too once their bucket is gone
-    assert call_blocked("trial", "clinic", True, 5000) == "minutes_exhausted"
+    assert call_blocked("active", "clinic", True, 1500) == "minutes_exhausted"
+
+
+def test_trial_always_hard_blocks_on_exhaust():
+    """2026-07-11: trial minutes are Vachanam's own cash — the 300-min bucket
+    is enforced even when the super-admin hard_block flag is OFF (the flag
+    governs PAYING orgs' overage behavior, not free trials)."""
+    assert call_blocked("trial", "clinic", False, 299) is None
+    assert call_blocked("trial", "clinic", False, 300) == "minutes_exhausted"
+    assert call_blocked("trial", "solo", False, 300) == "minutes_exhausted"
+    # goodwill adjustment still extends the trial bucket
+    assert call_blocked("trial", "solo", False, 300, adjustment=100) is None
 
 
 def test_b3_hard_block_honors_trial_grant_and_adjustment():
-    # B3: a solo-plan TRIAL org has a 500-min grant, not the 100-min plan
-    # bucket. The old gate blocked at 100 while the dashboard showed 400 left.
+    # B3: a solo-plan TRIAL org has the flat trial grant, not the plan bucket.
     assert minutes_exhausted("solo", 100, status="trial") is False
-    assert minutes_exhausted("solo", 499, status="trial") is False
-    assert minutes_exhausted("solo", 500, status="trial") is True
+    assert minutes_exhausted("solo", 299, status="trial") is False
+    assert minutes_exhausted("solo", 300, status="trial") is True
     assert call_blocked("trial", "solo", True, 100) is None
-    assert call_blocked("trial", "solo", True, 500) == "minutes_exhausted"
+    assert call_blocked("trial", "solo", True, 300) == "minutes_exhausted"
 
     # A positive super-admin adjustment extends the active bucket; a negative
     # one shrinks it — the gate must track both, exactly like the donut.
-    assert minutes_exhausted("solo", 100, status="active") is True
-    assert minutes_exhausted("solo", 100, status="active", adjustment=50) is False
-    assert minutes_exhausted("solo", 150, status="active", adjustment=50) is True
-    assert call_blocked("active", "solo", True, 120, adjustment=50) is None
-    assert call_blocked("active", "solo", True, 150, adjustment=50) == "minutes_exhausted"
-    assert call_blocked("active", "clinic", True, 1700, adjustment=-200) == "minutes_exhausted"
+    assert minutes_exhausted("solo", 700, status="active") is True
+    assert minutes_exhausted("solo", 700, status="active", adjustment=50) is False
+    assert minutes_exhausted("solo", 750, status="active", adjustment=50) is True
+    assert call_blocked("active", "solo", True, 720, adjustment=50) is None
+    assert call_blocked("active", "solo", True, 750, adjustment=50) == "minutes_exhausted"
+    assert call_blocked("active", "clinic", True, 1400, adjustment=-200) == "minutes_exhausted"

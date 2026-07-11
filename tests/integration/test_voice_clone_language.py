@@ -181,3 +181,63 @@ async def test_clone_upserts_one_voice_per_language(db, monkeypatch):
         assert br.tts_voice == "voice_te_v2"
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+# ---------------------------------------------------------------------------
+# Plan gates (repricing 2026-07-11): cloning = Clinic/Multi; languages per plan
+# ---------------------------------------------------------------------------
+
+async def _starter_branch(db):
+    org_id = uuid.uuid4()
+    db.add(Organization(id=org_id, name="Org", owner_phone=f"+9190000{str(uuid.uuid4().int)[:5]}",
+                        owner_email=f"o-{org_id}@c.com", plan="solo"))
+    await db.flush()
+    br = Branch(id=uuid.uuid4(), org_id=org_id, name="C",
+                whatsapp_number=f"+9100000{str(uuid.uuid4().int)[:5]}", language="te")
+    db.add(br)
+    await db.commit()
+    return br, org_id
+
+
+@pytest.mark.asyncio
+async def test_starter_plan_cannot_clone_voice(db, monkeypatch):
+    """Voice cloning is Clinic/Multi only — a solo/Starter org gets 403 and
+    smallest.ai is never called."""
+    br, org_id = await _starter_branch(db)
+    called = {"n": 0}
+
+    def fake_clone(*a, **k):
+        called["n"] += 1
+        return "voice_x"
+
+    monkeypatch.setattr(smallest_voice, "clone_voice", fake_clone)
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            r = await ac.post(
+                f"/branches/{br.id}/voice-clone",
+                data={"display_name": "myvoice"},
+                files={"file": ("sample.wav", b"RIFF0000WAVE", "audio/wav")},
+            )
+        assert r.status_code == 403, r.text
+        assert "Upgrade" in r.json()["detail"]
+        assert called["n"] == 0
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
+async def test_starter_plan_language_locked_to_telugu(db):
+    """PLAN_LANGUAGES: solo = ["te"]. Switching a Starter branch to Hindi must
+    403 with an upgrade message; Telugu stays allowed."""
+    br, org_id = await _starter_branch(db)
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            r_hi = await ac.patch(f"/branches/{br.id}/voice", json={"language": "hi"})
+            r_te = await ac.patch(f"/branches/{br.id}/voice", json={"language": "te"})
+        assert r_hi.status_code == 403, r_hi.text
+        assert "Upgrade" in r_hi.json()["detail"]
+        assert r_te.status_code == 200, r_te.text
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

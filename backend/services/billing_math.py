@@ -15,17 +15,36 @@ class Plan:
     base_rupees: int
     included_minutes: int
     overage_per_min: float  # rupees
+    max_doctors: int | None  # None = unlimited
+    display_name: str
 
 
+# Repriced 2026-07-11 (Vinay): every plan holds >=40% gross margin at the
+# worst-case full use of its included bucket (cost model: Rs3/min + Rs1,500
+# infra/DID per clinic). Internal keys stay solo/clinic/multi (DB enum,
+# Razorpay notes, agent cap logic); "Starter" is display-only.
 PLANS: dict[str, Plan] = {
-    "solo": Plan(1_999, 100, 5.0),
-    "clinic": Plan(9_999, 1_800, 5.0),
-    "multi": Plan(15_999, 3_600, 5.0),
+    "solo": Plan(5_999, 700, 5.0, 1, "Starter"),
+    "clinic": Plan(9_999, 1_500, 5.0, 5, "Clinic"),
+    "multi": Plan(17_999, 3_000, 5.0, None, "Multi"),
 }
 
-# CLAUDE.md: the 14-day free trial grants a flat 500 voice minutes, regardless
-# of the plan the clinic selected at signup. This is the single source of truth.
-TRIAL_MINUTES = 500
+# Voice-agent languages available per plan (agent.i18n codes). Multi = None =
+# every language the platform supports.
+PLAN_LANGUAGES: dict[str, list[str] | None] = {
+    "solo": ["te"],
+    "clinic": ["te", "hi", "en"],
+    "multi": None,
+}
+
+# Plans that may use clinic voice cloning + the treatment follow-up voice loop.
+PREMIUM_VOICE_PLANS = ("clinic", "multi")
+
+# The 14-day free trial grants a flat voice-minute bucket regardless of the
+# plan picked at signup. 500→300 on 2026-07-11 (Vinay): ~100 calls is enough
+# to convince, and the cap is now HARD-enforced for trials in call_blocked
+# (trial minutes are Vachanam's own cash — Rs3/min worst case).
+TRIAL_MINUTES = 300
 
 # CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
 # charge) adds GST on top; B2B clinics reclaim it via input credit.
@@ -168,7 +187,9 @@ def call_blocked(
             return "trial_expired"
     # B3: thread status + adjustment so the hard-block bucket matches the
     # trial grant and super-admin adjustment the dashboard already honors.
-    if hard_block_on_exhaust and minutes_exhausted(
+    # Trials ALWAYS hard-block on exhaust (2026-07-11): trial minutes are free
+    # service at Vachanam's cost — the bucket is the offer, not a suggestion.
+    if (hard_block_on_exhaust or status == "trial") and minutes_exhausted(
         plan, minutes_used, status, adjustment
     ):
         return "minutes_exhausted"

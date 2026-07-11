@@ -6,7 +6,7 @@ import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
-const PLANS = { solo: "Solo", clinic: "Clinic", multi: "Multi" };
+const PLANS = { solo: "Starter", clinic: "Clinic", multi: "Multi" };
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 // Mirror backend validators so the user gets instant, identical feedback.

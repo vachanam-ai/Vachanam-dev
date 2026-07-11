@@ -26,10 +26,10 @@ TODAY = date(2026, 6, 22)
 NOW_IN_HOURS = datetime(2026, 6, 22, 10, 0, tzinfo=IST)   # 10:00 IST → inside [9,20)
 
 
-async def _seed(db, *, is_final=False, next_reporting=date(2026, 6, 25), phone="+919000000040", consent=True):
+async def _seed(db, *, is_final=False, next_reporting=date(2026, 6, 25), phone="+919000000040", consent=True, plan="clinic"):
     org_id = uuid.uuid4()
     db.add(Organization(id=org_id, name="Org", owner_phone="+919000099040",
-                        owner_email=f"owner-{org_id}@c.com", plan="clinic"))
+                        owner_email=f"owner-{org_id}@c.com", plan=plan))
     await db.flush()
     br = Branch(id=uuid.uuid4(), org_id=org_id, name="C",
                 whatsapp_number=f"+9100{uuid.uuid4().hex[:9]}", timezone="Asia/Kolkata")
@@ -115,6 +115,26 @@ async def test_no_consent_skips_call_and_completes_task(db, monkeypatch, redis):
     """#303 (DPDP): followup_consent=False must actually stop the phone from
     ringing — policy §9 promises withdrawal works. Task closes, zero dispatch."""
     br, doc, pat, note, task = await _seed(db, consent=False)
+    called = {"n": 0}
+
+    async def fake_dispatch(*a, **k):
+        called["n"] += 1
+        return True
+
+    monkeypatch.setattr(job, "_dispatch", fake_dispatch)
+    n = await job.run_next_visit_followups(now=NOW_IN_HOURS)
+    assert n == 0
+    assert called["n"] == 0
+    await db.refresh(task)
+    assert task.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_starter_plan_skips_followup_loop(db, monkeypatch, redis):
+    """Repricing 2026-07-11: the treatment follow-up voice loop is a
+    Clinic/Multi feature. A solo/Starter org's task closes silently — zero
+    dispatch, no crash, no retry loop."""
+    br, doc, pat, note, task = await _seed(db, plan="solo")
     called = {"n": 0}
 
     async def fake_dispatch(*a, **k):

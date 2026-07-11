@@ -77,7 +77,9 @@ async def client(redis):
 async def clinic(db):
     org = Organization(
         name="E2E Org", owner_phone="+919000777001",
-        owner_email=f"e2e-{uuid.uuid4().hex[:6]}@test.com", plan="clinic", status="active",
+        # multi plan: the e2e path exercises Tamil + cloning, which the
+        # 2026-07-11 plan gates reserve for Clinic(te/hi/en)/Multi(all).
+        owner_email=f"e2e-{uuid.uuid4().hex[:6]}@test.com", plan="multi", status="active",
     )
     db.add(org)
     await db.flush()
@@ -251,8 +253,10 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
 
 
 async def test_voice_cloning_included_on_every_plan(client, db):
-    """Voice cloning is included on EVERY plan (Vinay 2026-06-20): a Solo clinic
-    sees voice_cloning_allowed True and can register a cloned voice (no 403)."""
+    """SUPERSEDED policy guard (repricing 2026-07-11, replaces Vinay 2026-06-20
+    'every plan'): cloning is Clinic/Multi only. A solo/Starter clinic sees
+    voice_cloning_allowed False and gets 403 on register; after an upgrade to
+    the clinic plan the same call succeeds."""
     org = Organization(
         name="Solo Org", owner_phone="+919000777002",
         owner_email=f"solo-{uuid.uuid4().hex[:6]}@test.com", plan="solo", status="active",
@@ -270,11 +274,25 @@ async def test_voice_cloning_included_on_every_plan(client, db):
 
     g = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
     assert g.status_code == 200
-    assert g.json()["voice_cloning_allowed"] is True
+    assert g.json()["voice_cloning_allowed"] is False
+    # Starter also only sees its own language in the dropdown.
+    assert [o["code"] for o in g.json()["allowed_languages"]] == ["te"]
 
+    r = await client.post(
+        f"/branches/{bid}/cloned-voices", headers=_auth(owner),
+        json={"voice_id": "voice_solo", "name": "Solo Voice", "language": "te"},
+    )
+    assert r.status_code == 403, r.text
+    assert "Upgrade" in r.json()["detail"]
+
+    # Upgrade to the clinic plan -> the same register now succeeds.
+    org.plan = "clinic"
+    await db.commit()
+    g2 = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
+    assert g2.json()["voice_cloning_allowed"] is True
     with patch("backend.services.smallest_voice.list_voices", return_value=[]):
-        r = await client.post(
+        r2 = await client.post(
             f"/branches/{bid}/cloned-voices", headers=_auth(owner),
             json={"voice_id": "voice_solo", "name": "Solo Voice", "language": "te"},
         )
-    assert r.status_code == 200, r.text
+    assert r2.status_code == 200, r2.text
