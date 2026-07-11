@@ -127,6 +127,9 @@ _PRIVACY_HTML: str | None = _load_doc("privacy-policy.md", "Privacy Policy")
 _TERMS_HTML: str | None = _load_doc("terms-of-service.md", "Terms of Service")
 _DPA_HTML: str | None = _load_doc("data-processing-agreement.md", "Data Processing Agreement")
 _DATA_HANDLING_HTML: str | None = _load_doc("data-handling.md", "How Vachanam Handles Your Data")
+# Razorpay website-compliance requirement (live-mode KYC checks the site has a
+# published refund/cancellation policy).
+_REFUND_HTML: str | None = _load_doc("refund-policy.md", "Refund & Cancellation Policy")
 # Doctor-facing pitch lives under docs/pitch/, not docs/legal/ — reach it via
 # the repo root the same way (served publicly so clinics get a shareable URL).
 _PITCH_HTML: str | None = _load_doc(
@@ -188,6 +191,22 @@ async def terms_of_service() -> HTMLResponse:
     Returns 503 if the markdown file is missing or empty at startup.
     """
     return _doc_response(_TERMS_HTML, "terms-of-service")
+
+
+@router.get(
+    "/refunds",
+    response_class=HTMLResponse,
+    include_in_schema=True,
+    tags=["legal"],
+    summary="Refund & Cancellation Policy",
+)
+async def refund_policy() -> HTMLResponse:
+    """Render docs/legal/refund-policy.md as styled HTML.
+
+    Public — Razorpay live-mode KYC verifies the site publishes this. Returns
+    503 if the markdown file is missing or empty at startup.
+    """
+    return _doc_response(_REFUND_HTML, "refund-policy")
 
 
 @router.get(

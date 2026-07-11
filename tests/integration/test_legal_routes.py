@@ -233,3 +233,15 @@ async def test_data_safety_pitch_returns_html(client):
     assert r.status_code == 200, r.text[:200]
     assert r.headers.get("content-type", "").startswith("text/html")
     assert "Patients" in r.text and "Safe" in r.text
+
+
+@pytest.mark.asyncio
+async def test_refund_policy_served(client):
+    """Razorpay live-mode KYC checks the site publishes a refund/cancellation
+    policy — /refunds must render it (200, cancellation + refund content)."""
+    r = await client.get("/refunds")
+    assert r.status_code == 200
+    body = r.text
+    assert "Refund" in body and "Cancellation" in body
+    assert "hello@vachanam.in" in body
+    assert "non-refundable" in body  # sets expectations honestly

@@ -299,6 +299,8 @@ export default function Landing() {
           <a href={`${API_BASE}/terms`} className="underline-offset-4 hover:underline">Terms</a>
           {" · "}
           <a href={`${API_BASE}/data-handling`} className="underline-offset-4 hover:underline">How we handle your data</a>
+          {" · "}
+          <a href={`${API_BASE}/refunds`} className="underline-offset-4 hover:underline">Refunds & cancellation</a>
         </p>
       </section>
     </div>
