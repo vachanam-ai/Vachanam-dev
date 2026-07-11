@@ -25,10 +25,8 @@ mis-set due time still self-heals within the hour.
 """
 import time
 
-import redis.asyncio as aioredis
 import structlog
 
-from backend.config import settings
 
 logger = structlog.get_logger()
 
@@ -40,8 +38,22 @@ _NEXT_AT_KEY = "wake:next_at:{job}"
 
 
 def _redis():
-    """Fresh client per call — a module-level client outlives its event loop."""
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    """Shared per-loop client (#305). The original fresh-client-per-call
+    approach built a new rediss:// TLS client every 60s tick × 3 gated jobs
+    and OOM-killed Render's 512MB instance every ~2.5h from the day #299
+    shipped. The shared client is NOT a context manager — never aclose it."""
+    from backend.redis_client import get_redis
+
+    return get_redis()
+
+
+def _drop_client() -> None:
+    """After a connection-level failure: forget the shared client so the next
+    call rebuilds instead of riding a dead socket (fail-open stays fail-open,
+    but must not fail-open forever on a poisoned connection)."""
+    from backend.redis_client import drop
+
+    drop()
 
 
 # ── time-scheduled work ─────────────────────────────────────────────────────
@@ -52,9 +64,9 @@ async def set_next_at(job: str, epoch: float | None) -> None:
     ceiling = time.time() + SAFETY_SECONDS
     value = ceiling if epoch is None else min(float(epoch), ceiling)
     try:
-        async with _redis() as r:
-            await r.set(_NEXT_AT_KEY.format(job=job), value)
+        await _redis().set(_NEXT_AT_KEY.format(job=job), value)
     except Exception as e:  # noqa: BLE001
+        _drop_client()
         logger.warning("wake_gate_set_next_failed", job=job, error=str(e)[:120])
 
 
@@ -63,20 +75,20 @@ async def clear_next_at(job: str) -> None:
     cached next-due time is stale. Drop it: the next tick recomputes from
     Postgres — which is already awake, since the writer just used it."""
     try:
-        async with _redis() as r:
-            await r.delete(_NEXT_AT_KEY.format(job=job))
+        await _redis().delete(_NEXT_AT_KEY.format(job=job))
     except Exception as e:  # noqa: BLE001
+        _drop_client()
         logger.warning("wake_gate_clear_next_failed", job=job, error=str(e)[:120])
 
 
 async def should_run_scheduled(job: str) -> bool:
     """True when the next item is due (or we simply don't know). Fail-open."""
     try:
-        async with _redis() as r:
-            raw = await r.get(_NEXT_AT_KEY.format(job=job))
+        raw = await _redis().get(_NEXT_AT_KEY.format(job=job))
         if raw is None:
             return True  # unknown ⇒ ask Postgres
         return time.time() >= float(raw)
     except Exception as e:  # noqa: BLE001
+        _drop_client()
         logger.warning("wake_gate_check_next_failed", job=job, error=str(e)[:120])
         return True

@@ -14,7 +14,6 @@ Per CLAUDE.md and security spec:
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import redis.asyncio as aioredis
 import structlog
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -30,8 +29,13 @@ _bearer = HTTPBearer(auto_error=True)
 
 
 def _revocation_redis():
-    """Per-call Redis client (avoids module-level event-loop binding — see TD-016)."""
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    """Shared per-loop client (#305) — was a FRESH rediss:// TLS client on
+    EVERY authenticated request, one of the two allocation hammers behind
+    Render's 512MB OOM-kill loop. Loop-binding worry (TD-016) is handled
+    inside redis_client (cache keys on the running loop)."""
+    from backend.redis_client import get_redis
+
+    return get_redis()
 
 
 def create_access_token(user: User) -> str:
@@ -92,11 +96,20 @@ async def get_current_user(
     if not jti:
         raise HTTPException(status_code=401, detail="Token missing jti")
 
-    # Revocation check — Redis SET key per revoked jti, TTL = remaining exp
-    async with _revocation_redis() as r:
-        if await r.exists(f"revoked_jwts:{jti}"):
-            logger.warning("jwt_revoked", jti=jti)
-            raise HTTPException(status_code=401, detail="Token revoked")
+    # Revocation check — Redis SET key per revoked jti, TTL = remaining exp.
+    # Shared client: do NOT aclose/async-with it (#305).
+    try:
+        revoked = await _revocation_redis().exists(f"revoked_jwts:{jti}")
+    except HTTPException:
+        raise
+    except Exception:
+        from backend.redis_client import drop
+
+        drop()  # dead socket must not poison every later request
+        raise
+    if revoked:
+        logger.warning("jwt_revoked", jti=jti)
+        raise HTTPException(status_code=401, detail="Token revoked")
 
     return CurrentUser(
         user_id=payload["sub"],
@@ -146,6 +159,5 @@ async def revoke_jwt(jti: str, exp_timestamp: int) -> None:
     """
     now_ts = int(datetime.now(timezone.utc).timestamp())
     ttl = max(exp_timestamp - now_ts, 1)
-    async with _revocation_redis() as r:
-        await r.set(f"revoked_jwts:{jti}", "1", ex=ttl)
+    await _revocation_redis().set(f"revoked_jwts:{jti}", "1", ex=ttl)
     logger.info("jwt_revoked", jti=jti, ttl=ttl)
