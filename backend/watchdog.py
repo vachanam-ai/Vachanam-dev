@@ -287,6 +287,11 @@ async def board_state() -> dict:
         hb = await r.get(_AGENT_HB_KEY)
         if hb:
             out["agent_heartbeat_age_s"] = int(time.time() - float(hb))
+        # A healthy Redis never writes its own state key (only recovery does) —
+        # but answering these reads IS the health proof. Synthesize the card.
+        if "redis" not in out["components"]:
+            out["components"]["redis"] = {"status": "ok", "since": None,
+                                          "detail": "answering reads", "action": None}
     except Exception as e:  # noqa: BLE001
         out["error"] = f"redis unreachable: {str(e)[:120]}"
     return out
