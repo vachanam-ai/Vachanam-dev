@@ -53,7 +53,7 @@ export default function Heatmap({ cells }) {
                 return (
                   <div key={`${di}-${h}`} data-cell
                     className={`aspect-square rounded-[4px] ${isPeak ? "ring-2 ring-gold" : ""}`}
-                    style={{ background: v ? `rgba(15, 118, 110, ${0.15 + 0.85 * (v / max)})` : "#eef4f2" }}
+                    style={{ background: v ? `rgba(15, 118, 110, ${0.15 + 0.85 * (v / max)})` : "var(--cell-empty)" }}
                     title={`${d} ${h}:00–${h + 1}:00 · ${v} call${v === 1 ? "" : "s"}`} />
                 );
               })}

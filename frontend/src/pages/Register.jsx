@@ -174,7 +174,7 @@ export default function Register() {
         </h1>
         <p data-reveal className="mt-2 font-ui text-sm text-slate">
           {step === "details"
-            ? "14 days free · 1,000 call minutes · no card needed"
+            ? "14 days free · 300 call minutes · no card needed"
             : `Enter the 6-digit code we emailed to ${form.email}.`}
         </p>
 
@@ -219,7 +219,7 @@ export default function Register() {
                 {Object.entries(PLANS).map(([k, v]) => (
                   <button type="button" key={k} onClick={() => setForm((f) => ({ ...f, plan: k }))}
                     className={`flex-1 rounded-xl border px-3 py-2 font-ui text-sm font-medium transition ${
-                      form.plan === k ? "border-teal bg-teal-mint" : "border-hairline bg-white hover:border-teal-light/60"
+                      form.plan === k ? "border-teal bg-teal-mint" : "border-hairline bg-surface hover:border-teal-light/60"
                     }`}>
                     {v}
                   </button>

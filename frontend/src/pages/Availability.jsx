@@ -88,7 +88,7 @@ export default function Availability() {
                   className={`rounded-xl border px-4 py-3 text-left transition ${
                     doctorId === id
                       ? "border-teal bg-teal-mint shadow-card"
-                      : "border-hairline bg-white hover:border-teal-light/60"
+                      : "border-hairline bg-surface hover:border-teal-light/60"
                   }`}>
                   <p className="font-ui font-medium">{d.name}</p>
                   <span className={d.booking_type === "token" ? "chip-token mt-1" : "chip-slot mt-1"}>

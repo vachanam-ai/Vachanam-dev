@@ -48,7 +48,7 @@ export default function VoicePicker() {
               className={`flex items-center justify-between rounded-2xl border p-4 text-left transition ${
                 isPlaying
                   ? "border-teal bg-teal-mint shadow-lift"
-                  : "border-hairline bg-white/85 shadow-card hover:border-teal-light/60"
+                  : "border-hairline bg-surface/85 shadow-card hover:border-teal-light/60"
               }`}
             >
               <div className="min-w-0">
@@ -59,7 +59,7 @@ export default function VoicePicker() {
                 className={`ml-3 grid h-11 w-11 shrink-0 place-items-center rounded-full border transition ${
                   isPlaying
                     ? "border-gold bg-gold-soft text-gold-ink"
-                    : "border-hairline bg-white text-teal"
+                    : "border-hairline bg-surface text-teal"
                 }`}
               >
                 {isPlaying ? (

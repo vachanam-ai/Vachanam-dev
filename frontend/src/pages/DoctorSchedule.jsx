@@ -35,7 +35,7 @@ function WeekdayPicker({ value, onChange }) {
           className={`h-10 w-12 rounded-lg border font-ui text-sm font-medium transition ${
             value.includes(i)
               ? "border-teal bg-teal text-white"
-              : "border-hairline bg-white text-slate hover:border-teal-light/60"
+              : "border-hairline bg-surface text-slate hover:border-teal-light/60"
           }`}>
           {label}
         </button>
@@ -120,7 +120,7 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
               className={`flex-1 rounded-xl border px-4 py-2.5 font-ui text-sm font-medium transition ${
                 f.booking_type === v
                   ? v === "token" ? "border-teal bg-teal-mint" : "border-gold bg-gold-soft"
-                  : "border-hairline bg-white hover:border-teal-light/60"
+                  : "border-hairline bg-surface hover:border-teal-light/60"
               }`}>
               {l}
             </button>

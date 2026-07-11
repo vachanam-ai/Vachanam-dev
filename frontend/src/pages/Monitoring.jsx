@@ -46,7 +46,7 @@ function HealthBoard() {
           const st = c?.status ?? "unknown";
           const color = st === "ok" ? "bg-emerald-500" : st === "down" ? "bg-red-500" : "bg-gray-300";
           return (
-            <div key={key} className="rounded-xl border border-hairline bg-white px-3 py-2">
+            <div key={key} className="rounded-xl border border-hairline bg-surface px-3 py-2">
               <div className="flex items-center gap-2">
                 <span className={`h-2.5 w-2.5 rounded-full ${color} ${st === "down" ? "animate-pulse" : ""}`} />
                 <p className="font-ui text-xs font-semibold">{label}</p>
@@ -85,7 +85,7 @@ function HealthBoard() {
 
 function Stat({ label, value, sub }) {
   return (
-    <div className="rounded-xl border border-hairline bg-white px-4 py-3">
+    <div className="rounded-xl border border-hairline bg-surface px-4 py-3">
       <p className="eyebrow">{label}</p>
       <p className="numeral mt-1 text-3xl text-teal-deep">{value}</p>
       {sub && <p className="mt-1 font-ui text-xs text-slate">{sub}</p>}
@@ -123,7 +123,7 @@ export default function Monitoring() {
           {[7, 14, 30].map((d) => (
             <button key={d} onClick={() => setDays(d)}
               className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
-                days === d ? "bg-teal text-white" : "bg-white text-slate hover:bg-teal-pale"
+                days === d ? "bg-teal text-white" : "bg-surface text-slate hover:bg-teal-pale"
               }`}>
               {d}d
             </button>

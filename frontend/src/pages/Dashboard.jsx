@@ -27,7 +27,7 @@ function QStat({ label, value, sub, suffix = "" }) {
     countUp(ref.current, value ?? 0, { duration: 1.0, suffix });
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="rounded-xl border border-hairline bg-white px-4 py-3">
+    <div className="rounded-xl border border-hairline bg-surface px-4 py-3">
       <p className="eyebrow">{label}</p>
       <p ref={ref} className="numeral mt-1 text-3xl text-teal-deep">0</p>
       {sub && <p className="mt-1 font-ui text-xs text-slate">{sub}</p>}
@@ -44,8 +44,8 @@ function LifetimeBand({ lifetime }) {
     ["minutes", "Voice minutes", lifetime?.minutes],
   ];
   return (
-    <div data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-teal-deep px-6 py-4 text-white shadow-lift">
-      <p className="eyebrow !text-teal-pale/80">Since day one</p>
+    <div data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-[#0e4a49] px-6 py-4 text-white shadow-lift">
+      <p className="eyebrow !text-[#cfe8e5]/80">Since day one</p>
       {items.map(([k, label, v]) => (
         <LifetimeStat key={k} label={label} value={v ?? 0} />
       ))}
@@ -59,7 +59,7 @@ function LifetimeStat({ label, value }) {
     countUp(ref.current, value ?? 0, { duration: 1.4 });
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <p className="font-ui text-sm text-teal-pale/90">
+    <p className="font-ui text-sm text-[#cfe8e5]/90">
       <span ref={ref} className="numeral mr-1.5 text-2xl font-semibold text-white">0</span>
       {label}
     </p>
@@ -121,7 +121,7 @@ function MinutesDonut({ minutes }) {
   return (
     <div className="flex items-center gap-5">
       <svg viewBox="0 0 140 140" className="h-36 w-36 shrink-0" role="img" aria-label="Voice minutes used">
-        <circle cx="70" cy="70" r={R} fill="none" stroke="#d8ece7" strokeWidth="14" />
+        <circle cx="70" cy="70" r={R} fill="none" stroke="var(--chart-track)" strokeWidth="14" />
         <circle ref={arcRef} cx="70" cy="70" r={R} fill="none" stroke="#0e7490" strokeWidth="14"
           strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C}
           transform="rotate(-90 70 70)" />
@@ -298,7 +298,7 @@ export default function Dashboard() {
             {[7, 14, 30].map((d) => (
               <button key={d} onClick={() => setDays(d)}
                 className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
-                  days === d ? "bg-teal text-white" : "bg-white text-slate hover:bg-teal-pale"
+                  days === d ? "bg-teal text-white" : "bg-surface text-slate hover:bg-teal-pale"
                 }`}>
                 {d}d
               </button>

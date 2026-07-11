@@ -13,9 +13,9 @@ const COLORS = {
   seen: "#0f766e",
   upcoming: "#5eead4",
   noShow: "#f59e0b",
-  cancelled: "#e5e9ee",
+  cancelled: "var(--chart-cancelled)",
   calls: "#0e7490",
-  grid: "#eef2f6",
+  grid: "var(--chart-grid)",
 };
 
 const W = 760, H = 264, PL = 36, PR = 16, PT = 20, PB = 30;
@@ -218,7 +218,7 @@ export default function TrendChart({ daily, calls }) {
             <circle data-dot cx={p.x} cy={p.y} r="2.8" fill="#f0b429" stroke="#fff" strokeWidth="1.2" />
             {(i === 0 || i === model.ratePts.length - 1) && (
               <text data-rlabel x={p.x} y={p.y - 8} textAnchor="middle" fontSize="10"
-                fontWeight="600" fontFamily="ui-sans-serif" fill="#b45309">
+                fontWeight="600" fontFamily="ui-sans-serif" fill="var(--rate-label)">
                 {Math.round(p.v * 100)}%
               </text>
             )}
@@ -238,7 +238,7 @@ export default function TrendChart({ daily, calls }) {
 
       {/* tooltip */}
       {hd && (
-        <div className="pointer-events-none absolute z-10 w-44 rounded-xl border border-hairline bg-white/95 px-3 py-2 shadow-lift backdrop-blur transition-all duration-150"
+        <div className="pointer-events-none absolute z-10 w-44 rounded-xl border border-hairline bg-surface/95 px-3 py-2 shadow-lift backdrop-blur transition-all duration-150"
           style={{
             left: `${Math.min(Math.max((cx(hover) / W) * 100, 12), 82)}%`,
             top: 0, transform: "translate(-50%, -6px)",

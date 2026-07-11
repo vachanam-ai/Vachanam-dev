@@ -1,22 +1,28 @@
-/** Vachanam brand — extracted from vachanam.in (teal/cream/ink + Spectral/Outfit). */
+/** Vachanam brand — extracted from vachanam.in (teal/cream/ink + Spectral/Outfit).
+ * Colors read CSS variables (RGB triplets in index.css) so .dark on <html>
+ * re-themes everything in one place; <alpha-value> keeps opacity modifiers. */
+const v = (name) => `rgb(var(--${name}) / <alpha-value>)`;
+
 export default {
   content: ["./index.html", "./src/**/*.{js,jsx}"],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
         teal: {
-          DEFAULT: "#006B6B",
-          deep: "#004F4F",
-          light: "#008F8F",
-          pale: "#E0F2F1",
-          mint: "#F0FAFA"
+          DEFAULT: v("teal"),
+          deep: v("teal-deep"),
+          light: v("teal-light"),
+          pale: v("teal-pale"),
+          mint: v("teal-mint")
         },
-        ink: { DEFAULT: "#1A2E2E", soft: "#2D4444" },
-        slate: { DEFAULT: "#708090", light: "#A0ADB8" },
-        cream: "#FAFCFC",
-        hairline: "#D0E4E4",
-        gold: { DEFAULT: "#f0c674", soft: "#fff4d6", ink: "#5a4500" },
-        danger: "#a51d2d"
+        ink: { DEFAULT: v("ink"), soft: v("ink-soft") },
+        slate: { DEFAULT: v("slate"), light: v("slate-light") },
+        cream: v("cream"),
+        surface: v("surface"),
+        hairline: v("hairline"),
+        gold: { DEFAULT: v("gold"), soft: v("gold-soft"), ink: v("gold-ink") },
+        danger: v("danger")
       },
       fontFamily: {
         display: ["Fraunces", "Georgia", "serif"],

@@ -115,7 +115,7 @@ export default function WalkIn() {
                     className={`rounded-xl border px-4 py-3 text-left transition ${
                       selected
                         ? "border-teal bg-teal-mint shadow-card"
-                        : "border-hairline bg-white hover:border-teal-light/60"
+                        : "border-hairline bg-surface hover:border-teal-light/60"
                     }`}
                   >
                     <p className="font-ui font-medium">{d.name}</p>
@@ -159,7 +159,7 @@ export default function WalkIn() {
                       className={`rounded-lg border px-3 py-1.5 font-ui text-sm tabular-nums transition ${
                         slot === t
                           ? "border-gold bg-gold-soft text-gold-ink"
-                          : "border-hairline bg-white hover:border-gold/60"
+                          : "border-hairline bg-surface hover:border-gold/60"
                       }`}>
                       {t}
                     </button>

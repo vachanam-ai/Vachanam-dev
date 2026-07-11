@@ -29,7 +29,7 @@ function NoteCard({ n, isLatest, isLast, onEdit }) {
       {/* dot on the line */}
       <span
         className={`absolute left-0 top-1.5 h-[11px] w-[11px] rounded-full border-2 ${
-          isLatest ? "border-teal bg-teal" : "border-teal bg-white"
+          isLatest ? "border-teal bg-teal" : "border-teal bg-surface"
         }`}
         aria-hidden
       />

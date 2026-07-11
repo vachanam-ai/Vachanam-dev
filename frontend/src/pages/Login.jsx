@@ -113,7 +113,7 @@ export default function Login() {
 
   return (
     <div ref={pageRef} className="min-h-dvh grid lg:grid-cols-[1.1fr_1fr]">
-      <section className="relative hidden overflow-hidden bg-teal-deep text-white lg:flex lg:flex-col lg:justify-between lg:p-12">
+      <section className="relative hidden overflow-hidden bg-[#0e4a49] text-white lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.12]"
           style={{
@@ -129,12 +129,12 @@ export default function Login() {
             <br />
             with being <em className="font-normal italic text-gold">heard.</em>
           </h1>
-          <p data-reveal className="mt-6 max-w-md font-ui text-teal-pale/90">
+          <p data-reveal className="mt-6 max-w-md font-ui text-[#cfe8e5]/90">
             Every call answered. Every token accounted for. Your front desk, your doctors,
             and your day — on one calm ledger.
           </p>
         </div>
-        <p data-reveal className="relative font-ui text-xs text-teal-pale/60">
+        <p data-reveal className="relative font-ui text-xs text-[#cfe8e5]/60">
           vachanam.in · India
         </p>
       </section>

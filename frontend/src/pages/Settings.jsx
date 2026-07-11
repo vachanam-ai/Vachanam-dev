@@ -387,7 +387,7 @@ export default function Settings() {
               className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-ui text-xs font-medium transition ${
                 s.done
                   ? "border-teal-pale bg-teal-mint text-teal-deep"
-                  : "border-hairline bg-white text-slate hover:border-teal-light/50"
+                  : "border-hairline bg-surface text-slate hover:border-teal-light/50"
               }`}>
               <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${s.done ? "bg-teal text-white" : "bg-slate-light/30"}`}>
                 {s.done ? "✓" : i + 1}
@@ -509,7 +509,7 @@ export default function Settings() {
         <InfoBox title="One-time share (2 minutes):">
           <p>1. Open Google Calendar → ⚙ Settings → <em>Settings for my calendars</em> → your calendar.</p>
           <p>2. <em>Share with specific people</em> → <em>Add people</em> → paste:</p>
-          <code className="block select-all break-all rounded bg-white px-2 py-1 text-xs">{SA_EMAIL}</code>
+          <code className="block select-all break-all rounded bg-surface px-2 py-1 text-xs">{SA_EMAIL}</code>
           <p>3. Permission: <strong>"Make changes to events"</strong> → Send → come back and press <em>Test connection</em>.</p>
         </InfoBox>
       </Section>
