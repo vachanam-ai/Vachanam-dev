@@ -58,7 +58,7 @@ We collect different data depending on your role. We collect only what is needed
 
 **If your clinic uses treatment follow-ups** (optional feature): your doctor may record short visit-progress notes (what was done this visit, what comes next) and schedule a follow-up call. The AI's follow-up question and a short summary of your answer are stored for your doctor to read. This data is entered by or visible only to YOUR clinic, is never used for anything except your continuing care, and is erased together with your patient record. Follow-up calls are made only if you agreed to them when booking — if you said no (or withdraw later), the call simply never happens.
 
-**About call transcripts:** a text transcript of the conversation (what was said, not the audio) may be kept for up to 90 days to monitor and improve call quality. Phone numbers are masked in the transcript before it is saved, it is visible only to your own clinic, and it is automatically deleted after the 90-day window by a daily software job.
+**About call transcripts:** a text transcript of the conversation (what was said, not the audio) may be kept for up to 90 days to monitor and improve call quality. Phone numbers are masked in the transcript before it is saved -- no unmasked copy is stored anywhere. The saved transcript is visible only to your own clinic; within Vachanam, production access is limited to the founder (acting Data Protection Officer) and every such access is audit-logged. The transcript is automatically deleted after the 90-day window by a daily software job.
 
 ### If you are a doctor
 
@@ -95,7 +95,7 @@ Every piece of data we collect has a specific purpose. We do not collect data "j
 | Staff email and name | To let staff log in securely via Google and manage the clinic's queue |
 | Staff role | To control who can see what (a receptionist sees the queue; only the owner sees analytics) |
 
-We also use anonymized, aggregated data (e.g., "this clinic had 35 bookings today") to show the clinic owner their own analytics dashboard. We never sell data. We never use patient data to train AI models.
+We also use anonymized, aggregated data (e.g., "this clinic had 35 bookings today") to show the clinic owner their own analytics dashboard. We never sell data. We never use patient data to train AI models, and we use our AI providers (such as Google Gemini) through paid enterprise APIs whose terms prohibit the provider from using submitted data to train their models.
 
 ---
 
@@ -267,7 +267,7 @@ This privacy policy is effective as of **2026-06-04**.
 - **DPDP Rules:** The Digital Personal Data Protection Rules were notified on 14 November 2025. The full compliance deadline is 13 May 2027. Vachanam is on track to meet this deadline. This policy will be updated as additional guidance is published by the Data Protection Board or the Ministry of Electronics and Information Technology.
 - **Data Fiduciary vs Data Processor:** Under DPDP Act 2023 Chapter II, the clinic is the Data Fiduciary (they decide why patient data is processed -- to manage appointments). Vachanam is the Data Processor (we process patient data on the clinic's documented instructions per our Data Processing Agreement). Both share responsibility for keeping your data safe.
 - **Significant Data Fiduciary (SDF):** The SDF threshold and data localization requirements are pending a separate notification from the central government. Vachanam monitors these developments and will comply when applicable. As of this policy's effective date, Vachanam does not meet the expected SDF threshold.
-- **Data residency:** Telephony (Vobiz), cache (Upstash), and voice compute (Fly.io, LiveKit) operate within India. Speech-to-text (Soniox, United States; Sarvam AI backup, India), text-to-speech (smallest.ai) and the AI language models (Google Gemini) operate globally. Database (Neon) and backend API (Render) operate in Singapore. The DPDP Act 2023 permits cross-border transfer of personal data except to countries specifically restricted by the central government (none of our vendors' countries are restricted as of this policy's date). We choose vendors with the strongest India or near-India data residency available for each function, and every processor and its location is listed in Section 6.
+- **Data residency:** Telephony (Vobiz), cache (Upstash), and voice compute (Fly.io, LiveKit) operate within India. Speech-to-text (Soniox, United States; Sarvam AI backup, India), text-to-speech (smallest.ai) and the AI language models (Google Gemini) operate globally. Database (Neon) and backend API (Render) operate in Singapore. The DPDP Act 2023 permits cross-border transfer of personal data except to countries specifically restricted by the central government (none of our vendors' countries are restricted as of this policy's date). We choose vendors with the strongest India or near-India data residency available for each function, every processor and its location is listed in Section 6, and each processor is bound by contractual data-protection terms (their enterprise terms of service and/or a data processing agreement) that restrict use of the data to providing the service to us.
 
 ---
 

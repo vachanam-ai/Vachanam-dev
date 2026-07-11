@@ -130,6 +130,67 @@ async def test_redis_down_does_not_crash_and_emails_once():
     assert email.await_count == 1
 
 
+class _FakeHttpClient:
+    """Minimal httpx.AsyncClient stand-in for the Fly Machines API."""
+
+    def __init__(self, machines):
+        self.machines = machines
+        self.restarted = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, headers=None):
+        class R:
+            def __init__(self, data):
+                self._data = data
+
+            def json(self):
+                return self._data
+
+        return R(self.machines)
+
+    async def post(self, url, headers=None):
+        self.restarted.append(url.rsplit("/machines/", 1)[1].split("/")[0])
+
+        class R:
+            status_code = 200
+
+        return R()
+
+
+@pytest.mark.asyncio
+async def test_restart_skips_stopped_standby_when_a_machine_is_running():
+    """FIXLOG #307: Fly exposes no standby flag — a hung-but-running primary
+    must not drag the stopped standby awake (drill 2026-07-11 woke both)."""
+    fake_http = _FakeHttpClient([
+        {"id": "primary", "state": "started"},
+        {"id": "standby", "state": "stopped"},
+    ])
+    with patch.object(wd, "get_redis", lambda: _FakeRedis()), \
+         patch.object(wd.settings, "fly_api_token", "tok"), \
+         patch.object(wd.httpx, "AsyncClient", lambda timeout: fake_http):
+        msg = await wd._restart_fly_agent()
+    assert fake_http.restarted == ["primary"]
+    assert "primary:200" in msg
+
+
+@pytest.mark.asyncio
+async def test_restart_starts_exactly_one_machine_when_all_stopped():
+    fake_http = _FakeHttpClient([
+        {"id": "m1", "state": "stopped"},
+        {"id": "m2", "state": "stopped"},
+    ])
+    with patch.object(wd, "get_redis", lambda: _FakeRedis()), \
+         patch.object(wd.settings, "fly_api_token", "tok"), \
+         patch.object(wd.httpx, "AsyncClient", lambda timeout: fake_http):
+        await wd._restart_fly_agent()
+    assert len(fake_http.restarted) == 1
+
+
 def test_tick_never_imports_database():
     """#299 discipline: the 60s tick must be Redis-only. Only the hourly deep
     check may touch backend.database."""

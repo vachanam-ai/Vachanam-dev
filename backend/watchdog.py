@@ -155,15 +155,20 @@ async def _restart_fly_agent() -> str:
             machines = (await c.get(
                 f"https://api.machines.dev/v1/apps/{app}/machines", headers=hdrs
             )).json()
+            # Fly doesn't expose a standby flag in config (verified in drill
+            # 2026-07-11 — restarting all "stopped" machines woke the standby
+            # too). Rule: hung-but-running machines get restarted; if NONE are
+            # running, start exactly ONE stopped machine. Standbys stay asleep.
+            started = [m for m in machines if m.get("state") == "started"]
+            stopped = [m for m in machines if m.get("state") == "stopped"]
+            targets = started if started else stopped[:1]
             restarted = []
-            for m in machines:
-                # standbys stay stopped by design — only kick started/failed workers
-                if m.get("state") in ("started", "stopped") and not m.get("config", {}).get("standby"):
-                    resp = await c.post(
-                        f"https://api.machines.dev/v1/apps/{app}/machines/{m['id']}/restart",
-                        headers=hdrs,
-                    )
-                    restarted.append(f"{m['id']}:{resp.status_code}")
+            for m in targets:
+                resp = await c.post(
+                    f"https://api.machines.dev/v1/apps/{app}/machines/{m['id']}/restart",
+                    headers=hdrs,
+                )
+                restarted.append(f"{m['id']}:{resp.status_code}")
             return f"fly restart issued → {', '.join(restarted) or 'no machines found'}"
     except Exception as e:  # noqa: BLE001
         return f"fly restart FAILED: {str(e)[:120]}"
