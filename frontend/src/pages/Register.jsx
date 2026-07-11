@@ -1,3 +1,4 @@
+import ThemeToggle from "../components/ThemeToggle.jsx";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -166,6 +167,7 @@ export default function Register() {
 
   return (
     <div ref={pageRef} className="min-h-dvh grid place-items-center px-4 py-12">
+      <ThemeToggle float />
       <div className="w-full max-w-md">
         <Link to="/" data-reveal className="font-brand text-3xl text-teal">Vachanam</Link>
         <p data-reveal className="eyebrow mt-8">Start free trial · {PLANS[form.plan]} plan</p>

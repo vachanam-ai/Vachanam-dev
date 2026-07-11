@@ -3,7 +3,7 @@
 **Effective date:** 2026-06-04
 **Last updated:** 2026-07-11
 
-This policy explains, in plain language, what personal data Vachanam collects, why we collect it, who sees it, how long we keep it, and what rights you have. If any part is unclear, email us at privacy@vachanam.in and we will explain it in Telugu, Hindi, or English -- whichever you prefer.
+This policy explains, in plain language, what personal data Vachanam collects, why we collect it, who sees it, how long we keep it, and what rights you have. If any part is unclear, email us at hello@vachanam.in and we will explain it in Telugu, Hindi, or English -- whichever you prefer.
 
 ---
 
@@ -17,7 +17,7 @@ This policy explains, in plain language, what personal data Vachanam collects, w
 | Can other clinics see my data? | **Never** — enforced at the database level on every query. |
 | Do you sell data or run ads? | **No**, and we never use patient data to train AI. |
 | How long is data kept? | Identity: 2 years after last visit. Transcripts (text, masked): 90 days. Enforced by software. |
-| Whom do I contact? | privacy@vachanam.in — Grievance Officer: Vinay Rongala. |
+| Whom do I contact? | hello@vachanam.in — Grievance Officer: Vinay Rongala. |
 
 **Contents:** 1. Who We Are · 2. Data We Collect · 3. Why We Collect · 4. Legal Basis (DPDP) · 5. Who Sees Your Data · 6. Third-Party Processors · 7. How We Protect Your Data · 8. Retention · 9. Your Rights · 10. Children's Data · 11. Cookies · 12. Changes · 13. Effective Date
 
@@ -30,7 +30,7 @@ This policy explains, in plain language, what personal data Vachanam collects, w
 - **Company:** Vachanam (sole proprietorship of Vinay Rongala)
 - **Location:** Hyderabad, Telangana, India
 - **General contact:** hello@vachanam.in
-- **Privacy and grievance contact:** privacy@vachanam.in (Vinay Rongala, Grievance Officer)
+- **Privacy and grievance contact:** hello@vachanam.in (Vinay Rongala, Grievance Officer)
 - **Website:** vachanam.in
 
 Under the Digital Personal Data Protection (DPDP) Act 2023, the clinic you visit is the "Data Fiduciary" -- they decide why your data is processed. Vachanam is the "Data Processor" -- we process your data on the clinic's behalf, only to book and manage your appointment.
@@ -195,16 +195,16 @@ You have rights over your personal data. Here is what you can do and how to do i
 
 | Your right | What it means | How to exercise it |
 |---|---|---|
-| **Right to access** | You can request a copy of all personal data we hold about you | Email privacy@vachanam.in |
-| **Right to correction** | If your data is wrong (e.g., name misspelled), you can ask us to fix it | Email privacy@vachanam.in |
-| **Right to erasure** | You can ask us to delete your personal data | Email privacy@vachanam.in |
-| **Right to withdraw consent** | If you gave consent for something specific (e.g., follow-up calls), you can withdraw it anytime | Email privacy@vachanam.in |
-| **Right to grievance redressal** | If you are unhappy with how we handle your data, you can file a grievance | Email privacy@vachanam.in (Vinay Rongala, Grievance Officer) |
+| **Right to access** | You can request a copy of all personal data we hold about you | Email hello@vachanam.in |
+| **Right to correction** | If your data is wrong (e.g., name misspelled), you can ask us to fix it | Email hello@vachanam.in |
+| **Right to erasure** | You can ask us to delete your personal data | Email hello@vachanam.in |
+| **Right to withdraw consent** | If you gave consent for something specific (e.g., follow-up calls), you can withdraw it anytime | Email hello@vachanam.in |
+| **Right to grievance redressal** | If you are unhappy with how we handle your data, you can file a grievance | Email hello@vachanam.in (Vinay Rongala, Grievance Officer) |
 | **Right to complain to the Data Protection Board** | If you are not satisfied with our response, you can approach the Data Protection Board of India | dpb.gov.in |
 
 ### How the process works
 
-1. You email privacy@vachanam.in with your request.
+1. You email hello@vachanam.in with your request.
 2. We verify your identity (we will ask you to confirm your phone number via OTP and may request a photo of a government-issued ID).
 3. We acknowledge your request within 48 hours.
 4. We complete your request within 7 calendar days.
@@ -273,7 +273,7 @@ This privacy policy is effective as of **2026-06-04**.
 
 **Contact us:**
 - General: hello@vachanam.in
-- Privacy and grievances: privacy@vachanam.in (Vinay Rongala, Grievance Officer)
+- Privacy and grievances: hello@vachanam.in (Vinay Rongala, Grievance Officer)
 - Response time: 7 calendar days for data subject requests; 48-hour acknowledgment
 
 *Vachanam -- "Healing starts with being heard."*

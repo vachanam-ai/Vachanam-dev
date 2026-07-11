@@ -215,7 +215,7 @@ Owner: `privacy-legal`. Hosted at `app.vachanam.in/privacy` and `/terms` (backen
 
 | Path | Status | Purpose |
 |---|---|---|
-| `docs/legal/privacy-policy.md` | working | Phase 4.5 Task 11a. 12 sections per spec section 9.2. Plain English, DPDP-defensible. Reflects no-recording decision (Option A). Lists 11 third-party processors with data locations. 7 retention periods with enforcement commitment. Contact: privacy@vachanam.in. |
+| `docs/legal/privacy-policy.md` | working | Phase 4.5 Task 11a. 12 sections per spec section 9.2. Plain English, DPDP-defensible. Reflects no-recording decision (Option A). Lists 11 third-party processors with data locations. 7 retention periods with enforcement commitment. Contact: hello@vachanam.in. |
 | `docs/legal/terms-of-service.md` | working | Phase 4.5 Task 11b. Clinic-facing SaaS terms (10 sections). Service description, clinic obligations as Data Fiduciary, Vachanam obligations as Data Processor, subscription plans (Solo/Clinic/Multi), acceptable use, limitation of liability, governing law (Hyderabad). |
 | `docs/legal/data-processing-agreement.md` | working | Phase 4.5 Task 11c. DPA template (12 sections). Vachanam = Data Processor, Clinic = Data Fiduciary. Sub-processor list (12 vendors). Security measures table. 24h breach notification to Clinic. Audit rights (once/year). Data return + deletion on termination (30 days). Signature block. |
 

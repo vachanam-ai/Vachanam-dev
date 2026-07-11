@@ -82,7 +82,7 @@ These are not policy aspirations — `data_retention.py` runs daily in productio
 
 ## 5. Your Rights and How to Exercise Them
 
-Under the DPDP Act 2023 you may request **access** to, **correction** of, or **erasure** of your personal data, **withdraw consent**, and **file a grievance**. Email **privacy@vachanam.in** (Vinay Rongala, Grievance Officer). We acknowledge within 48 hours and complete within 7 calendar days, after verifying your identity via your registered phone number. If unsatisfied, you may approach the Data Protection Board of India.
+Under the DPDP Act 2023 you may request **access** to, **correction** of, or **erasure** of your personal data, **withdraw consent**, and **file a grievance**. Email **hello@vachanam.in** (Vinay Rongala, Grievance Officer). We acknowledge within 48 hours and complete within 7 calendar days, after verifying your identity via your registered phone number. If unsatisfied, you may approach the Data Protection Board of India.
 
 ---
 
@@ -95,6 +95,6 @@ Under the DPDP Act 2023 you may request **access** to, **correction** of, or **e
 
 ---
 
-*Questions? privacy@vachanam.in — we will answer in Telugu, Hindi, or English.*
+*Questions? hello@vachanam.in — we will answer in Telugu, Hindi, or English.*
 
 © 2026 Vachanam (Vinay Rongala), Hyderabad, India. All rights reserved.

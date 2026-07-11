@@ -111,7 +111,7 @@ The honest one-liner for a doctor: *"Practo protects a mountain of health data w
 - Privacy Policy: **api.vachanam.in/privacy**
 - How we handle data (full lifecycle): **api.vachanam.in/data-handling**
 - Data Processing Agreement: **api.vachanam.in/dpa**
-- Questions or a security review before signing: **privacy@vachanam.in** — we'll walk your IT person through anything on this page.
+- Questions or a security review before signing: **hello@vachanam.in** — we'll walk your IT person through anything on this page.
 
 ---
 

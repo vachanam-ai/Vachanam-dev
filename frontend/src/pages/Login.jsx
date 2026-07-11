@@ -1,3 +1,4 @@
+import ThemeToggle from "../components/ThemeToggle.jsx";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -113,6 +114,7 @@ export default function Login() {
 
   return (
     <div ref={pageRef} className="min-h-dvh grid lg:grid-cols-[1.1fr_1fr]">
+      <ThemeToggle float />
       <section className="relative hidden overflow-hidden bg-[#0e4a49] text-white lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div
           className="pointer-events-none absolute inset-0 opacity-[0.12]"

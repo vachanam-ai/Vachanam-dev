@@ -194,7 +194,7 @@ Continued use of the service after the change takes effect constitutes acceptanc
 ## 10. Contact
 
 - **General inquiries:** hello@vachanam.in
-- **Privacy and data requests:** privacy@vachanam.in
+- **Privacy and data requests:** hello@vachanam.in
 - **Security concerns:** security@vachanam.in
 - **Billing questions:** hello@vachanam.in
 

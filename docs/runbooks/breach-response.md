@@ -1,7 +1,7 @@
 # Breach Response Runbook
 
 **Owner:** Vinay Rongala (acting DPO)
-**Contact:** privacy@vachanam.in | +91-ADMIN_PHONE (from env var)
+**Contact:** hello@vachanam.in | +91-ADMIN_PHONE (from env var)
 **Last updated:** 2026-06-04
 **Drill frequency:** Every 6 months (tabletop exercise, per spec section 12.3)
 
@@ -13,7 +13,7 @@ This runbook is designed so that anyone at 2 AM can follow it without asking que
 
 | Item | Value |
 |---|---|
-| Grievance officer | Vinay Rongala, privacy@vachanam.in |
+| Grievance officer | Vinay Rongala, hello@vachanam.in |
 | DPB notification deadline | 72 hours from CONFIRMED breach involving personal data |
 | Clinic notification deadline | 24 hours from CONFIRMED breach affecting their data |
 | Post-mortem deadline | 14 days from breach confirmation |
@@ -233,7 +233,7 @@ Per DPDP Act 2023 Section 11 and DPDP Rules (notified 14 November 2025):
 3. Approximate number of data subjects affected
 4. Likely consequences of the breach
 5. Measures taken or proposed to address the breach and mitigate harm
-6. Contact details of Vachanam's grievance officer (Vinay Rongala, privacy@vachanam.in)
+6. Contact details of Vachanam's grievance officer (Vinay Rongala, hello@vachanam.in)
 
 **ACTION ITEM: Update this section with the exact DPB notification portal URL, form, and process once the DPB publishes operational guidance. Monitor dpb.gov.in quarterly.**
 
@@ -260,11 +260,11 @@ Per DPDP Act 2023 Section 11 and DPDP Rules (notified 14 November 2025):
 >
 > **What you should do:**
 > - If you wish to inform your patients directly, we can provide you with the list of affected patient names and appointment dates.
-> - If any patient contacts you about this incident, please direct them to privacy@vachanam.in or share this notification with them.
+> - If any patient contacts you about this incident, please direct them to hello@vachanam.in or share this notification with them.
 >
 > **What we are changing:** [Preventive measure. E.g., "We have added an additional automated test to prevent this type of bug from reaching production."]
 >
-> We sincerely apologize for this incident. If you have any questions, please contact us at privacy@vachanam.in or call [ADMIN_PHONE].
+> We sincerely apologize for this incident. If you have any questions, please contact us at hello@vachanam.in or call [ADMIN_PHONE].
 >
 > Vinay Rongala
 > Founder, Vachanam
@@ -285,7 +285,7 @@ Per DPDP Act 2023 Section 11 and DPDP Rules (notified 14 November 2025):
 >
 > **What you need to do:** Nothing is required from you. Your future appointments are not affected.
 >
-> **Your rights:** You have the right to request a copy of your data, ask us to correct it, or ask us to delete it. Contact privacy@vachanam.in or call [ADMIN_PHONE].
+> **Your rights:** You have the right to request a copy of your data, ask us to correct it, or ask us to delete it. Contact hello@vachanam.in or call [ADMIN_PHONE].
 >
 > We apologize for the inconvenience.
 >
@@ -341,7 +341,7 @@ Create a file at `docs/incidents/YYYY-MM-DD-<slug>.md` with:
 
 | Role | Name | Contact | When to reach |
 |---|---|---|---|
-| Acting DPO / Grievance Officer | Vinay Rongala | privacy@vachanam.in, ADMIN_PHONE | Any breach, any time |
+| Acting DPO / Grievance Officer | Vinay Rongala | hello@vachanam.in, ADMIN_PHONE | Any breach, any time |
 | Data Protection Board of India | DPB | dpb.gov.in | Within 72 hours of confirmed breach |
 | Neon (database) | Neon Support | neon.tech support portal | Database credential compromise |
 | Razorpay | Razorpay Support | dashboard.razorpay.com | Webhook secret compromise, payment fraud |

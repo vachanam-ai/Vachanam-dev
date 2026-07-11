@@ -1,3 +1,4 @@
+import ThemeToggle from "../components/ThemeToggle.jsx";
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import gsap from "gsap";
@@ -82,7 +83,10 @@ export default function Landing() {
             <a href="#voices" className="text-ink-soft hover:text-teal">Voices</a>
             <a href="#pricing" className="text-ink-soft hover:text-teal">Pricing</a>
           </nav>
-          <Link to="/login" className="btn-primary px-5 py-2 text-sm">Clinic sign in</Link>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <Link to="/login" className="btn-primary px-5 py-2 text-sm">Clinic sign in</Link>
+          </div>
         </div>
       </header>
 

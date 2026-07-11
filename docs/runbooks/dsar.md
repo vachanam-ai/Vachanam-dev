@@ -1,7 +1,7 @@
 # Data Subject Access Request (DSAR) Runbook
 
 **Owner:** Vinay Rongala (acting DPO, Grievance Officer)
-**Contact:** privacy@vachanam.in
+**Contact:** hello@vachanam.in
 **SLA:** 7 calendar days from verified request to completed response
 **Legal basis:** DPDP Act 2023 Sections 11-13 (rights of Data Principal)
 **Last updated:** 2026-06-04
@@ -27,10 +27,10 @@ This runbook covers the step-by-step process for handling each type. Follow it e
 
 | Channel | Action |
 |---|---|
-| Email to privacy@vachanam.in | Primary channel. Proceed to Step 2. |
-| Email to hello@vachanam.in | Forward to privacy@vachanam.in. Proceed to Step 2. |
-| Verbal request to clinic owner | Clinic owner forwards to privacy@vachanam.in on behalf of patient. Proceed to Step 2. |
-| Phone call to ADMIN_PHONE | Ask the requester to also email privacy@vachanam.in so there is a written record. Then proceed to Step 2. |
+| Email to hello@vachanam.in | Primary channel. Proceed to Step 2. |
+| Email to hello@vachanam.in | Forward to hello@vachanam.in. Proceed to Step 2. |
+| Verbal request to clinic owner | Clinic owner forwards to hello@vachanam.in on behalf of patient. Proceed to Step 2. |
+| Phone call to ADMIN_PHONE | Ask the requester to also email hello@vachanam.in so there is a written record. Then proceed to Step 2. |
 
 ### Information to capture from the request
 
@@ -91,7 +91,7 @@ Send an acknowledgment email:
 > **Date received:** [date]
 > **Expected completion:** Within 7 calendar days (by [date])
 >
-> If you have any questions, reply to this email or contact us at privacy@vachanam.in.
+> If you have any questions, reply to this email or contact us at hello@vachanam.in.
 >
 > Vinay Rongala
 > Grievance Officer, Vachanam
@@ -308,7 +308,7 @@ Retain the following for 3 years from the date the request was completed:
 
 | What to retain | Where to store | Why |
 |---|---|---|
-| Original request email | Email archive (privacy@vachanam.in inbox) | Compliance demonstration: we received the request |
+| Original request email | Email archive (hello@vachanam.in inbox) | Compliance demonstration: we received the request |
 | Identity verification evidence | Email archive (delete government ID photos after verification) | Compliance demonstration: we verified identity |
 | Acknowledgment email sent | Email archive (sent items) | Compliance demonstration: we acknowledged within 48h |
 | Response email sent | Email archive (sent items) | Compliance demonstration: we responded within 7 days |
@@ -323,7 +323,7 @@ After 3 years, delete the email correspondence and data export files. The audit 
 
 | Milestone | Deadline | Who |
 |---|---|---|
-| Request received | Day 0 | Patient emails privacy@vachanam.in |
+| Request received | Day 0 | Patient emails hello@vachanam.in |
 | Identity verified | Day 0-1 | Vinay (OTP + optional government ID) |
 | Acknowledgment sent | Within 48 hours of receipt | Vinay |
 | Request executed | Day 1-6 | Vinay (manual SQL for MVP1; automated script later) |

@@ -494,7 +494,7 @@ Vachanam handles patient names, phones, and complaint summaries on behalf of cli
 
 Self-hosted at `app.vachanam.in/privacy` (also linked from `vachanam.in`). Covers:
 
-1. **Who we are** — Vachanam, Hyderabad, founder Vinay Rongala, contact `hello@vachanam.in`, grievance contact `privacy@vachanam.in`
+1. **Who we are** — Vachanam, Hyderabad, founder Vinay Rongala, contact `hello@vachanam.in`, grievance contact `hello@vachanam.in`
 2. **Data we collect**
    - Patient: name, phone, complaint summary (one-line), appointment timestamps
    - Doctor: name, WhatsApp number, specialization, working hours
@@ -521,7 +521,7 @@ Self-hosted at `app.vachanam.in/privacy` (also linked from `vachanam.in`). Cover
    - Deleted account: PII purged within 30 days; audit log retained
 
 > **Note (2026-06-04):** No voice call recordings — per client decision, AI-only audit via audit_log table.
-8. **Your rights under DPDP** — access (request a copy), correction, erasure (right to be forgotten with exceptions), grievance (email `privacy@vachanam.in`, 7-day SLA)
+8. **Your rights under DPDP** — access (request a copy), correction, erasure (right to be forgotten with exceptions), grievance (email `hello@vachanam.in`, 7-day SLA)
 9. **Children** — patients under 18 may only book via parent/guardian; we don't separately collect minor data
 10. **Cookies** — only essential cookies (auth JWT). No analytics, no advertising, no third-party tracking
 11. **Updates to this policy** — 30 days notice via email and WhatsApp before any change
@@ -537,7 +537,7 @@ Self-hosted at `app.vachanam.in/privacy` (also linked from `vachanam.in`). Cover
 | Accuracy | Owner/receptionist can edit patient records via PWA |
 | Storage limitation | Retention policy enforced by daily job `data_retention.py` (Phase 6+ scope) |
 | Reasonable security | This entire spec |
-| Grievance officer | `privacy@vachanam.in` → Vinay (founder = DPO for MVP); 7-day SLA |
+| Grievance officer | `hello@vachanam.in` → Vinay (founder = DPO for MVP); 7-day SLA |
 | Breach notification | 72-hour runbook (Section 10) |
 | DPO contact | In privacy policy; Vinay's name + email + admin phone |
 
@@ -547,7 +547,7 @@ Canonical legal docs live in `docs/legal/` (privacy-policy, terms-of-service, da
 
 ### 9.4 Data subject rights — how a patient exercises them
 
-A patient who wants to access, correct, or delete their data sends an email to `privacy@vachanam.in`. Process (manual for MVP, automated later):
+A patient who wants to access, correct, or delete their data sends an email to `hello@vachanam.in`. Process (manual for MVP, automated later):
 
 1. Vinay verifies identity (patient sends a photo of ID, confirms phone via OTP)
 2. Vinay runs a script that queries by phone number across `patients`, `tokens`, `calls`, `followup_tasks` for the requested branch
