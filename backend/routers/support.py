@@ -26,7 +26,20 @@ from backend.middleware.auth_middleware import (
 from backend.middleware.rate_limit import default_limit
 from backend.models.schema import Organization, SupportMessage, SupportTicket, User
 from backend.services import support_bot, support_email, support_kb, support_macros
-from backend.services.turnstile import require_turnstile
+from backend.services.turnstile import verify_turnstile
+from backend.middleware.rate_limit import client_ip
+
+
+async def _guard_anonymous(request: Request, user) -> None:
+    """Turnstile applies ONLY to anonymous callers — a logged-in clinic user is
+    already authenticated, and the client never attaches a Turnstile token on
+    support routes. Bot-abuse protection is for the public path; authed calls
+    rely on default_limit. 403 if an anonymous caller fails Turnstile (when it's
+    enforced; feature-off in dev/tests → always passes)."""
+    if user is None:
+        token = request.headers.get("x-turnstile-token")
+        if not await verify_turnstile(token, client_ip(request)):
+            raise HTTPException(status_code=403, detail="captcha_failed")
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -57,9 +70,10 @@ async def get_kb(request: Request):
     return {"audience": audience, "markdown": support_kb.kb_text(audience)}
 
 
-@router.post("/chat", dependencies=[Depends(default_limit), Depends(require_turnstile)])
+@router.post("/chat", dependencies=[Depends(default_limit)])
 async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(get_db)):
     user = await optional_current_user(request)
+    await _guard_anonymous(request, user)  # Turnstile for anonymous only
     audience = "clinic" if user and user.org_id else "public"
     result = await support_bot.answer(
         body.question, [t.model_dump() for t in body.history], audience,
@@ -211,9 +225,10 @@ _CONTACT_CATEGORIES = {"billing", "technical", "onboarding", "feature_request",
                        "sales_demo", "other"}
 
 
-@router.post("/contact", dependencies=[Depends(default_limit), Depends(require_turnstile)])
+@router.post("/contact", dependencies=[Depends(default_limit)])
 async def contact(body: ContactBody, request: Request, db: AsyncSession = Depends(get_db)):
     user = await optional_current_user(request)
+    await _guard_anonymous(request, user)  # Turnstile for anonymous only
     category = body.category if body.category in _CONTACT_CATEGORIES else "other"
     ticket = SupportTicket(
         org_id=(user.org_id if user else None),

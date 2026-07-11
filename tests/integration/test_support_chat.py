@@ -82,3 +82,29 @@ async def test_kb_public_subset(client):
     r = await client.get("/support/kb")
     assert r.status_code == 200
     assert "Connecting your phone number" not in r.text  # clinic-only stays out
+
+
+async def test_authed_chat_works_without_turnstile_token(client, db, monkeypatch):
+    """Regression: a logged-in user's client never attaches a Turnstile token —
+    with Turnstile ENFORCED, an authed chat must still succeed (Turnstile is
+    anonymous-only); an anonymous chat with no token must 403."""
+    from backend.config import settings
+    from backend.models.schema import Organization
+    monkeypatch.setattr(settings, "turnstile_secret_key", "enforced", raising=False)
+
+    org = Organization(name="C", owner_phone="", owner_email=f"{uuid.uuid4().hex}@t.com",
+                       plan="clinic", status="active")
+    db.add(org)
+    await db.commit()
+    now = datetime.now(timezone.utc)
+    tok = jwt.encode({"sub": str(uuid.uuid4()), "email": "o@t.com", "role": "org_admin",
+                      "org_id": str(org.id), "branch_ids": [], "is_admin": False,
+                      "iat": int(now.timestamp()),
+                      "exp": int((now + timedelta(hours=8)).timestamp()),
+                      "jti": str(uuid.uuid4())}, settings.jwt_secret, algorithm="HS256")
+    r = await client.post("/support/chat", json={"question": "cost?"},
+                          headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200  # authed → Turnstile skipped
+
+    r = await client.post("/support/chat", json={"question": "cost?"})  # anon, no token
+    assert r.status_code == 403  # anonymous must pass Turnstile

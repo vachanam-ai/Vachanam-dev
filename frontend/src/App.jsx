@@ -18,6 +18,7 @@ import TvDisplay from "./pages/TvDisplay.jsx";
 import Help from "./pages/Help.jsx";
 import MyTickets from "./pages/MyTickets.jsx";
 import SupportAdmin from "./pages/SupportAdmin.jsx";
+import SupportWidget from "./components/SupportWidget.jsx";
 
 function FullScreenSpinner() {
   return (
@@ -44,7 +45,11 @@ function Protected({ roles, children }) {
 
 export default function App() {
   const { user, role } = useAuth();
+  // Floating assistant is a CUSTOMER tool — show it to clinics + public
+  // visitors, not to Vachanam's own support/ops staff (they use the dashboard).
+  const showWidget = !["support", "super_admin"].includes(role);
   return (
+    <>
     <Routes>
       <Route path="/" element={user ? <Navigate to={roleHome(role)} replace /> : <Landing />} />
       <Route path="/login" element={user ? <Navigate to={roleHome(role)} replace /> : <Login />} />
@@ -161,5 +166,7 @@ export default function App() {
 
       <Route path="*" element={<Navigate to={user ? roleHome(role) : "/login"} replace />} />
     </Routes>
+    {showWidget && <SupportWidget />}
+    </>
   );
 }
