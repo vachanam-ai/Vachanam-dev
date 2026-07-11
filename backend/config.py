@@ -130,6 +130,13 @@ class Settings(BaseSettings):
     # verified in Resend (vachanam.in).
     resend_api_key: str = ""
     resend_from: str = "Vachanam <noreply@vachanam.in>"
+
+    # Watchdog (#306): where change-triggered health alerts go, and the Fly
+    # Machines API token that lets the watchdog RESTART a dead voice agent
+    # (empty ⇒ alert-only, no auto-restart). fly_agent_app matches infra/fly.agent.toml.
+    alert_email: str = "hello@vachanam.in"
+    fly_api_token: str = ""
+    fly_agent_app: str = "vachanam-agent"
     otp_ttl_seconds: int = 600        # 10 minutes
     # DPDP s.8(7) retention: erase a patient's PII this many days after their last
     # appointment (default 2 years, matching the privacy policy's appointments

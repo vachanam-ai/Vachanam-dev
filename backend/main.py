@@ -178,6 +178,17 @@ async def lifespan(app: FastAPI):
             run_hourly_maintenance, IntervalTrigger(hours=1),
             id="hourly_maintenance", replace_existing=True,
         )
+        # #306 autonomous watchdog: 60s Redis-only tick (agent heartbeat,
+        # redis, own memory) with auto-remediation (Fly restart / clean
+        # self-restart) + change-triggered email. Deep checks (DB probe,
+        # calendar backlog) ride the hourly maintenance wake — zero extra
+        # Neon wakes.
+        from backend.watchdog import run_watchdog_tick
+
+        scheduler.add_job(
+            run_watchdog_tick, IntervalTrigger(seconds=60),
+            id="watchdog_tick", replace_existing=True,
+        )
         scheduler.start()
         return scheduler
 

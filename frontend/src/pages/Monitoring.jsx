@@ -1,9 +1,87 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchAdminMonitoring } from "../api/client.js";
+import { fetchAdminMonitoring, fetchHealthBoard } from "../api/client.js";
 
 const pct = (v) => (v == null ? "—" : `${Math.round(v * 100)}%`);
 const num = (v) => (v == null ? "—" : v);
+
+/* #306 live health board. The watchdog (backend/watchdog.py) checks every 60s
+   and AUTO-REMEDIATES (Fly restart, requeue, clean self-restart) — this board
+   is its face: component states from Redis + the incident/action feed. */
+const COMP_LABELS = {
+  agent: "Voice agent (Fly)",
+  redis: "Redis (Upstash)",
+  database: "Database (Neon)",
+  api_memory: "API memory",
+  calendar_queue: "Calendar queue",
+};
+
+function ago(epoch) {
+  if (!epoch) return "";
+  const s = Math.max(0, Math.round(Date.now() / 1000 - epoch));
+  if (s < 90) return `${s}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  return `${Math.round(s / 3600)}h`;
+}
+
+function HealthBoard() {
+  const { data: hb } = useQuery({
+    queryKey: ["health-board"],
+    queryFn: fetchHealthBoard,
+    refetchInterval: 10_000,
+  });
+  const comps = hb?.components ?? {};
+  const anyDown = Object.values(comps).some((c) => c.status === "down");
+  return (
+    <section className="card overflow-hidden">
+      <header className={`flex items-center justify-between border-b border-hairline px-5 py-3 ${anyDown ? "bg-red-50" : "bg-teal-mint/60"}`}>
+        <h2 className="font-display text-lg font-semibold">Live health · watchdog</h2>
+        <span className={`rounded-full px-3 py-0.5 font-ui text-xs font-semibold ${anyDown ? "bg-red-600 text-white" : "bg-teal text-white"}`}>
+          {anyDown ? "ATTENTION" : "ALL SYSTEMS OK"}
+        </span>
+      </header>
+      <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-5">
+        {Object.entries(COMP_LABELS).map(([key, label]) => {
+          const c = comps[key];
+          const st = c?.status ?? "unknown";
+          const color = st === "ok" ? "bg-emerald-500" : st === "down" ? "bg-red-500" : "bg-gray-300";
+          return (
+            <div key={key} className="rounded-xl border border-hairline bg-white px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span className={`h-2.5 w-2.5 rounded-full ${color} ${st === "down" ? "animate-pulse" : ""}`} />
+                <p className="font-ui text-xs font-semibold">{label}</p>
+              </div>
+              <p className="mt-1 font-ui text-[11px] leading-snug text-slate">
+                {c ? c.detail : "no data yet"}
+                {c?.since ? ` · ${ago(c.since)}` : ""}
+              </p>
+              {c?.action && st === "down" && (
+                <p className="mt-1 font-ui text-[11px] font-medium text-amber-700">⚙ {c.action}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {(hb?.incidents?.length ?? 0) > 0 && (
+        <div className="border-t border-hairline px-5 py-3">
+          <p className="eyebrow mb-2">Incidents &amp; automatic actions</p>
+          <ul className="max-h-48 space-y-1 overflow-y-auto">
+            {hb.incidents.map((i, idx) => (
+              <li key={idx} className="font-ui text-xs text-slate">
+                <span className={i.action.endsWith("resolved") ? "text-emerald-700" : "text-red-700"}>
+                  {i.action.replace("watchdog.", "").replace(".", " ")}
+                </span>
+                {" — "}{i.detail}
+                {i.action_taken && <span className="text-amber-700"> · action: {i.action_taken}</span>}
+                {i.at && <span className="text-slate/60"> · {new Date(i.at).toLocaleString()}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
 
 function Stat({ label, value, sub }) {
   return (
@@ -52,6 +130,8 @@ export default function Monitoring() {
           ))}
         </div>
       </div>
+
+      <HealthBoard />
 
       {/* KPI tiles */}
       <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">

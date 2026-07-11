@@ -163,6 +163,8 @@ export const fetchClients = () => api.get("/admin/clients").then((r) => r.data);
 export const fetchAdminOverview = () => api.get("/admin/overview").then((r) => r.data);
 export const fetchAdminMonitoring = (days = 14) =>
   api.get("/admin/monitoring", { params: { days } }).then((r) => r.data);
+export const fetchHealthBoard = () =>
+  api.get("/admin/health-board").then((r) => r.data);
 export const setOrgStatus = (orgId, status) =>
   api.post(`/admin/orgs/${orgId}/status`, { status }).then((r) => r.data);
 export const setOrgPlan = (orgId, plan) =>

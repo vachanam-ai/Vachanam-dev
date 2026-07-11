@@ -3563,6 +3563,41 @@ def _start_render_keepalive() -> None:
     logger.info("render_keepalive_started url=%s interval=300s", url)
 
 
+_heartbeat_started = False
+
+
+def _start_watchdog_heartbeat() -> None:
+    """Liveness beacon for the backend watchdog (#306): write a Redis timestamp
+    every 60s. If it goes >180s stale, the watchdog declares the voice plane
+    down, emails Vinay, and auto-restarts this machine via the Fly API. Redis
+    only — never touches Neon (#299). Best-effort daemon thread, same pattern
+    as render_keepalive: a heartbeat failure must never affect a call."""
+    global _heartbeat_started
+    if _heartbeat_started:
+        return
+    _heartbeat_started = True
+
+    import threading
+    import time as _time
+
+    def _loop() -> None:
+        import redis as _redis_sync
+
+        client = None
+        while True:
+            try:
+                if client is None:
+                    client = _redis_sync.from_url(settings.redis_url)
+                client.set("watchdog:hb:agent", _time.time(), ex=300)
+            except Exception as e:  # noqa: BLE001
+                client = None  # rebuild next round — never reuse a dead socket
+                logger.warning("watchdog_heartbeat_failed: %s", str(e)[:120])
+            _time.sleep(60)
+
+    threading.Thread(target=_loop, name="watchdog-heartbeat", daemon=True).start()
+    logger.info("watchdog_heartbeat_started interval=60s")
+
+
 
 
 def _prewarm(proc) -> None:
@@ -3604,6 +3639,7 @@ if __name__ == "__main__":
     # NOT in _prewarm — prewarm runs in the job subprocess, which may not spawn
     # until the first call, and Render sleeps precisely when there are NO calls.
     _start_render_keepalive()
+    _start_watchdog_heartbeat()  # #306: backend watchdog watches this beacon
     # NO db keepalive (#299). It existed to stop Neon suspending its compute so
     # the first call after idle skipped a ~2-4s cold wake (#285) — but Neon only
     # suspends after 5 min of total query silence, so a 3-min ping pinned the

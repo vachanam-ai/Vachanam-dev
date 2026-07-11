@@ -46,3 +46,12 @@ async def run_hourly_maintenance() -> None:
     mem = process_mem_mb()
     if mem:
         logger.info("maintenance_mem", rss_mb=mem["rss"], peak_mb=mem["peak"])
+
+    # #306: deep health checks ride this wake — Neon is already awake, so the
+    # DB probe and calendar-backlog check cost zero extra compute wakes.
+    try:
+        from backend.watchdog import run_watchdog_deep
+
+        await run_watchdog_deep()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("watchdog_deep_failed", error=str(e)[:160])

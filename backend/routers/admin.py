@@ -907,3 +907,40 @@ async def admin_monitoring(
         ],
         daily=daily,
     )
+
+
+# ── #306: live health board — the watchdog's face ────────────────────────────
+
+@router.get("/health-board")
+async def admin_health_board(
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """Realtime component states + recent incident feed for the Monitoring
+    page. States come from Redis (O(1), no Neon wake); the incident history is
+    the audit trail the watchdog writes on every transition. Aggregates only —
+    no PII (RULE 1/9: health metadata never contains patient data)."""
+    from backend.models.schema import AuditLog
+    from backend.watchdog import board_state
+
+    out = await board_state()
+    try:
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(AuditLog)
+                .where(AuditLog.action.like("watchdog.%"))
+                .order_by(AuditLog.created_at.desc())
+                .limit(50)
+            )).scalars().all()
+        out["incidents"] = [
+            {
+                "action": r.action,
+                "at": r.created_at.isoformat() if r.created_at else None,
+                "detail": (r.metadata_json or {}).get("detail"),
+                "action_taken": (r.metadata_json or {}).get("action_taken"),
+            }
+            for r in rows
+        ]
+    except Exception as e:  # noqa: BLE001 — a dead DB must not kill the board
+        out["incidents"] = []
+        out["incidents_error"] = str(e)[:120]
+    return out
