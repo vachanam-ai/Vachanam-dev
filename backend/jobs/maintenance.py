@@ -37,3 +37,12 @@ async def run_hourly_maintenance() -> None:
             await fn()
         except Exception as e:  # noqa: BLE001 — one failure must not skip the rest
             logger.warning("maintenance_step_failed", step=name, error=str(e)[:160])
+
+    # Render free tier OOM-kills at 512MB (2026-07-11). One structured memory
+    # sample per hourly wake makes the growth curve — steady leak vs spike at a
+    # specific step — readable straight from Render logs.
+    from backend.memstat import process_mem_mb
+
+    mem = process_mem_mb()
+    if mem:
+        logger.info("maintenance_mem", rss_mb=mem["rss"], peak_mb=mem["peak"])

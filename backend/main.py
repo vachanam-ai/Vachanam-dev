@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 
 from agent.logging_config import configure_structlog
 from backend.config import settings
+from backend.memstat import process_mem_mb
 from backend.jobs.calendar_writer import run_calendar_writer
 from backend.middleware.rate_limit import close_rate_limiter, init_rate_limiter
 from backend.middleware.security_headers import SecurityHeadersMiddleware
@@ -368,6 +369,13 @@ async def health() -> dict:
     commit = os.getenv("RENDER_GIT_COMMIT", "")
     if commit:
         out["build"] = commit[:7]
+    mem = process_mem_mb()
+    if mem is not None:
+        # Render free tier OOM-kills at 512MB (reported 2026-07-11). Exposing
+        # current + peak RSS here turns every UptimeRobot/keepalive ping into a
+        # memory sample, so the growth curve is readable from Render logs and
+        # curl without shelling into the box. Zero dependencies (/proc).
+        out["mem_mb"] = mem
     return out
 
 
