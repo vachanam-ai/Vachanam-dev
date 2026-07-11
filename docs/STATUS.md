@@ -1,5 +1,17 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-12 — FAULT-TOLERANCE PRIMITIVES + CHAOS HARNESS (FIXLOG #320, master-local).**
+> `backend/services/resilience.py`: one `guard(name, coro_factory, timeout,
+> retries, backoff, fallback)` wrapper = chaos injection → circuit breaker
+> (5-fail open, 30s reset, half-open probe) → per-attempt timeout → backoff retry
+> → metrics (ok/failed/timeout/rejected + latency avg/p95/error-rate). Chaos
+> (per-dependency latency + fail-rate) is HARD-OFF unless `CHAOS_ENABLED=true`
+> (new flag, default False) so it can never fire in prod. Wired into both Resend
+> paths (support + watchdog) sharing one `resend_email` breaker. Owner endpoints:
+> `GET /admin/resilience` (board), `POST/DELETE /admin/resilience/chaos` (arm/
+> disarm drill). In-process state (single Render worker; Redis path noted for
+> multi-worker). Proof: `tests/unit/test_resilience.py` (10). No migration.
+
 > **2026-07-11 — SUPPORT SYSTEM PHASE 1 (master, code pushed; migration deploy-gated).**
 > Self-serve support core (FIXLOG #314): a markdown KB (`docs/support/*.md`,
 > audience-filtered) + a Gemini-grounded chatbot (`/support/chat`) that

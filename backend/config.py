@@ -149,6 +149,12 @@ class Settings(BaseSettings):
     # true to also email support_email a digest of overdue+unanswered tickets.
     support_sla_email: bool = False
 
+    # Chaos harness (resilience.py): when true, armed chaos injection (latency /
+    # forced failure per dependency) is APPLIED so a drill can watch the circuit
+    # breakers + metrics react to a slow/down dependency. HARD-OFF by default —
+    # a prod deploy following .env.example can never fault-inject into live calls.
+    chaos_enabled: bool = False
+
     # Watchdog (#306): where change-triggered health alerts go, and the Fly
     # Machines API token that lets the watchdog RESTART a dead voice agent
     # (empty ⇒ alert-only, no auto-restart). fly_agent_app matches infra/fly.agent.toml.

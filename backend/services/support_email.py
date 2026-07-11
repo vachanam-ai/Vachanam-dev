@@ -19,19 +19,27 @@ logger = structlog.get_logger()
 
 
 async def _send(to: str, subject: str, text: str) -> None:
-    """Fire one email FROM the support address. Swallows every error (RULE 8)."""
+    """Fire one email FROM the support address. Best-effort — routed through the
+    resilience guard so a slow/down Resend trips the 'resend_email' circuit
+    breaker (visible on /admin/resilience) instead of silently eating threads.
+    fallback=None ⇒ never raises (RULE 8)."""
     if not settings.resend_api_key or not to:
         return
-    try:
+    from backend.services.resilience import guard
+
+    async def _post():
         async with httpx.AsyncClient(timeout=10) as c:
-            await c.post(
+            r = await c.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {settings.resend_api_key}"},
                 json={"from": settings.support_from, "to": [to],
                       "subject": subject, "text": text},
             )
-    except Exception as exc:  # noqa: BLE001 — email must never break support flow
-        logger.warning("support_email_failed", to_last4=to[-4:], error=str(exc))
+            r.raise_for_status()  # a 4xx/5xx is a dependency failure the breaker must see
+
+    result = await guard("resend_email", _post, timeout=12, retries=1, fallback=False)
+    if result is False:
+        logger.warning("support_email_failed", to_last4=to[-4:])
 
 
 def _app_link(path: str) -> str:

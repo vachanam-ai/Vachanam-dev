@@ -944,3 +944,56 @@ async def admin_health_board(
         out["incidents"] = []
         out["incidents_error"] = str(e)[:120]
     return out
+
+
+# ── resilience board + chaos drill control (owner-only) ──────────────────────
+
+class ChaosArm(BaseModel):
+    dependency: str
+    fail_rate: float = 0.0      # 0..1 probability each call fails
+    latency_ms: int = 0         # extra delay injected before each call
+    ttl_s: float | None = None  # auto-disarm after N seconds (None = until cleared)
+
+
+@router.get("/resilience")
+async def admin_resilience(
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """Per-dependency metrics (calls / errors / latency), circuit-breaker states,
+    and any armed chaos. Aggregates only — no PII. Feeds the Monitoring page."""
+    from backend.services.resilience import board
+
+    return board()
+
+
+@router.post("/resilience/chaos")
+async def admin_resilience_chaos_arm(
+    body: ChaosArm,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """Arm a chaos drill against one dependency (slow it / fail it). Injection is
+    only APPLIED when CHAOS_ENABLED=true in the environment, so arming here on a
+    prod process with the flag off is a safe no-op. RULE: owner-only."""
+    from backend.services.resilience import board, set_chaos
+
+    cfg = set_chaos(body.dependency, fail_rate=body.fail_rate,
+                    latency_ms=body.latency_ms, ttl_s=body.ttl_s)
+    logger.warning("chaos_armed_by_admin", user_id=current_user.user_id,
+                   dependency=body.dependency, fail_rate=cfg["fail_rate"],
+                   latency_ms=cfg["latency_ms"])
+    return {"armed": body.dependency, "enabled": board()["chaos_enabled"], "config": {
+        "fail_rate": cfg["fail_rate"], "latency_ms": cfg["latency_ms"]}}
+
+
+@router.delete("/resilience/chaos")
+async def admin_resilience_chaos_clear(
+    dependency: str | None = None,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """Disarm chaos for one dependency, or all when no dependency is given."""
+    from backend.services.resilience import clear_chaos
+
+    clear_chaos(dependency)
+    logger.warning("chaos_cleared_by_admin", user_id=current_user.user_id,
+                   dependency=dependency or "ALL")
+    return {"cleared": dependency or "ALL"}

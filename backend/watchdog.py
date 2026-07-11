@@ -62,7 +62,9 @@ async def _email_alert(subject: str, body: str) -> None:
     if not settings.resend_api_key:
         logger.warning("watchdog_email_skipped_no_resend", subject=subject)
         return
-    try:
+    from backend.services.resilience import guard
+
+    async def _post():
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.post(
                 "https://api.resend.com/emails",
@@ -76,8 +78,11 @@ async def _email_alert(subject: str, body: str) -> None:
             )
             if r.status_code >= 300:
                 logger.error("watchdog_email_failed", status=r.status_code, body=r.text[:160])
-    except Exception as e:  # noqa: BLE001
-        logger.error("watchdog_email_error", error=str(e)[:160])
+                r.raise_for_status()  # let the breaker count a rejected send
+
+    # Shares the 'resend_email' breaker with support mail — one Resend outage
+    # opens it once for all senders. fallback=None ⇒ alerting never crashes us.
+    await guard("resend_email", _post, timeout=12, retries=0, fallback=None)
 
 
 async def _audit(component: str, event: str, detail: str, action_taken: str | None) -> None:
