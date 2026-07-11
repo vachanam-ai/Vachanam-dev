@@ -12,6 +12,8 @@ Flow:
 
 No password storage. Google handles password + 2FA.
 """
+from typing import Literal
+
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from google.auth.transport import requests as google_requests
@@ -219,7 +221,10 @@ class RegisterRequest(BaseModel):
     email: str | None = None
     password: str | None = None
     id_token: str | None = None  # Google alternative to email+password
-    plan: str = "clinic"         # solo | clinic | multi
+    # SEC: validated at the boundary — a junk plan used to hit the DB enum and
+    # 500; an out-of-enum string is now a clean 422. Keys are the internal plan
+    # ids (billing_math.PLANS); "Starter" is the DISPLAY name for solo.
+    plan: Literal["solo", "clinic", "multi"] = "clinic"
     email_otp: str | None = None  # email-OTP verification (Vinay 2026-06-15)
 
 
