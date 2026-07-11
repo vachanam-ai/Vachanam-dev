@@ -6,11 +6,13 @@ RULE 8: bot failure returns a safe refusal, never a 500.
 RULE 9: log ticket/message IDs, never bodies.
 """
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -18,14 +20,23 @@ from backend.middleware.auth_middleware import (
     CurrentUser,
     get_current_user,
     optional_current_user,
+    require_admin,
+    require_support_staff,
 )
 from backend.middleware.rate_limit import default_limit
-from backend.models.schema import SupportMessage, SupportTicket
-from backend.services import support_bot, support_kb
+from backend.models.schema import Organization, SupportMessage, SupportTicket, User
+from backend.services import support_bot, support_email, support_kb, support_macros
 from backend.services.turnstile import require_turnstile
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+# SLA target hours by priority — sla_due_at = created_at + hours[priority].
+_SLA_HOURS = {"urgent": 4, "high": 8, "normal": 24, "low": 72}
+
+
+def _sla_due(priority: str) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(hours=_SLA_HOURS.get(priority, 24))
 
 
 class ChatTurn(BaseModel):
@@ -73,6 +84,7 @@ async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(g
             status="ai_resolved" if result["answered"] else "open",
             priority="normal",
             source="in_app" if (user and user.org_id) else "public_chat",
+            sla_due_at=_sla_due("normal"),
         )
         db.add(ticket)
         await db.flush()
@@ -140,3 +152,276 @@ async def get_ticket_messages(ticket_id: uuid.UUID,
     ).scalars().all()
     return [{"sender": m.sender, "body": m.body, "created_at": m.created_at.isoformat()}
             for m in rows]
+
+
+# ── Clinic-user actions: reply to own ticket, rate a resolved ticket ─────────
+
+
+class ReplyBody(BaseModel):
+    body: str = Field(..., min_length=1, max_length=8000)
+
+
+class CsatBody(BaseModel):
+    score: int = Field(..., ge=1, le=5)
+    comment: str | None = Field(None, max_length=2000)
+
+
+@router.post("/tickets/{ticket_id}/messages")
+async def add_user_reply(ticket_id: uuid.UUID, body: ReplyBody,
+                         user: CurrentUser = Depends(get_current_user),
+                         db: AsyncSession = Depends(get_db)):
+    t = await _my_ticket(ticket_id, user, db)  # 404 if not caller's org
+    db.add(SupportMessage(ticket_id=t.id, sender="user",
+                          sender_user_id=user.user_id, body=body.body))
+    # A user reply always wants a human now — reopen unless already active.
+    if t.status in ("ai_resolved", "resolved", "closed", "pending"):
+        t.status = "open"
+    await db.commit()
+    await support_email.notify_user_reply(t.subject, user.email)  # RULE 8
+    logger.info("support_user_reply", ticket_id=str(t.id))
+    return {"ok": True, "status": t.status}
+
+
+@router.post("/tickets/{ticket_id}/csat")
+async def rate_ticket(ticket_id: uuid.UUID, body: CsatBody,
+                      user: CurrentUser = Depends(get_current_user),
+                      db: AsyncSession = Depends(get_db)):
+    t = await _my_ticket(ticket_id, user, db)
+    if t.status not in ("resolved", "closed"):
+        raise HTTPException(status_code=409, detail="Only a resolved ticket can be rated")
+    t.csat_score = body.score
+    t.csat_comment = body.comment
+    await db.commit()
+    logger.info("support_csat", ticket_id=str(t.id), score=body.score)
+    return {"ok": True}
+
+
+# ── Public / authed contact + demo form → a ticket (public lead = org_id NULL) ─
+
+
+class ContactBody(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    name: str | None = Field(None, max_length=255)
+    subject: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1, max_length=8000)
+    category: str = Field("other", max_length=32)
+
+
+_CONTACT_CATEGORIES = {"billing", "technical", "onboarding", "feature_request",
+                       "sales_demo", "other"}
+
+
+@router.post("/contact", dependencies=[Depends(default_limit), Depends(require_turnstile)])
+async def contact(body: ContactBody, request: Request, db: AsyncSession = Depends(get_db)):
+    user = await optional_current_user(request)
+    category = body.category if body.category in _CONTACT_CATEGORIES else "other"
+    ticket = SupportTicket(
+        org_id=(user.org_id if user else None),
+        email=(user.email if user else body.email),
+        name=body.name,
+        subject=body.subject,
+        category=category,
+        status="open",
+        priority="normal",
+        source="in_app" if (user and user.org_id) else "public_form",
+        sla_due_at=_sla_due("normal"),
+    )
+    db.add(ticket)
+    await db.flush()
+    db.add(SupportMessage(ticket_id=ticket.id, sender="user", body=body.body))
+    await db.commit()
+    await support_email.notify_new_ticket(ticket.id, ticket.subject, ticket.email)  # RULE 8
+    logger.info("support_contact", ticket_id=str(ticket.id),
+                org_id=str(ticket.org_id) if ticket.org_id else None)
+    return {"ok": True, "ticket_id": str(ticket.id)}
+
+
+# ── Support-staff dashboard (role 'support' or 'super_admin'; PII-locked) ──────
+
+
+def _admin_row(t: SupportTicket) -> dict:
+    return {
+        "id": str(t.id), "org_id": str(t.org_id) if t.org_id else None,
+        "email": t.email, "name": t.name, "subject": t.subject,
+        "category": t.category, "status": t.status, "priority": t.priority,
+        "source": t.source,
+        "sla_due_at": t.sla_due_at.isoformat() if t.sla_due_at else None,
+        "csat_score": t.csat_score,
+        "created_at": t.created_at.isoformat(),
+    }
+
+
+@router.get("/admin/tickets")
+async def admin_list_tickets(
+    status: str | None = None, priority: str | None = None,
+    category: str | None = None, overdue: bool = False,
+    _staff: CurrentUser = Depends(require_support_staff),
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(SupportTicket)
+    if status:
+        q = q.where(SupportTicket.status == status)
+    else:
+        q = q.where(SupportTicket.status != "ai_resolved")  # default: needs-human
+    if priority:
+        q = q.where(SupportTicket.priority == priority)
+    if category:
+        q = q.where(SupportTicket.category == category)
+    if overdue:
+        q = q.where(
+            SupportTicket.sla_due_at < datetime.now(timezone.utc),
+            SupportTicket.first_responded_at.is_(None),
+        )
+    q = q.order_by(SupportTicket.created_at.desc()).limit(500)
+    rows = (await db.execute(q)).scalars().all()
+    return [_admin_row(t) for t in rows]
+
+
+async def _any_ticket(ticket_id: uuid.UUID, db: AsyncSession) -> SupportTicket:
+    t = (
+        await db.execute(select(SupportTicket).where(SupportTicket.id == ticket_id))
+    ).scalar_one_or_none()
+    if t is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return t
+
+
+@router.get("/admin/tickets/{ticket_id}")
+async def admin_get_ticket(ticket_id: uuid.UUID,
+                           _staff: CurrentUser = Depends(require_support_staff),
+                           db: AsyncSession = Depends(get_db)):
+    return _admin_row(await _any_ticket(ticket_id, db))
+
+
+@router.get("/admin/tickets/{ticket_id}/messages")
+async def admin_ticket_messages(ticket_id: uuid.UUID,
+                                _staff: CurrentUser = Depends(require_support_staff),
+                                db: AsyncSession = Depends(get_db)):
+    await _any_ticket(ticket_id, db)
+    rows = (
+        await db.execute(
+            select(SupportMessage).where(SupportMessage.ticket_id == ticket_id)
+            .order_by(SupportMessage.created_at.asc())
+        )
+    ).scalars().all()
+    return [{"sender": m.sender, "body": m.body, "created_at": m.created_at.isoformat()}
+            for m in rows]
+
+
+@router.post("/admin/tickets/{ticket_id}/reply")
+async def admin_reply(ticket_id: uuid.UUID, body: ReplyBody,
+                      staff: CurrentUser = Depends(require_support_staff),
+                      db: AsyncSession = Depends(get_db)):
+    t = await _any_ticket(ticket_id, db)
+    db.add(SupportMessage(ticket_id=t.id, sender="staff",
+                          sender_user_id=staff.user_id, body=body.body))
+    if t.first_responded_at is None:
+        t.first_responded_at = datetime.now(timezone.utc)
+    if t.status in ("open", "ai_resolved"):
+        t.status = "pending"  # awaiting the user's next reply
+    await db.commit()
+    await support_email.notify_staff_reply(t.email, t.subject)  # RULE 8
+    logger.info("support_staff_reply", ticket_id=str(t.id), staff_id=staff.user_id)
+    return {"ok": True, "status": t.status}
+
+
+class StatusPatch(BaseModel):
+    status: str | None = None
+    priority: str | None = None
+
+
+_STATUSES = {"ai_resolved", "open", "pending", "resolved", "closed"}
+_PRIORITIES = {"low", "normal", "high", "urgent"}
+
+
+@router.patch("/admin/tickets/{ticket_id}")
+async def admin_patch_ticket(ticket_id: uuid.UUID, body: StatusPatch,
+                             staff: CurrentUser = Depends(require_support_staff),
+                             db: AsyncSession = Depends(get_db)):
+    t = await _any_ticket(ticket_id, db)
+    notify_resolved = False
+    if body.status is not None:
+        if body.status not in _STATUSES:
+            raise HTTPException(status_code=422, detail="bad status")
+        if body.status == "resolved" and t.status != "resolved":
+            t.resolved_at = datetime.now(timezone.utc)
+            notify_resolved = True
+        t.status = body.status
+    if body.priority is not None:
+        if body.priority not in _PRIORITIES:
+            raise HTTPException(status_code=422, detail="bad priority")
+        t.priority = body.priority
+    await db.commit()
+    if notify_resolved:
+        await support_email.notify_resolved(t.email, t.subject)  # RULE 8
+    logger.info("support_ticket_patched", ticket_id=str(t.id), status=t.status,
+                priority=t.priority)
+    return _admin_row(t)
+
+
+@router.get("/admin/macros")
+async def admin_macros(_staff: CurrentUser = Depends(require_support_staff)):
+    return support_macros.MACROS
+
+
+# ── Support-STAFF provisioning (super_admin only — staff can't mint staff) ─────
+
+
+class StaffCreate(BaseModel):
+    email: str = Field(..., min_length=3, max_length=255)
+    name: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
+
+
+@router.get("/admin/staff")
+async def list_staff(_admin: CurrentUser = Depends(require_admin),
+                     db: AsyncSession = Depends(get_db)):
+    rows = (
+        await db.execute(select(User).where(User.role == "support")
+                         .order_by(User.created_at.desc()))
+    ).scalars().all()
+    return [{"id": str(u.id), "email": u.email, "name": u.name} for u in rows]
+
+
+@router.post("/admin/staff")
+async def create_staff(body: StaffCreate, _admin: CurrentUser = Depends(require_admin),
+                       db: AsyncSession = Depends(get_db)):
+    from backend.routers.auth import _hash_password
+
+    email = body.email.strip().lower()
+    exists = (
+        await db.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status_code=409, detail="A user with that email already exists")
+    user = User(
+        org_id=None,  # platform-level, belongs to Vachanam not a clinic
+        email=email,
+        name=body.name.strip(),
+        role="support",
+        is_admin=False,  # NOT a super_admin — support inbox only, PII-locked
+        branch_ids=[],
+        password_hash=_hash_password(body.password),
+    )
+    db.add(user)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="A user with that email already exists")
+    logger.info("support_staff_created", staff_id=str(user.id))
+    return {"id": str(user.id), "email": user.email, "name": user.name}
+
+
+@router.delete("/admin/staff/{staff_id}")
+async def delete_staff(staff_id: uuid.UUID, _admin: CurrentUser = Depends(require_admin),
+                       db: AsyncSession = Depends(get_db)):
+    u = (
+        await db.execute(select(User).where(User.id == staff_id, User.role == "support"))
+    ).scalar_one_or_none()
+    if u is None:
+        raise HTTPException(status_code=404, detail="Support staff not found")
+    await db.delete(u)
+    await db.commit()
+    logger.info("support_staff_deleted", staff_id=str(staff_id))
+    return {"ok": True}

@@ -19,11 +19,14 @@ async def run_hourly_maintenance() -> None:
     from backend.jobs.calendar_writer import requeue_stale_in_progress
     from backend.jobs.call_scoring import run_call_scoring
     from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
+    from backend.jobs.support_sla import run_sla_escalation
 
     steps = [
         ("requeue_stale_in_progress", requeue_stale_in_progress),
         ("finalize_stale_calls", run_finalize_stale_calls),
         ("call_scoring", run_call_scoring),
+        # Support SLA escalation rides this wake (#299 — no extra Neon wake).
+        ("support_sla_escalation", run_sla_escalation),
     ]
 
     # Same guard main.py used: CDR sync only runs when Vobiz creds exist.

@@ -158,19 +158,36 @@ async def require_admin(current_user: CurrentUser = Depends(get_current_user)) -
     return current_user
 
 
+async def require_support_staff(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """Vachanam support inbox access: role 'support' OR 'super_admin'. Both are
+    platform-level and STAY locked out of clinic patient PII (forbid_admin still
+    guards those routes) — this only unlocks the support ticket dashboard, a
+    distinct support data class. A clinic user (org_admin/receptionist/doctor)
+    is 403."""
+    if current_user.role not in ("support", "super_admin"):
+        logger.warning("support_staff_access_denied", user_id=current_user.user_id,
+                       role=current_user.role)
+        raise HTTPException(status_code=403, detail="Support staff access required")
+    return current_user
+
+
 async def forbid_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-    """Dependency that blocks super_admin from PII-touching routes.
+    """Dependency that blocks PLATFORM staff (super_admin + support) from
+    PII-touching routes.
 
     Applied to routes that don't use assert_branch_access (e.g. /doctor/me/*).
     Per sub-spec A §5.6: platform admin (Vinay) cannot access clinic data
     outside /admin/* aggregate endpoints. This is a DPDP Act 2023 boundary —
-    Vachanam is the Data Processor, clinics are the Data Fiduciary.
+    Vachanam is the Data Processor, clinics are the Data Fiduciary. The 'support'
+    role (Vachanam support staff) shares the exact same lockout — it may read
+    support tickets, never clinic patient data.
     """
-    if current_user.role == "super_admin":
+    if current_user.role in ("super_admin", "support"):
         logger.warning(
-            "super_admin_pii_access_blocked",
+            "platform_staff_pii_access_blocked",
             user_id=current_user.user_id,
             email=current_user.email,
+            role=current_user.role,
         )
         raise HTTPException(
             status_code=403,
