@@ -15,7 +15,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, jwt
 
@@ -119,6 +119,34 @@ async def get_current_user(
         branch_ids=payload.get("branch_ids", []) or [],
         is_admin=bool(payload.get("is_admin", False)),
         jti=jti,
+    )
+
+
+async def optional_current_user(request: Request) -> "CurrentUser | None":
+    """Auth for public+authed routes (e.g. /support/chat): a valid Bearer token
+    resolves to a CurrentUser, anything else (missing / garbage / expired) is
+    anonymous → None. NEVER raises (unlike get_current_user via
+    HTTPBearer(auto_error=True)). No revocation check — this path exposes no
+    clinic data, so a near-expiry token resolving to a benign identity is fine.
+    """
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    token = header[7:].strip()
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[_ALGORITHM])
+    except JWTError:
+        return None
+    return CurrentUser(
+        user_id=payload.get("sub"),
+        email=payload.get("email"),
+        role=payload.get("role"),
+        org_id=payload.get("org_id"),
+        branch_ids=payload.get("branch_ids", []) or [],
+        is_admin=bool(payload.get("is_admin", False)),
+        jti=payload.get("jti"),
     )
 
 
