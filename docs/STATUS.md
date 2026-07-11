@@ -5,7 +5,7 @@
 > audience-filtered) + a Gemini-grounded chatbot (`/support/chat`) that
 > auto-logs ONE ticket per chat — answered→`ai_resolved`, stuck→`open` (the
 > human fallback). New `support_tickets`+`support_messages` (migration `aa24`,
-> **NOT applied to prod** — `/support/*` routes 500 until Vinay applies it).
+> **APPLIED to prod 2026-07-11** — prod head now `aa24`; `/support/kb` live 200).
 > Org-scoped ticket reads (IDOR-walled). Frontend: public `/help` (KB search +
 > chat) + in-app `/tickets` thread + Support nav. `"support"` role value added
 > (no route yet). Bot: RULE 1 (no clinic-data access), RULE 8 (safe refusal),
