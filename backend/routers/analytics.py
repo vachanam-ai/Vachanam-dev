@@ -74,6 +74,31 @@ class WeekdayLoad(BaseModel):
     bookings: int
 
 
+class LifetimeTotals(BaseModel):
+    """Since-day-one counters (dashboard lifetime band, 2026-07-11)."""
+    bookings: int   # every non-cancelled booking ever
+    calls: int      # every answered call ever
+    patients: int   # distinct patients on file (primary rows)
+    minutes: int    # total AI voice minutes ever
+
+
+class MonthTotals(BaseModel):
+    bookings: int
+    calls: int
+    new_patients: int
+
+
+class HourLoad(BaseModel):
+    hour: int   # branch-local, 0-23 (UI shows 8-21)
+    calls: int
+
+
+class HourCell(BaseModel):
+    weekday: int  # 0=Mon .. 6=Sun
+    hour: int     # branch-local
+    calls: int
+
+
 class Overview(BaseModel):
     today: DayPoint
     pending_today: int  # confirmed, not yet marked
@@ -87,6 +112,9 @@ class Overview(BaseModel):
     minutes: MinutesUsage  # this month vs plan
     attendance_rate: float | None  # period: attended / (attended + no_show)
     weekday_load: list[WeekdayLoad]  # bookings per weekday over the period
+    lifetime: LifetimeTotals
+    month: MonthTotals
+    hourly_by_weekday: list[HourCell]  # peak-hours heatmap grid (period)
 
 
 def _show_rate(attended: int, no_show: int) -> float | None:
@@ -397,7 +425,93 @@ async def analytics_overview(
     included = included_minutes_for(plan or "clinic", org_status or "active", adj or 0)
     used_min = int(used_seconds // 60)
 
-    # â”€â”€ Attendance rate + weekday load over the period â”€â”€
+    # ── Lifetime + this-month totals + peak-hours grid (2026-07-11 overhaul) ──
+    lifetime_bookings = (
+        await db.execute(
+            select(func.count()).select_from(Token).where(
+                and_(Token.branch_id == branch_uuid, Token.status.in_(ACTIVE))
+            )
+        )
+    ).scalar_one()
+    lifetime_calls = (
+        await db.execute(
+            select(func.count()).select_from(CallLog).where(
+                and_(CallLog.branch_id == branch_uuid, CallLog.answered.is_(True))
+            )
+        )
+    ).scalar_one()
+    lifetime_patients = (
+        await db.execute(
+            select(func.count()).select_from(Patient).where(
+                and_(Patient.branch_id == branch_uuid, Patient.is_primary.is_(True))
+            )
+        )
+    ).scalar_one()
+    lifetime_seconds = (
+        await db.execute(
+            select(func.coalesce(func.sum(CallLog.duration_seconds), 0)).where(
+                CallLog.branch_id == branch_uuid
+            )
+        )
+    ).scalar_one()
+
+    month_bookings = (
+        await db.execute(
+            select(func.count()).select_from(Token).where(
+                and_(
+                    Token.branch_id == branch_uuid,
+                    Token.status.in_(ACTIVE),
+                    Token.date >= month_start,
+                )
+            )
+        )
+    ).scalar_one()
+    month_calls = (
+        await db.execute(
+            select(func.count()).select_from(CallLog).where(
+                and_(
+                    CallLog.branch_id == branch_uuid,
+                    CallLog.answered.is_(True),
+                    _call_day >= month_start,
+                )
+            )
+        )
+    ).scalar_one()
+    month_new_patients = (
+        await db.execute(
+            select(func.count()).select_from(Patient).where(
+                and_(
+                    Patient.branch_id == branch_uuid,
+                    func.date(func.timezone(_patient_tz, Patient.created_at)) >= month_start,
+                )
+            )
+        )
+    ).scalar_one()
+
+    # Peak-hours grid: weekday × hour of answered calls over the selected
+    # period, in the BRANCH timezone (same M13 discipline as the day series).
+    _local_ts = func.timezone(_tzname, CallLog.started_at)
+    _dow = cast(func.extract("isodow", _local_ts), Integer)  # 1=Mon..7=Sun
+    _hr = cast(func.extract("hour", _local_ts), Integer)
+    hour_rows = (
+        await db.execute(
+            select(_dow, _hr, func.count())
+            .where(
+                and_(
+                    CallLog.branch_id == branch_uuid,  # Rule 1
+                    CallLog.answered.is_(True),
+                    _call_day >= start,
+                )
+            )
+            .group_by(_dow, _hr)
+        )
+    ).all()
+    hourly_by_weekday = [
+        HourCell(weekday=int(dow) - 1, hour=int(h), calls=n)
+        for dow, h, n in hour_rows
+    ]
+
+    # ── Attendance rate + weekday load over the period ──
     total_attended = sum(d.attended for d in daily)
     total_no_show = sum(d.no_show for d in daily)
     weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -420,6 +534,18 @@ async def analytics_overview(
             pct=round(min(used_min / included, 1.0) * 100, 1) if included else 0.0,
         ),
         attendance_rate=_show_rate(total_attended, total_no_show),
+        lifetime=LifetimeTotals(
+            bookings=lifetime_bookings,
+            calls=lifetime_calls,
+            patients=lifetime_patients,
+            minutes=int(lifetime_seconds // 60),
+        ),
+        month=MonthTotals(
+            bookings=month_bookings,
+            calls=month_calls,
+            new_patients=month_new_patients,
+        ),
+        hourly_by_weekday=hourly_by_weekday,
         weekday_load=[
             WeekdayLoad(weekday=weekday_names[i], bookings=weekday_counts[i])
             for i in range(7)

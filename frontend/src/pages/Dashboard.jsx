@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAnalytics, fetchCallQuality, fetchTodayQueue } from "../api/client.js";
+import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
+import Heatmap from "../components/dash/Heatmap.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { countUp, revealStagger } from "../lib/motion.js";
 
@@ -33,95 +35,63 @@ function QStat({ label, value, sub, suffix = "" }) {
   );
 }
 
-/* 14-day stacked bars (attended / no-show / cancelled) + show-rate line.
-   Motion (GSAP, Emil Kowalski principles): bars grow from their baseline
-   (origin-aware transform, not opacity-only), staggered left→right so the
-   eye reads time; the show-rate line draws itself after the bars land.
-   power3.out = fast start, soft landing — interruptible, never bouncy. */
-function TrendChart({ daily, calls }) {
-  const svgRef = useRef(null);
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    let mm;
-    import("gsap").then(({ gsap }) => {
-      // gsap.matchMedia: bars/line animate only when motion is welcome;
-      // reduced-motion users get the chart instantly (gsap-core a11y rule).
-      mm = gsap.matchMedia();
-      mm.add("(prefers-reduced-motion: no-preference)", () => {
-        gsap.fromTo(
-          svg.querySelectorAll("rect"),
-          { scaleY: 0, transformOrigin: "center bottom" },
-          { scaleY: 1, duration: 0.55, ease: "power3.out", stagger: 0.018 }
-        );
-        svg.querySelectorAll("polyline").forEach((line, i) => {
-          if (line.getAttribute("stroke-dasharray")) {
-            // dashed calls line: dash-draw would erase its pattern — fade it
-            gsap.fromTo(line, { autoAlpha: 0 }, { autoAlpha: 0.85, duration: 0.6, delay: 0.6 });
-            return;
-          }
-          const len = line.getTotalLength();
-          gsap.fromTo(
-            line,
-            { strokeDasharray: len, strokeDashoffset: len },
-            { strokeDashoffset: 0, duration: 0.8, ease: "power2.inOut", delay: 0.4 + i * 0.15 }
-          );
-        });
-      });
-    });
-    return () => mm?.revert();
-  }, [daily]);
-  const W = 720, H = 220, PAD = 28, BW = Math.max(8, (W - PAD * 2) / Math.max(daily.length, 1) - 8);
-  const maxBooked = Math.max(1, ...daily.map((d) => d.booked + d.cancelled));
-  const x = (i) => PAD + i * ((W - PAD * 2) / Math.max(daily.length, 1)) + 4;
-  const yh = (n) => (n / maxBooked) * (H - PAD * 2);
-  const ratePts = daily
-    .map((d, i) => (d.show_rate === null ? null : `${x(i) + BW / 2},${H - PAD - d.show_rate * (H - PAD * 2)}`))
-    .filter(Boolean)
-    .join(" ");
-  // Calls-answered line shares the chart (incorporated, per Vinay) on its own
-  // implicit scale so a quiet day still shows shape.
-  const maxCalls = Math.max(1, ...(calls ?? []).map((c) => c.calls));
-  const callPts = (calls ?? [])
-    .map((c, i) => `${x(i) + BW / 2},${H - PAD - (c.calls / maxCalls) * (H - PAD * 2) * 0.9}`)
-    .join(" ");
+/* Lifetime band — "since day one" counters, white numerals on deep teal. */
+function LifetimeBand({ lifetime }) {
+  const items = [
+    ["bookings", "Bookings", lifetime?.bookings],
+    ["calls", "Calls answered", lifetime?.calls],
+    ["patients", "Patients", lifetime?.patients],
+    ["minutes", "Voice minutes", lifetime?.minutes],
+  ];
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Daily bookings and show rate">
-      {[0.25, 0.5, 0.75, 1].map((g) => (
-        <line key={g} x1={PAD} x2={W - PAD} y1={H - PAD - g * (H - PAD * 2)} y2={H - PAD - g * (H - PAD * 2)}
-          stroke="#0f3d3a" strokeOpacity="0.08" strokeDasharray="3 5" />
+    <div data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-teal-deep px-6 py-4 text-white shadow-lift">
+      <p className="eyebrow !text-teal-pale/80">Since day one</p>
+      {items.map(([k, label, v]) => (
+        <LifetimeStat key={k} label={label} value={v ?? 0} />
       ))}
-      {daily.map((d, i) => {
-        const att = yh(d.attended), ns = yh(d.no_show), pend = yh(Math.max(d.booked - d.attended - d.no_show, 0)), can = yh(d.cancelled);
-        let y = H - PAD;
-        const seg = (h, fill, key, rx = 0) => {
-          y -= h;
-          return h > 0 ? <rect key={key} x={x(i)} y={y} width={BW} height={h} fill={fill} rx={rx} /> : null;
-        };
-        return (
-          <g key={d.date}>
-            {seg(att, "#0e7490", "a")}
-            {seg(pend, "#99d6cc", "p")}
-            {seg(ns, "#d97706", "n")}
-            {seg(can, "#cbd5d1", "c", 2)}
-            <title>{`${d.date}: ${d.booked} booked, ${d.attended} seen, ${d.no_show} no-show, ${d.cancelled} cancelled`}</title>
-          </g>
-        );
-      })}
-      {ratePts && <polyline points={ratePts} fill="none" stroke="#b7791f" strokeWidth="2.5" strokeLinecap="round" />}
-      {callPts && (
-        <polyline points={callPts} fill="none" stroke="#155e75" strokeWidth="2"
-          strokeDasharray="5 4" strokeLinecap="round" opacity="0.85" />
-      )}
-      {daily.map((d, i) =>
-        i % Math.ceil(daily.length / 7) === 0 ? (
-          <text key={d.date} x={x(i) + BW / 2} y={H - 8} textAnchor="middle"
-            className="fill-slate" fontSize="10" fontFamily="ui-sans-serif">
-            {d.date.slice(5)}
-          </text>
-        ) : null
-      )}
-    </svg>
+    </div>
+  );
+}
+
+function LifetimeStat({ label, value }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    countUp(ref.current, value ?? 0, { duration: 1.4 });
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <p className="font-ui text-sm text-teal-pale/90">
+      <span ref={ref} className="numeral mr-1.5 text-2xl font-semibold text-white">0</span>
+      {label}
+    </p>
+  );
+}
+
+/* This-month mini stats beside the minutes donut. */
+function MonthBlock({ month }) {
+  const rows = [
+    ["Bookings", month?.bookings],
+    ["Calls answered", month?.calls],
+    ["New patients", month?.new_patients],
+  ];
+  return (
+    <div className="space-y-2.5">
+      {rows.map(([label, v]) => (
+        <MonthRow key={label} label={label} value={v ?? 0} />
+      ))}
+    </div>
+  );
+}
+
+function MonthRow({ label, value }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    countUp(ref.current, value ?? 0, { duration: 1.0 });
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="flex items-baseline justify-between rounded-lg bg-teal-mint/50 px-3 py-2">
+      <span className="font-ui text-xs text-slate">{label}</span>
+      <span ref={ref} className="numeral text-xl text-teal-deep">0</span>
+    </div>
   );
 }
 
@@ -213,26 +183,6 @@ function WeekdayBars({ load }) {
   );
 }
 
-function Legend() {
-  const items = [
-    ["#0e7490", "Seen"],
-    ["#99d6cc", "Upcoming"],
-    ["#d97706", "No-show"],
-    ["#cbd5d1", "Cancelled"],
-    ["#b7791f", "Show-rate line"],
-    ["#155e75", "Calls answered (dashed)"]
-  ];
-  return (
-    <div className="flex flex-wrap gap-4">
-      {items.map(([c, l]) => (
-        <span key={l} className="flex items-center gap-1.5 font-ui text-xs text-slate">
-          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: c }} /> {l}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 const SOURCE_LABEL = { voice: "AI voice calls", walk_in: "Walk-ins", whatsapp: "WhatsApp" };
 
 const fmtDay = (iso) =>
@@ -315,13 +265,22 @@ export default function Dashboard() {
           suffix="%" sub="attended of seen-or-missed" />
       </div>
 
-      {/* Minutes + busiest weekdays */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* Lifetime totals — since day one */}
+      {an?.lifetime && <LifetimeBand lifetime={an.lifetime} />}
+
+      {/* Minutes + this month + busiest weekdays */}
+      <div className="grid gap-6 lg:grid-cols-3">
         <section data-reveal className="card overflow-hidden">
           <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Voice minutes · this month</h2>
           </header>
           <div className="px-5 py-4"><MinutesDonut minutes={an?.minutes} /></div>
+        </section>
+        <section data-reveal className="card overflow-hidden">
+          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+            <h2 className="font-display text-lg font-semibold">This month</h2>
+          </header>
+          <div className="px-5 py-4"><MonthBlock month={an?.month} /></div>
         </section>
         <section data-reveal className="card overflow-hidden">
           <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
@@ -350,8 +309,17 @@ export default function Dashboard() {
           {an?.daily?.length ? <TrendChart daily={an.daily} calls={an.calls_daily} /> : (
             <p className="font-ui text-sm text-slate">Charts appear after your first bookings.</p>
           )}
-          <Legend />
+          <ChartLegend />
         </div>
+      </section>
+
+      {/* Peak hours — when the phone actually rings */}
+      <section data-reveal className="card overflow-hidden">
+        <header className="flex items-center justify-between border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <h2 className="font-display text-lg font-semibold">Peak hours · {days}d</h2>
+          <span className="font-ui text-xs text-slate">calls by weekday &amp; hour</span>
+        </header>
+        <div className="px-5 py-4"><Heatmap cells={an?.hourly_by_weekday} /></div>
       </section>
 
       {/* Call quality — how the AI receptionist is actually performing */}
