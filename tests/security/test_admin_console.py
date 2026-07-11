@@ -111,8 +111,8 @@ async def test_overview_money_and_usage_math(client, biz_org):
     data = r.json()
     row = next(c for c in data["clients"] if c["org_id"] == str(biz_org["org"].id))
     assert row["minutes_used"] == 120.0
-    assert row["minutes_included"] == 1800
-    assert row["minutes_left"] == 1680.0
+    assert row["minutes_included"] == 1500  # clinic plan (repriced 2026-07-11)
+    assert row["minutes_left"] == 1380.0  # 1500 - 120
     assert row["revenue_month"] == 9999  # active clinic within bucket
     assert row["expense_month"] == round(120 * 2.0 + 1000, 2)  # 1 DID
     assert row["profit_month"] == round(9999 - (120 * 2.0 + 1000), 2)
