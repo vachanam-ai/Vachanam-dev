@@ -437,15 +437,28 @@ export default function Settings() {
               </strong>
             </span>
           )}
-          {plan.data && (plan.data.status !== "active" ||
-            (plan.data.cycle_end &&
-              (new Date(plan.data.cycle_end) - Date.now()) / 86400000 <= 5)) && (
+          {/* The pay button is ALWAYS visible (#351 — an active org with no
+              paid cycle had NO way to pay at all). Early renewals are safe:
+              the new cycle starts when the current one ends, nothing is lost. */}
+          {plan.data && (
             <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
               {paying ? "Opening payment…"
-                : `${plan.data.status === "active" ? "Renew" : "Activate"} — ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")} + GST${plan.data.status === "active" ? " & usage" : ""}`}
+                : `${plan.data.status !== "active" ? "Activate"
+                    : plan.data.cycle_end ? "Renew" : "Pay"} — ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")} + GST${plan.data.status === "active" && plan.data.cycle_end ? " & usage" : ""}`}
             </button>
           )}
         </div>
+        {plan.data?.status === "active" && plan.data.cycle_end &&
+          (new Date(plan.data.cycle_end) - Date.now()) / 86400000 > 5 && (
+          <p className="mt-2 font-ui text-xs text-slate">
+            Renewing early? Your new 30 days start when the current cycle ends — you lose nothing.
+          </p>
+        )}
+        {plan.data?.status === "active" && !plan.data.cycle_end && (
+          <p className="mt-2 font-ui text-xs text-slate">
+            Your line is active without a paid cycle. Paying starts your 30-day billing cycle today.
+          </p>
+        )}
         {plan.data && plan.data.status !== "active" && (
           <p className="mt-2 font-ui text-xs text-slate">
             UPI, card or netbanking via Razorpay. Your line activates the moment payment succeeds,
