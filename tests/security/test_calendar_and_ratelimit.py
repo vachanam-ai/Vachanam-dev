@@ -88,8 +88,22 @@ def test_pii_list_endpoints_carry_rate_limiter():
         "/analytics/overview",
         "/analytics/call-quality",
     }
+
+    def _api_routes():
+        # FastAPI >=0.139 keeps included routers LAZY: app.routes holds
+        # _IncludedRouter objects with no .path until materialized (#346 —
+        # this test silently matched zero routes on CI). Their
+        # effective_route_contexts() yields resolved routes with full
+        # .path and .dependant; older FastAPI flattens into app.routes.
+        for route in app.routes:
+            ctxs = getattr(route, "effective_route_contexts", None)
+            if callable(ctxs):
+                yield from ctxs()
+            else:
+                yield route
+
     seen = {}
-    for route in app.routes:
+    for route in _api_routes():
         path = getattr(route, "path", None)
         if path in want:
             deps = getattr(getattr(route, "dependant", None), "dependencies", [])

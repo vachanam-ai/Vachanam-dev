@@ -62,7 +62,11 @@ def test_list_voices_no_filter_returns_all(fake_waves):
 def test_clone_voice_returns_voice_id(fake_waves, monkeypatch):
     # clone_voice() posts to smallest.ai with raw httpx (NOT the mocked SDK), so
     # mock httpx.post here — otherwise the test hits the live API and 500s.
+    # The key check runs before the mocked post — stub it so the test passes
+    # in environments without SMALLEST_API_KEY (CI has no .env, #346).
     import httpx
+
+    monkeypatch.setattr(sv.settings, "smallest_api_key", "test-smallest-key")
 
     class _Resp:
         status_code = 200

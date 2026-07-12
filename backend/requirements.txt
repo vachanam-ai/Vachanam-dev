@@ -1,4 +1,7 @@
-fastapi>=0.110.0
+# Pinned exactly (#346): the >=0.110 float let CI/prod drift onto new
+# releases with behavior changes (0.139 made include_router lazy and broke
+# route introspection). Bump deliberately, full suite green on the new pin.
+fastapi==0.139.0
 uvicorn[standard]>=0.29.0
 sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
