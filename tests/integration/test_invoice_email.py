@@ -1,7 +1,6 @@
-"""#342: detailed payment invoice/receipt emailed on webhook-confirmed payment.
-
-Receipt mode until VACHANAM_GSTIN is set; tax-invoice mode after. Clinic's own
-GSTIN (Settings → Plan & billing) printed for input credit. RULE 8: a mail
+"""#342/#357/#358: payment receipt — Stripe-style HTML card + PDF attachment,
+same numbers the order charged. GSTIN removed from all documents (Vinay,
+#358 — returns with TD-038 when GST registration lands). RULE 8: a mail
 failure never un-activates a paid org.
 """
 import uuid
@@ -12,7 +11,12 @@ import pytest
 from backend.config import settings
 from backend.models.schema import Organization
 from backend.services.billing_math import subscription_order_breakdown
-from backend.services.invoice_email import build_invoice_text, invoice_number
+from backend.services.invoice_email import (
+    build_invoice_html,
+    build_invoice_pdf,
+    build_invoice_text,
+    invoice_number,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -21,41 +25,95 @@ def _bd_clinic_50_over():
     return subscription_order_breakdown("clinic", cycle_minutes_used=1550)
 
 
-@pytest.mark.asyncio
-async def test_receipt_mode_without_our_gstin(monkeypatch):
-    monkeypatch.setattr(settings, "vachanam_gstin", "")
+def test_text_receipt_numbers_and_no_gstin():
     subject, text = build_invoice_text(
-        org_name="Sunrise Dental", org_gstin="36ABCDE1234F1Z5", plan="clinic",
+        org_name="Sunrise Dental", plan="clinic",
         cycle_start=date(2026, 7, 12), cycle_end=date(2026, 8, 11),
         bd=_bd_clinic_50_over(), payment_id="pay_ABC123xyz",
     )
-    assert "Payment receipt" in subject
-    assert "GST registration in progress" in text
-    assert "Sunrise Dental (GSTIN: 36ABCDE1234F1Z5)" in text
-    assert "Extra usage: 50 min x Rs 5/min" in text
-    assert "12,093.82" in text  # total with GST
-    assert "1,844.82" in text   # GST line
+    assert "receipt" in subject.lower()
+    assert "12,093.82" in text      # amount paid (with GST)
+    assert "1,844.82" in text       # GST line
+    assert "Extra usage" in text and "50 min" in text
     assert "pay_ABC123xyz" in text
+    assert "GSTIN" not in text      # #358: removed everywhere
+    assert "registration" not in text
 
 
-@pytest.mark.asyncio
-async def test_tax_invoice_mode_with_our_gstin(monkeypatch):
-    monkeypatch.setattr(settings, "vachanam_gstin", "36AAACV1234A1Z5")
-    subject, text = build_invoice_text(
-        org_name="SmileCare", org_gstin=None, plan="solo",
+def test_html_receipt_card():
+    html = build_invoice_html(
+        org_name="Sunrise Dental", plan="clinic",
         cycle_start=date(2026, 7, 12), cycle_end=date(2026, 8, 11),
-        bd=subscription_order_breakdown("solo"), payment_id="pay_Z9",
+        bd=_bd_clinic_50_over(), payment_id="pay_ABC123xyz",
     )
-    assert "Tax invoice" in subject
-    assert "GSTIN: 36AAACV1234A1Z5" in text
-    assert "Extra usage:" not in text  # first activation, no overage LINE ITEM
-    # (the footer's generic "Extra usage beyond your plan…" note is fine)
-    assert "7,078.82" in text  # 5999 × 1.18
+    assert "Receipt from Vachanam" in html
+    assert "12,093.82" in html
+    assert "GST &middot; India (18%)" in html
+    assert "Amount paid" in html
+    assert "VAC-20260712-123XYZ" in html
+    assert "GSTIN" not in html
 
 
 def test_invoice_number_unique_and_traceable():
-    a = invoice_number(date(2026, 7, 12), "pay_ABC123xyz")
-    assert a == "VAC-20260712-123XYZ"
+    assert invoice_number(date(2026, 7, 12), "pay_ABC123xyz") == "VAC-20260712-123XYZ"
+
+
+def test_invoice_pdf_builds_without_gstin():
+    pdf = build_invoice_pdf(
+        org_name="Sunrise Dental", plan="clinic",
+        cycle_start=date(2026, 7, 12), cycle_end=date(2026, 8, 11),
+        bd=_bd_clinic_50_over(), payment_id="pay_ABC123xyz",
+    )
+    assert pdf.startswith(b"%PDF") and len(pdf) > 1200
+
+
+async def test_send_attaches_pdf_and_html(monkeypatch):
+    """#357/#358: Resend payload = text + HTML card + base64 PDF named after
+    the receipt number; PDF build failure degrades gracefully."""
+    import backend.services.invoice_email as ie
+
+    monkeypatch.setattr(settings, "resend_api_key", "re_test", raising=False)
+
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, headers=None, json=None):
+            captured.update(json)
+            return _Resp()
+
+    monkeypatch.setattr(ie.httpx, "AsyncClient", _Client)
+    await ie.send_payment_invoice(
+        to_email="owner@clinic.in", org_name="Sunrise Dental",
+        plan="clinic", cycle_start=date(2026, 7, 12),
+        cycle_end=date(2026, 8, 11), bd=_bd_clinic_50_over(),
+        payment_id="pay_ABC123xyz",
+    )
+    assert "Receipt from Vachanam" in captured.get("html", "")
+    atts = captured.get("attachments")
+    assert atts and atts[0]["filename"] == "VAC-20260712-123XYZ.pdf"
+    import base64 as b64
+    assert b64.b64decode(atts[0]["content"]).startswith(b"%PDF")
+
+    captured.clear()
+    monkeypatch.setattr(ie, "build_invoice_pdf",
+                        lambda **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    await ie.send_payment_invoice(
+        to_email="owner@clinic.in", org_name="Sunrise Dental",
+        plan="clinic", cycle_start=date(2026, 7, 12),
+        cycle_end=date(2026, 8, 11), bd=_bd_clinic_50_over(),
+        payment_id="pay_ABC123xyz",
+    )
+    assert "attachments" not in captured and captured.get("subject")
 
 
 async def test_activation_sends_invoice(db, monkeypatch):
@@ -72,7 +130,7 @@ async def test_activation_sends_invoice(db, monkeypatch):
     org = Organization(
         name="Invoice Clinic", owner_phone="+919000000070",
         owner_email=f"inv-{uuid.uuid4().hex[:8]}@clinic.in",
-        plan="solo", status="trial", gstin="36ABCDE1234F1Z5",
+        plan="solo", status="trial",
     )
     db.add(org)
     await db.commit()
@@ -81,11 +139,12 @@ async def test_activation_sends_invoice(db, monkeypatch):
     res = await activate_subscription(db, str(org.id), "solo", f"pay_{uuid.uuid4().hex[:10]}")
     assert res == "activated"
     assert sent["to_email"] == org.owner_email
-    assert sent["org_gstin"] == "36ABCDE1234F1Z5"
     assert sent["bd"]["base"] == 5999
 
 
 async def test_gstin_endpoint_validates_and_saves(db):
+    """API kept (#358 removed only the Settings UI field) — a clinic that
+    mails us their GSTIN can still have it stored for TD-038 later."""
     from backend.middleware.auth_middleware import CurrentUser
     from backend.routers.payments import GstinBody, set_gstin
 
@@ -101,11 +160,11 @@ async def test_gstin_endpoint_validates_and_saves(db):
                        org_id=str(org.id), branch_ids=[], is_admin=False, jti="j")
 
     info = await set_gstin(GstinBody(gstin="36abcde1234f1z5"), user, db)
-    assert info.gstin == "36ABCDE1234F1Z5"  # uppercased + saved
+    assert info.gstin == "36ABCDE1234F1Z5"
 
     with pytest.raises(Exception) as ei:
         await set_gstin(GstinBody(gstin="INVALID-GSTIN!!"), user, db)
     assert getattr(ei.value, "status_code", None) == 422
 
-    info = await set_gstin(GstinBody(gstin=""), user, db)  # clear
+    info = await set_gstin(GstinBody(gstin=""), user, db)
     assert info.gstin is None

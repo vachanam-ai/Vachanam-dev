@@ -4,11 +4,57 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#006B6B" />
-    <title>Vachanam — AI receptionist for Indian clinics</title>
+    <title>Vachanam — AI Voice Agent &amp; Receptionist for Clinics in India</title>
     <meta
       name="description"
-      content="Vachanam answers your clinic's calls in Telugu, books appointments with atomic tokens, syncs Google Calendar, and never misses a patient. Healing starts with being heard."
+      content="AI voice agent for clinics: Vachanam answers every patient call in Telugu, Hindi or English, books appointments, syncs Google Calendar and sends reminders — so your clinic never misses a patient. Built in India for dental, skin and diagnostic clinics."
     />
+    <link rel="canonical" href="https://vachanam.in/" />
+
+    <!-- Social cards -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Vachanam" />
+    <meta property="og:title" content="Vachanam — AI Voice Agent & Receptionist for Clinics" />
+    <meta property="og:description" content="Your clinic's calls answered by AI in Telugu, Hindi or English. Appointments booked, calendar synced, patients reminded — from ₹5,999/month." />
+    <meta property="og:url" content="https://vachanam.in/" />
+    <meta property="og:image" content="https://vachanam.in/favicon.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Vachanam — AI Voice Agent for Clinics in India" />
+    <meta name="twitter:description" content="AI answers your clinic's calls, books appointments and never misses a patient. Telugu-first, built for Indian clinics." />
+
+    <!-- Structured data: what Google shows for "AI voice agent for clinics" style queries -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Organization",
+          "@id": "https://vachanam.in/#org",
+          "name": "Vachanam",
+          "url": "https://vachanam.in/",
+          "logo": "https://vachanam.in/favicon.png",
+          "slogan": "Healing starts with being heard.",
+          "email": "hello@vachanam.in",
+          "address": { "@type": "PostalAddress", "addressLocality": "Hyderabad", "addressCountry": "IN" }
+        },
+        {
+          "@type": "SoftwareApplication",
+          "name": "Vachanam — AI Voice Agent for Clinics",
+          "applicationCategory": "BusinessApplication",
+          "operatingSystem": "Web",
+          "url": "https://vachanam.in/",
+          "provider": { "@id": "https://vachanam.in/#org" },
+          "description": "AI voice agent and receptionist for Indian clinics. Answers patient calls in Telugu, Hindi and English, matches the right doctor, books appointments without double-booking, syncs Google Calendar and sends reminders.",
+          "keywords": "AI voice agent for clinics, AI receptionist for clinics, clinic appointment booking AI, AI phone answering for doctors, Telugu voice agent, clinic call automation India",
+          "offers": [
+            { "@type": "Offer", "name": "Starter", "price": "5999", "priceCurrency": "INR" },
+            { "@type": "Offer", "name": "Clinic", "price": "9999", "priceCurrency": "INR" },
+            { "@type": "Offer", "name": "Multi", "price": "17999", "priceCurrency": "INR" }
+          ]
+        }
+      ]
+    }
+    </script>
     <script>
       // Apply the saved theme BEFORE first paint — prevents light-flash.
       try {

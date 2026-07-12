@@ -102,7 +102,7 @@ export default function Landing() {
         />
         <div className="mx-auto grid max-w-6xl gap-12 px-4 py-20 lg:grid-cols-[1.15fr_1fr] lg:py-28">
           <div>
-            <p data-hero className="eyebrow">Indian-language voice AI for clinics</p>
+            <p data-hero className="eyebrow">AI voice agent &amp; receptionist for Indian clinics</p>
             <h1 data-hero className="mt-4 font-display text-5xl font-semibold leading-[1.05] tracking-tight sm:text-6xl">
               Every missed call is a
               <span className="relative whitespace-nowrap">
@@ -121,7 +121,7 @@ export default function Landing() {
               <a href="#voices" className="btn-ghost px-6 py-3">Hear the voices</a>
             </div>
             <p data-hero className="mt-4 font-ui text-xs text-slate">
-              No credit card · 1,000 free minutes · cancel anytime
+              No credit card · 300 free minutes (≈100 calls) · cancel anytime
             </p>
           </div>
 

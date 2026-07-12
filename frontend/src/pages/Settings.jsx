@@ -14,7 +14,6 @@ import {
   registerClonedVoice,
   removeClonedVoice,
   saveBranchFaq,
-  saveGstin,
   setBranchVoice,
   testCalendar,
   updateBranchSettings,
@@ -175,18 +174,6 @@ export default function Settings() {
       else toast.success("Scheduled change cancelled");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change plan")
-  });
-
-  // GSTIN — printed on payment invoices for the clinic's input-tax credit.
-  const [gstin, setGstin] = useState("");
-  useEffect(() => { setGstin(plan.data?.gstin ?? ""); }, [plan.data?.gstin]);
-  const gstinSave = useMutation({
-    mutationFn: () => saveGstin(gstin.trim().toUpperCase()),
-    onSuccess: (d) => {
-      qc.setQueryData(["plan"], d);
-      toast.success(d.gstin ? "GSTIN saved — it will appear on your invoices" : "GSTIN cleared");
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not save GSTIN")
   });
 
   // Real payment: server-priced Razorpay order → checkout modal → server-side
@@ -489,23 +476,11 @@ export default function Settings() {
             <strong>{plan.data.pending_plan_effective}</strong>. Pick your current plan to cancel.
           </InfoBox>
         )}
-        <div className="mt-4 flex flex-wrap items-end gap-2">
-          <div>
-            <label className="label">Clinic GSTIN (optional)</label>
-            <input className="field w-[240px] uppercase" placeholder="36ABCDE1234F1Z5"
-              maxLength={15} value={gstin}
-              onChange={(e) => setGstin(e.target.value.toUpperCase())} />
-          </div>
-          <button type="button" className="btn-ghost"
-            disabled={gstinSave.isPending || (gstin ?? "") === (plan.data?.gstin ?? "")}
-            onClick={() => gstinSave.mutate()}>
-            {gstinSave.isPending ? "Saving…" : "Save"}
-          </button>
-          <p className="w-full font-ui text-xs text-slate">
-            Printed on your payment invoices so your clinic can claim GST input credit.
-            A detailed invoice is emailed to you after every successful payment.
-          </p>
-        </div>
+        {/* #358: GSTIN field removed on Vinay's call ("complicates things") —
+            the /api/billing/gstin endpoint stays for TD-038. */}
+        <p className="mt-3 font-ui text-xs text-slate">
+          A detailed receipt (PDF attached) is emailed to you after every successful payment.
+        </p>
       </Section>
 
       {/* 1 — Clinic details */}

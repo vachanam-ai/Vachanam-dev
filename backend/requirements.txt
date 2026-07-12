@@ -28,6 +28,8 @@ python-multipart>=0.0.27
 smallestai>=4.4.7
 fastapi-limiter==0.2.0
 markdown>=3.6
+# PDF invoices attached to payment mails (#357). Pure Python, no system deps.
+fpdf2>=2.8,<3
 bcrypt>=5.0.0
 
 # LiveKit dispatch SDK — the reminder / cascade-rebook / follow-up jobs create
