@@ -27,9 +27,11 @@ This Data Processing Agreement (DPA) supplements the Vachanam Terms of Service a
 Vachanam processes personal data solely on the documented instructions of the Clinic, for the following purposes:
 
 - Answering inbound patient phone calls via AI voice agent
-- Understanding the patient's health concern to route them to the appropriate doctor
+- Understanding the patient's health concern to route them to the appropriate doctor (in-call use only; the concern is not stored as a booking field)
 - Checking doctor availability and assigning appointment tokens
 - Creating calendar events for doctors
+- Making outbound service calls the Clinic has enabled: pre-appointment reminder calls, rebooking calls when a doctor takes leave, and treatment follow-up / next-visit calls (with the patient's follow-up consent)
+- Storing doctor-entered visit-progress notes and follow-up question/answer summaries (optional treatment-follow-up feature)
 - Providing a receptionist queue management interface
 - Providing clinic owner analytics (appointment counts, attendance rates)
 - Sending booking confirmations (via WhatsApp in upcoming release, with separate notice)
@@ -53,9 +55,9 @@ Vachanam will NOT process personal data for any purpose beyond those documented 
 
 | Data subject | Personal data processed |
 |---|---|
-| Patient | First name, mobile phone number, complaint summary (one-line description of health concern), appointment date, token number |
+| Patient | First name, mobile phone number, age/gender (if volunteered), preferred language, appointment date, token number; phone-masked call transcript (up to 90 days); visit-progress notes and follow-up Q&A summaries where the Clinic uses the treatment-follow-up feature. The spoken health concern is processed in-call for doctor routing and is NOT stored as a booking field. |
 | Doctor | Name, specialization, working hours |
-| Staff | Email address, name, role (owner or receptionist) |
+| Staff | Email address, name, role (owner or receptionist); bcrypt password hash for email-login accounts |
 
 ### 3.3 Data NOT processed
 
@@ -69,7 +71,7 @@ Vachanam will NOT process personal data for any purpose beyond those documented 
 
 ## 4. Sub-Processors
 
-Vachanam uses the following categories of sub-processor to deliver the service. By signing this DPA, the Clinic consents to the use of these sub-processors. To protect the confidentiality of Vachanam's technology stack (a legitimate trade-secret interest), sub-processors are identified by role; the **full named list** — with each provider's identity, location, and data-protection terms — is provided to the Clinic on written request to privacy@vachanam.in, under the confidentiality obligations of this DPA (Section 11).
+Vachanam uses the following categories of sub-processor to deliver the service. By signing this DPA, the Clinic consents to the use of these sub-processors. To protect the confidentiality of Vachanam's technology stack (a legitimate trade-secret interest), sub-processors are identified by role; the **full named list** — with each provider's identity, location, and data-protection terms — is provided to the Clinic on written request to privacy@vachanam.in, under a written confidentiality undertaking.
 
 | Sub-processor (by role) | What they process | Data location | Purpose |
 |---|---|---|---|
@@ -94,7 +96,7 @@ If Vachanam intends to add or replace a sub-processor:
 
 - We will notify the Clinic at least 30 days before the new sub-processor begins processing data.
 - The Clinic may object within 14 days of notification. If the objection cannot be resolved, the Clinic may terminate this DPA and the subscription, with data handled per Section 9.
-- The current sub-processor list is also published in the Vachanam Privacy Policy at app.vachanam.in/privacy (Section 6).
+- The current sub-processor list (by role and location) is also published in the Vachanam Privacy Policy, Section 6, linked from vachanam.in.
 
 ---
 
@@ -109,11 +111,11 @@ Vachanam implements the following security measures to protect personal data pro
 | Encryption in transit | TLS 1.2+ on all connections; HSTS enforced |
 | Encryption at rest | AES-256 disk encryption (managed by our database hosting provider) |
 | Data isolation | Every database query is scoped to the Clinic's branch_id; one clinic cannot access another's data |
-| Access control | Role-based JWT authentication (owner, receptionist, admin); Google OAuth login (no passwords stored) |
+| Access control | Role-based JWT authentication (owner, receptionist, admin); login via email + password (bcrypt-hashed, never stored in readable form) or Google OAuth |
 | Audit logging | Append-only audit log of all sensitive actions (login, data access, token assignment, payment); 7-year retention |
 | Rate limiting | Per-endpoint, per-user request throttling; IP blocklist for brute-force attempts |
 | Web application firewall | Managed OWASP Core Rule Set + bot protection at our edge/CDN provider |
-| Session security | 8-hour hard JWT expiry; 30-minute idle timeout; immediate revocation on logout |
+| Session security | 8-hour hard JWT expiry; immediate revocation on logout |
 | Secret management | All API keys and secrets stored as environment variables; secret scanning on code repository |
 | PII protection in logs | Phone numbers truncated to last 4 digits in all log output; PII denylist enforced on audit log metadata |
 
@@ -138,7 +140,7 @@ If Vachanam becomes aware of a breach of personal data affecting the Clinic's da
 
 ### 6.2 Notification to the Data Protection Board
 
-Vachanam will notify the Data Protection Board of India within **72 hours** of confirming a breach involving personal data, as required by DPDP Act 2023 Section 11.
+Vachanam will notify the Data Protection Board of India within **72 hours** of confirming a breach involving personal data, per the breach-intimation duty under DPDP Act 2023 Section 8(6) and the DPDP Rules.
 
 ### 6.3 Remediation report
 
@@ -237,4 +239,4 @@ By signing below, both parties agree to the terms of this Data Processing Agreem
 
 ---
 
-*This DPA is version 1.0, effective 2026-06-04. Updates to this DPA will follow the same 30-day notice process as the Vachanam Privacy Policy and Terms of Service.*
+*This DPA is version 1.1, last updated 2026-07-12 (first published 2026-06-04). Updates to this DPA follow the same 30-day notice process as the Vachanam Privacy Policy and Terms of Service.*

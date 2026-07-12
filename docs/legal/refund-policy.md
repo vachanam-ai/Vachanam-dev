@@ -21,7 +21,7 @@ ends, service simply pauses — nothing is charged, nothing is owed.
   Your AI receptionist keeps working until then.
 - No cancellation fee. No lock-in. No minimum contract.
 - After cancellation your data is exported for you on request and then deleted
-  per our [Privacy Policy](/legal/privacy) retention schedule.
+  per our [Privacy Policy](/privacy) retention schedule.
 
 ## 3. Refunds
 
@@ -56,4 +56,4 @@ note.
 ---
 
 © 2026 Vachanam · Vinay Rongala. This policy is part of our
-[Terms of Service](/legal/terms).
+[Terms of Service](/terms).

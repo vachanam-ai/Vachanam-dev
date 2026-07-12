@@ -1,7 +1,7 @@
 # Vachanam Terms of Service
 
 **Effective date:** 2026-06-04
-**Last updated:** 2026-06-04
+**Last updated:** 2026-07-12
 
 These terms govern the relationship between Vachanam and the clinic ("you") that subscribes to our service. They are written in plain English so that a clinic owner without a lawyer can understand them.
 
@@ -11,7 +11,7 @@ By subscribing to Vachanam, you agree to these terms.
 
 ## 1. What Vachanam Does
 
-Vachanam is an AI-powered appointment booking service for clinics in India. When a patient calls your clinic's number, the call is forwarded to our AI agent. The AI answers in Telugu, Hindi, or English, understands the patient's health concern, matches them to the correct doctor, checks availability, assigns a token number (with no double-booking), and creates a calendar event for the doctor.
+Vachanam is an AI-powered appointment booking service for clinics in India. When a patient calls your clinic's number, the call is answered by our AI agent. The AI speaks the patient's language (Telugu first; up to 8 Indian languages depending on your plan), understands the patient's health concern, matches them to the correct doctor, checks availability, assigns a token number (with no double-booking), and creates a calendar event for the doctor.
 
 Your receptionists manage the daily queue through a mobile-friendly web app (Progressive Web App). You, the clinic owner, see analytics on a dashboard.
 
@@ -40,7 +40,7 @@ As the Data Fiduciary, you are responsible for:
 
 ### 2.2 Account security
 
-- Each staff member (owner, receptionist) must have their own Google account for login. Sharing login credentials between staff members is not permitted.
+- Each staff member (owner, receptionist) must have their own login (email + password, or Google sign-in). Sharing login credentials between staff members is not permitted.
 - You are responsible for removing staff members' access promptly when they leave your clinic.
 - You must notify us at hello@vachanam.in within 24 hours if you suspect any unauthorized access to your Vachanam account.
 
@@ -56,7 +56,7 @@ You agree NOT to use Vachanam to:
 
 ### 2.4 Emergency handling
 
-Vachanam's AI agent detects emergency keywords (e.g., "chest pain," "unconscious," "breathing difficulty") and provides your clinic's emergency contact number to the caller. The AI does NOT provide emergency medical advice, does NOT call ambulances, and does NOT triage emergencies. You must ensure your clinic's emergency contact number is accurate and updated in your Vachanam settings.
+Vachanam is NOT an emergency service and does NOT detect, triage, or classify emergencies. If a caller explicitly asks for a human, or clearly keeps wanting one, the AI transfers the call to your clinic's own contact number. The AI does NOT provide emergency medical advice, does NOT call ambulances, and does NOT assess the urgency of any medical situation. You must ensure your clinic's transfer/emergency contact number is accurate and updated in your Vachanam settings, and you are responsible for your clinic's own emergency arrangements.
 
 ---
 
@@ -84,7 +84,7 @@ Our full security measures are documented in our Data Processing Agreement.
 If we discover a breach of personal data that affects your clinic:
 
 - We will notify you within 24 hours of confirming the breach (email + phone call to your registered owner email/phone).
-- We will notify the Data Protection Board of India within 72 hours, as required by DPDP Act 2023 Section 11.
+- We will notify the Data Protection Board of India within 72 hours, per the breach-intimation duty under DPDP Act 2023 Section 8(6) and the DPDP Rules.
 - We will provide you with a written incident report within 14 days, including: what happened, what data was affected, what we did to contain it, and what we changed to prevent recurrence.
 
 ### 3.4 Data subject request support
@@ -111,21 +111,23 @@ When you cancel your subscription (see Section 4.4):
 
 ### 4.1 Plans
 
-Vachanam offers three subscription plans:
+Vachanam offers three subscription plans. All prices are exclusive of 18% GST (charged additionally; B2B clinics can reclaim it via input credit).
 
-| Plan | Monthly price | Included minutes | Max doctors |
-|---|---|---|---|
-| **Solo** | INR 1,999/month + INR 3/min overage | First 100 minutes free | 1 |
-| **Clinic** | INR 7,999/month flat | 2,100 minutes included | 3 |
-| **Multi** | INR 16,999/month flat | 4,200 minutes included | 6 |
+| Plan | Monthly price | Included minutes | Doctors | Languages |
+|---|---|---|---|---|
+| **Starter** | INR 5,999/month | 700 minutes (≈250 calls) | 1 | Telugu |
+| **Clinic** | INR 9,999/month | 1,500 minutes (≈540 calls) | up to 5 | Telugu + Hindi + English |
+| **Multi** | INR 17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 8 supported languages |
 
-Overage charges (minutes beyond the included amount) are billed at the end of each billing cycle. Solo plan overage: INR 3/min. Multi plan overage: INR 2.50/min.
+- Overage on every plan: INR 5 per minute beyond the included minutes, billed with the next invoice. Included minutes reset monthly and do not carry over.
+- Optional add-ons: additional phone number INR 1,999/month; additional branch INR 7,999/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
+- On the Starter plan, individual AI calls are capped at 4 minutes.
 
-Full pricing details, including per-call cost breakdowns and what each plan includes, are available at vachanam.in.
+Current pricing and what each plan includes are always published at vachanam.in; if this table and the website ever differ, the website's published pricing at the time of purchase governs.
 
 ### 4.2 Free trial
 
-Every new clinic gets a 14-day free trial with up to 1,000 minutes of AI call handling. No credit card is required to start the trial. On day 12, we will send a payment link to your registered email. If payment is not completed by end of day 14, the service pauses until payment is received.
+Every new clinic gets a 14-day free trial with up to 300 minutes of AI call handling (≈100 calls). No credit card is required to start the trial. When the included trial minutes are used up or the 14 days end — whichever comes first — the service pauses until a plan is activated. Around day 12, we will send a payment link to your registered email. Nothing is ever charged for the trial.
 
 ### 4.3 Payment
 
@@ -133,7 +135,7 @@ All payments are processed through Razorpay, a Reserve Bank of India (RBI) autho
 
 ### 4.4 Cancellation
 
-You can cancel your subscription at any time by emailing hello@vachanam.in. Upon cancellation:
+You can cancel your subscription at any time from your dashboard (Settings → Plan & billing) or by emailing hello@vachanam.in from your registered owner email. Upon cancellation:
 
 - Your service continues until the end of the current paid billing period.
 - No refund is issued for the remaining days of the current billing period.
@@ -167,13 +169,13 @@ Vachanam is a scheduling and communication tool. It is not a healthcare provider
 3. **Accuracy of clinic-entered information.** Doctor names, specializations, working hours, leave, token limits, fees, and any other data entered by the clinic. Bookings are made against this data as entered.
 4. **Patient behaviour.** No-shows, late arrivals, wrong information given by the caller (name, phone, health issue), or a patient's decision to cancel.
 5. **Telephony and network failures.** Call drops, poor audio, carrier outages, spam-blocking of the clinic's number by handset apps or carriers, and any failure of the public telephone network or the patient's device or connection.
-6. **Third-party service interruptions.** Outages or degradation of the underlying cloud, telephony, calendar, payment, or AI services we depend on. We engineer for graceful degradation and pursue recovery promptly, but we do not control these providers (see Section 3.1 uptime commitment).
+6. **Third-party service interruptions.** Outages or degradation of the underlying cloud, telephony, calendar, payment, or AI services we depend on. We engineer for graceful degradation and pursue recovery promptly, but we do not control these providers (see Section 3.1; extended-outage credits are covered by our Refund & Cancellation Policy).
 7. **Notification delivery.** Non-delivery or delayed delivery of emails or (when launched) messages, once handed to the delivery provider or carrier.
 8. **The clinic's own legal compliance.** The clinic's obligations as Data Fiduciary under the DPDP Act 2023 (patient notices, consents where required), its professional licensing, advertising compliance, tax obligations, and its own staff conduct.
 9. **Losses from account misuse.** Actions taken through a clinic account whose credentials the clinic failed to secure (Section 2.2), including staff misuse.
 10. **Force majeure.** Events beyond reasonable control — natural disasters, war, riots, government orders, internet backbone failures, power grid failures, epidemics, or strikes.
 
-The AI agent may occasionally mishear, misunderstand, or fail to complete a call — speech recognition and language AI are probabilistic technologies. The clinic dashboard and daily queue remain the authoritative record; clinics should review their queue each day. Where a booking fails, Vachanam's responsibility is limited to the service-credit / liability terms above.
+The AI agent may occasionally mishear, misunderstand, or fail to complete a call — speech recognition and language AI are probabilistic technologies. The clinic dashboard and daily queue remain the authoritative record; clinics should review their queue each day. Where a booking fails, Vachanam's responsibility is limited to the liability cap in this Section 6 and the credits in our Refund & Cancellation Policy.
 
 Nothing in these terms excludes liability for fraud, willful misconduct, or death or personal injury caused by our negligence.
 
@@ -211,6 +213,7 @@ Continued use of the service after the change takes effect constitutes acceptanc
 ## 10. Contact
 
 - **General inquiries:** hello@vachanam.in
+- **Product support:** support@vachanam.in (or the in-app Support chat)
 - **Privacy and data requests:** privacy@vachanam.in
 - **Security concerns:** security@vachanam.in
 - **Billing questions:** hello@vachanam.in

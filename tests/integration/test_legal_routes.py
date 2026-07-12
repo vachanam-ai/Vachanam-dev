@@ -253,3 +253,44 @@ async def test_refund_policy_served(client):
     assert "Refund" in body and "Cancellation" in body
     assert "hello@vachanam.in" in body
     assert "non-refundable" in body  # sets expectations honestly
+
+
+async def test_terms_pricing_matches_billing_math():
+    """#329: the Terms §4.1 table went 5 weeks stale against a repricing.
+    Pin every legal pricing/trial figure to billing_math (single source of
+    truth) so a future repricing fails CI until the terms are updated."""
+    from pathlib import Path
+
+    from backend.services.billing_math import PLANS, TRIAL_MINUTES
+
+    text = Path("docs/legal/terms-of-service.md").read_text(encoding="utf-8")
+    for plan in PLANS.values():
+        assert f"{plan.base_rupees:,}" in text, (
+            f"terms missing current price for {plan.display_name}: "
+            f"INR {plan.base_rupees:,}")
+        assert f"{plan.included_minutes:,} minutes" in text, (
+            f"terms missing included minutes for {plan.display_name}")
+    assert "INR 5 per minute" in text        # overage, all plans
+    assert f"{TRIAL_MINUTES} minutes" in text  # trial size
+    assert "18% GST" in text
+    # Dead old-model figures must never reappear. (Plain "1,999" is now the
+    # legitimate extra-DID price, so match the old rows distinctively.)
+    for stale in ("First 100 minutes free", "7,999/month flat", "16,999",
+                  "2,100 minutes", "4,200 minutes", "1,000 minutes"):
+        assert stale not in text, f"stale pricing figure resurfaced: {stale}"
+
+
+async def test_legal_docs_match_product_reality():
+    """#329 spot-checks: claims that were factually false must stay fixed."""
+    from pathlib import Path
+
+    dpa = Path("docs/legal/data-processing-agreement.md").read_text(encoding="utf-8")
+    assert "no passwords stored" not in dpa          # we DO store bcrypt hashes
+    assert "30-minute idle timeout" not in dpa       # feature doesn't exist
+    assert "bcrypt" in dpa
+    privacy = Path("docs/legal/privacy-policy.md").read_text(encoding="utf-8")
+    assert "30 minutes of inactivity" not in privacy
+    assert "app.vachanam.in" not in privacy          # wrong domain
+    terms = Path("docs/legal/terms-of-service.md").read_text(encoding="utf-8")
+    assert "emergency keywords" not in terms         # keyword detection removed
+    assert "detects emergency" not in terms

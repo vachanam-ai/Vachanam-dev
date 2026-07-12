@@ -1,7 +1,7 @@
 # Vachanam Privacy Policy
 
 **Effective date:** 2026-06-04
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-12
 
 This policy explains, in plain language, what personal data Vachanam collects, why we collect it, who sees it, how long we keep it, and what rights you have. If any part is unclear, email us at hello@vachanam.in and we will explain it in Telugu, Hindi, or English -- whichever you prefer.
 
@@ -12,7 +12,7 @@ This policy explains, in plain language, what personal data Vachanam collects, w
 | Question | Answer |
 |---|---|
 | Do you record my call? | **No.** Audio is processed in real time and discarded. |
-| What do you store? | First name, phone, one-line reason for visit, appointment details. |
+| What do you store? | First name, phone, appointment details (doctor, date, token). Your spoken reason for visiting is used during the call to pick the right doctor — it is NOT saved on your booking record. |
 | Who owns the data? | The clinic you called (Data Fiduciary). Vachanam only processes it. |
 | Can other clinics see my data? | **Never** — enforced at the database level on every query. |
 | Do you sell data or run ads? | **No**, and we never use patient data to train AI. |
@@ -47,8 +47,11 @@ We collect different data depending on your role. We collect only what is needed
 |---|---|---|
 | First name | You tell us during the phone call | "Ravi" |
 | Mobile number | Caller ID from your phone call | +91 98765 XXXXX |
-| Complaint summary | You describe your health issue in one line | "knee pain for 2 weeks" |
+| Age and gender | Only if you choose to tell us on the call | "24" |
+| Preferred language | Detected from the call, remembered for next time | "Telugu" |
 | Appointment date and time | Assigned during booking | "2026-06-10, Token #5, morning slot" |
+
+**About your health concern:** what you say about your health issue ("knee pain for 2 weeks") is used DURING the call only, to route you to the right doctor. It is **not saved as a field on your booking record**, never appears in the doctor's calendar event or any notification, and can appear only inside the temporary phone-masked call transcript described below (deleted within 90 days).
 
 **What we do NOT collect from patients:**
 
@@ -74,8 +77,9 @@ Note: WhatsApp-based doctor schedule management is planned for an upcoming relea
 
 | Data | How we get it |
 |---|---|
-| Email address | You sign in with your Google account |
-| Name | From your Google account |
+| Email address | You provide it at signup (verified with a one-time code) or sign in with your Google account |
+| Name | You provide it at signup, or from your Google account |
+| Password | Only if you use email login — stored as a one-way bcrypt hash, never in readable form |
 | Role (owner or receptionist) | Assigned by the clinic owner |
 
 ---
@@ -88,7 +92,7 @@ Every piece of data we collect has a specific purpose. We do not collect data "j
 |---|---|
 | Patient name | So the doctor and receptionist know who is coming |
 | Patient mobile number | To identify your appointment; to send booking confirmation (in upcoming WhatsApp release) |
-| Complaint summary | To route you to the correct doctor (e.g., "chest pain" goes to the cardiologist, not the dentist) |
+| Health concern (spoken, in-call only — not stored on the booking) | To route you to the correct doctor (e.g., "tooth pain" goes to the dental surgeon, not the skin specialist) |
 | Appointment date and token number | To reserve your spot and prevent double-booking |
 | Doctor name and specialization | To match patients to the right doctor |
 | Doctor working hours | To check availability before assigning a token |
@@ -115,7 +119,7 @@ Your data is visible only to people who need it to serve you.
 
 | Who | What they see | Why |
 |---|---|---|
-| **The clinic you called** (owner and receptionists) | Your name, phone, complaint summary, token number, appointment date | To manage your visit and mark your attendance |
+| **The clinic you called** (owner and receptionists) | Your name, phone, token number, appointment date | To manage your visit and mark your attendance |
 | **The specific doctor you are booked with** | Your name and token number (via calendar event showing first name + last 4 digits of phone) | To know who is coming and when |
 | **Vachanam technical staff** | Access to backend systems for troubleshooting only; every access is recorded in an audit log | To fix technical issues if something goes wrong with your booking |
 
@@ -175,7 +179,7 @@ We keep data only as long as it serves a clear purpose. Here are the specific re
 
 | Data type | How long we keep it | Why | What happens after |
 |---|---|---|---|
-| Active booking records (patient name, phone, complaint, token, appointment) | 2 years from last activity | Clinics need historical booking data for follow-ups and analytics | Permanently deleted from the database |
+| Active booking records (patient name, phone, token, appointment) | 2 years from last activity | Clinics need historical booking data for follow-ups and analytics | Personal identity erased; anonymous booking counts remain for the clinic's statistics |
 | Audit log (who accessed what, when, from where) | 7 years | Regulatory compliance and security investigation capability; aligns with Indian record-keeping norms | Permanently deleted |
 | User accounts (staff email, name, role) | Until the clinic owner removes the user, or the user requests deletion + 30 days | Clinic needs active staff accounts; 30-day buffer allows recovery from accidental deletion | Personally identifiable information purged; anonymized audit records retained |
 | Authentication tokens (login sessions) | 8 hours maximum (hard expiry) + immediate revocation on logout | Security: limits damage window if a device is stolen | Automatically expired; revocation records cleared from cache |
@@ -230,7 +234,7 @@ If we become aware that we have collected personal data from a child without ver
 
 **We use only essential cookies.** Specifically:
 
-- **Authentication token (JWT):** Stored in your browser's localStorage when a clinic staff member logs in. This is not technically a cookie, but it serves a similar purpose. It expires after 8 hours or 30 minutes of inactivity, whichever comes first.
+- **Authentication token (JWT):** Stored in your browser's localStorage when a clinic staff member logs in. This is not technically a cookie, but it serves a similar purpose. It expires after a hard limit of 8 hours and is revoked immediately when you sign out.
 
 **What we do NOT use:**
 
@@ -250,9 +254,9 @@ If we make changes to this privacy policy:
 - **Material changes** (new data collected, new processors, changed retention periods, changed rights): We will notify you at least 30 days before the change takes effect, via email (for clinic staff) and through the Vachanam platform.
 - **Minor changes** (typo fixes, formatting, clarification without substance change): Updated immediately with a new "Last updated" date.
 
-You can always find the current version of this policy at app.vachanam.in/privacy.
+You can always find the current version of this policy linked from vachanam.in (footer → Privacy).
 
-The previous version of this policy will be archived at docs/legal/privacy-policy-archive/ with its effective date range.
+Previous versions of this policy, with their effective date ranges, are available on request to privacy@vachanam.in.
 
 ---
 

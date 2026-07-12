@@ -1,7 +1,7 @@
 # How Vachanam Handles Your Data
 
 **Effective date:** 2026-07-10
-**Last updated:** 2026-07-10
+**Last updated:** 2026-07-12
 
 This document walks through the complete life of your personal data inside Vachanam — from the moment you dial a clinic's number to the day the data is erased. It is the plain-language companion to our [Privacy Policy](/privacy) and describes what our software actually does, not just what we promise.
 
@@ -30,7 +30,7 @@ On your explicit confirmation we store, in the clinic's own partition of our dat
 | Stored | Where | Visible to |
 |---|---|---|
 | Your first name, phone number, age/gender if you gave them | `patients` table (one row per patient, per clinic) | Your clinic only |
-| Token number, doctor, date, time, one-line reason for visit | `tokens` table (one row per booking) | Your clinic only |
+| Token number, doctor, date, time | `tokens` table (one row per booking). Your spoken reason for visiting is used in-call for doctor routing and is NOT saved on this row. | Your clinic only |
 | A consent record (that notice was given and you proceeded) | `consents` table | Your clinic only |
 | An audit trail entry (what happened, when) | `audit_log` table (IDs only, no names) | Compliance use only |
 
@@ -45,7 +45,7 @@ A calendar event is created for the doctor containing **only your first name, th
 
 ## 2. Separation by Design
 
-Every kind of data lives in its own dedicated table — patients, tokens, consents, calls, users (clinic staff), audit logs, and so on — 18 tables in total. Each row that can identify a person carries the clinic's `branch_id`, and **every read and write in the application is scoped to that clinic**. This is our RULE 1 (tenant isolation): no query, cache key, calendar event, or log line may expose one clinic's patient data to another clinic. It is enforced in code and covered by automated tests that run on every change.
+Every kind of data lives in its own dedicated table — patients, tokens, consents, calls, users (clinic staff), audit logs, and so on. Each row that can identify a person carries the clinic's `branch_id`, and **every read and write in the application is scoped to that clinic**. This is our RULE 1 (tenant isolation): no query, cache key, calendar event, or log line may expose one clinic's patient data to another clinic. It is enforced in code and covered by automated tests that run on every change.
 
 Vachanam's own operator (the platform super-admin) is **locked out of clinic patient-data routes** by role checks — platform administration does not include browsing patient records.
 
@@ -91,7 +91,7 @@ Under the DPDP Act 2023 you may request **access** to, **correction** of, or **e
 - All traffic encrypted in transit (TLS); database encrypted at rest (AES-256).
 - Authentication via short-lived tokens (8-hour hard expiry, immediate revocation on logout), rate limiting on sensitive endpoints, and security headers on every response.
 - Secrets are never stored in code; access to production systems is limited and audited.
-- Third-party processors are listed exhaustively in the [Privacy Policy](/privacy) §6 with their locations — no processor is added without a policy update first.
+- Third-party processors are listed by role and location in the [Privacy Policy](/privacy) §6 (the named list is available on request to privacy@vachanam.in) — no processor is added without a policy update first.
 
 ---
 
