@@ -49,6 +49,13 @@ async def erase_patient_pii(db: AsyncSession, p: Patient) -> None:
     await db.execute(
         TreatmentNote.__table__.delete().where(TreatmentNote.patient_id == p.id)
     )
+    # An erased patient must never be dialed again — close any queued calls.
+    await db.execute(
+        FollowupTask.__table__.update()
+        .where(FollowupTask.patient_id == p.id,
+               FollowupTask.status.in_(("pending", "in_progress")))
+        .values(status="completed")
+    )
 
     logger.info(
         "patient_pii_erased",

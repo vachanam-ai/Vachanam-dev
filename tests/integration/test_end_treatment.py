@@ -55,7 +55,7 @@ async def test_end_treatment_removes_thread_keeps_pii(db):
             r = await ac.post(f"/treatment/patients/{pat.id}/end-treatment", json={
                 "branch_id": str(br.id), "doctor_id": str(doc.id)})
             assert r.status_code == 200, r.text
-            assert r.json() == {"ended": True, "erased": False}
+            assert r.json() == {"ended": True}
     finally:
         app.dependency_overrides.clear()
 
@@ -71,15 +71,21 @@ async def test_end_treatment_removes_thread_keeps_pii(db):
         assert p.name == "Ravi" and p.phone is not None  # PII kept
 
 
-async def test_end_treatment_with_erase_wipes_pii(db):
+async def test_patients_delete_erases_and_hides_from_list(db):
+    """Erasure lives ONLY on the Patients page (Vinay 2026-07-12):
+    DELETE /patients/{id} wipes PII + notes + queued calls, and the erased
+    patient never appears in the patients list again."""
     org_id, usr, br, doc, pat = await _seed(db, "0062")
     app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, usr.id)
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
-            r = await ac.post(f"/treatment/patients/{pat.id}/end-treatment", json={
-                "branch_id": str(br.id), "erase_data": True})
+            r = await ac.delete(f"/patients/{pat.id}",
+                                params={"branch_id": str(br.id)})
             assert r.status_code == 200, r.text
-            assert r.json()["erased"] is True
+            assert r.json() == {"erased": True}
+
+            listed = await ac.get(f"/patients/branches/{br.id}/patients")
+            assert all(row["id"] != str(pat.id) for row in listed.json()["patients"])
     finally:
         app.dependency_overrides.clear()
 
@@ -90,6 +96,9 @@ async def test_end_treatment_with_erase_wipes_pii(db):
         notes = (await s2.execute(select(TreatmentNote).where(
             TreatmentNote.patient_id == pat.id))).scalars().all()
         assert notes == []
+        tasks = (await s2.execute(select(FollowupTask).where(
+            FollowupTask.patient_id == pat.id))).scalars().all()
+        assert all(t.status == "completed" for t in tasks)  # never dialed again
 
 
 async def test_end_treatment_cross_branch_denied(db):

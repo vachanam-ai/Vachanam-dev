@@ -120,7 +120,9 @@ export default function Treatments() {
   const [editingId, setEditingId] = useState(null);
   const [replyMessage, setReplyMessage] = useState("");
   const [confirmEnd, setConfirmEnd] = useState(false);
-  const [eraseData, setEraseData] = useState(false);
+  // Mass end-treatment: selected thread keys "patientId:doctorId".
+  const [selected, setSelected] = useState(() => new Set());
+  const [confirmBulk, setConfirmBulk] = useState(false);
 
   const { data: doctors = [] } = useQuery({
     queryKey: ["doctors", branchId],
@@ -257,21 +259,51 @@ export default function Treatments() {
   const canReply =
     Boolean(patientId) && Boolean(doctorId) && Boolean(replyMessage.trim()) && !reply.isPending;
 
-  // One-time visitors don't need a treatment thread; completed treatments can be
-  // closed out — optionally erasing the patient's personal data (DPDP erasure).
+  // One-time visitors don't need a treatment thread; completed treatments can
+  // be closed out. Never erases patient data — that lives on the Patients page.
   const end = useMutation({
     mutationFn: () =>
-      endTreatment(patientId, { branchId, doctorId: threadDoctorId, eraseData }),
+      endTreatment(patientId, { branchId, doctorId: threadDoctorId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
       setPatientId("");
       setThreadDoctorId("");
       setConfirmEnd(false);
-      setEraseData(false);
-      toast.success(eraseData ? "Treatment ended and patient data erased" : "Treatment ended");
+      toast.success("Treatment ended");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Couldn't end the treatment")
   });
+
+  const bulkEnd = useMutation({
+    mutationFn: () =>
+      Promise.all(
+        [...selected].map((key) => {
+          const [pid, did] = key.split(":");
+          return endTreatment(pid, { branchId, doctorId: did });
+        })
+      ),
+    onSuccess: (results) => {
+      qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
+      setSelected(new Set());
+      setConfirmBulk(false);
+      setPatientId("");
+      setThreadDoctorId("");
+      toast.success(`${results.length} treatment${results.length === 1 ? "" : "s"} ended`);
+    },
+    onError: () => {
+      // Some may have succeeded — refetch shows the truth (each call is
+      // independent and idempotent).
+      qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
+      toast.error("Couldn't end some treatments — list refreshed, try the rest again");
+    }
+  });
+
+  const toggleSelect = (key) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
 
   const needsAttention = followups.some(
     (f) => (f.response && f.response.trim()) || f.status === "unreachable"
@@ -322,21 +354,61 @@ export default function Treatments() {
             {patients.length === 0 ? "No patients under treatment yet." : "No patients match."}
           </p>
         ) : (
+          <>
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-teal-mint/50 px-3 py-2">
+              <span className="font-ui text-sm">
+                {selected.size} selected
+              </span>
+              {confirmBulk ? (
+                <>
+                  <span className="font-ui text-sm text-slate">
+                    End these treatments? Follow-up calls stop; patient data is kept.
+                  </span>
+                  <button type="button" className="btn-danger" disabled={bulkEnd.isPending}
+                    onClick={() => bulkEnd.mutate()}>
+                    {bulkEnd.isPending ? "Ending…" : `End ${selected.size}`}
+                  </button>
+                  <button type="button" className="btn-ghost" onClick={() => setConfirmBulk(false)}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="btn-danger" onClick={() => setConfirmBulk(true)}>
+                    End treatment ({selected.size})
+                  </button>
+                  <button type="button" className="btn-ghost" onClick={() => setSelected(new Set())}>
+                    Clear
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           <ul className="divide-y divide-hairline overflow-hidden rounded-xl border border-hairline">
             {filteredPatients.map((p) => {
-              const selected = p.patient_id === patientId && p.doctor_id === threadDoctorId;
+              const key = `${p.patient_id}:${p.doctor_id}`;
+              const isOpen = p.patient_id === patientId && p.doctor_id === threadDoctorId;
               return (
-                <li key={`${p.patient_id}:${p.doctor_id}`}>
+                <li key={key} className={`flex items-center ${isOpen ? "bg-teal-mint/60" : "hover:bg-teal-mint/30"} transition-colors`}>
+                  {/* mass-select checkbox — separate hit target from the row */}
+                  <label className="grid h-12 w-11 shrink-0 cursor-pointer place-items-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-teal"
+                      checked={selected.has(key)}
+                      onChange={() => toggleSelect(key)}
+                      aria-label={`Select ${p.name} for ending treatment`}
+                    />
+                  </label>
                   <button
                     type="button"
                     onClick={() => {
-                      setPatientId(selected ? "" : p.patient_id);
-                      setThreadDoctorId(selected ? "" : p.doctor_id);
+                      setPatientId(isOpen ? "" : p.patient_id);
+                      setThreadDoctorId(isOpen ? "" : p.doctor_id);
                     }}
-                    className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors ${
-                      selected ? "bg-teal-mint/60" : "hover:bg-teal-mint/30"
-                    }`}
-                    aria-expanded={selected}
+                    className="flex min-w-0 flex-1 items-center justify-between gap-3 py-3 pr-4 text-left"
+                    aria-expanded={isOpen}
                   >
                     <span className="min-w-0">
                       <span className="block truncate font-ui font-medium">
@@ -355,6 +427,7 @@ export default function Treatments() {
               );
             })}
           </ul>
+          </>
         )}
       </div>
 
@@ -386,22 +459,9 @@ export default function Treatments() {
               <div className="space-y-3 border-b border-hairline bg-danger/5 px-4 py-3">
                 <p className="font-ui text-sm">
                   Removes this patient from the treatment list and stops any pending
-                  follow-up calls. Use it for one-time visitors or a finished treatment.
+                  follow-up calls. Patient details are kept — to permanently erase a
+                  patient&rsquo;s data, use Delete on the Patients page.
                 </p>
-                <label className="flex cursor-pointer items-start gap-2 font-ui text-sm">
-                  <input
-                    type="checkbox"
-                    checked={eraseData}
-                    onChange={(e) => setEraseData(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 accent-teal"
-                  />
-                  <span>
-                    Also erase the patient&rsquo;s personal data (name, phone)
-                    <span className="block text-xs text-slate">
-                      Permanent. Visit notes are deleted; anonymous booking counts remain.
-                    </span>
-                  </span>
-                </label>
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -409,7 +469,7 @@ export default function Treatments() {
                     disabled={end.isPending}
                     className="btn-danger"
                   >
-                    {end.isPending ? "Ending…" : eraseData ? "End & erase data" : "End treatment"}
+                    {end.isPending ? "Ending…" : "End treatment"}
                   </button>
                   <button type="button" onClick={() => setConfirmEnd(false)} className="btn-ghost">
                     Cancel

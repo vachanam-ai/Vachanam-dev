@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { listPatients, editPatient } from "../api/patients.js";
+import { toast } from "sonner";
+import { listPatients, editPatient, deletePatient } from "../api/patients.js";
 
 export default function Patients() {
   const { branchId } = useAuth();
@@ -14,8 +15,19 @@ export default function Patients() {
   });
 
   const [editing, setEditing] = useState(null); // patient id being edited
+  const [deleting, setDeleting] = useState(null); // patient pending delete confirm
   const [form, setForm] = useState({ name: "", age: "", phone: "" });
   const [err, setErr] = useState("");
+
+  const del = useMutation({
+    mutationFn: (p) => deletePatient(p.id, branchId),
+    onSuccess: () => {
+      setDeleting(null);
+      qc.invalidateQueries({ queryKey: ["patients", branchId] });
+      toast.success("Patient data erased");
+    },
+    onError: () => toast.error("Could not erase — try again")
+  });
 
   const mut = useMutation({
     mutationFn: ({ id, payload }) => editPatient(id, payload),
@@ -73,6 +85,31 @@ export default function Patients() {
       </div>
 
       {err && <p className="font-ui text-sm text-red-600">{err}</p>}
+
+      {/* Erase confirmation — permanent, so it interrupts */}
+      {deleting && (
+        <div className="card space-y-3 border-danger/40 p-4">
+          <p className="font-ui text-sm">
+            Permanently erase <span className="font-semibold">{deleting.name}</span>
+            {deleting.phone ? ` (${deleting.phone})` : ""}? Their name, phone and
+            visit notes are deleted and any scheduled follow-up calls stop. Anonymous
+            booking counts remain in analytics. <span className="font-medium">This
+            cannot be undone.</span>
+          </p>
+          <div className="flex gap-2">
+            <button
+              className="btn-danger"
+              onClick={() => del.mutate(deleting)}
+              disabled={del.isPending}
+            >
+              {del.isPending ? "Erasing…" : "Erase permanently"}
+            </button>
+            <button className="btn-ghost" onClick={() => setDeleting(null)} disabled={del.isPending}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="card overflow-hidden">
         {isLoading ? (
@@ -150,12 +187,18 @@ export default function Patients() {
                       <td className="p-3">{p.age ?? "—"}</td>
                       <td className="p-3">{p.phone || "—"}</td>
                       <td className="p-3">{p.last_doctor || "—"}</td>
-                      <td className="p-3">
+                      <td className="whitespace-nowrap p-3">
                         <button
                           className="btn-ghost px-3 py-1.5"
                           onClick={() => startEdit(p)}
                         >
                           Edit
+                        </button>
+                        <button
+                          className="btn-danger ml-2 px-3 py-1.5"
+                          onClick={() => setDeleting(p)}
+                        >
+                          Delete
                         </button>
                       </td>
                     </tr>

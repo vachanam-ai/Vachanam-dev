@@ -68,7 +68,10 @@ async def list_patients(
         await db.execute(
             select(Patient, last_doc.c.doctor_name)
             .outerjoin(last_doc, last_doc.c.pid == Patient.id)
-            .where(Patient.branch_id == branch_id)
+            # Erased patients (retention job or clinic delete) never show —
+            # an "[erased]" row is noise, not information (Vinay 2026-07-12).
+            .where(Patient.branch_id == branch_id,
+                   Patient.anonymized_at.is_(None))
             .order_by(func.lower(Patient.name))
         )
     ).all()
@@ -81,6 +84,45 @@ async def list_patients(
         for (p, doc_name) in rows
     ]
     return {"patients": patients}
+
+
+@router.delete("/{patient_id}")
+async def delete_patient(
+    patient_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Erase a patient's personal data (DPDP right to erasure) — the ONLY
+    place a clinic can erase a patient (Vinay 2026-07-12; end-treatment no
+    longer erases). Same shared path as the automatic retention job. The row
+    survives anonymized for aggregate counts but never appears in any list."""
+    await assert_branch_access(user, str(branch_id), db)
+    patient = (
+        await db.execute(
+            select(Patient).where(
+                Patient.id == patient_id, Patient.branch_id == branch_id
+            )
+        )
+    ).scalar_one_or_none()
+    if patient is None:
+        raise HTTPException(status_code=404, detail="patient not found in branch")
+
+    from backend.services.patient_erasure import erase_patient_pii
+
+    await erase_patient_pii(db, patient)
+    await db.commit()
+
+    from backend.services.audit_service import write_audit_row
+
+    await write_audit_row(
+        action="patient.erased",
+        resource_type="patient",
+        resource_id=str(patient_id),
+        user_id=uuid.UUID(user.user_id) if user.user_id else None,
+        branch_id=branch_id,
+    )
+    return {"erased": True}
 
 
 @router.patch("/{patient_id}")

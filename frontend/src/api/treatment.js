@@ -24,9 +24,10 @@ export const listFollowups = (patientId, branchId, doctorId) =>
 export const replyToPatient = (patientId, payload) =>
   api.post(`/treatment/patients/${patientId}/followups`, payload).then((r) => r.data);
 
-export const endTreatment = (patientId, { branchId, doctorId, eraseData = false }) =>
+// Ends the thread only — never erases patient data (that lives on the
+// Patients page, deletePatient).
+export const endTreatment = (patientId, { branchId, doctorId }) =>
   api.post(`/treatment/patients/${patientId}/end-treatment`, {
     branch_id: branchId,
     doctor_id: doctorId || null,
-    erase_data: eraseData,
   }).then((r) => r.data);

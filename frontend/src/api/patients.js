@@ -5,3 +5,7 @@ export const listPatients = (branchId) =>
 
 export const editPatient = (patientId, payload) =>
   api.patch(`/patients/${patientId}`, payload).then((r) => r.data);
+
+export const deletePatient = (patientId, branchId) =>
+  api.delete(`/patients/${patientId}`, { params: { branch_id: branchId } })
+    .then((r) => r.data);

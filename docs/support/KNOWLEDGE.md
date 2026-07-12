@@ -130,9 +130,11 @@ of the Clinic plan to evaluate.
   the next visit.
 - The doctor can type a reply in the app and Vachanam speaks it to the
   patient on the next call — a two-way loop without the doctor dialing anyone.
-- One-time visitors don't need any of this: the End treatment button removes
-  a patient from the treatment list and stops any pending follow-up calls.
-  There is also an option to permanently erase the patient's personal data.
+- One-time visitors don't need any of this: select one or many patients in
+  the treatment list and use End treatment — they leave the list and any
+  pending follow-up calls stop. Ending a treatment never deletes patient
+  details; permanent erasure is done separately with the Delete button on
+  the Patients page (with a confirmation, and it cannot be undone).
 
 ## Reminders and calendar
 
@@ -182,7 +184,8 @@ of the Clinic plan to evaluate.
 - Every record is isolated per clinic; cross-clinic access is technically
   impossible and tested on every code change.
 - Patient personal data is erased automatically after 2 years of inactivity,
-  and clinics can erase a patient on demand (End treatment → erase).
+  and clinics can erase a patient on demand (Patients page → Delete, with
+  confirmation; erased patients disappear from all lists).
 - Vachanam complies with India's DPDP Act 2023. Privacy policy, terms, and a
   plain-language "how we handle your data" page are on the website. Data
   requests: privacy@vachanam.in.
