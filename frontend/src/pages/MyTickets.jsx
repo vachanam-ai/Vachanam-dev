@@ -81,6 +81,7 @@ function Thread({ ticket, onChanged }) {
   const [reply, setReply] = useState("");
   const [rated, setRated] = useState(false);
   const pollRef = useRef(null);
+  const endRef = useRef(null);
 
   const load = () => getTicketMessages(ticket.id).then(setMsgs).catch(() => setMsgs([]));
   useEffect(() => {
@@ -89,6 +90,8 @@ function Thread({ ticket, onChanged }) {
     return () => clearInterval(pollRef.current);
     // eslint-disable-next-line
   }, [ticket.id]);
+  // Long threads scroll inside the box — land on the newest message.
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "nearest" }); }, [msgs.length]);
 
   const send = async () => {
     if (!reply.trim()) return;
@@ -102,9 +105,12 @@ function Thread({ ticket, onChanged }) {
 
   return (
     <div className="space-y-2 rounded-b-2xl border border-t-0 border-hairline bg-surface/85 p-3">
-      {msgs.map((m, i) => (
-        <Bubble key={i} side={m.sender === "user" ? "right" : "left"} tone={m.sender}>{m.body}</Bubble>
-      ))}
+      <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+        {msgs.map((m, i) => (
+          <Bubble key={i} side={m.sender === "user" ? "right" : "left"} tone={m.sender}>{m.body}</Bubble>
+        ))}
+        <div ref={endRef} />
+      </div>
       {resolved && !rated && (
         <div className="flex items-center gap-2 text-sm text-ink-soft">
           Rate this help:
