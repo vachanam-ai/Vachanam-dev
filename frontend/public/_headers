@@ -1,0 +1,5 @@
+# Keep search engines OFF the raw Cloudflare Pages URLs (#359): old
+# *.pages.dev deployment snapshots stay reachable forever and were feeding
+# scrapers stale pricing. Only vachanam.in should be indexed.
+https://:project.pages.dev/*
+  X-Robots-Tag: noindex
