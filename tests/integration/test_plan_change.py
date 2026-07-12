@@ -1,39 +1,55 @@
-"""Clinic self-serve plan change, effective next billing cycle (new 2026-06-23).
+"""Clinic self-serve plan change — ANNIVERSARY billing (#340, 2026-07-12).
 
-A clinic owner schedules a switch via POST /api/plan-change; it sits in
-pending_plan/pending_plan_effective (1st of next month) until run_pending_plan_changes
-promotes it. Covers: effective-date math, scheduling, cancelling a pending
-change, non-admin rejection, and the apply job.
+A clinic's cycle starts the day they pay (not the 1st of the month). A plan
+switch scheduled mid-cycle applies at the CURRENT PAID CYCLE'S end; a clinic
+with no future paid cycle (trial/paused) switches immediately. Covers:
+scheduling against a cycle, immediate switch without one, cancelling, RBAC,
+and the apply job.
 """
 import uuid
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from backend.middleware.auth_middleware import CurrentUser
-from backend.models.schema import Organization
-from backend.routers.payments import PlanChangeRequest, change_plan, get_plan
+from backend.models.schema import BillingCycle, Organization
+from backend.routers.payments import PlanChangeRequest, change_plan
 from backend.services.billing_math import next_cycle_start
 
 pytestmark = pytest.mark.asyncio
 
 
 def test_next_cycle_start_rolls_to_first_of_next_month():
+    # Retained for the legacy helper (still used as a fallback elsewhere).
     assert next_cycle_start(date(2026, 6, 23)) == date(2026, 7, 1)
     assert next_cycle_start(date(2026, 6, 1)) == date(2026, 7, 1)
     assert next_cycle_start(date(2026, 12, 15)) == date(2027, 1, 1)  # year wrap
 
 
-async def _seed_org(db, plan="solo"):
+async def _seed_org(db, plan="solo", status="active"):
     org = Organization(
         name="Plan Clinic", owner_phone="+919000000050",
         owner_email=f"plan-{uuid.uuid4().hex[:8]}@realclinic.in",
-        plan=plan, status="active",
+        plan=plan, status=status,
     )
     db.add(org)
     await db.commit()
     await db.refresh(org)
     return org
+
+
+async def _seed_cycle(db, org, end, start=None):
+    bc = BillingCycle(
+        org_id=org.id,
+        cycle_start=start or (end - timedelta(days=30)),
+        cycle_end=end,
+        plan=org.plan, base_amount=5999, included_minutes=700,
+        minutes_used=0, overage_minutes=0, overage_rate=5, overage_amount=0,
+        status="paid", razorpay_payment_id=f"pay_{uuid.uuid4().hex[:12]}",
+    )
+    db.add(bc)
+    await db.commit()
+    return bc
 
 
 def _user(org, role="org_admin"):
@@ -43,16 +59,26 @@ def _user(org, role="org_admin"):
     )
 
 
-async def test_schedule_plan_change_sets_pending_for_next_cycle(db):
+async def test_plan_change_scheduled_for_current_cycle_end(db):
     org = await _seed_org(db, plan="solo")
+    cycle_end = date.today() + timedelta(days=12)
+    await _seed_cycle(db, org, end=cycle_end)
     info = await change_plan(PlanChangeRequest(plan="clinic"), _user(org), db)
-    assert info.plan == "solo"  # current plan unchanged this cycle
+    assert info.plan == "solo"  # current paid cycle untouched
     assert info.pending_plan == "clinic"
-    assert info.pending_plan_effective == next_cycle_start(date.today()).isoformat()
+    assert info.pending_plan_effective == cycle_end.isoformat()  # anniversary, not 1st
+
+
+async def test_plan_change_without_paid_cycle_applies_immediately(db):
+    org = await _seed_org(db, plan="solo", status="trial")
+    info = await change_plan(PlanChangeRequest(plan="clinic"), _user(org), db)
+    assert info.plan == "clinic"  # nothing paid to protect
+    assert info.pending_plan is None
 
 
 async def test_selecting_current_plan_cancels_pending(db):
     org = await _seed_org(db, plan="solo")
+    await _seed_cycle(db, org, end=date.today() + timedelta(days=10))
     await change_plan(PlanChangeRequest(plan="multi"), _user(org), db)
     info = await change_plan(PlanChangeRequest(plan="solo"), _user(org), db)
     assert info.pending_plan is None

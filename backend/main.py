@@ -163,8 +163,16 @@ async def lifespan(app: FastAPI):
             run_trial_nudge, IntervalTrigger(hours=6),
             id="trial_nudge", replace_existing=True,
         )
-        # Apply clinic-scheduled plan changes whose effective date (1st of the
-        # month) has arrived.
+        # Anniversary-billing renewal loop (#340): renewal email when a paid
+        # cycle ends within 3 days; pause 3 days after an unpaid cycle end.
+        from backend.jobs.trial_pause import run_billing_renewal
+
+        scheduler.add_job(
+            run_billing_renewal, IntervalTrigger(hours=6),
+            id="billing_renewal", replace_existing=True,
+        )
+        # Apply clinic-scheduled plan changes whose effective date (the current
+        # cycle's end date) has arrived.
         scheduler.add_job(
             run_pending_plan_changes, IntervalTrigger(hours=6),
             id="pending_plan_changes", replace_existing=True,

@@ -29,7 +29,7 @@ from backend.middleware.rate_limit import (
     verify_payment_limit,
 )
 from backend.models.schema import Organization
-from backend.services.billing_math import PLANS, next_cycle_start
+from backend.services.billing_math import PLANS
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -176,6 +176,7 @@ class PlanInfo(BaseModel):
     status: str
     pending_plan: str | None
     pending_plan_effective: str | None  # ISO date the pending change applies
+    cycle_end: str | None = None  # ISO date the current PAID cycle ends (renewal day)
 
 
 class PlanChangeRequest(BaseModel):
@@ -195,7 +196,20 @@ async def _load_my_org(current_user: CurrentUser, db: "AsyncSession") -> Organiz
     return org
 
 
-def _plan_info(org: Organization) -> "PlanInfo":
+async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
+    from backend.models.schema import BillingCycle
+
+    return (
+        await db.execute(
+            select(BillingCycle.cycle_end)
+            .where(BillingCycle.org_id == org_id)
+            .order_by(BillingCycle.cycle_end.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _plan_info(org: Organization, cycle_end: date | None = None) -> "PlanInfo":
     return PlanInfo(
         plan=org.plan,
         status=org.status,
@@ -203,6 +217,7 @@ def _plan_info(org: Organization) -> "PlanInfo":
         pending_plan_effective=(
             org.pending_plan_effective.isoformat() if org.pending_plan_effective else None
         ),
+        cycle_end=cycle_end.isoformat() if cycle_end else None,
     )
 
 
@@ -211,8 +226,9 @@ async def get_plan(
     current_user: CurrentUser = Depends(get_current_user),
     db: "AsyncSession" = Depends(get_db),
 ) -> "PlanInfo":
-    """Caller's current plan + any scheduled change."""
-    return _plan_info(await _load_my_org(current_user, db))
+    """Caller's current plan + any scheduled change + current cycle end."""
+    org = await _load_my_org(current_user, db)
+    return _plan_info(org, await _latest_cycle_end(db, org.id))
 
 
 @router.post("/plan-change", response_model=PlanInfo)
@@ -221,12 +237,15 @@ async def change_plan(
     current_user: CurrentUser = Depends(get_current_user),
     db: "AsyncSession" = Depends(get_db),
 ) -> "PlanInfo":
-    """Schedule a plan change for the next billing cycle (1st of next month).
+    """Schedule a plan change for the next billing cycle.
 
-    A clinic owner can switch any time; the change never applies mid-month, so
-    a downgrade can't shrink minutes already paid for. Selecting the current
-    plan cancels a pending change. A daily job applies the change once its
-    effective date arrives.
+    Anniversary billing (Vinay 2026-07-12): a clinic's cycle starts the day
+    they pay, not the 1st of the month. So a scheduled change applies on the
+    CURRENT PAID CYCLE'S end date — never mid-cycle, so a downgrade can't
+    shrink minutes already paid for. A clinic with no future paid cycle
+    (trial / paused — nothing paid to protect) switches immediately.
+    Selecting the current plan cancels a pending change. A daily job applies
+    the change once its effective date arrives.
     """
     if current_user.role != "org_admin":
         raise HTTPException(status_code=403, detail="Only a clinic owner can change the plan")
@@ -240,8 +259,15 @@ async def change_plan(
         org.pending_plan = None
         org.pending_plan_effective = None
     else:
-        org.pending_plan = plan
-        org.pending_plan_effective = next_cycle_start(date.today())
+        cycle_end = await _latest_cycle_end(db, org.id)
+        if cycle_end and cycle_end > date.today():
+            org.pending_plan = plan
+            org.pending_plan_effective = cycle_end
+        else:
+            # Nothing paid-for to protect — apply now.
+            org.plan = plan
+            org.pending_plan = None
+            org.pending_plan_effective = None
     await db.commit()
     await db.refresh(org)
     logger.info(
@@ -391,11 +417,23 @@ async def activate_subscription(
         org.subscription_started_at = now
 
     today = now.date()
+    # Anniversary billing: the FIRST cycle starts the day they pay. A RENEWAL
+    # paid early starts where the current cycle ends (no paid days lost); paid
+    # late, it starts today (the gap wasn't served).
+    last_end = (
+        await db.execute(
+            select(BillingCycle.cycle_end)
+            .where(BillingCycle.org_id == org.id)
+            .order_by(BillingCycle.cycle_end.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    start = last_end if (last_end and last_end > today) else today
     db.add(
         BillingCycle(
             org_id=org.id,
-            cycle_start=today,
-            cycle_end=today + timedelta(days=30),
+            cycle_start=start,
+            cycle_end=start + timedelta(days=30),
             plan=chosen_plan,
             base_amount=plan_def.base_rupees,
             included_minutes=plan_def.included_minutes,

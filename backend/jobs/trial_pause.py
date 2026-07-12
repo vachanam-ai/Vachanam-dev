@@ -122,6 +122,102 @@ async def run_trial_nudge() -> None:
             logger.error("trial_nudge_error", org_id=str(org.id), error=str(e)[:160])
 
 
+async def run_billing_renewal(today: date | None = None) -> None:
+    """Anniversary-billing renewal loop (#340 — before this, ONE payment kept an
+    org active forever; no cycle end was ever enforced).
+
+    For every status='active' org, look at its LATEST BillingCycle.cycle_end:
+      - ends within 3 days           → ONE renewal email (Redis dedup per org+cycle)
+      - ended over 3 days ago (grace) → status='paused' + admin alert; paying
+        reactivates instantly via the normal webhook path.
+    Orgs with no cycle at all (admin-activated before billing existed) are left
+    alone — pausing them would cut service on clinics that never saw a bill.
+    RULE 8: email/Redis failures skip the org, never break the sweep.
+    """
+    from datetime import timedelta
+
+    import httpx
+    from sqlalchemy import func
+
+    from backend.config import settings
+    from backend.models.schema import BillingCycle
+    from backend.redis_client import get_redis
+    from backend.services.billing_math import PLANS
+
+    today = today or date.today()
+    grace = timedelta(days=3)
+    async with _db_module.AsyncSessionLocal() as db:
+        latest = (
+            select(BillingCycle.org_id, func.max(BillingCycle.cycle_end).label("end"))
+            .group_by(BillingCycle.org_id)
+            .subquery()
+        )
+        rows = (
+            await db.execute(
+                select(Organization, latest.c.end)
+                .join(latest, latest.c.org_id == Organization.id)
+                .where(Organization.status == "active")
+            )
+        ).all()
+
+        overdue = [(o, end) for o, end in rows if end + grace < today]
+        due_soon = [(o, end) for o, end in rows if today <= end <= today + timedelta(days=3)]
+
+        for org, end in overdue:
+            org.status = "paused"
+            logger.info("billing_cycle_overdue_paused", org_id=str(org.id),
+                        cycle_ended=end.isoformat())
+        if overdue:
+            await db.commit()
+            try:
+                await alert_admin("billing_overdue_paused", branch_id=None)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("billing_pause_alert_failed", error=str(e))
+
+    if not settings.resend_api_key:
+        return
+    for org, end in due_soon:
+        if not org.owner_email:
+            continue
+        try:
+            if not await get_redis().set(
+                f"renewal_nudge:{org.id}:{end.isoformat()}", "1", ex=30 * 86400, nx=True
+            ):
+                continue  # already nudged for this cycle
+        except Exception:  # noqa: BLE001 — Redis down: skip, retry next run
+            continue
+        price = PLANS[org.plan].base_rupees if org.plan in PLANS else 0
+        billing_url = f"{settings.frontend_url.rstrip('/')}/settings#plan"
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                    json={
+                        "from": settings.resend_from,
+                        "to": [org.owner_email],
+                        "subject": "Your Vachanam plan renews soon — pay to keep your line on",
+                        "text": (
+                            f"Namaste {org.name},\n\n"
+                            f"Your current billing cycle ends on {end.strftime('%d %b %Y')}. "
+                            f"Renew for Rs {price:,} (+18% GST) to keep your AI receptionist "
+                            f"answering every call:\n\n{billing_url}\n\n"
+                            "Pay with UPI, card or netbanking (Razorpay). If the cycle "
+                            "ends unpaid, your line pauses after a 3-day grace period — "
+                            "nothing is deleted, and paying reactivates it instantly.\n\n"
+                            "Questions? Just reply to this email.\n— Vachanam"
+                        ),
+                    },
+                )
+            if r.status_code >= 300:
+                logger.error("renewal_nudge_email_failed", org_id=str(org.id),
+                             status=r.status_code)
+            else:
+                logger.info("renewal_nudge_sent", org_id=str(org.id), cycle_end=end.isoformat())
+        except Exception as e:  # noqa: BLE001
+            logger.error("renewal_nudge_error", org_id=str(org.id), error=str(e)[:160])
+
+
 async def run_pending_plan_changes(today: date | None = None) -> None:
     """Apply clinic-scheduled plan changes whose effective date has arrived.
 

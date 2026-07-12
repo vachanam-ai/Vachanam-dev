@@ -398,9 +398,9 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Plan & billing */}
+      {/* Plan & billing — anniversary cycles: your 30 days start the day you pay. */}
       <Section id="plan" title="Plan & billing"
-        sub="Switch plans any time — the change takes effect from your next billing month, so you never lose minutes you've already paid for.">
+        sub="Your billing cycle starts the day you pay and runs 30 days. Plan switches take effect from your next cycle, so you never lose minutes you've already paid for.">
         <div className="flex flex-wrap items-center gap-3">
           <div>
             <label className="label">Plan</label>
@@ -415,15 +415,28 @@ export default function Settings() {
           <span className={plan.data?.status === "active" ? "chip-token" : "chip-muted"}>
             {plan.data?.status ?? "—"}
           </span>
-          {plan.data && plan.data.status !== "active" && (
+          {plan.data?.cycle_end && plan.data.status === "active" && (
+            <span className="font-ui text-sm text-slate">
+              Cycle ends{" "}
+              <strong className="text-ink">
+                {new Date(plan.data.cycle_end).toLocaleDateString("en-IN",
+                  { day: "numeric", month: "short", year: "numeric" })}
+              </strong>
+            </span>
+          )}
+          {plan.data && (plan.data.status !== "active" ||
+            (plan.data.cycle_end &&
+              (new Date(plan.data.cycle_end) - Date.now()) / 86400000 <= 5)) && (
             <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
-              {paying ? "Opening payment…" : `Activate — pay ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")}`}
+              {paying ? "Opening payment…"
+                : `${plan.data.status === "active" ? "Renew" : "Activate"} — pay ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")}`}
             </button>
           )}
         </div>
         {plan.data && plan.data.status !== "active" && (
           <p className="mt-2 font-ui text-xs text-slate">
-            UPI, card or netbanking via Razorpay. Your line activates the moment payment succeeds.
+            UPI, card or netbanking via Razorpay. Your line activates the moment payment succeeds,
+            and your 30-day cycle starts today.
           </p>
         )}
         {plan.data?.pending_plan && (
