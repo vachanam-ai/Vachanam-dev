@@ -216,13 +216,21 @@ async def test_data_handling_returns_html(client):
 
 async def test_privacy_policy_matches_reality():
     """The policy must describe what the code DOES: transcripts ARE stored
-    (masked, 90 days) — the old 'NOT STORED' wording was false; and the STT
-    processor table must name Soniox (primary) + Sarvam (fallback)."""
+    (masked, 90 days). Since #321 (stack confidentiality, Vinay 2026-07-12)
+    processors are identified BY ROLE, never by vendor name — the named list
+    is available via privacy@. This test is the scrub's regression: a vendor
+    name reappearing in the public policy is a failure."""
     from pathlib import Path
 
     text = Path("docs/legal/privacy-policy.md").read_text(encoding="utf-8")
-    assert "Soniox" in text
-    assert "Sarvam" in text  # still listed — it is the live fallback
+    # Both STT layers still disclosed, just role-named.
+    assert "Speech-recognition provider (primary)" in text
+    assert "Speech-recognition provider (backup)" in text
+    assert "privacy@vachanam.in" in text  # named list on request
+    # Stack vendors must NOT be named (Google/Razorpay are deliberate exceptions).
+    for vendor in ("Soniox", "Sarvam", "Gemini", "smallest", "LiveKit",
+                   "Vobiz", "Neon", "Upstash", "Fly.io", "Resend"):
+        assert vendor not in text, f"vendor name leaked into public policy: {vendor}"
     assert "90 days" in text  # transcript retention disclosed
     assert "| Voice call transcripts | NOT STORED |" not in text
 

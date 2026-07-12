@@ -1,5 +1,16 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-12 — LEGAL REBRAND + VENDOR SCRUB + UI BATCH + END-TREATMENT (FIXLOG #321-323).**
+> Legal pages (/privacy /terms /dpa /refunds /data-handling /data-safety) now
+> brand-styled (teal tokens, Fraunces/Outfit, dark mode, topbar). Processors
+> listed BY ROLE (stack confidential; named list via privacy@ on request;
+> Google+Razorpay stay named). NEW terms §6.1 — 10 "not responsible for" heads.
+> UI: `.input` alias fixed 19 unstyled support controls; compact density
+> (btn/field text-sm py-2) + 44px touch via pointer:coarse; navbar signout
+> nowrap+truncate; logo → roleHome. NEW end-treatment endpoint + button
+> (one-time visitor cleanup; optional DPDP erase via shared
+> services/patient_erasure.py, extracted from retention job).
+
 > **2026-07-12 — FAULT-TOLERANCE PRIMITIVES + CHAOS HARNESS (FIXLOG #320, master-local).**
 > `backend/services/resilience.py`: one `guard(name, coro_factory, timeout,
 > retries, backoff, fallback)` wrapper = chaos injection → circuit breaker

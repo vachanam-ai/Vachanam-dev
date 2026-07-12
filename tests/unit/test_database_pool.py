@@ -25,9 +25,12 @@ def test_pool_size_configured() -> None:
     which is set from the constructor argument. This is the only stable way to assert
     the configured maximum — pool.overflow() is a runtime counter, not the config value.
     """
+    # #324: the conftest fuse rebinds _db_module.engine to a NullPool test
+    # engine, so assert the PRODUCTION config on a fresh factory-built engine
+    # (the same _new_engine() main.py's engine comes from).
     import backend.database as _db_module
 
-    engine = _db_module.engine
+    engine = _db_module._new_engine()
     pool = engine.sync_engine.pool
 
     actual_size = pool.size()
@@ -52,7 +55,7 @@ def test_pool_pre_ping_enabled() -> None:
     """
     import backend.database as _db_module
 
-    engine = _db_module.engine
+    engine = _db_module._new_engine()  # #324: module engine is the test fuse
     pool = engine.sync_engine.pool
 
     assert pool._pre_ping is True, (

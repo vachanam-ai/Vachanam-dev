@@ -24,6 +24,10 @@ _REPO_ROOT = Path(__file__).parent.parent.parent
 _LEGAL_DIR = _REPO_ROOT / "docs" / "legal"
 
 # ── HTML wrapper template ────────────────────────────────────────────────────
+# Brand-matched to the PWA design system ("calm clinic ledger"): teal/cream/ink
+# tokens, Fraunces display + Outfit UI (CSP already whitelists Google Fonts),
+# light/dark via prefers-color-scheme, styled tables (the processor lists), and
+# a header bar linking back to vachanam.in.
 _HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -31,54 +35,100 @@ _HTML_TEMPLATE = """\
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title} — Vachanam</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Outfit:wght@400;500;600&family=Pacifico&display=swap" rel="stylesheet">
   <style>
+    :root {{
+      --teal: #006b6b; --teal-deep: #004f4f; --teal-light: #008f8f;
+      --teal-pale: #e0f2f1; --teal-mint: #f0fafa;
+      --ink: #1a2e2e; --ink-soft: #2d4444; --slate: #708090;
+      --cream: #fafcfc; --surface: #ffffff; --hairline: #d0e4e4;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --teal: #20b2a6; --teal-deep: #7fd4cd; --teal-light: #35c1b8;
+        --teal-pale: #133231; --teal-mint: #0f1f1e;
+        --ink: #e8f1ef; --ink-soft: #c6d6d3; --slate: #94a6a3;
+        --cream: #0a1312; --surface: #122019; --hairline: #203634;
+      }}
+    }}
     *, *::before, *::after {{ box-sizing: border-box; }}
+    html {{ -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }}
     body {{
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                   Helvetica, Arial, sans-serif;
-      font-size: 16px;
-      line-height: 1.6;
-      color: #1a1a1a;
-      background: #ffffff;
+      font-family: "Outfit", system-ui, sans-serif;
+      font-size: 16px; line-height: 1.7;
+      color: var(--ink); background: var(--cream);
       margin: 0;
-      padding: 2rem 1rem;
+      background-image:
+        radial-gradient(1200px 600px at 85% -10%, rgba(0,143,143,.06), transparent 60%),
+        radial-gradient(900px 500px at -10% 110%, rgba(0,107,107,.05), transparent 55%);
     }}
-    .container {{
-      max-width: 720px;
-      margin: 0 auto;
+    .topbar {{
+      position: sticky; top: 0; z-index: 10;
+      display: flex; align-items: center; gap: .75rem;
+      padding: .8rem 1.25rem;
+      background: color-mix(in srgb, var(--cream) 85%, transparent);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--hairline);
     }}
-    h1 {{ font-size: 2rem; margin-top: 0; color: #111; }}
-    h2 {{ font-size: 1.4rem; margin-top: 2rem; color: #222; border-bottom: 1px solid #e5e5e5; padding-bottom: 0.25rem; }}
-    h3 {{ font-size: 1.15rem; margin-top: 1.5rem; color: #333; }}
-    p  {{ margin: 0.75rem 0; }}
-    ul, ol {{ padding-left: 1.5rem; }}
-    li {{ margin: 0.4rem 0; }}
-    a  {{ color: #2563eb; text-decoration: none; }}
+    .brand {{ font-family: "Pacifico", cursive; font-size: 1.3rem; color: var(--teal); text-decoration: none; }}
+    .topbar .doc {{ font-size: .8rem; letter-spacing: .14em; text-transform: uppercase; color: var(--slate); }}
+    .container {{ max-width: 760px; margin: 0 auto; padding: 2.5rem 1.25rem 3rem; }}
+    h1, h2, h3 {{ font-family: "Fraunces", Georgia, serif; letter-spacing: -0.01em; text-wrap: balance; }}
+    h1 {{ font-size: 2.1rem; font-weight: 600; margin: 0 0 .5rem; color: var(--ink); }}
+    h2 {{ font-size: 1.35rem; font-weight: 600; margin-top: 2.4rem; color: var(--teal-deep);
+          border-bottom: 1px solid var(--hairline); padding-bottom: .35rem; }}
+    h3 {{ font-size: 1.1rem; font-weight: 600; margin-top: 1.6rem; color: var(--ink-soft); }}
+    p  {{ margin: .8rem 0; }}
+    ul, ol {{ padding-left: 1.4rem; }}
+    li {{ margin: .35rem 0; }}
+    a  {{ color: var(--teal); text-decoration: none; text-underline-offset: 3px; }}
     a:hover {{ text-decoration: underline; }}
-    strong {{ font-weight: 600; }}
-    hr {{ border: none; border-top: 1px solid #e5e5e5; margin: 2rem 0; }}
-    code {{ background: #f4f4f4; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }}
+    strong {{ font-weight: 600; color: var(--ink); }}
+    hr {{ border: none; border-top: 1px solid var(--hairline); margin: 2rem 0; }}
+    code {{ background: var(--teal-mint); padding: .1em .35em; border-radius: 4px; font-size: .9em; }}
     blockquote {{
-      margin: 1rem 0;
-      padding: 0.5rem 1rem;
-      border-left: 4px solid #d1d5db;
-      color: #555;
+      margin: 1rem 0; padding: .6rem 1rem;
+      border-left: 3px solid var(--teal-light);
+      background: var(--teal-mint); border-radius: 0 10px 10px 0;
+      color: var(--ink-soft);
     }}
+    .tablewrap, body {{ overflow-x: auto; }}
+    table {{
+      width: 100%; border-collapse: collapse; margin: 1.2rem 0;
+      font-size: .92rem; background: var(--surface);
+      border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden;
+    }}
+    th {{
+      text-align: left; font-weight: 600; font-size: .78rem;
+      letter-spacing: .08em; text-transform: uppercase;
+      color: var(--teal-deep); background: var(--teal-mint);
+      padding: .6rem .8rem; border-bottom: 1px solid var(--hairline);
+    }}
+    td {{ padding: .55rem .8rem; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
+    tr:last-child td {{ border-bottom: none; }}
     .footer {{
-      margin-top: 3rem;
-      padding-top: 1rem;
-      border-top: 1px solid #e5e5e5;
-      font-size: 0.85rem;
-      color: #666;
+      margin-top: 3rem; padding-top: 1.2rem;
+      border-top: 1px solid var(--hairline);
+      font-size: .85rem; color: var(--slate);
     }}
+    .footer a {{ color: var(--teal); }}
   </style>
 </head>
 <body>
+  <div class="topbar">
+    <a class="brand" href="https://vachanam.in">Vachanam</a>
+    <span class="doc">{title}</span>
+  </div>
   <div class="container">
     {body}
     <div class="footer">
       <p>Vachanam &mdash; AI-powered appointment booking for Indian clinics.<br>
-      Contact: <a href="mailto:hello@vachanam.in">hello@vachanam.in</a></p>
+      Healing starts with being heard.<br>
+      General: <a href="mailto:hello@vachanam.in">hello@vachanam.in</a> ·
+      Privacy &amp; data requests: <a href="mailto:privacy@vachanam.in">privacy@vachanam.in</a> ·
+      Support: <a href="mailto:support@vachanam.in">support@vachanam.in</a></p>
     </div>
   </div>
 </body>

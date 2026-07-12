@@ -95,7 +95,7 @@ Every piece of data we collect has a specific purpose. We do not collect data "j
 | Staff email and name | To let staff log in securely via Google and manage the clinic's queue |
 | Staff role | To control who can see what (a receptionist sees the queue; only the owner sees analytics) |
 
-We also use anonymized, aggregated data (e.g., "this clinic had 35 bookings today") to show the clinic owner their own analytics dashboard. We never sell data. We never use patient data to train AI models, and we use our AI providers (such as Google Gemini) through paid enterprise APIs whose terms prohibit the provider from using submitted data to train their models.
+We also use anonymized, aggregated data (e.g., "this clinic had 35 bookings today") to show the clinic owner their own analytics dashboard. We never sell data. We never use patient data to train AI models, and we use our AI providers only through paid enterprise APIs whose terms prohibit the provider from using submitted data to train their models.
 
 ---
 
@@ -128,23 +128,23 @@ Your data is visible only to people who need it to serve you.
 
 ## 6. Third-Party Data Processors
 
-We use the following third-party services to operate Vachanam. Each service processes only the minimum data needed for its function. We have listed every service, what it does, where it operates, and a link to its own privacy policy.
+We use carefully selected third-party services to operate Vachanam. Each processes only the minimum data needed for its function, under contractual data-protection terms that restrict use of the data to providing the service to us. To protect the confidentiality of our technology stack, processors are identified below by role rather than by name; the **full named list of processors** (with each provider's own privacy policy) is available on written request to [privacy@vachanam.in](mailto:privacy@vachanam.in), and is disclosed to our clinic customers under their Data Processing Agreement.
 
-| Service | What it processes | Where data is processed | Their privacy policy |
-|---|---|---|---|
-| **Soniox** | Converts your voice to text (speech-to-text) during your call. Audio is streamed in real time and not stored beyond the duration of the call. | United States | [soniox.com/privacy](https://soniox.com/legal/privacy-policy) |
-| **Sarvam AI** | Backup speech-to-text, used only when Soniox is unavailable. Same real-time streaming, no storage beyond the call. | India | [sarvam.ai/privacy](https://sarvam.ai/privacy) |
-| **smallest.ai (Waves)** | Converts the AI agent's responses (which include your name) back into voice (text-to-speech) during your call. Text is processed in real time and not stored after the call. | Global | [smallest.ai/privacy](https://smallest.ai) |
-| **Google (Calendar API + OAuth)** | Creates a calendar event for your doctor with your first name and last 4 digits of your phone number. Also handles staff login via Google accounts. | Global (Google Cloud) | [policies.google.com/privacy](https://policies.google.com/privacy) |
-| **Google (Gemini)** | Our AI language models (Gemini 3.1 Flash Lite primary, Gemini 2.5 Flash backup). Processes the conversation during your call to understand your request and route you to the right doctor. Subject to Google's data processing terms. | Global (Google Cloud) | [policies.google.com/privacy](https://policies.google.com/privacy) |
-| **Razorpay** | Processes clinic subscription payments. Sees billing amount and clinic owner email for invoicing. Does NOT see any patient data. | India | [razorpay.com/privacy](https://razorpay.com/privacy) |
-| **Resend** | Sends one-time verification codes to clinic staff by email during signup. Sees only the staff/owner email address. Does NOT see any patient data. | Global (US) | [resend.com/legal/privacy-policy](https://resend.com/legal/privacy-policy) |
-| **Neon** | Hosts our PostgreSQL database where appointment and user records are stored. All data encrypted at rest (AES-256 disk encryption managed by Neon). | Singapore | [neon.tech/privacy](https://neon.tech/privacy) |
-| **Upstash** | Hosts our Redis cache used for real-time token number assignment (preventing double-booking). Stores only temporary token counters that expire daily. | Mumbai, India | [upstash.com/privacy](https://upstash.com/privacy) |
-| **LiveKit** | Voice call infrastructure that connects your phone call to our AI agent. Handles audio routing only; does not store call content. | Mumbai, India | [livekit.io/privacy](https://livekit.io/privacy) |
-| **Fly.io** | Hosts the voice agent compute server that runs during your call. | Mumbai, India | [fly.io/legal/privacy-policy](https://fly.io/legal/privacy-policy) |
-| **Render** | Hosts our backend API server that manages appointments, authentication, and clinic data. | Singapore | [render.com/privacy](https://render.com/privacy) |
-| **Cloudflare** | Provides our CDN (content delivery network), DNS, and web application firewall. Processes HTTP request metadata (IP address, URL, headers) for security and routing. Does not see database contents. | Global edge network | [cloudflare.com/privacypolicy](https://www.cloudflare.com/privacypolicy/) |
+| Service (by role) | What it processes | Where data is processed |
+|---|---|---|
+| **Speech-recognition provider (primary)** | Converts your voice to text during your call. Audio is streamed in real time and not stored beyond the duration of the call. | United States |
+| **Speech-recognition provider (backup)** | Used only when the primary is unavailable. Same real-time streaming, no storage beyond the call. | India |
+| **Voice-synthesis provider** | Converts the AI agent's responses (which include your name) into natural speech during your call. Text is processed in real time and not stored after the call. | Global |
+| **Google (Calendar + sign-in)** | Creates a calendar event for your doctor with your first name and last 4 digits of your phone number; handles staff login via Google accounts. (Named because your clinic connects its own Google Calendar.) | Global (Google Cloud) |
+| **AI language-model provider** | Processes the conversation during your call to understand your request and route you to the right doctor; also performs automated, non-identifying quality scoring of transcripts. Used via paid enterprise APIs whose terms prohibit training on submitted data. | Global |
+| **Razorpay** | Processes clinic subscription payments (RBI-authorised payment aggregator). Sees billing amount and clinic owner email for invoicing. Does NOT see any patient data. | India |
+| **Transactional email provider** | Sends one-time verification codes and service emails to clinic staff. Sees only the staff/owner email address. Does NOT see any patient data. | Global (US) |
+| **Database hosting provider** | Hosts our database where appointment and user records are stored. All data encrypted at rest (AES-256). | Singapore |
+| **Cache provider** | Real-time token-number assignment (prevents double-booking). Stores only temporary counters that expire daily. | Mumbai, India |
+| **Voice-call infrastructure provider** | Connects your phone call to our AI agent. Handles audio routing only; does not store call content. | Mumbai, India |
+| **Voice compute host** | Runs the voice agent server during your call. | Mumbai, India |
+| **API hosting provider** | Hosts our backend API that manages appointments, authentication, and clinic data. | Singapore |
+| **CDN & security provider** | Content delivery, DNS, and web application firewall. Processes HTTP request metadata (IP address, URL, headers) for security and routing. Does not see database contents. | Global edge network |
 
 **WhatsApp (Meta):** WhatsApp-based booking confirmations and doctor commands are planned for an upcoming release. When this feature launches, Meta will be added to this table and this policy will be updated with 30 days notice. WhatsApp is not active in the current version.
 
@@ -179,7 +179,7 @@ We keep data only as long as it serves a clear purpose. Here are the specific re
 | Audit log (who accessed what, when, from where) | 7 years | Regulatory compliance and security investigation capability; aligns with Indian record-keeping norms | Permanently deleted |
 | User accounts (staff email, name, role) | Until the clinic owner removes the user, or the user requests deletion + 30 days | Clinic needs active staff accounts; 30-day buffer allows recovery from accidental deletion | Personally identifiable information purged; anonymized audit records retained |
 | Authentication tokens (login sessions) | 8 hours maximum (hard expiry) + immediate revocation on logout | Security: limits damage window if a device is stolen | Automatically expired; revocation records cleared from cache |
-| Voice call audio | NOT STORED | We do not record calls. Audio is processed in real time by Sarvam AI for speech-to-text conversion, then discarded. | Not applicable |
+| Voice call audio | NOT STORED | We do not record calls. Audio is processed in real time by our speech-recognition provider for speech-to-text conversion, then discarded. | Not applicable |
 | Treatment progress notes (doctor-entered) | Until the patient record is erased (2 years after last activity) | Doctors need continuity of care across visits | Deleted with the patient record |
 | Follow-up question and answer summary | Until the patient record is erased | The doctor reads the patient's response | Question/answer text cleared with the patient record |
 | Voice call transcripts (text only) | Up to 90 days | Call-quality monitoring and troubleshooting failed bookings. Phone numbers are masked before the transcript is saved; the transcript is visible only to your own clinic. | Transcript text automatically deleted by a daily job; the non-personal quality scores survive |
@@ -267,7 +267,7 @@ This privacy policy is effective as of **2026-06-04**.
 - **DPDP Rules:** The Digital Personal Data Protection Rules were notified on 14 November 2025. The full compliance deadline is 13 May 2027. Vachanam is on track to meet this deadline. This policy will be updated as additional guidance is published by the Data Protection Board or the Ministry of Electronics and Information Technology.
 - **Data Fiduciary vs Data Processor:** Under DPDP Act 2023 Chapter II, the clinic is the Data Fiduciary (they decide why patient data is processed -- to manage appointments). Vachanam is the Data Processor (we process patient data on the clinic's documented instructions per our Data Processing Agreement). Both share responsibility for keeping your data safe.
 - **Significant Data Fiduciary (SDF):** The SDF threshold and data localization requirements are pending a separate notification from the central government. Vachanam monitors these developments and will comply when applicable. As of this policy's effective date, Vachanam does not meet the expected SDF threshold.
-- **Data residency:** Telephony (Vobiz), cache (Upstash), and voice compute (Fly.io, LiveKit) operate within India. Speech-to-text (Soniox, United States; Sarvam AI backup, India), text-to-speech (smallest.ai) and the AI language models (Google Gemini) operate globally. Database (Neon) and backend API (Render) operate in Singapore. The DPDP Act 2023 permits cross-border transfer of personal data except to countries specifically restricted by the central government (none of our vendors' countries are restricted as of this policy's date). We choose vendors with the strongest India or near-India data residency available for each function, every processor and its location is listed in Section 6, and each processor is bound by contractual data-protection terms (their enterprise terms of service and/or a data processing agreement) that restrict use of the data to providing the service to us.
+- **Data residency:** Telephony, cache, and voice compute operate within India. Speech recognition (primary in the United States, backup in India), voice synthesis, and the AI language models operate globally. The database and backend API operate in Singapore. The DPDP Act 2023 permits cross-border transfer of personal data except to countries specifically restricted by the central government (none of our processors' countries are restricted as of this policy's date). We choose providers with the strongest India or near-India data residency available for each function, every processor role and its location is listed in Section 6 (named list available on request to privacy@vachanam.in), and each processor is bound by contractual data-protection terms (their enterprise terms of service and/or a data processing agreement) that restrict use of the data to providing the service to us.
 
 ---
 

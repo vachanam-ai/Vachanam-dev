@@ -28,6 +28,10 @@ import os as _os
 
 settings.redis_url = _os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0")
 
+# The real DATABASE_URL as loaded from .env — captured BEFORE the fuse below
+# overwrites it, so _refuse_unsafe_test_db can still compare against it.
+_ORIG_DATABASE_URL = settings.database_url
+
 
 def _refuse_unsafe_test_db() -> None:
     """Hard-fail pytest if TEST_DATABASE_URL could point at a dev or prod DB.
@@ -52,8 +56,11 @@ def _refuse_unsafe_test_db() -> None:
     if not url:
         pytest.fail("TEST_DATABASE_URL is not set — cannot run DB tests safely")
 
-    if url == settings.database_url:
+    if url == _ORIG_DATABASE_URL:
         # Strip password from URL before displaying (basic sanitisation).
+        # Compared against the ORIGINAL .env DATABASE_URL — the module-level
+        # fuse rewrites settings.database_url to the test URL, so comparing
+        # against settings.database_url here would always (wrongly) fail.
         safe_url = _sanitize_url(url)
         pytest.fail(
             f"REFUSING to run tests against non-test DB: "
@@ -100,6 +107,29 @@ def _sanitize_url(url: str) -> str:
     """
     import re
     return re.sub(r"(://[^:]+:)[^@]+(@)", r"\1***\2", url)
+
+
+# ── HARD FUSE (FIXLOG #324): no test can EVER reach the real DATABASE_URL. ───
+# Root cause 2026-07-12: tests that hit the app through an ASGI client WITHOUT
+# requesting the `db` fixture left backend.database bound to .env DATABASE_URL
+# (which on the dev box is Neon PROD) — every full-suite run posted junk
+# "I am stuck, help" tickets into the LIVE support desk. The `db` fixture's
+# rebinding is opt-in per test; this fuse is unconditional and runs at conftest
+# import, before any test executes:
+#   1. validate TEST_DATABASE_URL (same guards the db fixture uses),
+#   2. overwrite settings.database_url with the test URL,
+#   3. rebind backend.database.engine + AsyncSessionLocal to the test DB.
+# A test that forgets `db` now fails loudly on missing tables instead of
+# silently writing to production. DPDP: prod patient data is unreachable from
+# the test process, full stop.
+_refuse_unsafe_test_db()
+settings.database_url = settings.test_database_url
+_db_module.engine = create_async_engine(
+    settings.test_database_url, echo=False, poolclass=NullPool
+)
+_db_module.AsyncSessionLocal = async_sessionmaker(
+    _db_module.engine, class_=AsyncSession, expire_on_commit=False
+)
 
 
 @pytest_asyncio.fixture(scope="function")

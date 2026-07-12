@@ -283,6 +283,97 @@ async def list_patients(
     return {"patients": out}
 
 
+class EndTreatmentIn(BaseModel):
+    branch_id: uuid.UUID
+    # When set, only this doctor's treatment thread ends (a patient can run two
+    # treatments at once). Omitted = end every thread for the patient.
+    doctor_id: uuid.UUID | None = None
+    # DPDP right-to-erasure: also wipe the patient's PII (name/phone/age) via the
+    # SAME code path the automatic retention job uses. Whole-patient — never
+    # doctor-scoped (PII belongs to the patient, not a thread).
+    erase_data: bool = False
+
+
+@router.post("/patients/{patient_id}/end-treatment")
+async def end_treatment(
+    patient_id: uuid.UUID,
+    body: EndTreatmentIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """End a treatment (one-time visitor cleanup / treatment finished).
+
+    Deletes the treatment notes for the thread (the patient drops off the
+    Treatments list) and completes any pending follow-up tasks so no more
+    calls go out. With erase_data=True the patient's PII is erased too
+    (services/patient_erasure.py — same path as the retention job).
+    RULE 1: branch-scoped; RULE 9: audit row keeps IDs only.
+    """
+    await assert_branch_access(user, str(body.branch_id), db)
+    pat = await _load_patient(patient_id, body.branch_id, db)
+
+    if body.erase_data:
+        from backend.services.patient_erasure import erase_patient_pii
+
+        # Erasure already deletes ALL the patient's notes + clears the thread.
+        await erase_patient_pii(db, pat)
+        notes_deleted = -1  # signalled as "all" below
+    else:
+        note_filter = [
+            TreatmentNote.patient_id == patient_id,
+            TreatmentNote.branch_id == body.branch_id,
+        ]
+        task_filter = [
+            FollowupTask.patient_id == patient_id,
+            FollowupTask.branch_id == body.branch_id,
+        ]
+        if body.doctor_id:
+            note_filter.append(TreatmentNote.doctor_id == body.doctor_id)
+            task_filter.append(FollowupTask.doctor_id == body.doctor_id)
+        # FK ORDER: FollowupTask.treatment_note_id -> treatment_notes is
+        # RESTRICT — clear links before deleting the notes.
+        await db.execute(
+            FollowupTask.__table__.update().where(*task_filter)
+            .values(treatment_note_id=None)
+        )
+        res = await db.execute(TreatmentNote.__table__.delete().where(*note_filter))
+        notes_deleted = int(res.rowcount or 0)
+
+    # No more follow-up calls for this thread, in either mode.
+    task_filter = [
+        FollowupTask.patient_id == patient_id,
+        FollowupTask.branch_id == body.branch_id,
+        FollowupTask.status.in_(("pending", "in_progress")),
+    ]
+    if body.doctor_id and not body.erase_data:
+        task_filter.append(FollowupTask.doctor_id == body.doctor_id)
+    await db.execute(
+        FollowupTask.__table__.update().where(*task_filter).values(status="completed")
+    )
+    await db.commit()
+
+    from backend.services.audit_service import write_audit_row
+
+    await write_audit_row(
+        action="treatment.ended",
+        resource_type="patient",
+        resource_id=str(patient_id),
+        user_id=uuid.UUID(user.user_id) if user.user_id else None,
+        branch_id=body.branch_id,
+        metadata={"erase_data": body.erase_data,
+                  "doctor_id": str(body.doctor_id) if body.doctor_id else None},
+    )
+    logger.info(
+        "treatment_ended",
+        patient_id=str(patient_id),
+        branch_id=str(body.branch_id),
+        erase_data=body.erase_data,
+        notes_deleted=notes_deleted,
+        action="treatment.ended",
+    )
+    return {"ended": True, "erased": body.erase_data}
+
+
 # --- M2 (Task 7): follow-up thread (read + doctor reply) ---
 # Thread = next_visit_book + doctor_advice rows for one patient+branch, oldest first.
 # A doctor reply (any language) is relayed verbatim via what_to_ask; it NEVER writes

@@ -25,16 +25,12 @@ from backend.config import settings
 from backend.models.schema import (
     CallQuality,
     Consent,
-    FollowupTask,
     Patient,
     Token,
-    TreatmentNote,
 )
+from backend.services.patient_erasure import ERASED_NAME, erase_patient_pii
 
 logger = structlog.get_logger()
-
-# Name is NOT NULL on patients — use a fixed placeholder rather than NULL.
-ERASED_NAME = "[erased]"
 
 
 async def run_data_retention() -> None:
@@ -59,36 +55,9 @@ async def run_data_retention() -> None:
         ).scalars().all()
 
         for p in stale:
-            # Capture identifiers for the log BEFORE erasing (Rule 9: ids + last-4).
-            last4 = (p.phone or "")[-4:] or "----"
-            p.name = ERASED_NAME
-            p.phone = None
-            p.age = None
-            p.gender = None
-            p.followup_consent = False
-            p.anonymized_at = now
-
-            # Treatment health-data erasure (RULE 9): delete the patient's
-            # treatment notes outright and NULL the health text on their
-            # follow-up thread (keep the task rows for non-PII outcome trends).
-            # FK ORDER: FollowupTask.treatment_note_id -> treatment_notes is
-            # RESTRICT, so the FollowupTask link must be cleared BEFORE the
-            # treatment_notes are deleted, else the delete raises FK violation.
-            await db.execute(
-                FollowupTask.__table__.update()
-                .where(FollowupTask.patient_id == p.id)
-                .values(treatment_note_id=None, what_to_ask=None, response_summary=None)
-            )
-            await db.execute(
-                TreatmentNote.__table__.delete().where(TreatmentNote.patient_id == p.id)
-            )
-
-            logger.info(
-                "patient_pii_erased",
-                patient_id=str(p.id),
-                branch_id=str(p.branch_id),
-                phone_last4=last4,
-            )
+            # Shared erasure path (services/patient_erasure.py) — same code the
+            # clinic-initiated "end treatment & delete data" action uses.
+            await erase_patient_pii(db, p)
 
         # Prune the demonstrable-notice records past the same window.
         pruned = await db.execute(

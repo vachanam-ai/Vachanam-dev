@@ -70,11 +70,20 @@ export default function SupportWidget() {
             <div ref={endRef} />
           </div>
 
-          <form onSubmit={ask} className="flex items-center gap-2 border-t border-hairline p-2">
-            <input className="input flex-1 py-2" placeholder="Message…" value={q}
+          <form onSubmit={ask} className="flex items-center gap-2 border-t border-hairline p-2.5">
+            <input className="input flex-1" placeholder="Type your question…" value={q}
               onChange={(e) => setQ(e.target.value)} />
-            <button className="btn-primary px-3 py-2" disabled={busy} aria-label="Send">
-              {busy ? "…" : "➤"}
+            <button
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal text-white transition hover:brightness-110 disabled:opacity-40"
+              disabled={busy || !q.trim()} aria-label="Send"
+            >
+              {busy ? (
+                <span className="text-xs">…</span>
+              ) : (
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
+                </svg>
+              )}
             </button>
           </form>
           <Link to="/tickets" onClick={() => setOpen(false)}

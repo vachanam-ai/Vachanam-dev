@@ -100,9 +100,12 @@ body::after {
   @apply flex items-center gap-4 px-4 py-3 border-b border-hairline last:border-b-0;
 }
 
+/* Compact desktop density (2026-07-12, Vinay: "everything looks very big").
+   36-40px control height + 14px text is the desktop norm; 44px touch targets
+   are restored under (pointer: coarse) below, per Apple/Android guidelines. */
 .btn {
-  @apply inline-flex items-center justify-center gap-2 font-ui font-medium rounded-xl
-    px-4 py-2.5 transition-all duration-150 select-none
+  @apply inline-flex items-center justify-center gap-2 font-ui font-medium rounded-lg
+    px-3.5 py-2 text-sm transition-all duration-150 select-none
     focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-light
     disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98];
 }
@@ -120,9 +123,20 @@ body::after {
 .chip-danger { @apply chip bg-danger/10 text-danger; }
 
 .field {
-  @apply w-full rounded-xl border border-hairline bg-surface px-3.5 py-2.5 font-ui text-ink text-base
+  @apply w-full rounded-lg border border-hairline bg-surface px-3 py-2 font-ui text-ink text-sm
     placeholder:text-slate-light focus:border-teal-light focus:outline-none
     focus:ring-2 focus:ring-teal-light/25 transition;
+}
+/* Alias — the support pages were written with `input`; keep both valid so a
+   missed rename can never ship an unstyled control again. */
+.input { @apply field; }
+
+/* Touch devices get full 44px+ targets (Apple HIG / Android 48dp) without
+   inflating desktop density. */
+@media (pointer: coarse) {
+  .btn, .field, .input {
+    min-height: 44px;
+  }
 }
 
 /* iOS Safari zooms the page when a focused input's font is < 16px. Force a

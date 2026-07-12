@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { useAuth } from "../hooks/useAuth.jsx";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
 
 const NAV = {
@@ -61,17 +61,24 @@ export default function Shell() {
   return (
     <div className="flex min-h-[100dvh] flex-col">
       <header className="sticky top-0 z-30 border-b border-hairline bg-cream/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:gap-6">
-          <span className="font-brand text-xl leading-none text-teal">Vachanam</span>
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:gap-5">
+          {/* Brand → role home (dashboard for owners) */}
+          <Link
+            to={roleHome(role)}
+            className="shrink-0 font-brand text-xl leading-none text-teal"
+            aria-label="Go to home"
+          >
+            Vachanam
+          </Link>
 
-          {/* Desktop / tablet inline nav */}
-          <nav className="hidden items-center gap-1 md:flex">
+          {/* Desktop / tablet inline nav — nowrap labels, scrolls if cramped */}
+          <nav className="hidden min-w-0 items-center gap-0.5 overflow-x-auto md:flex">
             {links.map((l) => (
               <NavLink
                 key={l.to}
                 to={l.to}
                 className={({ isActive }) =>
-                  `rounded-lg px-3 py-1.5 font-ui text-sm transition ${
+                  `whitespace-nowrap rounded-lg px-2.5 py-1.5 font-ui text-sm transition ${
                     isActive
                       ? "bg-teal text-white shadow-card"
                       : "text-ink-soft hover:bg-teal-mint"
@@ -83,15 +90,18 @@ export default function Shell() {
             ))}
           </nav>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2.5">
             <ThemeToggle />
-            <div className="hidden text-right sm:block">
-              <p className="font-ui text-sm font-medium leading-tight">{user?.name ?? user?.email}</p>
-              <p className="font-ui text-[11px] uppercase tracking-[0.14em] text-slate">
+            <div className="hidden min-w-0 max-w-[180px] text-right lg:block">
+              <p className="truncate font-ui text-sm font-medium leading-tight">{user?.name ?? user?.email}</p>
+              <p className="truncate font-ui text-[10px] uppercase tracking-[0.14em] text-slate">
                 {ROLE_LABEL[role] ?? role}
               </p>
             </div>
-            <button onClick={logout} className="btn-ghost hidden px-3 py-1.5 text-sm md:inline-flex">
+            <button
+              onClick={logout}
+              className="btn-ghost hidden shrink-0 whitespace-nowrap px-3 py-1.5 text-sm md:inline-flex"
+            >
               Sign out
             </button>
 

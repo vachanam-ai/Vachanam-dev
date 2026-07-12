@@ -17,7 +17,7 @@ The number you dialled tells us which clinic you want. That is the ONLY thing we
 
 ### Step 2 — The AI answers
 
-Your voice is streamed in real time to a speech-to-text service (Soniox; Sarvam AI as backup). **The audio is converted to text and discarded — no voice recording is ever stored.** The text of the conversation is processed by an AI language model (Google Gemini) to understand your request. The AI is prohibited by design from giving medical advice, making diagnoses, or storing medical records.
+Your voice is streamed in real time to our speech-recognition service. **The audio is converted to text and discarded — no voice recording is ever stored.** The text of the conversation is processed by an AI language model to understand your request. The AI is prohibited by design from giving medical advice, making diagnoses, or storing medical records.
 
 ### Step 3 — A token is reserved
 

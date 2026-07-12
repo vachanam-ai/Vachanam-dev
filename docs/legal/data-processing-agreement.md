@@ -69,24 +69,24 @@ Vachanam will NOT process personal data for any purpose beyond those documented 
 
 ## 4. Sub-Processors
 
-Vachanam uses the following sub-processors to deliver the service. By signing this DPA, the Clinic consents to the use of these sub-processors.
+Vachanam uses the following categories of sub-processor to deliver the service. By signing this DPA, the Clinic consents to the use of these sub-processors. To protect the confidentiality of Vachanam's technology stack (a legitimate trade-secret interest), sub-processors are identified by role; the **full named list** — with each provider's identity, location, and data-protection terms — is provided to the Clinic on written request to privacy@vachanam.in, under the confidentiality obligations of this DPA (Section 11).
 
-| Sub-processor | What they process | Data location | Purpose |
+| Sub-processor (by role) | What they process | Data location | Purpose |
 |---|---|---|---|
-| Soniox | Voice audio (real-time speech-to-text only) | United States | Convert patient speech to text during calls (primary) |
-| Sarvam AI | Voice audio (real-time speech-to-text only) | India | Convert patient speech to text during calls (backup, used only when Soniox is unavailable) |
-| smallest.ai (Waves) | The agent's response text, including the patient's spoken name, converted to voice (text-to-speech) | Global | Convert the agent's responses to natural speech during calls |
-| Google (Calendar API) | Calendar events containing patient first name + last 4 digits of phone number | Global (Google Cloud) | Create appointment events on doctor's calendar |
+| Speech-recognition provider (primary) | Voice audio (real-time speech-to-text only) | United States | Convert patient speech to text during calls |
+| Speech-recognition provider (backup) | Voice audio (real-time speech-to-text only) | India | Backup conversion, used only when the primary is unavailable |
+| Voice-synthesis provider | The agent's response text, including the patient's spoken name, converted to voice | Global | Convert the agent's responses to natural speech during calls |
+| Google (Calendar API) | Calendar events containing patient first name + last 4 digits of phone number | Global (Google Cloud) | Create appointment events on doctor's calendar (named — the Clinic connects its own Google Calendar) |
 | Google (OAuth) | Staff email address | Global (Google Cloud) | Authenticate clinic staff login |
-| Google (Gemini) | Real-time conversation transcript | Global (Google Cloud) | AI language models (Gemini 3.1 Flash Lite primary, Gemini 2.5 Flash backup) for understanding patient requests; also performs automated quality review (scoring) of call transcripts for service improvement — the stored output is non-identifying (a numeric score + issue tags, no patient data) |
-| Razorpay | Clinic billing amount, clinic owner email | India | Process Clinic subscription payments |
-| Resend | Clinic staff / owner email address | Global (US) | Send one-time verification codes (email OTP) during staff signup |
-| Neon | All database records (patients, doctors, tokens, staff, audit log) | Singapore | Database hosting |
-| Upstash | Temporary token counters (daily booking counts only) | Mumbai, India | Prevent double-booking via atomic token assignment |
-| LiveKit | Audio routing metadata (no storage of call content) | Mumbai, India | Voice call infrastructure |
-| Fly.io | Voice agent compute (processes calls in real time) | Mumbai, India | Host voice agent server |
-| Render | Backend API compute (processes API requests) | Singapore | Host backend application server |
-| Cloudflare | HTTP request metadata (IP, URL, headers) | Global edge | CDN, DNS, web application firewall |
+| AI language-model provider | Real-time conversation transcript | Global | Understand patient requests during calls; automated quality review (scoring) of transcripts — the stored output is non-identifying (a numeric score + issue tags, no patient data). Enterprise API terms prohibit training on submitted data |
+| Razorpay | Clinic billing amount, clinic owner email | India | Process Clinic subscription payments (RBI-authorised payment aggregator) |
+| Transactional email provider | Clinic staff / owner email address | Global (US) | One-time verification codes (email OTP) and service email |
+| Database hosting provider | All database records (patients, doctors, tokens, staff, audit log) | Singapore | Database hosting (AES-256 at rest) |
+| Cache provider | Temporary token counters (daily booking counts only) | Mumbai, India | Prevent double-booking via atomic token assignment |
+| Voice-call infrastructure provider | Audio routing metadata (no storage of call content) | Mumbai, India | Voice call infrastructure |
+| Voice compute host | Voice agent compute (processes calls in real time) | Mumbai, India | Host voice agent server |
+| API hosting provider | Backend API compute (processes API requests) | Singapore | Host backend application server |
+| CDN & security provider | HTTP request metadata (IP, URL, headers) | Global edge | CDN, DNS, web application firewall |
 
 ### 4.1 Changes to sub-processors
 
@@ -107,12 +107,12 @@ Vachanam implements the following security measures to protect personal data pro
 | Measure | Implementation |
 |---|---|
 | Encryption in transit | TLS 1.2+ on all connections; HSTS enforced |
-| Encryption at rest | AES-256 disk encryption (managed by Neon, our database provider) |
+| Encryption at rest | AES-256 disk encryption (managed by our database hosting provider) |
 | Data isolation | Every database query is scoped to the Clinic's branch_id; one clinic cannot access another's data |
 | Access control | Role-based JWT authentication (owner, receptionist, admin); Google OAuth login (no passwords stored) |
 | Audit logging | Append-only audit log of all sensitive actions (login, data access, token assignment, payment); 7-year retention |
 | Rate limiting | Per-endpoint, per-user request throttling; IP blocklist for brute-force attempts |
-| Web application firewall | Cloudflare managed OWASP Core Rule Set + Bot Fight Mode |
+| Web application firewall | Managed OWASP Core Rule Set + bot protection at our edge/CDN provider |
 | Session security | 8-hour hard JWT expiry; 30-minute idle timeout; immediate revocation on logout |
 | Secret management | All API keys and secrets stored as environment variables; secret scanning on code repository |
 | PII protection in logs | Phone numbers truncated to last 4 digits in all log output; PII denylist enforced on audit log metadata |

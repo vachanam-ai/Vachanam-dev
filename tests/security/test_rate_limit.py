@@ -337,7 +337,7 @@ async def test_trusted_ip_bypasses_rate_limit(client, redis, monkeypatch):
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def test_user_a_exhausting_quota_does_not_affect_user_b(client, redis):
+async def test_user_a_exhausting_quota_does_not_affect_user_b(client, redis, db):
     """User A burns through /queue/{branch}/today limit → 429 for user A.
     User B (different JWT sub) from same IP still has fresh quota.
 
@@ -404,7 +404,7 @@ async def test_user_a_exhausting_quota_does_not_affect_user_b(client, redis):
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def test_ten_distinct_users_each_get_independent_quota(client, redis):
+async def test_ten_distinct_users_each_get_independent_quota(client, redis, db):
     """10 distinct user JWTs hit /queue/{branch}/today in parallel.
 
     Each must succeed (no user crosses its own per-user limit). We deliberately

@@ -25,7 +25,7 @@ Less data stored = less data that can ever leak. This is deliberate.
 
 ## 2. Where the data lives
 
-- **Database:** Neon PostgreSQL (Singapore region), encrypted at rest with AES-256, running on SOC 2–audited infrastructure.
+- **Database:** PostgreSQL (Singapore region), encrypted at rest with AES-256, running on SOC 2–audited infrastructure.
 - **In transit:** every connection — patient call signalling, dashboard, API — is TLS-encrypted.
 - **Voice processing:** happens in real time in Mumbai (our voice servers run in India); audio is never written to disk.
 - Every vendor we use, what it sees, and where it operates is listed publicly in our Privacy Policy §6. No vendor is added without updating that list first.
@@ -98,7 +98,7 @@ Doctors often benchmark against Practo — a fair bar. Structural comparison:
 |---|---|---|
 | Data collected | Full health profiles, consultation records, medicine orders, payments | First name, phone, complaint line, token — booking only |
 | Business model risk | Consumer app monetising engagement across clinics | B2B tool; your data has zero value to us beyond serving your clinic |
-| Certifications | ISO 27001 (organisational certification) | Runs entirely on SOC 2 / ISO-certified infrastructure (Neon, Google Cloud, AWS-backed vendors); Vachanam's own ISO certification is on our roadmap as we grow |
+| Certifications | ISO 27001 (organisational certification) | Runs entirely on SOC 2 / ISO-certified cloud infrastructure; Vachanam's own ISO certification is on our roadmap as we grow |
 | Call recordings | Varies by product | Never — audio is not stored, full stop |
 | Cross-clinic visibility | Platform-wide patient accounts | Impossible by design — no shared patient identity across clinics |
 | Retention | Policy-based | Enforced by daily software job, publicly documented |

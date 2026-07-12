@@ -8,7 +8,8 @@ import {
   createNote,
   editNote,
   listFollowups,
-  replyToPatient
+  replyToPatient,
+  endTreatment
 } from "../api/treatment.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
@@ -118,6 +119,8 @@ export default function Treatments() {
   const [isFinal, setIsFinal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [replyMessage, setReplyMessage] = useState("");
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [eraseData, setEraseData] = useState(false);
 
   const { data: doctors = [] } = useQuery({
     queryKey: ["doctors", branchId],
@@ -254,6 +257,22 @@ export default function Treatments() {
   const canReply =
     Boolean(patientId) && Boolean(doctorId) && Boolean(replyMessage.trim()) && !reply.isPending;
 
+  // One-time visitors don't need a treatment thread; completed treatments can be
+  // closed out — optionally erasing the patient's personal data (DPDP erasure).
+  const end = useMutation({
+    mutationFn: () =>
+      endTreatment(patientId, { branchId, doctorId: threadDoctorId, eraseData }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
+      setPatientId("");
+      setThreadDoctorId("");
+      setConfirmEnd(false);
+      setEraseData(false);
+      toast.success(eraseData ? "Treatment ended and patient data erased" : "Treatment ended");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Couldn't end the treatment")
+  });
+
   const needsAttention = followups.some(
     (f) => (f.response && f.response.trim()) || f.status === "unreachable"
   );
@@ -278,14 +297,14 @@ export default function Treatments() {
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
             type="search"
-            className="field min-h-[48px] flex-1"
+            className="field flex-1"
             placeholder="Search by name or phone…"
             value={patientSearch}
             onChange={(e) => setPatientSearch(e.target.value)}
             aria-label="Search patients"
           />
           <select
-            className="field min-h-[48px] sm:w-56"
+            className="field sm:w-56"
             value={filterDoctorId}
             onChange={(e) => setFilterDoctorId(e.target.value)}
             aria-label="Filter by doctor"
@@ -314,7 +333,7 @@ export default function Treatments() {
                       setPatientId(selected ? "" : p.patient_id);
                       setThreadDoctorId(selected ? "" : p.doctor_id);
                     }}
-                    className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors min-h-[56px] ${
+                    className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors ${
                       selected ? "bg-teal-mint/60" : "hover:bg-teal-mint/30"
                     }`}
                     aria-expanded={selected}
@@ -355,7 +374,49 @@ export default function Treatments() {
                   {status === "completed" ? "Completed" : "Active"}
                 </span>
               )}
+              <button
+                type="button"
+                onClick={() => setConfirmEnd((v) => !v)}
+                className="ml-auto font-ui text-xs text-danger underline-offset-2 hover:underline"
+              >
+                End treatment
+              </button>
             </header>
+            {confirmEnd && (
+              <div className="space-y-3 border-b border-hairline bg-danger/5 px-4 py-3">
+                <p className="font-ui text-sm">
+                  Removes this patient from the treatment list and stops any pending
+                  follow-up calls. Use it for one-time visitors or a finished treatment.
+                </p>
+                <label className="flex cursor-pointer items-start gap-2 font-ui text-sm">
+                  <input
+                    type="checkbox"
+                    checked={eraseData}
+                    onChange={(e) => setEraseData(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-teal"
+                  />
+                  <span>
+                    Also erase the patient&rsquo;s personal data (name, phone)
+                    <span className="block text-xs text-slate">
+                      Permanent. Visit notes are deleted; anonymous booking counts remain.
+                    </span>
+                  </span>
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => end.mutate()}
+                    disabled={end.isPending}
+                    className="btn-danger"
+                  >
+                    {end.isPending ? "Ending…" : eraseData ? "End & erase data" : "End treatment"}
+                  </button>
+                  <button type="button" onClick={() => setConfirmEnd(false)} className="btn-ghost">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             {notesLoading ? (
               <p className="px-4 py-6 font-ui text-sm text-slate">Loading visit notes…</p>
             ) : notes.length === 0 ? (
@@ -449,7 +510,7 @@ export default function Treatments() {
                 <input
                   id="visit-date"
                   type="date"
-                  className="field min-h-[56px]"
+                  className="field"
                   value={visitDate}
                   onChange={(e) => setVisitDate(e.target.value)}
                   required
@@ -459,7 +520,7 @@ export default function Treatments() {
                 <label className="label" htmlFor="doctor-select">Doctor</label>
                 <select
                   id="doctor-select"
-                  className="field min-h-[56px]"
+                  className="field"
                   value={doctorId}
                   onChange={(e) => setDoctorId(e.target.value)}
                   required
@@ -521,14 +582,14 @@ export default function Treatments() {
               <input
                 id="next-date"
                 type="date"
-                className="field min-h-[56px]"
+                className="field"
                 value={nextReportingDate}
                 onChange={(e) => setNextReportingDate(e.target.value)}
                 disabled={isFinal}
               />
             </div>
 
-            <label className="flex min-h-[56px] cursor-pointer items-center gap-3 rounded-xl border border-hairline px-4 font-ui">
+            <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-hairline px-4 font-ui">
               <input
                 type="checkbox"
                 checked={isFinal}

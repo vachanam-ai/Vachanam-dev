@@ -158,6 +158,23 @@ To the maximum extent permitted by applicable Indian law:
 - Vachanam is not liable for any harm resulting from a patient relying on the AI agent for medical advice (the AI is explicitly instructed not to give medical advice; see Section 1).
 - Vachanam is not liable for missed or incorrect bookings caused by factors outside our control (e.g., incorrect doctor schedule entered by the clinic owner, patient providing wrong information, telephony network failure).
 
+### 6.1 What Vachanam is expressly NOT responsible for
+
+Vachanam is a scheduling and communication tool. It is not a healthcare provider, not a medical device, and not a party to the doctor–patient relationship. Specifically, Vachanam is **not responsible for**:
+
+1. **Medical care or outcomes.** Any diagnosis, treatment, prescription, medical advice, or clinical outcome. The AI agent books appointments only; all medical decisions and care are solely between the patient and the clinic's doctors.
+2. **Medical emergencies.** Vachanam is not an emergency service and must not be relied on in an emergency. The clinic is responsible for its own emergency contact arrangements (Section 2.4).
+3. **Accuracy of clinic-entered information.** Doctor names, specializations, working hours, leave, token limits, fees, and any other data entered by the clinic. Bookings are made against this data as entered.
+4. **Patient behaviour.** No-shows, late arrivals, wrong information given by the caller (name, phone, health issue), or a patient's decision to cancel.
+5. **Telephony and network failures.** Call drops, poor audio, carrier outages, spam-blocking of the clinic's number by handset apps or carriers, and any failure of the public telephone network or the patient's device or connection.
+6. **Third-party service interruptions.** Outages or degradation of the underlying cloud, telephony, calendar, payment, or AI services we depend on. We engineer for graceful degradation and pursue recovery promptly, but we do not control these providers (see Section 3.1 uptime commitment).
+7. **Notification delivery.** Non-delivery or delayed delivery of emails or (when launched) messages, once handed to the delivery provider or carrier.
+8. **The clinic's own legal compliance.** The clinic's obligations as Data Fiduciary under the DPDP Act 2023 (patient notices, consents where required), its professional licensing, advertising compliance, tax obligations, and its own staff conduct.
+9. **Losses from account misuse.** Actions taken through a clinic account whose credentials the clinic failed to secure (Section 2.2), including staff misuse.
+10. **Force majeure.** Events beyond reasonable control — natural disasters, war, riots, government orders, internet backbone failures, power grid failures, epidemics, or strikes.
+
+The AI agent may occasionally mishear, misunderstand, or fail to complete a call — speech recognition and language AI are probabilistic technologies. The clinic dashboard and daily queue remain the authoritative record; clinics should review their queue each day. Where a booking fails, Vachanam's responsibility is limited to the service-credit / liability terms above.
+
 Nothing in these terms excludes liability for fraud, willful misconduct, or death or personal injury caused by our negligence.
 
 ---

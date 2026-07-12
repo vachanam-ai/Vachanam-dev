@@ -241,7 +241,7 @@ async def test_csp_contains_required_directives(client):
 # ======================================================================
 
 
-async def test_authenticated_request_has_all_security_headers(client):
+async def test_authenticated_request_has_all_security_headers(client, db):
     """A request WITH a valid JWT to a protected route that returns 200
     (or any non-error status) must also carry all 6 security headers.
 

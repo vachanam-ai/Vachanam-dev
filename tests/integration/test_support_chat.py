@@ -110,7 +110,7 @@ async def test_authed_chat_works_without_turnstile_token(client, db, monkeypatch
     assert r.status_code == 403  # anonymous must pass Turnstile
 
 
-async def test_team_emailed_once_only_for_new_unanswered_ticket(client, monkeypatch):
+async def test_team_emailed_once_only_for_new_unanswered_ticket(client, db, monkeypatch):
     """Resend-quota policy: a NEW ticket the AI couldn't answer emails the team
     exactly once; an AI-resolved chat emails nobody."""
     from backend.services import support_email
