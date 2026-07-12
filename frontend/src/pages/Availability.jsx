@@ -34,9 +34,13 @@ export default function Availability() {
     enabled: Boolean(branchId && doctorId && from && to && from <= to)
   });
 
+  // Re-run when loading flips: on a client-side nav the first render is the
+  // "Loading doctors…" early return (no pageRef), so a mount-only reveal left
+  // every [data-reveal] block at its CSS opacity:0 — permanently black page
+  // until reload (live 2026-07-12, FIXLOG #334).
   useEffect(() => {
-    revealStagger(pageRef.current);
-  }, []);
+    if (!isLoading) revealStagger(pageRef.current);
+  }, [isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const mark = useMutation({
     mutationFn: () =>
