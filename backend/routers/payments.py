@@ -53,26 +53,28 @@ def _extract_org_id(notes: dict | None) -> _uuid.UUID | None:
         return None
 
 
-def _trusted_org_id_for_order(order_id: str) -> _uuid.UUID | None:
-    """Resolve the org_id for audit attribution from the TRUSTED Razorpay order.
+def _trusted_order_notes(order_id: str) -> dict:
+    """Fetch the server-created order back from Razorpay and return ITS notes.
 
     iter1 #5: /verify-payment is unauthenticated (the HMAC signature is the auth),
-    so it must NOT attribute the audit row to a client-supplied notes.org_id — a
-    caller could forge `notes` to mis-attribute (or hide) a verification. The order
-    was created server-side with notes.org_id = current_user.org_id (see
-    create_order), so we fetch the order back from Razorpay and read ITS notes.
-    Best-effort: any failure (creds unset, network, unknown order) → None, never
-    raises; org_id is attribution metadata, not a gate on the signature check.
-    """
+    so nothing client-supplied is trusted — the order was created server-side
+    with notes set BY US (org_id, plan, billed breakdown; see create_order).
+    Best-effort: any failure (creds unset, network, unknown order) → {}, never
+    raises."""
     if not order_id:
-        return None
+        return {}
     try:
         client = _get_client()
         order = client.order.fetch(order_id)
-    except Exception as e:  # noqa: BLE001 — attribution is best-effort
+    except Exception as e:  # noqa: BLE001 — best-effort
         logger.warning("razorpay_order_fetch_failed", order_id=order_id, error=str(e))
-        return None
-    return _extract_org_id(order.get("notes") if isinstance(order, dict) else None)
+        return {}
+    notes = order.get("notes") if isinstance(order, dict) else None
+    return notes if isinstance(notes, dict) else {}
+
+
+def _trusted_org_id_for_order(order_id: str) -> _uuid.UUID | None:
+    return _extract_org_id(_trusted_order_notes(order_id) or None)
 
 
 def _get_client() -> razorpay.Client:
@@ -395,7 +397,11 @@ async def set_gstin(
     response_model=VerifyPaymentResponse,
     dependencies=[Depends(verify_payment_limit)],
 )
-async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyPaymentResponse:
+async def verify_payment(
+    request: Request,
+    req: VerifyPaymentRequest,
+    db: AsyncSession = Depends(get_db),
+) -> VerifyPaymentResponse:
     """Verify HMAC-SHA256 signature: hex(HMAC(order_id|payment_id, KEY_SECRET)).
 
     Audit:
@@ -414,9 +420,10 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
     except Exception:  # noqa: BLE001
         client_ip = request.client.host if request.client else None
     user_agent = request.headers.get("user-agent")
-    # iter1 #5: derive org_id from the TRUSTED server-created order, NOT from the
-    # client-supplied req.notes (which is forgeable on this unauthenticated route).
-    org_id = _trusted_org_id_for_order(req.razorpay_order_id)
+    # iter1 #5: derive org_id/plan from the TRUSTED server-created order, NOT
+    # from client-supplied fields (forgeable on this unauthenticated route).
+    trusted_notes = _trusted_order_notes(req.razorpay_order_id)
+    org_id = _extract_org_id(trusted_notes or None)
 
     if not settings.razorpay_key_secret:
         raise HTTPException(status_code=500, detail="Razorpay credentials not configured")
@@ -472,6 +479,25 @@ async def verify_payment(request: Request, req: VerifyPaymentRequest) -> VerifyP
         logger.error(
             "audit_write_failed", action="payment.verify.success", error=str(audit_err)
         )
+
+    # #354: activate ON the verified signature — the HMAC only computes with
+    # our key secret, so a valid signature IS proof of payment. The webhook
+    # stays as the redundant backstop (activate_subscription is idempotent by
+    # payment_id, so webhook redelivery after this is a no-op). Before this,
+    # activation lived ONLY in the webhook — unconfigured dashboards meant n
+    # successful checkouts produced ZERO cycles, no lock, no invoice.
+    if org_id is not None:
+        try:
+            plan_note = (trusted_notes.get("plan") or "").strip().lower() or None
+            act = await activate_subscription(
+                db, str(org_id), plan_note, req.razorpay_payment_id
+            )
+            logger.info("verify_activation", status=act, org_id=str(org_id))
+        except Exception as e:  # noqa: BLE001 — money taken; never fail the
+            # verified response. The webhook/backstop or support resolves it.
+            logger.error("verify_activation_failed", error=str(e)[:160])
+    else:
+        logger.error("verify_activation_no_org", order_id=req.razorpay_order_id)
 
     return VerifyPaymentResponse(
         verified=True,

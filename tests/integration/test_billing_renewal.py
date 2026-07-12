@@ -232,6 +232,57 @@ async def test_plan_info_carries_last_payment_date(db):
     assert info.last_payment_date == date.today().isoformat()  # row created today
 
 
+async def test_verify_payment_activates_without_webhook(db, monkeypatch):
+    """#354 (Vinay: 'no lock on button' — n checkouts, ZERO cycles): the
+    verified HMAC signature itself now activates. Webhook stays a redundant
+    idempotent backstop; unconfigured dashboards no longer swallow payments."""
+    import hashlib
+    import hmac as hmac_mod
+
+    from backend.routers import payments as pay
+    from backend.routers.payments import VerifyPaymentRequest, verify_payment
+
+    org = await _org(db, status="active", plan="solo")  # active, never billed
+
+    class _FakeOrders:
+        def fetch(self, order_id):
+            return {"id": order_id, "notes": {"org_id": str(org.id), "plan": "solo"}}
+
+    class _FakeClient:
+        order = _FakeOrders()
+
+    monkeypatch.setattr(pay, "_get_client", lambda: _FakeClient())
+    monkeypatch.setattr(pay.settings, "razorpay_key_secret", "test-secret")
+
+    order_id, payment_id = "order_v354", f"pay_{uuid.uuid4().hex[:10]}"
+    sig = hmac_mod.new(
+        b"test-secret", f"{order_id}|{payment_id}".encode(), hashlib.sha256
+    ).hexdigest()
+
+    class _Req:
+        client = None
+        headers = {}
+
+    resp = await verify_payment(
+        _Req(),
+        VerifyPaymentRequest(
+            razorpay_order_id=order_id, razorpay_payment_id=payment_id,
+            razorpay_signature=sig,
+        ),
+        db,
+    )
+    assert resp.verified is True
+
+    (c,) = await _cycles(db, org)
+    assert c.razorpay_payment_id == payment_id
+    assert c.cycle_start == date.today()
+
+    # Webhook redelivery of the SAME payment must be a no-op (idempotent).
+    res = await activate_subscription(db, str(org.id), "solo", payment_id)
+    assert res == "already_processed"
+    assert len(await _cycles(db, org)) == 1
+
+
 async def test_renewal_job_respects_grace_and_cycleless_orgs(db):
     import backend.jobs.trial_pause as job
 
