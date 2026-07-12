@@ -25,6 +25,9 @@ export const setTurnstileToken = (t) => { turnstileToken = t || ""; };
 export const setTurnstileResetter = (fn) => { turnstileReset = fn; };
 const TURNSTILE_PATHS = new Set([
   "/auth/login", "/auth/register", "/auth/request-otp", "/auth/forgot-password",
+  // Public support surface: backend requires Turnstile for ANONYMOUS callers
+  // on these (authed callers skip it server-side; the header is ignored then).
+  "/support/chat", "/support/contact",
 ]);
 
 api.interceptors.request.use((config) => {
