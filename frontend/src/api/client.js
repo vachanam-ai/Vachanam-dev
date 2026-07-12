@@ -77,6 +77,8 @@ export const createPaymentOrder = (plan) =>
   api.post("/api/create-order", { plan }).then((r) => r.data);
 export const verifyPayment = (payload) =>
   api.post("/api/verify-payment", payload).then((r) => r.data);
+export const saveGstin = (gstin) =>
+  api.post("/api/billing/gstin", { gstin }).then((r) => r.data);
 
 // ── Analytics (owner) ──
 export const fetchAnalytics = (branchId, days = 14) =>

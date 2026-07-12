@@ -138,6 +138,10 @@ class Settings(BaseSettings):
     # verified in Resend (vachanam.in).
     resend_api_key: str = ""
     resend_from: str = "Vachanam <noreply@vachanam.in>"
+    # Vachanam's own GSTIN, printed on payment invoices once GST registration is
+    # done. Empty ⇒ invoices go out as payment RECEIPTS ("GST registration in
+    # progress") — set the env var the day the GSTIN arrives (#342).
+    vachanam_gstin: str = ""
     # Support desk: notifications to the team go TO support_email; support emails
     # to clinics are sent FROM support_from (support@vachanam.in — a Zoho alias,
     # domain verified in Resend). Kept separate from resend_from/alert_email so

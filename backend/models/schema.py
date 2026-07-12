@@ -38,6 +38,9 @@ class Organization(Base):
     minutes_adjustment: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    # Clinic's GST number — printed on payment invoices so the clinic can claim
+    # input credit (B2B). Optional; set by the owner in Settings.
+    gstin: Mapped[str | None] = mapped_column(String(15))
     # Clinic-scheduled plan change: takes effect at pending_plan_effective (1st
     # of next month) so a switch never shrinks the current month's paid bucket.
     # A daily job applies it. Both NULL = no pending change.

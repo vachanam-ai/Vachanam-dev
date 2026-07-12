@@ -9,6 +9,7 @@ Key secret never leaves the server. Frontend receives only razorpay_key_id (publ
 """
 import hashlib
 import hmac
+import re
 import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
 
@@ -204,6 +205,7 @@ class PlanInfo(BaseModel):
     pending_plan: str | None
     pending_plan_effective: str | None  # ISO date the pending change applies
     cycle_end: str | None = None  # ISO date the current PAID cycle ends (renewal day)
+    gstin: str | None = None  # clinic's GSTIN (shown on invoices)
 
 
 class PlanChangeRequest(BaseModel):
@@ -268,6 +270,7 @@ def _plan_info(org: Organization, cycle_end: date | None = None) -> "PlanInfo":
             org.pending_plan_effective.isoformat() if org.pending_plan_effective else None
         ),
         cycle_end=cycle_end.isoformat() if cycle_end else None,
+        gstin=getattr(org, "gstin", None),
     )
 
 
@@ -328,6 +331,33 @@ async def change_plan(
         effective=org.pending_plan_effective.isoformat() if org.pending_plan_effective else None,
     )
     return _plan_info(org)
+
+
+class GstinBody(BaseModel):
+    gstin: str = Field("", max_length=15)
+
+
+_GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$")
+
+
+@router.post("/billing/gstin", response_model=PlanInfo)
+async def set_gstin(
+    body: GstinBody,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> PlanInfo:
+    """Save the clinic's GSTIN — printed on payment invoices for input credit.
+    Empty string clears it."""
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only a clinic owner can set the GSTIN")
+    g = body.gstin.strip().upper()
+    if g and not _GSTIN_RE.match(g):
+        raise HTTPException(status_code=422, detail="That doesn't look like a valid 15-character GSTIN")
+    org = await _load_my_org(current_user, db)
+    org.gstin = g or None
+    await db.commit()
+    logger.info("gstin_saved", org_id=current_user.org_id, set=bool(g))
+    return _plan_info(org, await _latest_cycle_end(db, org.id))
 
 
 @router.post(
@@ -479,14 +509,15 @@ async def activate_subscription(
         )
     ).scalar_one_or_none()
     start = last.cycle_end if (last is not None and last.cycle_end > today) else today
+    used_closing = 0.0
     if last is not None:
         # Close out the ending cycle's meter (#341): its extra usage was billed
         # inside this payment (subscription_order_breakdown at order time).
-        used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
+        used_closing = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
         last_plan = PLANS.get(last.plan)
         if last_plan is not None:
-            over_min = max(0, int(round(used)) - last_plan.included_minutes)
-            last.minutes_used = int(round(used))
+            over_min = max(0, int(round(used_closing)) - last_plan.included_minutes)
+            last.minutes_used = int(round(used_closing))
             last.overage_minutes = over_min
             last.overage_amount = int(round(over_min * last_plan.overage_per_min))
     db.add(
@@ -507,6 +538,24 @@ async def activate_subscription(
     )
     await db.commit()
     logger.info("subscription_activated", org_id=str(org.id), plan=chosen_plan)
+
+    # #342: mail the clinic a detailed invoice/receipt (the SAME numbers the
+    # order charged). Best-effort — RULE 8, never un-activates a paid org.
+    try:
+        from backend.services.billing_math import subscription_order_breakdown
+        from backend.services.invoice_email import send_payment_invoice
+
+        bd = subscription_order_breakdown(
+            chosen_plan, used_closing, int(getattr(org, "minutes_adjustment", 0) or 0)
+        )
+        await send_payment_invoice(
+            to_email=org.owner_email or "", org_name=org.name,
+            org_gstin=getattr(org, "gstin", None), plan=chosen_plan,
+            cycle_start=start, cycle_end=start + timedelta(days=30),
+            bd=bd, payment_id=payment_id,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("invoice_send_failed", error=str(e)[:120])
     return "activated"
 
 
