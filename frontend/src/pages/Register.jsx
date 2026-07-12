@@ -248,7 +248,9 @@ export default function Register() {
                   <span className="font-ui text-xs uppercase tracking-[0.14em] text-slate">or</span>
                   <span className="h-px flex-1 bg-hairline" />
                 </div>
-                <div ref={gsiRef} className="flex justify-center" />
+                <div className="flex justify-center">
+                  <div ref={gsiRef} className="gsi-crop" />
+                </div>
                 <p className="font-ui text-[11px] text-slate">
                   Google signup skips the code step — Google already verified you. Uses the
                   clinic name and your name above.

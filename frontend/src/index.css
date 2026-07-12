@@ -169,6 +169,17 @@ body::after {
   @apply text-[11px] font-ui font-semibold uppercase tracking-[0.18em] text-teal;
 }
 
+/* Google Sign-In button renders in an iframe we can't style; its filled_black
+   personalized variant ships a white 1px border ring that clashes with the
+   dark card. Mask the pill and pull the iframe out 2px each side so the ring
+   is cropped away (button text has >2px internal padding — nothing clips). */
+.gsi-crop {
+  border-radius: 9999px;
+  overflow: hidden;
+  width: fit-content;
+}
+.gsi-crop > div { margin: -2px; }
+
 /* Scrollbars that match the paper */
 * { scrollbar-width: thin; scrollbar-color: rgb(var(--hairline)) transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }

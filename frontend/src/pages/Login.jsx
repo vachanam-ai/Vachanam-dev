@@ -229,7 +229,9 @@ export default function Login() {
 
           <div data-reveal>
             {GOOGLE_CLIENT_ID ? (
-              <div ref={gsiRef} className="flex justify-center" />
+              <div className="flex justify-center">
+                <div ref={gsiRef} className="gsi-crop" />
+              </div>
             ) : (
               <div className="card p-4 font-ui text-sm text-danger">
                 VITE_GOOGLE_CLIENT_ID missing — add it to frontend/.env.local
