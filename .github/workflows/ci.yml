@@ -124,7 +124,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          # NO pip cache: every install below is --no-cache-dir, so the cache
+          # post-step found an empty dir and FAILED the job even though every
+          # real step (incl. Run pytest) was green (#346 final gremlin).
 
       - name: Install backend dependencies
         run: pip install --no-cache-dir -r backend/requirements.txt
