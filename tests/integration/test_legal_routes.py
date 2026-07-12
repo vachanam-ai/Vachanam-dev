@@ -294,3 +294,11 @@ async def test_legal_docs_match_product_reality():
     terms = Path("docs/legal/terms-of-service.md").read_text(encoding="utf-8")
     assert "emergency keywords" not in terms         # keyword detection removed
     assert "detects emergency" not in terms
+    # #330 (Vinay): personal name scrubbed from every public document —
+    # the brand is Vachanam, role titles only.
+    for doc in ("privacy-policy", "terms-of-service", "data-processing-agreement",
+                "data-handling", "refund-policy"):
+        text = Path(f"docs/legal/{doc}.md").read_text(encoding="utf-8")
+        assert "Rongala" not in text, f"personal name leaked into {doc}"
+    pitch = Path("docs/pitch/data-safety-pitch.md").read_text(encoding="utf-8")
+    assert "Rongala" not in pitch

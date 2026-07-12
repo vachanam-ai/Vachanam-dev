@@ -3,7 +3,7 @@
 **Between:**
 
 1. **The Clinic** ("Data Fiduciary," "you"), as identified in the signature block below, and
-2. **Vachanam** ("Data Processor," "we"), sole proprietorship of Vinay Rongala, Hyderabad, Telangana, India.
+2. **Vachanam** ("Data Processor," "we"), Hyderabad, Telangana, India.
 
 **Effective date:** The date both parties sign this agreement.
 
@@ -123,7 +123,7 @@ Vachanam implements the following security measures to protect personal data pro
 
 | Measure | Implementation |
 |---|---|
-| Access to production systems | Limited to Vinay Rongala (founder, acting DPO); all access audit-logged |
+| Access to production systems | Limited to the Vachanam founder (acting Data Protection Officer); all access audit-logged |
 | Security reviews | Pre-release OWASP ZAP scan; quarterly dependency audit; quarterly breach response drill |
 | Incident response | Documented breach response runbook (5 steps, 6 pre-rehearsed scenarios); 72-hour notification to Data Protection Board |
 
@@ -220,8 +220,8 @@ By signing below, both parties agree to the terms of this Data Processing Agreem
 
 | Field | Value |
 |---|---|
-| Name | Vinay Rongala |
-| Title | Founder, Vachanam |
+| Name | _________________ |
+| Title | Authorized signatory, Vachanam |
 | Email | hello@vachanam.in |
 | Date | _________________ |
 | Signature | _________________ |

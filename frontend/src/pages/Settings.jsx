@@ -628,7 +628,7 @@ export default function Settings() {
             Re-recording a language replaces its previous voice.
           </p>
           <div className="mt-3 space-y-2">
-            <input className="field" placeholder="Voice name (e.g. Dr Vinay)"
+            <input className="field" placeholder="Voice name (e.g. Dr Asha)"
               value={uploadName} onChange={(e) => setUploadName(e.target.value)} />
             <select className="field" value={uploadLanguage}
               aria-label="Sample language"
@@ -674,7 +674,7 @@ export default function Settings() {
             Already cloned a voice in your smallest.ai dashboard? Paste its voice ID.
           </p>
           <div className="mt-3 space-y-2">
-            <input className="field" placeholder="Voice name (e.g. Dr Vinay)"
+            <input className="field" placeholder="Voice name (e.g. Dr Asha)"
               value={cloneName} onChange={(e) => setCloneName(e.target.value)} />
             <input className="field" placeholder="voice_…  (from smallest.ai)"
               value={cloneId} onChange={(e) => setCloneId(e.target.value)} />

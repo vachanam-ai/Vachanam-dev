@@ -78,7 +78,14 @@ async def answer(question: str, history: list[dict], audience: str,
     )
     prompt = _SYSTEM.format(kb=kb) + plan_line + convo + f"\nuser: {question}\n"
     try:
-        raw = await _call_gemini(prompt)
+        # Through the resilience guard: a broken Gemini dependency (missing
+        # package, bad key, outage) now shows on /admin/resilience as the
+        # 'gemini_support_bot' breaker instead of hiding behind the fallback
+        # for days (#330 — prod ImportError went unnoticed).
+        from backend.services.resilience import guard
+
+        raw = await guard("gemini_support_bot", lambda: _call_gemini(prompt),
+                          timeout=25, retries=0)
         data = json.loads(raw)
         ans = (data.get("answer") or "").strip()
         answered = bool(data.get("answered")) and bool(ans)

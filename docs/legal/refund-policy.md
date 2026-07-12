@@ -2,7 +2,7 @@
 
 **Effective date:** 11 July 2026
 **Applies to:** Vachanam subscription plans and voice-minute charges billed to clinics.
-**Operated by:** Vinay Rongala (sole proprietor), Hyderabad, Telangana, India · hello@vachanam.in
+**Operated by:** Vachanam, Hyderabad, Telangana, India · hello@vachanam.in
 
 Vachanam is a B2B service for clinics. Patients are never charged by Vachanam —
 this policy is for clinic owners who pay for a Vachanam plan.
@@ -55,5 +55,5 @@ note.
 
 ---
 
-© 2026 Vachanam · Vinay Rongala. This policy is part of our
+© 2026 Vachanam. This policy is part of our
 [Terms of Service](/terms).

@@ -14,7 +14,11 @@ google-api-python-client>=2.0.0
 apscheduler>=3.10.0
 pytz>=2024.1
 openai>=1.30.0
-google-generativeai>=0.7.0
+# NEW Gemini SDK (`from google import genai`) — used by support_bot +
+# call_scoring. #330: the OLD google-generativeai pin satisfied nothing (code
+# never imports it) while the real dependency was missing in prod, so every
+# prod bot answer fell back and hourly call-scoring silently no-opped.
+google-genai>=1.0.0
 razorpay>=1.4.0
 python-multipart>=0.0.27
 # smallest.ai Waves SDK — voice cloning (add/list/delete) + voice catalog.

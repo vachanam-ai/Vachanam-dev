@@ -116,4 +116,4 @@ The honest one-liner for a doctor: *"Practo protects a mountain of health data w
 ---
 
 *Vachanam — "Healing starts with being heard."*
-© 2026 Vachanam (Vinay Rongala), Hyderabad, India.
+© 2026 Vachanam, Hyderabad, India.
