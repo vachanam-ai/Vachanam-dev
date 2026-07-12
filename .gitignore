@@ -58,3 +58,4 @@ agent/vobiz_minimal/recordings/
 
 # ralph-loop session state (local only)
 .claude/ralph-loop.local.md
+dump.rdb
