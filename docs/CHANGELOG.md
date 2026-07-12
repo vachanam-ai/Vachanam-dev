@@ -13,6 +13,26 @@ Format per session:
 
 ---
 
+## 2026-07-12 — DECISION: no SSO/SAML for MVP (deferred until enterprise demand)
+
+Vinay asked whether SSO / SAML / multi-tenant SSO are needed. Assessment: **NO
+for the current market.** Vachanam sells to 1-5 doctor Indian clinics — they
+have no identity provider (Okta/Azure AD/Google Workspace SSO); staff sign in
+with email+password (+ Google Sign-In already available). SAML is an
+enterprise procurement checkbox for hospital chains — explicitly out of MVP
+scope (memory: clinic-scope). Building it now = per-tenant IdP config,
+metadata exchange, cert rotation, SP-initiated/IdP-initiated flows — weeks of
+work with zero users able to use it.
+
+**Revisit trigger:** first hospital-chain or corporate-clinic deal that lists
+SSO as a requirement. Path then: OIDC first (simpler than SAML, covers Azure
+AD/Google Workspace), per-org `sso_config` on organizations, domain-based IdP
+routing at login. Nothing in today's auth blocks that seam.
+
+Same session: PageSpeed actions (FIXLOG #338) — see FIXLOG.
+
+---
+
 ## 2026-06-05 — Phase 4.5 Security & Compliance: CLOSED
 
 Sprint outcome: 14/18 acceptance criteria GREEN, 3 manual-verification, 1 deferred (Shannon → Phase 3 gate).

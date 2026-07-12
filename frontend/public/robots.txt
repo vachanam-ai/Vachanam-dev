@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://vachanam.in/sitemap.xml

@@ -1,24 +1,30 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { roleHome, useAuth } from "./hooks/useAuth.jsx";
 import Shell from "./components/Shell.jsx";
+// Public entry pages stay eager — they ARE the first paint.
 import Landing from "./pages/Landing.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/Register.jsx";
-import Settings from "./pages/Settings.jsx";
-import Queue from "./pages/Queue.jsx";
-import WalkIn from "./pages/WalkIn.jsx";
-import Treatments from "./pages/Treatments.jsx";
-import Patients from "./pages/Patients.jsx";
-import Availability from "./pages/Availability.jsx";
-import Dashboard from "./pages/Dashboard.jsx";
-import DoctorSchedule from "./pages/DoctorSchedule.jsx";
-import Admin from "./pages/Admin.jsx";
-import Monitoring from "./pages/Monitoring.jsx";
-import TvDisplay from "./pages/TvDisplay.jsx";
-import Help from "./pages/Help.jsx";
-import MyTickets from "./pages/MyTickets.jsx";
-import SupportAdmin from "./pages/SupportAdmin.jsx";
 import SupportWidget from "./components/SupportWidget.jsx";
+
+// Everything behind login (plus kiosk/help) loads on demand: a public visitor
+// on the landing page should not download the dashboard, charts, or admin
+// consoles (PSI: landing shipped the whole 550KB bundle, FIXLOG #338).
+const Settings = lazy(() => import("./pages/Settings.jsx"));
+const Queue = lazy(() => import("./pages/Queue.jsx"));
+const WalkIn = lazy(() => import("./pages/WalkIn.jsx"));
+const Treatments = lazy(() => import("./pages/Treatments.jsx"));
+const Patients = lazy(() => import("./pages/Patients.jsx"));
+const Availability = lazy(() => import("./pages/Availability.jsx"));
+const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
+const DoctorSchedule = lazy(() => import("./pages/DoctorSchedule.jsx"));
+const Admin = lazy(() => import("./pages/Admin.jsx"));
+const Monitoring = lazy(() => import("./pages/Monitoring.jsx"));
+const TvDisplay = lazy(() => import("./pages/TvDisplay.jsx"));
+const Help = lazy(() => import("./pages/Help.jsx"));
+const MyTickets = lazy(() => import("./pages/MyTickets.jsx"));
+const SupportAdmin = lazy(() => import("./pages/SupportAdmin.jsx"));
 
 function FullScreenSpinner() {
   return (
@@ -50,6 +56,7 @@ export default function App() {
   const showWidget = !["support", "super_admin"].includes(role);
   return (
     <>
+    <Suspense fallback={<FullScreenSpinner />}>
     <Routes>
       <Route path="/" element={user ? <Navigate to={roleHome(role)} replace /> : <Landing />} />
       <Route path="/login" element={user ? <Navigate to={roleHome(role)} replace /> : <Login />} />
@@ -166,6 +173,7 @@ export default function App() {
 
       <Route path="*" element={<Navigate to={user ? roleHome(role) : "/login"} replace />} />
     </Routes>
+    </Suspense>
     {showWidget && <SupportWidget />}
     </>
   );
