@@ -121,14 +121,13 @@ async def get_today_queue(
             .order_by(Doctor.name, Token.token_number)
         )
         rows = result.all()
-    except Exception as exc:
-        # Catches SQLAlchemy errors (table missing, query fail) and lower-level
-        # asyncpg/asyncio transport errors that bubble up through the SQLAlchemy
-        # session (e.g., proactor event loop errors during concurrent connection
-        # pool pings on Windows/Python 3.14).  Any unhandled exception here must
-        # become an HTTP 500 — not propagate through Starlette's ServerErrorMiddleware
-        # which would re-raise and cause httpx.ASGITransport to propagate the
-        # exception to test callers (breaking the rate-limit test assertions).
+    except (SQLAlchemyError, OSError, RuntimeError) as exc:
+        # TD-025 paid down: narrowed from bare Exception so genuine programming
+        # bugs (AttributeError/TypeError) propagate to the global handler instead
+        # of being masked as "Database error". Still catches SQLAlchemy errors and
+        # the asyncpg/asyncio transport errors (OSError/RuntimeError) that bubble
+        # through the session — e.g. proactor event-loop errors during concurrent
+        # pool pings on Windows/Python 3.14.
         logger.error("queue_db_error", branch_id=branch_id, error=str(exc))
         raise HTTPException(status_code=500, detail="Database error")
 

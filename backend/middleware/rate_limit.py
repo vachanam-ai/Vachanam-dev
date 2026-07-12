@@ -46,7 +46,7 @@ from typing import Awaitable
 import redis.asyncio as aioredis
 import structlog
 from fastapi import HTTPException, Request, Response
-from jose import jwt
+import jwt
 from pyrate_limiter import Limiter, Rate
 from pyrate_limiter.abstracts.bucket import AbstractBucket, BucketFactory
 from pyrate_limiter.abstracts.rate import RateItem
@@ -349,6 +349,19 @@ def _make_endpoint_limiter(times: int, seconds: int, name: str = ""):
                 endpoint=request.url.path,
                 error=str(exc),
             )
+            # SEC #8: but not FULLY open — a Redis outage previously dropped
+            # throttling, the IP blocklist AND Turnstile together, leaving the
+            # public auth surface unlimited for brute-force. Per-worker
+            # in-memory fallback window (approximate: N workers ⇒ N× budget —
+            # still bounded, vs unbounded before).
+            if not _fallback_allow(key, times, seconds):
+                logger.warning("rate_limit_fallback_exceeded", key=key,
+                               endpoint=request.url.path)
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too Many Requests",
+                    headers={"Retry-After": str(seconds)},
+                )
             return
         if not ok:
             logger.warning(
@@ -378,6 +391,29 @@ razorpay_webhook_limit = _make_endpoint_limiter(times=100, seconds=60, name="rzp
 queue_today_limit = _make_endpoint_limiter(times=60, seconds=60, name="queue")
 admin_limit = _make_endpoint_limiter(times=30, seconds=60, name="admin")
 default_limit = _make_endpoint_limiter(times=100, seconds=60, name="default")
+
+
+# ── In-process fallback throttle (SEC #8) ────────────────────────────────
+# Used ONLY while Redis is unreachable. Fixed-window counters per limiter key,
+# per worker. Deliberately crude: correctness of the window matters less than
+# not being unlimited during an outage.
+_FALLBACK_WINDOWS: dict[str, tuple[float, int]] = {}
+
+
+def _fallback_allow(key: str, times: int, seconds: int) -> bool:
+    import time as _time
+
+    now = _time.monotonic()
+    start, count = _FALLBACK_WINDOWS.get(key, (now, 0))
+    if now - start >= seconds:
+        start, count = now, 0
+    count += 1
+    if len(_FALLBACK_WINDOWS) > 10_000:
+        # ponytail: bound memory during a long outage + scan; a reset briefly
+        # refreshes everyone's window, which is acceptable for a fallback.
+        _FALLBACK_WINDOWS.clear()
+    _FALLBACK_WINDOWS[key] = (start, count)
+    return count <= times
 
 
 # ── IP blocklist helpers (spec §5.6) ─────────────────────────────────────

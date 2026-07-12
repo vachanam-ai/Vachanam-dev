@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest_asyncio
-from jose import jwt
+import jwt
 
 from backend.config import settings
 

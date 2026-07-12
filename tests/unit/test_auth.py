@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from jose import jwt
+import jwt
 
 from backend.config import settings
 from backend.middleware.auth_middleware import create_access_token
@@ -85,7 +85,7 @@ def test_tampered_token_signature_rejected():
     parts = token.split(".")
     tampered_sig = "X" + parts[2][1:] if parts[2][0] != "X" else "Y" + parts[2][1:]
     tampered = f"{parts[0]}.{parts[1]}.{tampered_sig}"
-    from jose import JWTError
+    from jwt import PyJWTError as JWTError
     with pytest.raises(JWTError):
         jwt.decode(tampered, settings.jwt_secret, algorithms=["HS256"])
 
@@ -106,6 +106,6 @@ def test_expired_token_rejected():
         "jti": str(uuid.uuid4()),
     }
     expired_token = jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
-    from jose import JWTError
+    from jwt import PyJWTError as JWTError
     with pytest.raises(JWTError):
         jwt.decode(expired_token, settings.jwt_secret, algorithms=["HS256"])

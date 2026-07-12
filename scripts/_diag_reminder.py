@@ -1,6 +1,6 @@
 """One-off diagnostic: why didn't the 4:30 reminder fire? Read-only. Last-4 only."""
 import asyncio
-from datetime import date, datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from backend.database import AsyncSessionLocal

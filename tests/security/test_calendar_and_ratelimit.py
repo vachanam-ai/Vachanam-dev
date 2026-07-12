@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 import pytest_asyncio
-from jose import jwt
+import jwt
 
 from backend.config import settings
 from backend.models.schema import Branch, Organization

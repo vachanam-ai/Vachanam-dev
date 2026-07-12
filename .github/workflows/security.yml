@@ -20,12 +20,10 @@ jobs:
       - name: Install pip-audit
         run: pip install pip-audit
       - name: Audit backend dependencies
-        # Fails the build on any known CVE in pinned requirements.
-        # PYSEC-2026-1325 (ecdsa): transitive dep of python-jose, used only for
-        # ES256 — we sign HS256 exclusively (auth_middleware _ALGORITHM), so the
-        # vulnerable code never runs; no upstream fix exists. Real fix = migrate
-        # python-jose → PyJWT (TD-030), which drops ecdsa entirely.
-        run: pip-audit -r backend/requirements.txt --ignore-vuln PYSEC-2026-1325
+        # Fails the build on any known CVE in pinned requirements. No ignores:
+        # TD-037 migrated python-jose → PyJWT, dropping the vulnerable ecdsa
+        # transitive dep (PYSEC-2026-1325) entirely.
+        run: pip-audit -r backend/requirements.txt
       - name: Audit voice-agent dependencies
         # The Fly agent ships its own pinned set — audit it too (was missed).
         run: pip-audit -r agent/livekit_minimal/requirements.txt

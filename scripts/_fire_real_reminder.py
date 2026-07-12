@@ -1,7 +1,7 @@
 """Fire the reminder for today's 16:30 token via the REAL reminder path."""
 import asyncio
 import os
-from datetime import date, datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from backend.config import settings

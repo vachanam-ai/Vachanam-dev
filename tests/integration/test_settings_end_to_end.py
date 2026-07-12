@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 import pytest_asyncio
-from jose import jwt
+import jwt
 from sqlalchemy import select
 
 from agent.tools.booking_tools import assign_token, confirm_booking

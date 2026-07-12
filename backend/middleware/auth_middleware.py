@@ -17,7 +17,8 @@ from datetime import datetime, timedelta, timezone
 import structlog
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 
 from backend.config import settings
 from backend.models.schema import User

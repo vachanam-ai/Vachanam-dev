@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 import pytest_asyncio
-from jose import jwt
+import jwt
 from sqlalchemy import select
 
 from backend.config import settings

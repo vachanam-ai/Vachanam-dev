@@ -414,7 +414,8 @@ def _diag_guard(request: Request) -> None:
     must require an admin JWT. Non-prod stays open for easy debugging."""
     if settings.app_env != "production":
         return
-    from jose import JWTError, jwt
+    import jwt
+    from jwt import PyJWTError as JWTError
 
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):

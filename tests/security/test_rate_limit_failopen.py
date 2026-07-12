@@ -46,6 +46,22 @@ async def test_rate_limit_dep_fails_open_when_redis_down(monkeypatch):
     assert await dep(_Req(), _Resp()) is None
 
 
+async def test_fallback_throttle_caps_redis_outage_flood(monkeypatch):
+    """SEC #8: fail-open must not mean UNLIMITED. During an outage the
+    per-worker in-memory window still 429s past the limit."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(rl, "_get_rate_limit_redis", _boom)
+    rl._FALLBACK_WINDOWS.clear()
+    dep = rl._make_endpoint_limiter(times=3, seconds=60, name="fbtest")
+    for _ in range(3):
+        assert await dep(_Req(), _Resp()) is None  # within fallback budget
+    with pytest.raises(HTTPException) as ei:
+        await dep(_Req(), _Resp())  # 4th in the window → throttled
+    assert ei.value.status_code == 429
+    rl._FALLBACK_WINDOWS.clear()
+
+
 async def test_is_ip_blocked_fails_open_false_when_redis_down(monkeypatch):
     monkeypatch.setattr(rl, "_get_rate_limit_redis", _boom)
     # Fail-open: unknown blocklist state must read as "not blocked", not 500.

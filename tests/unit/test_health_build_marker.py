@@ -74,7 +74,7 @@ def test_diagnostics_require_admin_in_prod(monkeypatch):
     import uuid
     from datetime import datetime, timedelta, timezone
 
-    from jose import jwt
+    import jwt
     tok = jwt.encode({
         "sub": str(uuid.uuid4()), "email": "o@c.com", "role": "org_admin",
         "org_id": str(uuid.uuid4()), "branch_ids": [], "is_admin": False,

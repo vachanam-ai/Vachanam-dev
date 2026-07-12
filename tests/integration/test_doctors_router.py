@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 import pytest_asyncio
-from jose import jwt
+import jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

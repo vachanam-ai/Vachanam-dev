@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 import pytest
 import pytest_asyncio
-from jose import jwt
+import jwt
 
 from backend.config import settings
 from backend.models.schema import Branch, Organization
