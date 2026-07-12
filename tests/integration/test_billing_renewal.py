@@ -9,12 +9,12 @@ enforced, no renewal was requested. Now:
   leaves in-grace and cycle-less orgs alone.
 """
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 
-from backend.models.schema import BillingCycle, Organization
+from backend.models.schema import BillingCycle, Branch, CallLog, Organization
 from backend.routers.payments import activate_subscription
 
 pytestmark = pytest.mark.asyncio
@@ -97,6 +97,68 @@ async def test_renewal_job_pauses_after_grace(db):
 
     await db.refresh(org)
     assert org.status == "paused"
+
+
+async def test_renewal_charges_overage_and_gst(db, monkeypatch):
+    """#341 (Vinay: '50 extra minutes → ₹250 — how is it charged?'):
+    renewal order = base + overage + 18% GST, and the webhook stamps the
+    closing cycle's meter."""
+    from backend.middleware.auth_middleware import CurrentUser
+    from backend.routers import payments as pay
+    from backend.routers.payments import CreateOrderRequest, create_order
+
+    org = await _org(db, status="active", plan="clinic")  # 1,500 min included
+    branch = Branch(org_id=org.id, name="Main", whatsapp_number="+911234500000")
+    db.add(branch)
+    await db.flush()
+    start = date.today() - timedelta(days=28)
+    end = start + timedelta(days=30)
+    db.add(BillingCycle(
+        org_id=org.id, cycle_start=start, cycle_end=end,
+        plan="clinic", base_amount=9999, included_minutes=1500, minutes_used=0,
+        overage_minutes=0, overage_rate=5, overage_amount=0,
+        status="paid", razorpay_payment_id=f"pay_{uuid.uuid4().hex[:10]}",
+    ))
+    # 1,550 minutes of calls inside the cycle window → 50 min overage
+    db.add(CallLog(
+        branch_id=branch.id, call_type="inbound",
+        started_at=datetime(start.year, start.month, start.day, 12,
+                            tzinfo=timezone.utc) + timedelta(days=1),
+        duration_seconds=1550 * 60,
+    ))
+    await db.commit()
+
+    captured = {}
+
+    class _FakeOrders:
+        def create(self, payload):
+            captured.update(payload)
+            return {"id": "order_test123", "amount": payload["amount"], "currency": "INR"}
+
+    class _FakeClient:
+        order = _FakeOrders()
+
+    monkeypatch.setattr(pay, "_get_client", lambda: _FakeClient())
+    monkeypatch.setattr(pay.settings, "razorpay_key_id", "rzp_test_x")
+
+    user = CurrentUser(user_id=str(uuid.uuid4()), email="o@x.in", role="org_admin",
+                       org_id=str(org.id), branch_ids=[], is_admin=False, jti="j")
+    resp = await create_order(None, CreateOrderRequest(plan="clinic"), user, db)
+
+    # 9,999 + 50×5 = 10,249 → +18% GST = 12,093.82 → 1,209,382 paise
+    assert resp.amount == 1209382
+    assert captured["notes"]["overage_minutes"] == "50"
+    assert captured["notes"]["overage_amount"] == "250.0"
+
+    # Webhook closes the meter on the old cycle and opens a contiguous one.
+    res = await activate_subscription(db, str(org.id), "clinic",
+                                      f"pay_{uuid.uuid4().hex[:10]}")
+    assert res == "activated"
+    c1, c2 = await _cycles(db, org)
+    assert c1.minutes_used == 1550
+    assert c1.overage_minutes == 50
+    assert c1.overage_amount == 250
+    assert c2.cycle_start == c1.cycle_end  # contiguous
 
 
 async def test_renewal_job_respects_grace_and_cycleless_orgs(db):

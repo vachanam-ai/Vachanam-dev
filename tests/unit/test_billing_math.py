@@ -16,7 +16,34 @@ from backend.services.billing_math import (
     month_expense,
     month_revenue,
     overage_breakdown,
+    subscription_order_breakdown,
 )
+
+
+def test_subscription_order_first_activation_is_base_plus_gst():
+    bd = subscription_order_breakdown("solo")
+    assert bd["base"] == 5999
+    assert bd["overage_minutes"] == 0
+    assert bd["gst"] == round(5999 * 0.18, 2)
+    assert bd["amount_paise"] == int(round(5999 * 1.18 * 100))
+
+
+def test_subscription_order_renewal_adds_overage_then_gst():
+    # Vinay's example (2026-07-12): 50 extra minutes → ₹250. Clinic renewal:
+    # 9,999 + 250 = 10,249 subtotal → +18% GST = ₹12,093.82.
+    bd = subscription_order_breakdown("clinic", cycle_minutes_used=1550)
+    assert bd["overage_minutes"] == 50
+    assert bd["overage_amount"] == 250.0
+    assert bd["gst"] == 1844.82
+    assert bd["total"] == 12093.82
+    assert bd["amount_paise"] == 1209382
+
+
+def test_subscription_order_honors_minute_adjustment():
+    # +100 goodwill minutes → bucket 1600, so 1550 used = no overage.
+    bd = subscription_order_breakdown("clinic", cycle_minutes_used=1550, adjustment=100)
+    assert bd["overage_minutes"] == 0
+    assert bd["amount_paise"] == int(round(9999 * 1.18 * 100))
 
 
 def test_overage_breakdown_solo_1000_minutes():

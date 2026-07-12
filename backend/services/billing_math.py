@@ -130,6 +130,39 @@ def overage_breakdown(
     }
 
 
+def subscription_order_breakdown(
+    plan: str, cycle_minutes_used: float = 0.0, adjustment: int = 0
+) -> dict:
+    """What a Razorpay activation/renewal order charges (#341, Vinay 2026-07-12:
+    GST ON TOP, overage collected WITH the renewal).
+
+    total = plan base + previous-cycle overage minutes × rate, + 18% GST on the
+    whole subtotal. First activation passes cycle_minutes_used=0 (trial minutes
+    are free service; exhaust hard-blocks — never billed).
+    Example: clinic plan, 50 min over → 9,999 + 250 = 10,249 + 1,844.82 GST
+    = ₹12,093.82 total.
+    """
+    p = PLANS.get(plan)
+    if p is None:
+        return {"plan": plan, "base": 0, "overage_minutes": 0, "overage_amount": 0.0,
+                "gst": 0.0, "total": 0.0, "amount_paise": 0}
+    included = max(0, p.included_minutes + (adjustment or 0))
+    over_min = max(0, int(round(cycle_minutes_used)) - included)
+    overage_amount = round(over_min * p.overage_per_min, 2)
+    subtotal = round(p.base_rupees + overage_amount, 2)
+    gst = round(subtotal * GST_RATE, 2)
+    total = round(subtotal + gst, 2)
+    return {
+        "plan": plan,
+        "base": p.base_rupees,
+        "overage_minutes": over_min,
+        "overage_amount": overage_amount,
+        "gst": gst,
+        "total": total,
+        "amount_paise": int(round(total * 100)),
+    }
+
+
 def next_cycle_start(today: date) -> date:
     """First day of the month AFTER ``today`` — when a clinic-scheduled plan
     change takes effect (never mid-month, so a switch can't shrink the bucket

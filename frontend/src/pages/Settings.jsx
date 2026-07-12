@@ -429,7 +429,7 @@ export default function Settings() {
               (new Date(plan.data.cycle_end) - Date.now()) / 86400000 <= 5)) && (
             <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
               {paying ? "Opening payment…"
-                : `${plan.data.status === "active" ? "Renew" : "Activate"} — pay ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")}`}
+                : `${plan.data.status === "active" ? "Renew" : "Activate"} — ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")} + GST${plan.data.status === "active" ? " & usage" : ""}`}
             </button>
           )}
         </div>

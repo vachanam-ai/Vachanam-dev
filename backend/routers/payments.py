@@ -29,7 +29,7 @@ from backend.middleware.rate_limit import (
     verify_payment_limit,
 )
 from backend.models.schema import Organization
-from backend.services.billing_math import PLANS
+from backend.services.billing_math import PLANS, subscription_order_breakdown
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -117,13 +117,17 @@ async def create_order(
     request: Request,
     req: CreateOrderRequest,
     current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> CreateOrderResponse:
     """Create a Razorpay subscription order for the caller's org.
 
     Auth-gated (TD-025/G1): only a clinic owner with an org can subscribe. The
-    amount is the plan's fixed price (server-derived, not client-supplied), and
-    the order's ``notes`` carry org_id + plan set BY US — so the webhook can
-    trust them when it activates the subscription.
+    amount is server-derived, never client-supplied (#341, Vinay 2026-07-12):
+    plan base + the CURRENT paid cycle's overage minutes × ₹5, + 18% GST on the
+    whole subtotal. A first activation (trial/paused, no paid cycle) has no
+    overage — trial minutes are free service and hard-block on exhaust. The
+    order ``notes`` carry org_id + plan + the billed breakdown set BY US, so
+    the webhook can trust them when it activates.
     """
     if current_user.role != "org_admin" or not current_user.org_id:
         raise HTTPException(status_code=403, detail="Only a clinic owner can subscribe")
@@ -133,14 +137,37 @@ async def create_order(
     if plan_def is None:
         raise HTTPException(status_code=422, detail="plan must be solo, clinic or multi")
 
-    amount_paise = plan_def.base_rupees * 100
+    # Renewal? Bill the ending cycle's extra usage along with the next cycle.
+    org = await _load_my_org(current_user, db)
+    used = 0.0
+    from backend.models.schema import BillingCycle
+
+    last = (
+        await db.execute(
+            select(BillingCycle).where(BillingCycle.org_id == org.id)
+            .order_by(BillingCycle.cycle_end.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+    if last is not None:
+        used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
+    bd = subscription_order_breakdown(
+        plan, used, int(getattr(org, "minutes_adjustment", 0) or 0)
+    )
+
     client = _get_client()
     payload = {
-        "amount": amount_paise,
+        "amount": bd["amount_paise"],
         "currency": "INR",
         "receipt": f"sub_{plan}_{_uuid.uuid4().hex[:10]}",
         # notes set SERVER-SIDE — these are what the webhook trusts for activation
-        "notes": {"org_id": current_user.org_id, "plan": plan},
+        "notes": {
+            "org_id": current_user.org_id,
+            "plan": plan,
+            "base": str(bd["base"]),
+            "overage_minutes": str(bd["overage_minutes"]),
+            "overage_amount": str(bd["overage_amount"]),
+            "gst": str(bd["gst"]),
+        },
     }
 
     try:
@@ -194,6 +221,29 @@ async def _load_my_org(current_user: CurrentUser, db: "AsyncSession") -> Organiz
     if org is None:
         raise HTTPException(status_code=404, detail="Organization not found")
     return org
+
+
+async def _cycle_minutes_used(db: AsyncSession, org_id, start: date, end: date) -> float:
+    """Voice minutes the org consumed in [start, end) — call_logs summed across
+    its branches. This is the metering behind per-minute overage billing."""
+    from sqlalchemy import func
+
+    from backend.models.schema import Branch, CallLog
+
+    start_dt = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+    end_dt = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
+    secs = (
+        await db.execute(
+            select(func.coalesce(func.sum(CallLog.duration_seconds), 0))
+            .join(Branch, Branch.id == CallLog.branch_id)
+            .where(
+                Branch.org_id == org_id,
+                CallLog.started_at >= start_dt,
+                CallLog.started_at < end_dt,
+            )
+        )
+    ).scalar_one()
+    return float(secs or 0) / 60.0
 
 
 async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
@@ -420,15 +470,25 @@ async def activate_subscription(
     # Anniversary billing: the FIRST cycle starts the day they pay. A RENEWAL
     # paid early starts where the current cycle ends (no paid days lost); paid
     # late, it starts today (the gap wasn't served).
-    last_end = (
+    last = (
         await db.execute(
-            select(BillingCycle.cycle_end)
+            select(BillingCycle)
             .where(BillingCycle.org_id == org.id)
             .order_by(BillingCycle.cycle_end.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
-    start = last_end if (last_end and last_end > today) else today
+    start = last.cycle_end if (last is not None and last.cycle_end > today) else today
+    if last is not None:
+        # Close out the ending cycle's meter (#341): its extra usage was billed
+        # inside this payment (subscription_order_breakdown at order time).
+        used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
+        last_plan = PLANS.get(last.plan)
+        if last_plan is not None:
+            over_min = max(0, int(round(used)) - last_plan.included_minutes)
+            last.minutes_used = int(round(used))
+            last.overage_minutes = over_min
+            last.overage_amount = int(round(over_min * last_plan.overage_per_min))
     db.add(
         BillingCycle(
             org_id=org.id,
