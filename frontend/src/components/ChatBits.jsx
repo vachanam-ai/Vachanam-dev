@@ -36,5 +36,8 @@ export function chatErrorMessage(err) {
   const code = err?.response?.status;
   if (code === 403) return "Please complete the verification check below, then send again.";
   if (code === 429) return "You're sending messages very quickly — please wait a minute and try again.";
+  if (code >= 500) return "We're updating the service right now — please try again in a minute.";
+  // No HTTP status at all: network drop, or the request timed out client-side.
+  if (!code) return "Couldn't reach us — check your connection and try once more.";
   return "Something went wrong — email hello@vachanam.in and we'll help.";
 }

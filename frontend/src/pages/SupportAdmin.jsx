@@ -35,7 +35,12 @@ function Thread({ ticket, macros, onChanged }) {
           onChange={(e) => patch({ priority: e.target.value })}>
           {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
-        <span className="text-ink-soft">{ticket.email}</span>
+        <span className="text-ink-soft">{ticket.email || "no email"}</span>
+        {ticket.phone && (
+          <a className="font-medium text-teal hover:underline" href={`tel:${ticket.phone}`}>
+            📞 {ticket.phone}
+          </a>
+        )}
       </div>
 
       <div className="max-h-72 space-y-2 overflow-y-auto rounded-xl border border-hairline bg-surface/85 p-3">
@@ -121,22 +126,38 @@ export default function SupportAdmin() {
   const [macros, setMacros] = useState([]);
   const [active, setActive] = useState(null);
   const [filter, setFilter] = useState("");
+  const [tab, setTab] = useState("inbox"); // inbox | leads
 
   const load = () =>
-    adminListTickets(filter ? { status: filter } : {}).then(setTickets).catch(() => setTickets([]));
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter]);
+    adminListTickets({
+      ...(filter ? { status: filter } : {}),
+      ...(tab === "leads" ? { leads: true } : {}),
+    }).then(setTickets).catch(() => setTickets([]));
+  useEffect(() => { setActive(null); load(); /* eslint-disable-next-line */ }, [filter, tab]);
   useEffect(() => { adminMacros().then(setMacros).catch(() => setMacros([])); }, []);
 
   const activeTicket = tickets.find((t) => t.id === active);
 
   return (
     <div className="mx-auto max-w-5xl space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="font-display text-2xl font-semibold text-ink">Support dashboard</h1>
-        <select className="input w-auto py-1" value={filter} onChange={(e) => setFilter(e.target.value)}>
-          <option value="">Needs human</option>
-          {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-xl border border-hairline p-0.5">
+            {["inbox", "leads"].map((k) => (
+              <button key={k}
+                className={"rounded-lg px-3 py-1 text-sm font-medium capitalize transition " +
+                  (tab === k ? "bg-teal text-white" : "text-ink-soft hover:text-ink")}
+                onClick={() => setTab(k)}>
+                {k === "leads" ? "🔥 Leads" : "Inbox"}
+              </button>
+            ))}
+          </div>
+          <select className="input w-auto py-1" value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="">Needs human</option>
+            {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-[1fr_1.4fr]">
@@ -151,13 +172,21 @@ export default function SupportAdmin() {
                   <span className="truncate font-medium text-ink">{t.subject}</span>
                   <span className="chip bg-teal-pale text-teal-deep text-xs">{t.priority}</span>
                 </div>
+                {tab === "leads" && (
+                  <div className="mt-1 text-sm text-ink">
+                    {t.name || "—"}{t.phone && <> · <a className="text-teal hover:underline"
+                      href={`tel:${t.phone}`} onClick={(e) => e.stopPropagation()}>📞 {t.phone}</a></>}
+                  </div>
+                )}
                 <div className="text-xs text-ink-soft">
-                  {t.status} · {t.org_id ? "clinic" : "lead"} · {new Date(t.created_at).toLocaleString()}
+                  {t.status} · {t.org_id ? "clinic" : "new lead"} · {new Date(t.created_at).toLocaleString()}
                 </div>
               </button>
             </li>
           ))}
-          {tickets.length === 0 && <li className="text-ink-soft">No tickets.</li>}
+          {tickets.length === 0 && (
+            <li className="text-ink-soft">{tab === "leads" ? "No demo requests yet." : "No tickets."}</li>
+          )}
         </ul>
 
         <div className="rounded-2xl border border-hairline bg-surface/85 p-4">

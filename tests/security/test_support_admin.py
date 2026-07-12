@@ -192,14 +192,17 @@ async def test_user_reply_reopens_and_csat_gate(client, db):
 # ── Public contact form → a lead ticket (org_id NULL) ────────────────────────
 
 async def test_public_contact_creates_lead_ticket(client, db):
+    # #337: demo leads are phone-first — 10-digit phone required, priority high.
     from backend.models.schema import SupportTicket
     r = await client.post("/support/contact", json={
-        "email": "lead@clinic.com", "name": "Dr Lead", "subject": "demo please",
+        "email": "lead@clinic.com", "name": "Dr Lead", "phone": "9866543210",
+        "subject": "demo please",
         "body": "want a demo for my dental clinic", "category": "sales_demo"})
     assert r.status_code == 200
     tid = uuid.UUID(r.json()["ticket_id"])
     row = (await db.execute(select(SupportTicket).where(SupportTicket.id == tid))).scalar_one()
     assert row.org_id is None and row.category == "sales_demo" and row.source == "public_form"
+    assert row.phone == "9866543210" and row.priority == "high"
 
 
 async def test_macros_available_to_staff(client):

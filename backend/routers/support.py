@@ -221,8 +221,10 @@ async def rate_ticket(ticket_id: uuid.UUID, body: CsatBody,
 
 
 class ContactBody(BaseModel):
-    email: str = Field(..., min_length=3, max_length=255)
+    # Email optional ONLY for demo leads (phone-first); enforced below.
+    email: str | None = Field(None, max_length=255)
     name: str | None = Field(None, max_length=255)
+    phone: str | None = Field(None, max_length=20)
     subject: str = Field(..., min_length=1, max_length=200)
     body: str = Field(..., min_length=1, max_length=8000)
     category: str = Field("other", max_length=32)
@@ -237,16 +239,26 @@ async def contact(body: ContactBody, request: Request, db: AsyncSession = Depend
     user = await optional_current_user(request)
     await _guard_anonymous(request, user)  # Turnstile for anonymous only
     category = body.category if body.category in _CONTACT_CATEGORIES else "other"
+    is_demo = category == "sales_demo"
+    phone_digits = "".join(c for c in (body.phone or "") if c.isdigit())[-10:]
+    if is_demo:
+        # A demo lead is a callback: 10-digit Indian mobile required.
+        if len(phone_digits) != 10:
+            raise HTTPException(status_code=422, detail="A 10-digit phone number is required to book a demo")
+    elif not user and not (body.email and len(body.email) >= 3):
+        raise HTTPException(status_code=422, detail="Email is required")
     ticket = SupportTicket(
         org_id=(user.org_id if user else None),
-        email=(user.email if user else body.email),
+        email=(user.email if user else (body.email or "")),
         name=body.name,
+        phone=phone_digits or None,
         subject=body.subject,
         category=category,
         status="open",
-        priority="normal",
+        # Leads jump the queue: a hot clinic owner cools off fast.
+        priority="high" if is_demo else "normal",
         source="in_app" if (user and user.org_id) else "public_form",
-        sla_due_at=_sla_due("normal"),
+        sla_due_at=_sla_due("high" if is_demo else "normal"),
     )
     db.add(ticket)
     await db.flush()
@@ -264,7 +276,7 @@ async def contact(body: ContactBody, request: Request, db: AsyncSession = Depend
 def _admin_row(t: SupportTicket) -> dict:
     return {
         "id": str(t.id), "org_id": str(t.org_id) if t.org_id else None,
-        "email": t.email, "name": t.name, "subject": t.subject,
+        "email": t.email, "name": t.name, "phone": t.phone, "subject": t.subject,
         "category": t.category, "status": t.status, "priority": t.priority,
         "source": t.source,
         "sla_due_at": t.sla_due_at.isoformat() if t.sla_due_at else None,
@@ -276,7 +288,7 @@ def _admin_row(t: SupportTicket) -> dict:
 @router.get("/admin/tickets")
 async def admin_list_tickets(
     status: str | None = None, priority: str | None = None,
-    category: str | None = None, overdue: bool = False,
+    category: str | None = None, overdue: bool = False, leads: bool = False,
     _staff: CurrentUser = Depends(require_support_staff),
     db: AsyncSession = Depends(get_db),
 ):
@@ -287,8 +299,15 @@ async def admin_list_tickets(
         q = q.where(SupportTicket.status != "ai_resolved")  # default: needs-human
     if priority:
         q = q.where(SupportTicket.priority == priority)
-    if category:
+    # Leads (demo requests) live in their own tab: leads=true shows ONLY them;
+    # the ordinary inbox never mixes them in (Vinay 2026-07-12: "new clients
+    # should be handled differently").
+    if leads:
+        q = q.where(SupportTicket.category == "sales_demo")
+    elif category:
         q = q.where(SupportTicket.category == category)
+    else:
+        q = q.where(SupportTicket.category != "sales_demo")
     if overdue:
         q = q.where(
             SupportTicket.sla_due_at < datetime.now(timezone.utc),

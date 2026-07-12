@@ -90,8 +90,27 @@ export default function Help() {
     }
   };
 
-  // Contact / demo form → a support ticket (a lead when logged out).
-  const [contact, setContact] = useState({ name: "", email: "", subject: "", body: "", category: "sales_demo" });
+  // Book a demo → a phone-first LEAD (separate pipeline from support tickets).
+  const [demo, setDemo] = useState({ clinic: "", name: "", phone: "", body: "" });
+  const [demoSent, setDemoSent] = useState(false);
+  const [dErr, setDErr] = useState("");
+  const submitDemo = async (e) => {
+    e.preventDefault();
+    setDErr("");
+    try {
+      await submitContact({
+        name: demo.name,
+        phone: demo.phone,
+        subject: `Demo request — ${demo.clinic}`.slice(0, 200),
+        body: demo.body.trim() || "Please call me to arrange a demo.",
+        category: "sales_demo",
+      });
+      setDemoSent(true);
+    } catch (x) { setDErr(x.response?.data?.detail || "Could not send — call us at hello@vachanam.in"); }
+  };
+
+  // Other questions → an ordinary support ticket.
+  const [contact, setContact] = useState({ name: "", email: "", subject: "", body: "", category: "other" });
   const [sent, setSent] = useState(false);
   const [cErr, setCErr] = useState("");
   const submitC = async (e) => {
@@ -191,7 +210,37 @@ export default function Help() {
         </section>
 
         <section className="space-y-3" data-help-reveal>
-          <h2 className="font-display text-lg font-semibold">Contact us / book a demo</h2>
+          <h2 className="font-display text-lg font-semibold">Book a free demo</h2>
+          {demoSent ? (
+            <p className="rounded-2xl border border-teal/40 bg-teal-mint p-4 text-sm">
+              Done — we'll call you within a working day to arrange your demo.
+            </p>
+          ) : (
+            <form onSubmit={submitDemo}
+              className="grid gap-2 rounded-2xl border border-teal/40 bg-surface/85 p-5 shadow-card sm:grid-cols-2">
+              <p className="text-sm text-ink-soft sm:col-span-2">
+                Tell us about your clinic — we'll call you back and show Vachanam answering a live
+                patient call in Telugu.
+              </p>
+              <input className="input" placeholder="Clinic name" required value={demo.clinic}
+                onChange={(e) => setDemo({ ...demo, clinic: e.target.value })} />
+              <input className="input" placeholder="Your name" required value={demo.name}
+                onChange={(e) => setDemo({ ...demo, name: e.target.value })} />
+              <input className="input sm:col-span-2" placeholder="Phone number (10 digits)" required
+                type="tel" inputMode="numeric" pattern="[0-9]{10}"
+                title="10-digit mobile number" value={demo.phone}
+                onChange={(e) => setDemo({ ...demo, phone: e.target.value.replace(/\D/g, "").slice(0, 10) })} />
+              <textarea className="input sm:col-span-2" rows={2}
+                placeholder="Anything specific you'd like to see? (optional)"
+                value={demo.body} onChange={(e) => setDemo({ ...demo, body: e.target.value })} />
+              <button className="btn-primary sm:col-span-2 py-3">Book my demo — we'll call you</button>
+              {dErr && <p className="text-sm text-danger sm:col-span-2">{dErr}</p>}
+            </form>
+          )}
+        </section>
+
+        <section className="space-y-3" data-help-reveal>
+          <h2 className="font-display text-lg font-semibold">Other questions</h2>
           {sent ? (
             <p className="rounded-2xl border border-hairline bg-teal-mint p-4 text-sm">
               Thanks — we've got your message and will reply by email soon.
@@ -199,9 +248,6 @@ export default function Help() {
           ) : (
             <form onSubmit={submitC}
               className="grid gap-2 rounded-2xl border border-hairline bg-surface/85 p-5 shadow-card sm:grid-cols-2">
-              <p className="text-sm text-ink-soft sm:col-span-2">
-                Tell us about your clinic — we'll show you Vachanam answering a live call in Telugu.
-              </p>
               <input className="input" placeholder="Your name" value={contact.name}
                 onChange={(e) => setContact({ ...contact, name: e.target.value })} />
               <input className="input" placeholder="Email" required type="email" value={contact.email}
@@ -213,11 +259,10 @@ export default function Help() {
                 onChange={(e) => setContact({ ...contact, body: e.target.value })} />
               <select className="input" value={contact.category}
                 onChange={(e) => setContact({ ...contact, category: e.target.value })}>
-                <option value="sales_demo">Book a demo</option>
+                <option value="other">General</option>
                 <option value="billing">Billing</option>
                 <option value="technical">Technical</option>
                 <option value="onboarding">Onboarding</option>
-                <option value="other">Other</option>
               </select>
               <button className="btn-primary sm:col-span-1">Send</button>
               {cErr && <p className="text-sm text-danger sm:col-span-2">{cErr}</p>}

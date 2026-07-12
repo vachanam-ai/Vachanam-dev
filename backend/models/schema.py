@@ -875,6 +875,9 @@ class SupportTicket(Base):
     )
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str | None] = mapped_column(String(255))
+    # Demo leads are phone-first (a clinic owner books a callback, not an
+    # email thread). Empty for ordinary tickets.
+    phone: Mapped[str | None] = mapped_column(String(20))
     subject: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(
         Enum("billing", "technical", "onboarding", "feature_request", "sales_demo",
