@@ -43,15 +43,11 @@ def _mock_request():
 
 def _patch_order_notes(org_id: uuid.UUID | None):
     """Patch the Razorpay order fetch so verify_payment sees a trusted order whose
-    server-set notes carry the given org_id."""
+    server-set notes carry the given org_id. (#354 moved verify_payment onto
+    _trusted_order_notes — the full-notes helper — so patch THAT.)"""
     notes = {"org_id": str(org_id)} if org_id is not None else {}
 
-    def fake_trusted(order_id: str):
-        from backend.routers.payments import _extract_org_id
-
-        return _extract_org_id(notes)
-
-    return patch("backend.routers.payments._trusted_org_id_for_order", fake_trusted)
+    return patch("backend.routers.payments._trusted_order_notes", lambda order_id: notes)
 
 
 @pytest.mark.asyncio

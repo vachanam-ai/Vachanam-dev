@@ -185,5 +185,6 @@ body::after {
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-thumb { background: rgb(var(--hairline)); border-radius: 8px; }
 
-/* GSAP reveal targets start hidden to avoid flash */
-[data-reveal] { opacity: 0; }
+/* GSAP reveal targets start hidden to avoid flash — but ONLY until the
+   reveal marks them (#355: late-mounting cards stayed invisible forever). */
+[data-reveal]:not([data-revealed]) { opacity: 0; }

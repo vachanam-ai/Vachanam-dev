@@ -1,14 +1,31 @@
 import gsap from "gsap";
 
 /** Staggered entrance for everything marked [data-reveal] inside `scope`.
- *  One orchestrated load beats scattered micro-motion. */
+ *  One orchestrated load beats scattered micro-motion.
+ *  #355: animated nodes get [data-revealed] so (a) re-running only reveals
+ *  NEW nodes (cards that mount after their query lands) and (b) the CSS
+ *  pre-hide releases them — before this, a card mounting after the one-shot
+ *  reveal stayed at opacity 0 forever (invisible, space reserved). */
 export function revealStagger(scope) {
-  const targets = scope?.querySelectorAll?.("[data-reveal]");
+  const targets = scope?.querySelectorAll?.("[data-reveal]:not([data-revealed])");
   if (!targets?.length) return;
+  targets.forEach((el) => el.setAttribute("data-revealed", ""));
   gsap.fromTo(
     targets,
     { opacity: 0, y: 14 },
     { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", stagger: 0.07, clearProps: "transform" }
+  );
+}
+
+/** Reveal ONE late-mounting element (a card that renders only once its own
+ *  query resolves). Idempotent via the same [data-revealed] mark. */
+export function revealNow(el) {
+  if (!el || el.hasAttribute("data-revealed")) return;
+  el.setAttribute("data-revealed", "");
+  gsap.fromTo(
+    el,
+    { opacity: 0, y: 14 },
+    { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", clearProps: "transform" }
   );
 }
 
