@@ -1,0 +1,7 @@
+# Test/lint toolchain (NOT shipped to prod images). CI installs this after the
+# runtime requirement sets; the app never imports anything here.
+# Pins match the dev box (#346 — CI had NO pytest at all: the old alembic step
+# always failed first and masked it).
+pytest==8.2.0
+pytest-asyncio==1.3.0
+ruff>=0.15

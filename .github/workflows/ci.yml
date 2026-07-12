@@ -131,6 +131,12 @@ jobs:
       - name: Install agent dependencies (LiveKit)
         run: pip install --no-cache-dir -r agent/livekit_minimal/requirements.txt
 
+      - name: Install test toolchain
+        # #346: pytest was never pinned anywhere — the step below ran on a
+        # runner with no pytest (masked for weeks by the alembic step failing
+        # first).
+        run: pip install --no-cache-dir -r requirements-dev.txt
+
       - name: Create test database
         # The PG service only creates vachanam_dev; the conftest fuse needs a
         # separate vachanam_test (name must contain "_test").
