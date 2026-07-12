@@ -40,7 +40,10 @@ def _parse(text: str) -> dict:
 def load_kb() -> list[dict]:
     if not _DIR.exists():
         return []
-    return [_parse(p.read_text(encoding="utf-8")) for p in sorted(_DIR.glob("*.md"))]
+    # KNOWLEDGE.md is the chatbot's grounding document (knowledge_text below),
+    # not a Help-page article — keep it out of the article list.
+    return [_parse(p.read_text(encoding="utf-8"))
+            for p in sorted(_DIR.glob("*.md")) if p.name != "KNOWLEDGE.md"]
 
 
 _CACHE = load_kb()
@@ -61,6 +64,23 @@ def kb_text(audience: str) -> str:
         keep = lambda a: a in ("public", "both")  # noqa: E731
     parts = [f"## {e['title']}\n{e['body']}" for e in _CACHE if keep(e["audience"])]
     return "\n\n".join(parts)
+
+
+# ── Chatbot grounding document (2026-07-12, Vinay: one end-to-end knowledge
+# doc, free-style answers, strict refusal outside it). Loaded ONCE at import;
+# it sits as the STABLE PREFIX of every bot prompt, so the model provider's
+# implicit prompt caching discounts the repeated tokens automatically — no
+# explicit cache API/TTL to manage at this size (~15 KB).
+_KNOWLEDGE = ""
+try:
+    _KNOWLEDGE = (_DIR / "KNOWLEDGE.md").read_text(encoding="utf-8").strip()
+except OSError:
+    pass  # missing doc → bot falls back to refusing everything (safe)
+
+
+def knowledge_text() -> str:
+    """The full product-knowledge document for the chatbot's system prompt."""
+    return _KNOWLEDGE
 
 
 if __name__ == "__main__":  # ponytail self-check
