@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { fetchAnalytics, fetchCallQuality, fetchTodayQueue } from "../api/client.js";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  fetchAnalytics, fetchCallQuality, fetchMessages, fetchTodayQueue, resolveMessage,
+} from "../api/client.js";
 import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
 import Heatmap from "../components/dash/Heatmap.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
@@ -211,6 +213,58 @@ function groupLeave(rows) {
   return groups;
 }
 
+/* Caller messages the agent took for the doctor (#349) — pending count badge,
+   urgent flagged, done button. Hidden entirely when there are no messages. */
+function MessagesCard({ branchId }) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["messages", branchId],
+    queryFn: () => fetchMessages(branchId),
+    enabled: Boolean(branchId),
+    refetchInterval: 60_000,
+  });
+  const done = useMutation({
+    mutationFn: (id) => resolveMessage(branchId, id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["messages", branchId] }),
+  });
+  const msgs = data?.messages ?? [];
+  if (!msgs.length) return null;
+  return (
+    <section data-reveal className="card overflow-hidden">
+      <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <h2 className="font-display text-lg font-semibold">Messages for the doctor</h2>
+        {data.pending > 0 && (
+          <span className="chip bg-gold-soft text-gold-ink">{data.pending} pending</span>
+        )}
+      </header>
+      <ul className="divide-y divide-hairline">
+        {msgs.map((m) => (
+          <li key={m.id} className={`flex items-start gap-3 px-5 py-3 ${m.status === "done" ? "opacity-50" : ""}`}>
+            <div className="min-w-0 flex-1">
+              <p className="font-ui text-sm text-ink">{m.message}</p>
+              <p className="mt-1 font-ui text-xs text-slate">
+                {m.urgent && <span className="chip-danger mr-2">urgent</span>}
+                {m.patient_name || "Unknown caller"}
+                {m.caller_phone ? ` · ${m.caller_phone}` : ""}
+                {m.created_at ? ` · ${new Date(m.created_at).toLocaleString()}` : ""}
+              </p>
+            </div>
+            {m.status === "pending" && (
+              <button
+                className="btn-ghost shrink-0 text-xs"
+                disabled={done.isPending}
+                onClick={() => done.mutate(m.id)}
+              >
+                Done
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function Dashboard() {
   const { branchId } = useAuth();
   const pageRef = useRef(null);
@@ -264,6 +318,9 @@ export default function Dashboard() {
           value={an?.attendance_rate != null ? Math.round(an.attendance_rate * 100) : 100}
           suffix="%" sub="attended of seen-or-missed" />
       </div>
+
+      {/* Caller messages awaiting a callback (#349) — hidden when empty */}
+      <MessagesCard branchId={branchId} />
 
       {/* Lifetime totals — since day one */}
       {an?.lifetime && <LifetimeBand lifetime={an.lifetime} />}

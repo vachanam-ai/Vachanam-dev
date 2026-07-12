@@ -4,6 +4,7 @@ Rule 1: every query filters by branch_id; access enforced via assert_branch_acce
 Currently: voice selection for the clinic's AI agent.
 """
 import uuid
+from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -373,6 +374,77 @@ async def save_faq(
     await db.commit()
     logger.info("branch_faq_saved", branch_id=branch_id, items=len(cleaned))
     return {"faq": cleaned, "template": FAQ_TEMPLATE}
+
+
+@router.get("/{branch_id}/messages")
+async def list_messages(
+    branch_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Caller messages the voice agent took for the doctor/clinic (#349).
+    Pending first, urgent first within that, newest first; latest 50."""
+    await assert_branch_access(current_user, branch_id, db)
+    from backend.models.schema import Patient, PatientMessage
+
+    rows = (
+        await db.execute(
+            select(PatientMessage, Patient.name)
+            .outerjoin(Patient, Patient.id == PatientMessage.patient_id)
+            .where(PatientMessage.branch_id == uuid.UUID(branch_id))
+            .order_by(
+                (PatientMessage.status == "pending").desc(),
+                PatientMessage.urgent.desc(),
+                PatientMessage.created_at.desc(),
+            )
+            .limit(50)
+        )
+    ).all()
+    return {
+        "messages": [
+            {
+                "id": str(m.id),
+                "message": m.message,
+                "urgent": m.urgent,
+                "status": m.status,
+                "caller_phone": m.caller_phone,
+                "patient_name": name,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m, name in rows
+        ],
+        "pending": sum(1 for m, _ in rows if m.status == "pending"),
+    }
+
+
+@router.patch("/{branch_id}/messages/{message_id}")
+async def resolve_message(
+    branch_id: str,
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Mark a caller message done (the clinic called back / handled it)."""
+    await assert_branch_access(current_user, branch_id, db)
+    from backend.models.schema import PatientMessage
+
+    m = (
+        await db.execute(
+            select(PatientMessage).where(
+                PatientMessage.id == uuid.UUID(message_id),
+                # RULE 1: id alone is not enough — the row must belong to the
+                # branch the caller is authorized on.
+                PatientMessage.branch_id == uuid.UUID(branch_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if m is None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    m.status = "done"
+    m.resolved_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info("patient_message_resolved", branch_id=branch_id, message_id=message_id)
+    return {"id": str(m.id), "status": m.status}
 
 
 class ClonedVoiceRegister(BaseModel):

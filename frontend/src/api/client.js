@@ -89,6 +89,12 @@ export const fetchCallQuality = (branchId, days = 14) =>
     .get("/analytics/call-quality", { params: { branch_id: branchId, days } })
     .then((r) => r.data);
 
+// ── Caller messages for the doctor (#349) ──
+export const fetchMessages = (branchId) =>
+  api.get(`/branches/${branchId}/messages`).then((r) => r.data);
+export const resolveMessage = (branchId, messageId) =>
+  api.patch(`/branches/${branchId}/messages/${messageId}`).then((r) => r.data);
+
 // ── Queue (receptionist) ──
 export const fetchTodayQueue = (branchId) =>
   api.get(`/queue/${branchId}/today`).then((r) => r.data);

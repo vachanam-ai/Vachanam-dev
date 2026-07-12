@@ -67,6 +67,35 @@ async def notify_staff_reply(to_email: str, subject: str) -> None:
     )
 
 
+async def notify_clinic_message(branch_id) -> None:
+    """URGENT caller message (#349) → ONE mail to the clinic owner pointing at
+    the dashboard. RULE 9: the message text itself NEVER rides the email (it
+    can contain health details) — the mail only says a message is waiting.
+    Opens its own short session (called from the voice agent mid-call)."""
+    import backend.database as dbm
+    from sqlalchemy import select
+
+    from backend.models.schema import Branch, Organization
+
+    async with dbm.AsyncSessionLocal() as db:
+        row = (
+            await db.execute(
+                select(Organization.owner_email, Branch.name)
+                .join(Branch, Branch.org_id == Organization.id)
+                .where(Branch.id == branch_id)
+            )
+        ).first()
+    if not row or not row[0]:
+        return
+    await _send(
+        row[0],
+        f"Urgent: a caller left a message for {row[1]}",
+        "A caller just left an URGENT message for your clinic and expects a "
+        "call back.\n\nRead it on your dashboard (Messages):\n"
+        f"{_app_link('/dashboard')}\n\n— Vachanam",
+    )
+
+
 async def notify_resolved(to_email: str, subject: str) -> None:
     """To the CLINIC when their ticket is resolved. Sent from support@."""
     await _send(

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models.schema import FollowupTask, Patient, TreatmentNote
+from backend.models.schema import FollowupTask, Patient, PatientMessage, TreatmentNote
 
 logger = structlog.get_logger()
 
@@ -34,6 +34,16 @@ async def erase_patient_pii(db: AsyncSession, p: Patient) -> None:
     """
     now = datetime.now(timezone.utc)
     last4 = (p.phone or "")[-4:] or "----"
+    # Caller messages carry the full phone + free text (#349) — DELETE them,
+    # both linked rows and unlinked rows matching the phone (message taken
+    # before the patient row existed). Must run BEFORE p.phone is nulled.
+    _msg_filter = PatientMessage.patient_id == p.id
+    if p.phone:
+        _msg_filter = _msg_filter | (
+            (PatientMessage.branch_id == p.branch_id)
+            & (PatientMessage.caller_phone == p.phone)
+        )
+    await db.execute(PatientMessage.__table__.delete().where(_msg_filter))
     p.name = ERASED_NAME
     p.phone = None
     p.age = None

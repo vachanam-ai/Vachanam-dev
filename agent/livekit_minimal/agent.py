@@ -1673,6 +1673,64 @@ class VachanamAgent(Agent):
                 "with the doctor and get back to them."}
 
     @function_tool()
+    async def take_message(
+        self, context: RunContext, message: str, urgent: bool = False
+    ) -> dict:
+        """Record a message FROM the caller FOR the doctor/clinic — use when
+        the caller wants the clinic or doctor to know something or call them
+        back (a complaint, a payment issue, something personal for the
+        doctor). NOT for bookings and NOT for clinic-info questions
+        (log_clinic_question). Set urgent=true when the caller expresses
+        urgency. Restate the message back in one line BEFORE calling this so
+        it is accurate. Only after this returns success may you say the
+        clinic has the message and will call back."""
+        from backend.models.schema import Patient, PatientMessage
+
+        msg = " ".join((message or "").split())[:500]
+        if not msg:
+            return {"logged": False}
+        try:
+            patient_id = None
+            if self._state.patient_phone:
+                patient_id = (
+                    await self._db.execute(
+                        select(Patient.id).where(
+                            and_(
+                                Patient.branch_id == self._state.branch_id,
+                                Patient.phone == self._state.patient_phone,
+                            )
+                        ).limit(1)
+                    )
+                ).scalar_one_or_none()
+            self._db.add(PatientMessage(
+                branch_id=self._state.branch_id,
+                patient_id=patient_id,
+                caller_phone=self._state.patient_phone,
+                message=msg,
+                urgent=bool(urgent),
+            ))
+            await self._db.commit()
+        except Exception as e:  # noqa: BLE001 — message-taking must never break the call
+            logger.warning("take_message_failed: %s", e)
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            return {"logged": False, "next": "Apologise briefly and suggest "
+                    "they call the clinic directly."}
+        if urgent:
+            # RULE 4/8: the alert email is a notification — best-effort, never
+            # blocks or fails the message write it follows.
+            try:
+                from backend.services.support_email import notify_clinic_message
+
+                await notify_clinic_message(self._state.branch_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("urgent_message_alert_failed: %s", e)
+        return {"logged": True, "next": "Tell the caller their message is with "
+                "the clinic and they will get a call back."}
+
+    @function_tool()
     async def switch_language(self, context: RunContext, language: str) -> object:
         """Switch the CALL's spoken language. Call ONLY when the caller
         EXPLICITLY asks to talk in another language ('can you speak English?',
@@ -2238,11 +2296,17 @@ class VachanamAgent(Agent):
 
     @function_tool()
     async def request_human_transfer(self, context: RunContext, reason: str) -> dict:
-        """Transfer the call to a human. Use ONLY if the patient explicitly asks
-        for a person/doctor/receptionist, or keeps insisting across turns."""
+        """Transfer the call to the clinic's emergency line. Use when the
+        caller's situation sounds URGENT NOW, when they explicitly ask for a
+        human/person, or on their THIRD ask for the doctor (never deflect a
+        third time). On failure, follow the returned `next` instruction —
+        never leave the caller without a path to a human."""
         room = self._room
         if room is None or not self._transfer_to:
-            return {"success": False, "error": "transfer_unavailable"}
+            return {"success": False, "error": "transfer_unavailable",
+                    "next": "Apologise that you cannot connect the call right "
+                            "now, offer to take a message with take_message, "
+                            "and suggest they visit or call the clinic directly."}
         participant_identity = next(iter(room.remote_participants), None)
         if participant_identity is None:
             return {"success": False, "error": "no_participant"}
@@ -2266,7 +2330,13 @@ class VachanamAgent(Agent):
             return {"success": True}
         except Exception as e:
             logger.error("transfer_failed: %s", e)
-            return {"success": False, "error": "transfer_failed"}
+            # The line to a human broke — hand the caller the number itself so
+            # they can dial directly (spoken digit-by-digit by the TTS layer).
+            return {"success": False, "error": "transfer_failed",
+                    "emergency_contact": self._transfer_to,
+                    "next": "Say the connection did not go through, give this "
+                            "emergency number aloud digit by digit, and offer "
+                            "to also take a message with take_message."}
 
 
 async def entrypoint(ctx: agents.JobContext) -> None:

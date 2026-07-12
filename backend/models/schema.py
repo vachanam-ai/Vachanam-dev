@@ -279,6 +279,32 @@ class ClinicQuestion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PatientMessage(Base):
+    """A caller's message FOR the doctor/clinic taken by the voice agent
+    (#349 — "I will inform the clinic" must be a real deliverable, not a
+    phrase). Distinct from ClinicQuestion (FAQ growth): a message carries a
+    callback promise, so it stores the FULL caller phone — that number is the
+    delivery address for the promised callback (legitimate purpose; DPDP
+    data-minimisation satisfied by scope: message text + phone only, wiped by
+    patient erasure and pruned by retention). RULE 1: branch-scoped."""
+    __tablename__ = "patient_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Known caller → linked to their record so the dashboard can show the name.
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"), nullable=True
+    )
+    caller_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    urgent: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(10), default="pending")  # pending | done
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class Consent(Base):
     """DPDP s.5 demonstrable-notice record. One row per call where the data-
     processing disclosure (the AI-assistant greeting) was spoken to the caller,

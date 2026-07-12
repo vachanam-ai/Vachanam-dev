@@ -75,13 +75,22 @@ async def run_data_retention() -> None:
             .values(transcript=None)
         )
 
-        if stale or pruned.rowcount or transcripts_pruned.rowcount:
+        # Caller messages (#349) hold full phone + free text on the SAME short
+        # clock as transcripts: once past it, the callback moment is long gone.
+        from backend.models.schema import PatientMessage
+
+        messages_pruned = await db.execute(
+            PatientMessage.__table__.delete().where(PatientMessage.created_at < t_cutoff)
+        )
+
+        if stale or pruned.rowcount or transcripts_pruned.rowcount or messages_pruned.rowcount:
             await db.commit()
             logger.info(
                 "data_retention_run",
                 patients_erased=len(stale),
                 consents_pruned=int(pruned.rowcount or 0),
                 transcripts_pruned=int(transcripts_pruned.rowcount or 0),
+                messages_pruned=int(messages_pruned.rowcount or 0),
                 retention_days=days,
                 transcript_retention_days=t_days,
             )
