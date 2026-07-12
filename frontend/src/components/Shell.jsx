@@ -61,7 +61,10 @@ export default function Shell() {
   return (
     <div className="flex min-h-[100dvh] flex-col">
       <header className="sticky top-0 z-30 border-b border-hairline bg-cream/80 backdrop-blur-md">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4 sm:gap-5">
+        {/* Full-bleed bar (Vinay 2026-07-12: "no scrolling on navbar, spread
+            left corner to right corner") — the header ignores the page's
+            max-w-6xl; brand left, links center-left, user block pinned right. */}
+        <div className="flex h-14 w-full items-center gap-3 px-4 sm:gap-5 sm:px-6">
           {/* Brand → role home (dashboard for owners) */}
           <Link
             to={roleHome(role)}
@@ -71,8 +74,9 @@ export default function Shell() {
             Vachanam
           </Link>
 
-          {/* Desktop / tablet inline nav — nowrap labels, scrolls if cramped */}
-          <nav className="hidden min-w-0 items-center gap-0.5 overflow-x-auto md:flex">
+          {/* Inline nav only where ALL links fit without scrolling (lg+);
+              below that the hamburger drawer takes over. */}
+          <nav className="hidden items-center gap-0.5 lg:flex xl:gap-1">
             {links.map((l) => (
               <NavLink
                 key={l.to}
@@ -100,7 +104,7 @@ export default function Shell() {
             </div>
             <button
               onClick={logout}
-              className="btn-ghost hidden shrink-0 whitespace-nowrap px-3 py-1.5 text-sm md:inline-flex"
+              className="btn-ghost hidden shrink-0 whitespace-nowrap px-3 py-1.5 text-sm lg:inline-flex"
             >
               Sign out
             </button>
@@ -112,7 +116,7 @@ export default function Shell() {
                 aria-label={menuOpen ? "Close menu" : "Open menu"}
                 aria-expanded={menuOpen}
                 onClick={() => setMenuOpen((o) => !o)}
-                className="grid h-11 w-11 place-items-center rounded-lg border border-hairline bg-surface text-ink-soft transition hover:bg-teal-mint md:hidden"
+                className="grid h-11 w-11 place-items-center rounded-lg border border-hairline bg-surface text-ink-soft transition hover:bg-teal-mint lg:hidden"
               >
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                   strokeWidth="2" strokeLinecap="round" aria-hidden>
@@ -136,7 +140,7 @@ export default function Shell() {
 
         {/* Mobile drawer */}
         {menuOpen && (
-          <nav className="border-t border-hairline bg-cream/95 px-4 py-3 backdrop-blur-md md:hidden">
+          <nav className="border-t border-hairline bg-cream/95 px-4 py-3 backdrop-blur-md lg:hidden">
             <div className="mb-2 sm:hidden">
               <p className="font-ui text-sm font-medium leading-tight">{user?.name ?? user?.email}</p>
               <p className="font-ui text-[11px] uppercase tracking-[0.14em] text-slate">
