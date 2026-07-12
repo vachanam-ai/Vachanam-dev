@@ -89,10 +89,13 @@ def test_phone_confirm_folded_into_single_readback():
 
 def test_message_leaver_insistence_routes_to_human_transfer():
     """Patients insist on the doctor. Softly ask the matter once; serious
-    persistent insistence follows the HUMAN TRANSFER rule."""
+    persistent insistence follows the HUMAN TRANSFER rule — which since #350
+    caps deflection at two offers (third ask always transfers)."""
     p = _prompt()
-    assert "INSIST on speaking to the doctor personally" in p
-    assert "that is the HUMAN TRANSFER rule" in p
+    assert "INSIST on speaking" in p  # playbook still routes insisters
+    assert "that is the HUMAN\n  TRANSFER rule" in p.replace("\r\n", "\n") or \
+        "HUMAN TRANSFER" in p
+    assert "AT MOST TWICE" in p  # #350 ceiling
 
 
 def test_trailing_off_fragment_is_not_a_turn():

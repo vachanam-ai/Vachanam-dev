@@ -305,7 +305,7 @@ def test_prompt_includes_transfer_trigger_instructions():
     )
     assert "request_human_transfer" in prompt
     assert "explicit_ask" in prompt
-    assert "persistent_pressure" in prompt
+    assert "persistent" in prompt  # #350 renamed persistent_pressure → persistent
     # Must NOT instruct keyword-based transfer — LLM judges intent, not keywords
     assert "chest pain" not in prompt.lower()
     assert "heart attack" not in prompt.lower()
