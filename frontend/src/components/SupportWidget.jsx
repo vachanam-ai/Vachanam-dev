@@ -2,6 +2,37 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { sendChat } from "../api/support";
 
+/** Three jiggling dots — "assistant is typing". */
+function TypingDots() {
+  return (
+    <div className="text-left">
+      <span className="inline-flex items-center gap-1 rounded-2xl bg-teal-mint px-3 py-3">
+        {[0, 150, 300].map((d) => (
+          <span
+            key={d}
+            className="h-1.5 w-1.5 animate-bounce rounded-full bg-ink/50 motion-reduce:animate-none"
+            style={{ animationDelay: `${d}ms` }}
+          />
+        ))}
+      </span>
+    </div>
+  );
+}
+
+/** Streams the answer in character-by-character (client-side; the API returns
+ *  one JSON blob — ticket status needs the full answer, so real SSE buys
+ *  nothing on 1-4 sentence replies). */
+function TypedText({ text, done, onTick, onDone }) {
+  const [n, setN] = useState(done ? text.length : 0);
+  useEffect(() => {
+    if (done) return undefined;
+    if (n >= text.length) { onDone(); return undefined; }
+    const t = setTimeout(() => { setN((v) => v + 2); onTick(); }, 18);
+    return () => clearTimeout(t);
+  }, [n, done, text, onTick, onDone]);
+  return done ? text : text.slice(0, n);
+}
+
 /** Floating support chatbot — a launcher bubble (bottom-right) that opens a
  *  small chat window. Grounded assistant; every chat auto-logs a ticket the
  *  clinic can follow up on under Support. Shown app-wide except full-screen
@@ -15,7 +46,10 @@ export default function SupportWidget() {
   const [busy, setBusy] = useState(false);
   const endRef = useRef(null);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, open]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, open, busy]);
+  const scrollToEnd = () => endRef.current?.scrollIntoView({ behavior: "auto" });
+  const markTyped = (i) =>
+    setMsgs((m) => m.map((msg, j) => (j === i ? { ...msg, typed: true } : msg)));
 
   // Hide on the waiting-room TV board (public kiosk, no chrome).
   if (pathname.startsWith("/tv/")) return null;
@@ -31,9 +65,9 @@ export default function SupportWidget() {
     try {
       const res = await sendChat({ question, history, ticketId });
       setTicketId(res.ticket_id);
-      setMsgs((m) => [...m, { role: "bot", content: res.answer }]);
+      setMsgs((m) => [...m, { role: "bot", content: res.answer, typed: false }]);
     } catch {
-      setMsgs((m) => [...m, { role: "bot", content: "Something went wrong — email hello@vachanam.in and we'll help." }]);
+      setMsgs((m) => [...m, { role: "bot", content: "Something went wrong — email hello@vachanam.in and we'll help.", typed: true }]);
     } finally { setBusy(false); }
   };
 
@@ -63,10 +97,16 @@ export default function SupportWidget() {
               <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
                 <span className={"inline-block max-w-[85%] rounded-2xl px-3 py-2 text-sm " +
                   (m.role === "user" ? "bg-teal text-white" : "bg-teal-mint text-ink")}>
-                  {m.content}
+                  {m.role === "bot" ? (
+                    <TypedText text={m.content} done={m.typed !== false}
+                      onTick={scrollToEnd} onDone={() => markTyped(i)} />
+                  ) : (
+                    m.content
+                  )}
                 </span>
               </div>
             ))}
+            {busy && <TypingDots />}
             <div ref={endRef} />
           </div>
 
