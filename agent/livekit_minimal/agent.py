@@ -589,6 +589,22 @@ DOCTOR_ADVICE_PROMPT_EXTRA = (
 _FOLLOWUP_CALLTYPES = {"next_visit_book", "doctor_advice"}
 
 
+def _writeback_task_id(meta: dict, state) -> str | None:
+    """Which FollowupTask gets the patient's spoken reply at call end.
+
+    Outbound follow-ups carry task_id in dispatch meta; INBOUND calls that
+    answered a pending follow-up route it via state (#347 — without this,
+    "I will inform the doctor" on an inbound call recorded NOTHING for the
+    doctor). Cascade rebooks use the separate followup_task_id field and
+    must NOT be auto-completed here — their retry loop owns completion.
+    """
+    return meta.get("task_id") or (
+        str(state.followup_writeback_task_id)
+        if state.followup_writeback_task_id
+        else None
+    )
+
+
 def _followup_meta_safe(meta: dict) -> dict:
     """RULE 9: the ONLY metadata fields allowed to reach the LLM/agent for a
     follow-up call. Private clinical notes (steps_performed/next_steps) must never
@@ -2788,6 +2804,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     )
                     try:
                         state.followup_task_id = UUID(inbound_followup["task_id"])
+                        # Inbound has no dispatch meta — route the patient's reply
+                        # to the teardown write-back through state instead (#347).
+                        state.followup_writeback_task_id = state.followup_task_id
                         state.doctor_id = UUID(inbound_followup["doctor_id"])
                     except (ValueError, KeyError):
                         pass
@@ -3307,7 +3326,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # teardown. (Task 8 set status=completed on dispatch; this enriches
                 # response_summary and is idempotent.) RULE 9: health self-report —
                 # branch_id-scoped, retention-wiped by the data_retention job.
-                _task_id = meta.get("task_id")
+                _task_id = _writeback_task_id(meta, state)
                 if _task_id:
                     try:
                         _replies = []

@@ -36,6 +36,11 @@ class SessionState:
     is_rebook: bool = False
     cancelled_token_id: UUID | None = None
     followup_task_id: UUID | None = None  # cascade_rebook: mark completed on confirm
+    # Inbound call answering a PENDING treatment follow-up: the greeting asked
+    # the doctor's question, so the patient's reply must reach the doctor via
+    # the teardown response_summary write-back (outbound calls carry task_id in
+    # dispatch meta; inbound has no meta — this field is the inbound channel).
+    followup_writeback_task_id: UUID | None = None
 
     # Solo plan 4-minute cap
     elapsed_seconds: int = 0
