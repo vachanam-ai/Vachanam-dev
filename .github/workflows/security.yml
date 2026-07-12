@@ -40,7 +40,10 @@ jobs:
       - name: Install test deps
         run: pip install pytest
       - name: Scan git history for real secrets
-        run: python -m pytest tests/security/test_secrets_not_in_repo.py -q --tb=short
+        # --noconftest: this job installs ONLY pytest; the repo conftest pulls
+        # pytest_asyncio + backend deps and killed collection (#346). The scan
+        # itself is pure subprocess+regex — it needs no fixtures.
+        run: python -m pytest tests/security/test_secrets_not_in_repo.py --noconftest -q --tb=short
 
   frontend-audit:
     runs-on: ubuntu-latest

@@ -31,7 +31,10 @@ jobs:
       # A 200 wakes/keeps it warm; a slow cold-start still counts as activity,
       # so never fail the job on a timeout. 4 pings @ 60s bridge cron drift.
       - run: |
+          # NB: `[ $i -lt 4 ] && sleep` as the loop's last command made the
+          # FINAL iteration exit 1 → the job "failed" every 5 minutes and
+          # GitHub emailed every failure (FIXLOG #346 — the mail flood).
           for i in 1 2 3 4; do
             curl -fsS --max-time 90 https://vachanam-backend.onrender.com/health || true
-            [ "$i" -lt 4 ] && sleep 60
+            if [ "$i" -lt 4 ]; then sleep 60; fi
           done

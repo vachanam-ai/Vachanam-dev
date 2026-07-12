@@ -115,11 +115,18 @@ def _get_git_log_diff() -> str:
     result = subprocess.run(
         [
             "git", "log", "--all", "-p",
-            "--", ".", ":!tests/security/test_secrets_not_in_repo.py",
+            # #346: history outgrew the old 120s budget and this test silently
+            # became the CI failure emailing every push. Exclude bulk paths
+            # that can never carry a live secret pattern (lockfiles, audio,
+            # images) — everything else, including docs, stays scanned.
+            "--", ".",
+            ":!tests/security/test_secrets_not_in_repo.py",
+            ":!frontend/package-lock.json",
+            ":!*.wav", ":!*.mp3", ":!*.png", ":!*.jpg", ":!*.ico",
         ],
         cwd=str(repo_root),
         capture_output=True,
-        timeout=120,
+        timeout=600,
     )
     # git log --all -p returns 0 even on empty repos
     assert result.returncode == 0, (
