@@ -1,5 +1,26 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-12 (evening) — MAIL-SPAM ROOT-CAUSED + CI GREEN PATH, MESSAGES-FOR-DOCTOR, TRANSFER ESCALATION, PAY BUTTON (FIXLOG #346-351).**
+> The "spam" was GitHub Actions: keepalive bash exit-code bug red EVERY 5 MIN
+> since Jul 3 (~2,600 runs) + secrets-scan conftest import + npm form-data HIGH
+> + CI had NO pytest + 4 real test failures once it did (biggest:
+> `fastapi>=0.110` float → CI got 0.139 lazy include_router; NOW PINNED
+> `fastapi==0.139.0`; rate-limiter test walks effective_route_contexts()).
+> NEW: patient_messages (ee28 **APPLIED to prod**) + take_message tool +
+> Dashboard "Messages for the doctor" card + urgent owner-email (no text in
+> mail, RULE 9) — replaces the empty "I informed the clinic". Inbound
+> follow-up replies now reach FollowupTask.response_summary (#347). Transfer
+> escalation (#350): urgent = immediate transfer; third doctor-ask ALWAYS
+> transfers; failed transfer speaks the emergency number digit-by-digit.
+> Settings pay button always visible (#351; active-no-cycle orgs had NO pay
+> path). GSI white ring cropped (#348). Suites: integration 321 + unit/sec
+> 652 green local; CI-replica container proof for the fastapi pin.
+> **SCOREBOARD (e622d19): CI ✅ (pytest on GitHub runners green for the FIRST
+> TIME) + security-gate ✅ + keep-render-warm ✅ — the failure-mail flood is
+> over.** Agent Fly v101 deployed (bom) with #333/#347/#349/#350. Last
+> gremlin was setup-python's pip-cache post-step failing the job while every
+> real step passed (removed — installs are --no-cache-dir).
+
 > **2026-07-12 — LEGAL REBRAND + VENDOR SCRUB + UI BATCH + END-TREATMENT (FIXLOG #321-323).**
 > Legal pages (/privacy /terms /dpa /refunds /data-handling /data-safety) now
 > brand-styled (teal tokens, Fraunces/Outfit, dark mode, topbar). Processors
