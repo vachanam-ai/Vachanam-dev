@@ -149,6 +149,22 @@ async def create_order(
             .order_by(BillingCycle.cycle_end.desc()).limit(1)
         )
     ).scalar_one_or_none()
+    # #353 (Vinay): the pay window LOCKS while a paid cycle runs — it opens
+    # 3 days before the cycle ends, and the confirming webhook's new cycle
+    # locks it again. Stops accidental n-times payment stacking. Server-side
+    # so a stale/bypassed UI can't double-charge.
+    if (
+        org.status == "active"
+        and last is not None
+        and (last.cycle_end - date.today()).days > 3
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Renewal opens 3 days before your current cycle ends "
+                f"on {last.cycle_end.isoformat()}"
+            ),
+        )
     if last is not None:
         used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
     bd = subscription_order_breakdown(
@@ -205,6 +221,7 @@ class PlanInfo(BaseModel):
     pending_plan: str | None
     pending_plan_effective: str | None  # ISO date the pending change applies
     cycle_end: str | None = None  # ISO date the current PAID cycle ends (renewal day)
+    last_payment_date: str | None = None  # ISO date the last payment was confirmed (#353)
     gstin: str | None = None  # clinic's GSTIN (shown on invoices)
 
 
@@ -248,12 +265,13 @@ async def _cycle_minutes_used(db: AsyncSession, org_id, start: date, end: date) 
     return float(secs or 0) / 60.0
 
 
-async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
+async def _latest_cycle(db: AsyncSession, org_id):
+    """Latest BillingCycle row (by cycle_end) or None."""
     from backend.models.schema import BillingCycle
 
     return (
         await db.execute(
-            select(BillingCycle.cycle_end)
+            select(BillingCycle)
             .where(BillingCycle.org_id == org_id)
             .order_by(BillingCycle.cycle_end.desc())
             .limit(1)
@@ -261,7 +279,12 @@ async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
     ).scalar_one_or_none()
 
 
-def _plan_info(org: Organization, cycle_end: date | None = None) -> "PlanInfo":
+async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
+    last = await _latest_cycle(db, org_id)
+    return last.cycle_end if last else None
+
+
+def _plan_info(org: Organization, last_cycle=None) -> "PlanInfo":
     return PlanInfo(
         plan=org.plan,
         status=org.status,
@@ -269,7 +292,14 @@ def _plan_info(org: Organization, cycle_end: date | None = None) -> "PlanInfo":
         pending_plan_effective=(
             org.pending_plan_effective.isoformat() if org.pending_plan_effective else None
         ),
-        cycle_end=cycle_end.isoformat() if cycle_end else None,
+        cycle_end=last_cycle.cycle_end.isoformat() if last_cycle else None,
+        # The cycle row is created the moment the webhook confirms payment —
+        # its created_at IS the payment timestamp (#353 "last payment date").
+        last_payment_date=(
+            last_cycle.created_at.date().isoformat()
+            if last_cycle is not None and last_cycle.created_at
+            else None
+        ),
         gstin=getattr(org, "gstin", None),
     )
 
@@ -281,7 +311,7 @@ async def get_plan(
 ) -> "PlanInfo":
     """Caller's current plan + any scheduled change + current cycle end."""
     org = await _load_my_org(current_user, db)
-    return _plan_info(org, await _latest_cycle_end(db, org.id))
+    return _plan_info(org, await _latest_cycle(db, org.id))
 
 
 @router.post("/plan-change", response_model=PlanInfo)
@@ -357,7 +387,7 @@ async def set_gstin(
     org.gstin = g or None
     await db.commit()
     logger.info("gstin_saved", org_id=current_user.org_id, set=bool(g))
-    return _plan_info(org, await _latest_cycle_end(db, org.id))
+    return _plan_info(org, await _latest_cycle(db, org.id))
 
 
 @router.post(

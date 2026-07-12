@@ -1649,7 +1649,9 @@ class VachanamAgent(Agent):
         about the clinic and the answer is not in your CLINIC FAQ or clinic
         info — the clinic reviews these to improve its FAQ. Then tell the
         caller the clinic will check with the doctor and get back to them.
-        Never log booking requests or medical questions here."""
+        NEVER log here: booking requests, medical questions, urgent matters,
+        requests to speak to the doctor, or anything expecting a call back —
+        those are take_message or the HUMAN TRANSFER rule (#352)."""
         from backend.models.schema import ClinicQuestion
 
         q = " ".join((question or "").split())[:300]

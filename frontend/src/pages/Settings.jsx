@@ -163,8 +163,9 @@ export default function Settings() {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change language")
   });
 
-  // Plan & billing — current plan + any scheduled change.
-  const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan });
+  // Plan & billing — current plan + any scheduled change. Refetches every
+  // minute so cycle-end / days-left stay live without a reload (#353).
+  const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan, refetchInterval: 60_000 });
   const planChange = useMutation({
     mutationFn: (p) => changePlan(p),
     onSuccess: (d) => {
@@ -428,32 +429,49 @@ export default function Settings() {
           <span className={plan.data?.status === "active" ? "chip-token" : "chip-muted"}>
             {plan.data?.status ?? "—"}
           </span>
-          {plan.data?.cycle_end && plan.data.status === "active" && (
-            <span className="font-ui text-sm text-slate">
-              Cycle ends{" "}
-              <strong className="text-ink">
-                {new Date(plan.data.cycle_end).toLocaleDateString("en-IN",
-                  { day: "numeric", month: "short", year: "numeric" })}
-              </strong>
-            </span>
-          )}
-          {/* The pay button is ALWAYS visible (#351 — an active org with no
-              paid cycle had NO way to pay at all). Early renewals are safe:
-              the new cycle starts when the current one ends, nothing is lost. */}
-          {plan.data && (
-            <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
-              {paying ? "Opening payment…"
-                : `${plan.data.status !== "active" ? "Activate"
-                    : plan.data.cycle_end ? "Renew" : "Pay"} — ₹${(PLAN_PRICES[plan.data.plan] ?? 0).toLocaleString("en-IN")} + GST${plan.data.status === "active" && plan.data.cycle_end ? " & usage" : ""}`}
-            </button>
-          )}
+          {(() => {
+            const p = plan.data;
+            if (!p) return null;
+            // Days left computed against NOW on every render; the 60s plan
+            // refetch keeps this live. Backend enforces the same 3-day
+            // window server-side, so the UI lock is honest, not decorative.
+            const daysLeft = p.cycle_end
+              ? Math.ceil((new Date(p.cycle_end) - Date.now()) / 86400000)
+              : null;
+            const payable =
+              p.status !== "active" || !p.cycle_end || daysLeft <= 3;
+            const fmt = (d) => new Date(d).toLocaleDateString("en-IN",
+              { day: "numeric", month: "short", year: "numeric" });
+            return (
+              <>
+                {p.last_payment_date && (
+                  <span className="font-ui text-sm text-slate">
+                    Last paid <strong className="text-ink">{fmt(p.last_payment_date)}</strong>
+                  </span>
+                )}
+                {p.cycle_end && p.status === "active" && (
+                  <span className="font-ui text-sm text-slate">
+                    Renews <strong className="text-ink">{fmt(p.cycle_end)}</strong>
+                    {daysLeft > 0 && (
+                      <> · <strong className="text-ink">{daysLeft}</strong> day{daysLeft === 1 ? "" : "s"} left</>
+                    )}
+                  </span>
+                )}
+                {payable ? (
+                  <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
+                    {paying ? "Opening payment…"
+                      : `${p.status !== "active" ? "Activate"
+                          : p.cycle_end ? "Renew" : "Pay"} — ₹${(PLAN_PRICES[p.plan] ?? 0).toLocaleString("en-IN")} + GST${p.status === "active" && p.cycle_end ? " & usage" : ""}`}
+                  </button>
+                ) : (
+                  <span className="chip-muted" title="Renewal opens 3 days before your cycle ends">
+                    Paid — renewal opens {fmt(new Date(new Date(p.cycle_end) - 3 * 86400000))}
+                  </span>
+                )}
+              </>
+            );
+          })()}
         </div>
-        {plan.data?.status === "active" && plan.data.cycle_end &&
-          (new Date(plan.data.cycle_end) - Date.now()) / 86400000 > 5 && (
-          <p className="mt-2 font-ui text-xs text-slate">
-            Renewing early? Your new 30 days start when the current cycle ends — you lose nothing.
-          </p>
-        )}
         {plan.data?.status === "active" && !plan.data.cycle_end && (
           <p className="mt-2 font-ui text-xs text-slate">
             Your line is active without a paid cycle. Paying starts your 30-day billing cycle today.

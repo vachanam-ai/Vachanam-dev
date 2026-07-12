@@ -161,6 +161,77 @@ async def test_renewal_charges_overage_and_gst(db, monkeypatch):
     assert c2.cycle_start == c1.cycle_end  # contiguous
 
 
+async def test_pay_window_locked_mid_cycle(db):
+    """#353 (Vinay: 'payment is accepting n number of times'): an active org
+    whose cycle ends >3 days out gets a 409 — server-side, so a stale UI or
+    direct API call can't stack payments."""
+    from fastapi import HTTPException
+
+    from backend.middleware.auth_middleware import CurrentUser
+    from backend.routers.payments import CreateOrderRequest, create_order
+
+    org = await _org(db, status="active", plan="solo")
+    start = date.today() - timedelta(days=10)  # ends in 20 days
+    db.add(BillingCycle(
+        org_id=org.id, cycle_start=start, cycle_end=start + timedelta(days=30),
+        plan="solo", base_amount=5999, included_minutes=700, minutes_used=0,
+        overage_minutes=0, overage_rate=5, overage_amount=0,
+        status="paid", razorpay_payment_id=f"pay_{uuid.uuid4().hex[:10]}",
+    ))
+    await db.commit()
+
+    user = CurrentUser(user_id=str(uuid.uuid4()), email="o@x.in", role="org_admin",
+                       org_id=str(org.id), branch_ids=[], is_admin=False, jti="j")
+    with pytest.raises(HTTPException) as ei:
+        await create_order(None, CreateOrderRequest(plan="solo"), user, db)
+    assert ei.value.status_code == 409
+    assert "Renewal opens 3 days" in ei.value.detail
+
+
+async def test_pay_window_open_for_active_org_without_cycle(db, monkeypatch):
+    """#351/#353: an admin-activated org (active, never billed) must always be
+    able to pay — that state previously had NO pay path at all."""
+    from backend.middleware.auth_middleware import CurrentUser
+    from backend.routers import payments as pay
+    from backend.routers.payments import CreateOrderRequest, create_order
+
+    org = await _org(db, status="active", plan="solo")
+
+    class _FakeOrders:
+        def create(self, payload):
+            return {"id": "order_nocycle", "amount": payload["amount"], "currency": "INR"}
+
+    class _FakeClient:
+        order = _FakeOrders()
+
+    monkeypatch.setattr(pay, "_get_client", lambda: _FakeClient())
+    monkeypatch.setattr(pay.settings, "razorpay_key_id", "rzp_test_x")
+
+    user = CurrentUser(user_id=str(uuid.uuid4()), email="o@x.in", role="org_admin",
+                       org_id=str(org.id), branch_ids=[], is_admin=False, jti="j")
+    resp = await create_order(None, CreateOrderRequest(plan="solo"), user, db)
+    assert resp.order_id == "order_nocycle"
+
+
+async def test_plan_info_carries_last_payment_date(db):
+    """#353: the Settings card shows when the org last paid."""
+    from backend.routers.payments import _latest_cycle, _plan_info
+
+    org = await _org(db, status="active", plan="solo")
+    start = date.today() - timedelta(days=5)
+    db.add(BillingCycle(
+        org_id=org.id, cycle_start=start, cycle_end=start + timedelta(days=30),
+        plan="solo", base_amount=5999, included_minutes=700, minutes_used=0,
+        overage_minutes=0, overage_rate=5, overage_amount=0,
+        status="paid", razorpay_payment_id=f"pay_{uuid.uuid4().hex[:10]}",
+    ))
+    await db.commit()
+
+    info = _plan_info(org, await _latest_cycle(db, org.id))
+    assert info.cycle_end == (start + timedelta(days=30)).isoformat()
+    assert info.last_payment_date == date.today().isoformat()  # row created today
+
+
 async def test_renewal_job_respects_grace_and_cycleless_orgs(db):
     import backend.jobs.trial_pause as job
 

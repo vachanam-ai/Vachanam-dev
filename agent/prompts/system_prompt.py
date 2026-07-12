@@ -245,9 +245,10 @@ def build_system_prompt(
     faq_line += (
         "\nCLINIC-INFO QUESTIONS NOT COVERED above (or when no FAQ exists): call "
         "log_clinic_question with the caller's question, then say the clinic will "
-        "check with the doctor and get back to them. If the caller sounds worried "
-        "or says it is urgent, give the clinic's emergency contact instead. Never "
-        "guess an answer."
+        "check with the doctor and get back to them. Never guess an answer. "
+        "log_clinic_question is ONLY for clinic-info questions (#352): urgent "
+        "matters and doctor-requests follow the HUMAN TRANSFER rule, and "
+        "call-me-back messages go to take_message — NEVER into the FAQ log."
     )
 
     recording_sentence = ""
