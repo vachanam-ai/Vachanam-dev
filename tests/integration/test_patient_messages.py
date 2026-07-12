@@ -170,6 +170,31 @@ async def test_retention_prunes_old_messages(db, redis):
     assert left == ["fresh"]
 
 
+@pytest.mark.asyncio
+async def test_urgent_email_names_caller_but_never_message_text(db, monkeypatch):
+    """#349/#356: the urgent alert says WHO is waiting (name + last-4) but the
+    message text NEVER rides the email (RULE 9 — it can carry health detail)."""
+    import backend.services.support_email as se
+
+    org_id, br = await _seed(db, "+910000000207")
+    await db.commit()
+
+    sent = {}
+
+    async def _capture(to, subject, text):
+        sent.update(to=to, subject=subject, text=text)
+
+    monkeypatch.setattr(se, "_send", _capture)
+    # The fixture-patched AsyncSessionLocal points at the test DB (conftest).
+    await se.notify_clinic_message(br.id, caller_name="Ravi", caller_last4="7554")
+
+    assert sent, "owner email resolved and mail attempted"
+    assert "Ravi" in sent["subject"] and "…7554" in sent["subject"]
+    assert "Ravi" in sent["text"]
+    # No message body ever — only the dashboard link.
+    assert "/dashboard" in sent["text"]
+
+
 def test_prompt_instructs_take_message():
     from agent.prompts.system_prompt import build_system_prompt
 

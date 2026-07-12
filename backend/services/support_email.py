@@ -67,10 +67,13 @@ async def notify_staff_reply(to_email: str, subject: str) -> None:
     )
 
 
-async def notify_clinic_message(branch_id) -> None:
+async def notify_clinic_message(
+    branch_id, caller_name: str | None = None, caller_last4: str | None = None
+) -> None:
     """URGENT caller message (#349) → ONE mail to the clinic owner pointing at
-    the dashboard. RULE 9: the message text itself NEVER rides the email (it
-    can contain health details) — the mail only says a message is waiting.
+    the dashboard. RULE 9: the message TEXT never rides the email (it can
+    contain health details) — the mail says WHO is waiting (name + last-4,
+    the same identity scope as calendar events) but not what they said.
     Opens its own short session (called from the voice agent mid-call)."""
     import backend.database as dbm
     from sqlalchemy import select
@@ -87,10 +90,13 @@ async def notify_clinic_message(branch_id) -> None:
         ).first()
     if not row or not row[0]:
         return
+    who = caller_name or "A caller"
+    if caller_last4:
+        who += f" (…{caller_last4})"
     await _send(
         row[0],
-        f"Urgent: a caller left a message for {row[1]}",
-        "A caller just left an URGENT message for your clinic and expects a "
+        f"Urgent: {who} left a message for {row[1]}",
+        f"{who} just left an URGENT message for your clinic and expects a "
         "call back.\n\nRead it on your dashboard (Messages):\n"
         f"{_app_link('/dashboard')}\n\n— Vachanam",
     )

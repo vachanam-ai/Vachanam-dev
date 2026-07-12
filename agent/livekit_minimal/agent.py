@@ -1693,17 +1693,21 @@ class VachanamAgent(Agent):
             return {"logged": False}
         try:
             patient_id = None
+            patient_name = self._state.patient_name  # name given during THIS call
             if self._state.patient_phone:
-                patient_id = (
+                _pat = (
                     await self._db.execute(
-                        select(Patient.id).where(
+                        select(Patient.id, Patient.name).where(
                             and_(
                                 Patient.branch_id == self._state.branch_id,
                                 Patient.phone == self._state.patient_phone,
                             )
                         ).limit(1)
                     )
-                ).scalar_one_or_none()
+                ).first()
+                if _pat is not None:
+                    patient_id = _pat[0]
+                    patient_name = _pat[1] or patient_name
             self._db.add(PatientMessage(
                 branch_id=self._state.branch_id,
                 patient_id=patient_id,
@@ -1726,7 +1730,11 @@ class VachanamAgent(Agent):
             try:
                 from backend.services.support_email import notify_clinic_message
 
-                await notify_clinic_message(self._state.branch_id)
+                await notify_clinic_message(
+                    self._state.branch_id,
+                    caller_name=patient_name,
+                    caller_last4=(self._state.patient_phone or "")[-4:] or None,
+                )
             except Exception as e:  # noqa: BLE001
                 logger.warning("urgent_message_alert_failed: %s", e)
         return {"logged": True, "next": "Tell the caller their message is with "
