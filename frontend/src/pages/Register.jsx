@@ -6,6 +6,7 @@ import { requestOtp } from "../api/client.js";
 import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
+import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
 
 const PLANS = { solo: "Starter", clinic: "Clinic", multi: "Multi" };
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -98,8 +99,12 @@ export default function Register() {
           }
         }
       });
+      paint();
+    };
+    const paint = () => {
+      if (cancelled || !gsiRef.current || !window.google?.accounts?.id) return;
       window.google.accounts.id.renderButton(gsiRef.current, {
-        theme: "outline",
+        theme: gsiTheme(), // dark app → Google's filled_black (was a white slab)
         size: "large",
         shape: "pill",
         // Cap to container width so the rendered iframe never overflows a phone.
@@ -108,8 +113,10 @@ export default function Register() {
       });
     };
     mount();
+    const stopWatch = watchTheme(paint); // re-render when the theme toggles
     return () => {
       cancelled = true;
+      stopWatch();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, form.clinic_name, form.owner_name, form.plan]);

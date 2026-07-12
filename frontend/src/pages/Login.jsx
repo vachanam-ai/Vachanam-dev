@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
+import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
 import { forgotPassword, resetPassword } from "../api/client.js";
 import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 
@@ -51,8 +52,12 @@ export default function Login() {
           }
         }
       });
+      paint();
+    };
+    const paint = () => {
+      if (cancelled || !gsiRef.current || !window.google?.accounts?.id) return;
       window.google.accounts.id.renderButton(gsiRef.current, {
-        theme: "outline",
+        theme: gsiTheme(), // dark app → Google's filled_black (was a white slab)
         size: "large",
         shape: "pill",
         // Cap to the narrowest common phone content width (360px viewport minus
@@ -62,8 +67,10 @@ export default function Login() {
       });
     };
     mount();
+    const stopWatch = watchTheme(paint); // re-render when the theme toggles
     return () => {
       cancelled = true;
+      stopWatch();
     };
   }, [login, navigate]);
 

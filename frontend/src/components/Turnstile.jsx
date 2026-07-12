@@ -47,6 +47,8 @@ export default function Turnstile({ onToken }) {
       if (cancelled || !ref.current || widgetId.current !== null) return;
       widgetId.current = window.turnstile.render(ref.current, {
         sitekey: SITE_KEY,
+        // Follow the APP theme, not the OS one (user can toggle them apart).
+        theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
         callback: emit,
         "expired-callback": () => emit(""),
         "error-callback": () => emit(""),
