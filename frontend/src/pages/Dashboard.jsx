@@ -6,7 +6,7 @@ import {
 import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
 import Heatmap from "../components/dash/Heatmap.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { countUp, revealStagger } from "../lib/motion.js";
+import { countUp, revealNow, revealStagger } from "../lib/motion.js";
 
 function Hero({ label, value, sub, gold, suffix = "" }) {
   const ref = useRef(null);
@@ -39,6 +39,12 @@ function QStat({ label, value, sub, suffix = "" }) {
 
 /* Lifetime band — "since day one" counters, white numerals on deep teal. */
 function LifetimeBand({ lifetime }) {
+  const ref = useRef(null);
+  // #355: renders only once analytics lands — reveals itself if the
+  // page-level reveal already ran (idempotent either way).
+  useEffect(() => {
+    revealNow(ref.current);
+  });
   const items = [
     ["bookings", "Bookings", lifetime?.bookings],
     ["calls", "Calls answered", lifetime?.calls],
@@ -46,7 +52,7 @@ function LifetimeBand({ lifetime }) {
     ["minutes", "Voice minutes", lifetime?.minutes],
   ];
   return (
-    <div data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-[#0e4a49] px-6 py-4 text-white shadow-lift">
+    <div ref={ref} data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-[#0e4a49] px-6 py-4 text-white shadow-lift">
       <p className="eyebrow !text-[#cfe8e5]/80">Since day one</p>
       {items.map(([k, label, v]) => (
         <LifetimeStat key={k} label={label} value={v ?? 0} />
@@ -228,9 +234,15 @@ function MessagesCard({ branchId }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["messages", branchId] }),
   });
   const msgs = data?.messages ?? [];
+  const ref = useRef(null);
+  // #355: this card mounts only after ITS query resolves — it misses the
+  // page-level reveal train, so it reveals itself (idempotent).
+  useEffect(() => {
+    if (msgs.length) revealNow(ref.current);
+  });
   if (!msgs.length) return null;
   return (
-    <section data-reveal className="card overflow-hidden">
+    <section ref={ref} data-reveal className="card overflow-hidden">
       <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-5 py-3">
         <h2 className="font-display text-lg font-semibold">Messages for the doctor</h2>
         {data.pending > 0 && (
