@@ -4,6 +4,10 @@ on:
   push:
     branches: [master, main]
   pull_request:
+  schedule:
+    # Weekly re-audit — new CVEs get published against ALREADY-pinned deps, so
+    # a repo with no pushes would otherwise never learn about them.
+    - cron: "30 2 * * 1"
 
 jobs:
   dependency-audit:
@@ -17,7 +21,14 @@ jobs:
         run: pip install pip-audit
       - name: Audit backend dependencies
         # Fails the build on any known CVE in pinned requirements.
-        run: pip-audit -r backend/requirements.txt
+        # PYSEC-2026-1325 (ecdsa): transitive dep of python-jose, used only for
+        # ES256 — we sign HS256 exclusively (auth_middleware _ALGORITHM), so the
+        # vulnerable code never runs; no upstream fix exists. Real fix = migrate
+        # python-jose → PyJWT (TD-030), which drops ecdsa entirely.
+        run: pip-audit -r backend/requirements.txt --ignore-vuln PYSEC-2026-1325
+      - name: Audit voice-agent dependencies
+        # The Fly agent ships its own pinned set — audit it too (was missed).
+        run: pip-audit -r agent/livekit_minimal/requirements.txt
 
   secrets-scan:
     runs-on: ubuntu-latest
