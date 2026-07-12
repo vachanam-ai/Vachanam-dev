@@ -310,14 +310,58 @@ def _phone_override_error(
     return None
 
 
-_DIGIT_RUN = re.compile(r"\d{2,}")
+_DIGIT_RUN = re.compile(r"\d{5,}")
 
 
 def _space_digit_runs(s: str) -> str:
-    """Insert spaces between the digits of any 2+-digit run so TTS speaks them
-    one by one ("9 6 6 6") instead of as a cardinal ("ninety-six crore"). Used
-    in the TTS path for phone numbers; single digits are left alone."""
+    """Insert spaces between the digits of any 5+-digit run (phone numbers,
+    OTP-like sequences) so TTS speaks them one by one ("9 6 6 6") instead of
+    as a cardinal ("ninety-six crore"). Runs of 1-4 digits are left joined:
+    dates, token numbers, times and years must be read as normal number words
+    — spacing "13" made the agent say "ఒకటి మూడు" instead of "పదమూడు"
+    (live 2026-07-12, FIXLOG #333)."""
     return _DIGIT_RUN.sub(lambda m: " ".join(m.group()), s)
+
+
+_TIME_RE = re.compile(r"\b(\d{1,2}):([0-5]\d)\b")
+
+
+def _normalize_times(s: str) -> str:
+    """Clock forms → speakable numbers: '10:00' → '10' (TTS read the colon
+    form digit-by-digit — "one zero zero zero am", live 2026-07-12 #333),
+    '10:30' → '10 30' ("ten thirty"). Phones are never colon-separated, so
+    this cannot touch the digit-by-digit phone path."""
+    return _TIME_RE.sub(
+        lambda m: m.group(1) if m.group(2) == "00" else f"{m.group(1)} {m.group(2)}", s
+    )
+
+
+# Carry trailing digits AND colons so both a split phone ("96664"+"44428")
+# and a split clock ("10:"+"00") are stitched before the rewrites run.
+_TRAILING_DIGITS = re.compile(r"[\d:]+$")
+
+
+async def _space_digits_stream(text):
+    """Chunk-stitching wrapper around the TTS text rewrites (_normalize_times,
+    then _space_digit_runs).
+
+    With the 5+ threshold, per-chunk spacing alone is no longer split-safe: a
+    phone number cut across stream chunks ("96664" + "44428") would show up
+    as two short runs and slip through as cardinals. Holding each chunk's
+    trailing digits until the next chunk arrives lets the full run be seen
+    (and spaced) as one."""
+    pend = ""
+    async for chunk in text:
+        buf = pend + chunk
+        pend = ""
+        m = _TRAILING_DIGITS.search(buf)
+        if m:
+            pend = m.group()
+            buf = buf[: m.start()]
+        if buf:
+            yield _space_digit_runs(_normalize_times(buf))
+    if pend:
+        yield _space_digit_runs(_normalize_times(pend))
 
 
 async def _end_call_with_notice(ctx, reason: str, t_answer: float | None = None) -> None:
@@ -953,20 +997,14 @@ class VachanamAgent(Agent):
         self._tts_override = tts
 
     async def tts_node(self, text, model_settings):
-        """Space out multi-digit runs before they reach TTS. A joined number like
-        "9666444428" is read by the te/en TTS as an Indian cardinal ("తొంభై ఆరు
-        కోట్ల..." / "ninety-six crore...") — live 2026-07-08, a phone number came
-        out as "96 crores 66 lakhs". Isolating each digit forces digit-by-digit
-        speech ("9 6 6 6...") no matter how the LLM formatted it, and it is
-        chunk-safe: every digit is spaced individually, so a number split across
-        stream chunks still comes out right. Single stray digits (a bare "3"
-        o'clock) are untouched — only runs of 2+."""
-
-        async def _spaced():
-            async for chunk in text:
-                yield _space_digit_runs(chunk)
-
-        async for frame in super().tts_node(_spaced(), model_settings):
+        """Space out LONG digit runs (5+) before they reach TTS. A joined
+        number like "9666444428" is read by the te/en TTS as an Indian
+        cardinal ("తొంభై ఆరు కోట్ల..." / "ninety-six crore...") — live
+        2026-07-08, a phone number came out as "96 crores 66 lakhs" (#296).
+        Short runs stay joined: dates/tokens/times like "13" must be spoken
+        as one number word, not digit-by-digit (#333). Chunk splits are
+        handled by _space_digits_stream's trailing-digit carry."""
+        async for frame in super().tts_node(_space_digits_stream(text), model_settings):
             yield frame
 
     async def on_enter(self) -> None:
