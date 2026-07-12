@@ -302,3 +302,14 @@ async def test_legal_docs_match_product_reality():
         assert "Rongala" not in text, f"personal name leaked into {doc}"
     pitch = Path("docs/pitch/data-safety-pitch.md").read_text(encoding="utf-8")
     assert "Rongala" not in pitch
+    assert "one-line reason for visit" not in pitch  # not stored (tokens has no such column)
+    # #331: treatment notes ARE stored — the blanket "no clinical notes" claim
+    # was false. Every core doc must disclose the feature with the same framing.
+    assert "or clinical notes." not in terms  # old blanket denial banned
+    for name, txt in (("terms", terms), ("privacy",
+                      Path("docs/legal/privacy-policy.md").read_text(encoding="utf-8")),
+                      ("data-handling",
+                      Path("docs/legal/data-handling.md").read_text(encoding="utf-8")),
+                      ("dpa",
+                      Path("docs/legal/data-processing-agreement.md").read_text(encoding="utf-8"))):
+        assert "visit-progress note" in txt.lower(), f"{name} missing treatment-notes disclosure"

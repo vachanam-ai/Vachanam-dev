@@ -18,7 +18,7 @@ Your receptionists manage the daily queue through a mobile-friendly web app (Pro
 **What Vachanam does NOT do:**
 
 - We do not give medical advice, diagnoses, prescriptions, or treatment recommendations.
-- We do not store electronic medical records (EMR/EHR) or clinical notes.
+- We are not an electronic medical records (EMR/EHR) system: we do not store medical histories, diagnoses, prescriptions, test results, lab reports, documents, or scans. If your clinic enables the optional **treatment-follow-up feature**, we store only short doctor-entered visit-progress notes (what was done this visit, what comes next, the next reporting date) and the doctor's follow-up question with a short summary of the patient's answer. These are appointment-continuity notes visible only to your own clinic, and they are deleted when the treatment is ended or the patient record is erased.
 - We do not process insurance claims.
 - We do not collect payments from patients.
 - We do not provide video consultations.
@@ -49,7 +49,7 @@ As the Data Fiduciary, you are responsible for:
 You agree NOT to use Vachanam to:
 
 - Provide medical advice to patients through the AI agent.
-- Store patient clinical records, test results, or prescriptions in the Vachanam system.
+- Store patient clinical records, test results, prescriptions, documents, or scans in the Vachanam system. (The optional treatment-follow-up feature is for short visit-progress notes only — what was done, what comes next — not for clinical documentation.)
 - Share patient personal information obtained through Vachanam outside the platform for purposes unrelated to the patient's appointment.
 - Attempt to access another clinic's data on the Vachanam platform.
 - Interfere with or disrupt the service for other clinics.

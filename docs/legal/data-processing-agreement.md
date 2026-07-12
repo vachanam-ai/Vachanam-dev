@@ -62,10 +62,12 @@ Vachanam will NOT process personal data for any purpose beyond those documented 
 ### 3.3 Data NOT processed
 
 - Voice call recordings (not stored; audio processed in real time only)
-- Full medical history, diagnosis, prescriptions, or test results
+- Full medical history, diagnosis records, prescriptions, test results, lab reports, medical documents, or scans
 - Aadhaar number, PAN number, or other government ID numbers
 - Patient payment or financial information
 - Biometric data
+
+**For clarity — treatment-progress notes vs. medical records:** where the Clinic enables the optional treatment-follow-up feature, Vachanam stores short doctor-entered visit-progress notes (what was done this visit, what comes next, the next reporting date) and the doctor's follow-up question with a brief summary of the patient's answer (Sections 2 and 3.2). These are appointment-continuity notes serving scheduling and follow-up only. Vachanam is not an EMR/EHR: it provides no fields for and must not be used to store clinical documentation of the kinds listed above. These notes are Clinic-scoped (RULE-1 isolation), never appear in calendar events, notifications, or logs, and are deleted when the Clinic ends the treatment or when the patient record is erased (automatic retention erasure or Clinic-initiated deletion).
 
 ---
 

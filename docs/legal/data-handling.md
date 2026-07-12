@@ -41,6 +41,18 @@ A calendar event is created for the doctor containing **only your first name, th
 - A text transcript of the call (audio is never kept) may be stored for up to **90 days** for call-quality monitoring. **Phone numbers are masked in the transcript before it is written.** A daily job deletes transcripts older than the window.
 - A reminder call before your appointment uses your name and appointment time — nothing about your health concern is spoken in any notification.
 
+### Step 6 — If your clinic uses treatment follow-ups (optional)
+
+Some clinics track multi-visit treatments in Vachanam. Here is exactly what that stores and how it lives:
+
+| Stored | Entered by | Where | Erased when |
+|---|---|---|---|
+| Visit-progress note: what was done this visit, what comes next, next reporting date | Your doctor or the reception desk | `treatment_notes` table, clinic-scoped | Clinic ends the treatment, or your patient record is erased |
+| The doctor's follow-up question (what the AI asks you on the follow-up call) | Your doctor | follow-up task row, clinic-scoped | Cleared when your patient record is erased |
+| A short summary of your answer on the follow-up call | Summarised from the call | Same follow-up task row | Cleared when your patient record is erased |
+
+These are **appointment-continuity notes, not a medical record**: Vachanam has no fields for diagnoses, prescriptions, test results, documents, or scans, and the AI never speaks these notes in any notification or calendar event. Follow-up calls happen only with your consent, and stop immediately when the clinic ends the treatment or you withdraw consent. When your patient record is erased — automatically after 2 years of inactivity, or on demand — the visit notes are deleted outright and the follow-up question/answer text is cleared.
+
 ---
 
 ## 2. Separation by Design

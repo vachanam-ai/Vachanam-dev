@@ -12,7 +12,7 @@ This policy explains, in plain language, what personal data Vachanam collects, w
 | Question | Answer |
 |---|---|
 | Do you record my call? | **No.** Audio is processed in real time and discarded. |
-| What do you store? | First name, phone, appointment details (doctor, date, token). Your spoken reason for visiting is used during the call to pick the right doctor — it is NOT saved on your booking record. |
+| What do you store? | First name, phone, appointment details (doctor, date, token). If your clinic uses treatment follow-ups: your doctor's short visit-progress notes and your follow-up answers. Your spoken reason for visiting is used during the call to pick the right doctor — it is NOT saved on your booking record. |
 | Who owns the data? | The clinic you called (Data Fiduciary). Vachanam only processes it. |
 | Can other clinics see my data? | **Never** — enforced at the database level on every query. |
 | Do you sell data or run ads? | **No**, and we never use patient data to train AI. |
@@ -59,7 +59,7 @@ We collect different data depending on your role. We collect only what is needed
 - We do NOT store your full medical history, diagnosis, prescriptions, test results, or Aadhaar/PAN number.
 - We do NOT ask you to create an account or set a password.
 
-**If your clinic uses treatment follow-ups** (optional feature): your doctor may record short visit-progress notes (what was done this visit, what comes next) and schedule a follow-up call. The AI's follow-up question and a short summary of your answer are stored for your doctor to read. This data is entered by or visible only to YOUR clinic, is never used for anything except your continuing care, and is erased together with your patient record. Follow-up calls are made only if you agreed to them when booking — if you said no (or withdraw later), the call simply never happens.
+**If your clinic uses treatment follow-ups** (optional feature): your doctor may record short visit-progress notes — what was done this visit, what comes next, and the next reporting date — and schedule a follow-up call. The doctor's follow-up question and a short summary of your answer are also stored for your doctor to read. These are appointment-continuity notes, NOT a medical record: no diagnosis documents, prescriptions, test results, or scans can be stored in Vachanam. This data is entered by and visible only to YOUR clinic, is never used for anything except your continuing care, never appears in calendar events or notifications, and is deleted when your clinic ends the treatment or when your patient record is erased (automatically after 2 years of inactivity, or earlier on request). Follow-up calls are made only if you agreed to them when booking — if you said no (or withdraw later), the call simply never happens.
 
 **About call transcripts:** a text transcript of the conversation (what was said, not the audio) may be kept for up to 90 days to monitor and improve call quality. Phone numbers are masked in the transcript before it is saved -- no unmasked copy is stored anywhere. The saved transcript is visible only to your own clinic; within Vachanam, production access is limited to the founder (acting Data Protection Officer) and every such access is audit-logged. The transcript is automatically deleted after the 90-day window by a daily software job.
 

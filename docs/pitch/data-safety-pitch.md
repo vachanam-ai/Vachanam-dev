@@ -6,7 +6,7 @@
 
 ## The one-paragraph answer
 
-Your clinic's data belongs to your clinic. Vachanam stores the minimum needed to book appointments — a first name, a phone number, a one-line reason for visit, a token — encrypted at rest and in transit, in a database partition that only your clinic can read. We never record calls, never store medical records, never sell or share data with advertisers, and never use patient data to train AI. Data that stops being needed is erased automatically by software, not by promise. Under India's DPDP Act 2023, **you** remain the owner (Data Fiduciary); we are your processor, bound by a signed Data Processing Agreement.
+Your clinic's data belongs to your clinic. Vachanam stores the minimum needed to book appointments — a first name, a phone number, a token — encrypted at rest and in transit, in a database partition that only your clinic can read. We never record calls, never store medical records, never sell or share data with advertisers, and never use patient data to train AI. Data that stops being needed is erased automatically by software, not by promise. Under India's DPDP Act 2023, **you** remain the owner (Data Fiduciary); we are your processor, bound by a signed Data Processing Agreement.
 
 ---
 
