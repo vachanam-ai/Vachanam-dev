@@ -25,7 +25,7 @@ Audit: @audit decorator on POST, PATCH, DELETE.
 Per CLAUDE.md Rule 1: every query filters by branch_id.
 """
 import uuid
-from datetime import date, time
+from datetime import time
 from typing import Optional
 
 import structlog

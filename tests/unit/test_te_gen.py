@@ -2,7 +2,6 @@
 Gemini is mocked — no network."""
 import json
 
-import pytest
 
 from agent.eval.example_bank import ExampleBank
 from agent.i18n import te_gen

@@ -15,7 +15,8 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from backend.config import settings
-from backend.jobs.data_retention import ERASED_NAME, run_data_retention
+from backend.jobs.data_retention import run_data_retention
+from backend.services.patient_erasure import ERASED_NAME
 from backend.models.schema import (
     Branch,
     CallQuality,

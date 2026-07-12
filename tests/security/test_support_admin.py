@@ -82,7 +82,7 @@ async def test_support_staff_sees_cross_org_excluding_ai_resolved(client, db):
 # ── RULE 1: support staff are PII-locked (super_admin-lite) ──────────────────
 
 async def test_support_role_blocked_from_patient_pii(client, db):
-    org = await _org(db)
+    await _org(db)
     await db.commit()
     # /patients/* is guarded by forbid_admin, which now also blocks 'support'
     r = await client.get(f"/patients/branches/{uuid.uuid4()}/patients",
@@ -171,7 +171,6 @@ async def test_patch_resolve_stamps_resolved_at(client, db):
 # ── Clinic user: reply reopens, CSAT only on resolved ────────────────────────
 
 async def test_user_reply_reopens_and_csat_gate(client, db):
-    from backend.models.schema import SupportTicket
     org = await _org(db)
     t = await _ticket(db, org, status="resolved")
     tok = _jwt("org_admin", org.id)

@@ -332,7 +332,6 @@ async def test_reschedule_twice_in_one_call_with_stale_token(clinic, db, redis):
 async def test_find_bookings_includes_recent_cancelled(clinic, db, redis):
     """Cascade-cancelled bookings must still be visible â€” that cancelled
     booking IS what the patient asks about on a rebook call."""
-    from agent.livekit_minimal.agent import VachanamAgent
 
     branch, doc = clinic["branch"], clinic["token_doc"]
     day = _tomorrow()

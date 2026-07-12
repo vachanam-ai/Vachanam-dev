@@ -15,7 +15,7 @@ No password storage. Google handles password + 2FA.
 from typing import Literal
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel
@@ -196,7 +196,6 @@ async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
     The middleware checks this set on every request, so the token becomes
     invalid immediately even though its signature is still valid until exp.
     """
-    from jose import jwt
     # Re-decode just to extract exp; the dependency already validated everything
     # else. We don't want logout to crash if the token is on the verge of expiring.
     from fastapi import Request  # noqa — unused, but documents intent

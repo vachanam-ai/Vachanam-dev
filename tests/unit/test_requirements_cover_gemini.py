@@ -7,9 +7,9 @@ from pathlib import Path
 
 def test_google_genai_pinned():
     reqs = Path("backend/requirements.txt").read_text(encoding="utf-8")
-    lines = [l.split("#")[0].strip() for l in reqs.splitlines()]
-    assert any(l.startswith("google-genai") for l in lines), (
+    lines = [ln.split("#")[0].strip() for ln in reqs.splitlines()]
+    assert any(ln.startswith("google-genai") for ln in lines), (
         "backend/requirements.txt must pin google-genai (the NEW SDK that "
         "support_bot + call_scoring import); google-generativeai is NOT it")
-    assert not any(l.startswith("google-generativeai") for l in lines), (
+    assert not any(ln.startswith("google-generativeai") for ln in lines), (
         "old google-generativeai pin is dead weight — nothing imports it")

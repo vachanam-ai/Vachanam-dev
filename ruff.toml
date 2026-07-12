@@ -1,0 +1,15 @@
+# Lint gate (#343): `python -m ruff check backend agent tests` must stay clean.
+# Scope is deliberate — correctness rules only, no style-war churn on a
+# working production codebase.
+line-length = 120
+
+[lint]
+select = ["E4", "E7", "E9", "F"]  # imports, statements, syntax, pyflakes
+# E402: imports-below-code are deliberate here (test-DB fuse ordering, agent
+# plugin load order #145, lazy heavy imports off the hot path). Do not "fix".
+ignore = ["E402"]
+
+[lint.per-file-ignores]
+# Compact seeding style in tests ("db.add(x); await db.flush()") reads fine.
+"tests/**" = ["E702"]
+"scripts/**" = ["E702"]

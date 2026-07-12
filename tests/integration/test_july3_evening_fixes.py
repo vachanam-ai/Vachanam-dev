@@ -13,7 +13,6 @@ import datetime
 
 import pytest
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy import select
 
 from backend.main import app
 from backend.middleware.auth_middleware import get_current_user, CurrentUser

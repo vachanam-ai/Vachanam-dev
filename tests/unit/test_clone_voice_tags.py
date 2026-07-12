@@ -1,8 +1,6 @@
 """clone_voice sends a dashboard tag ("Tamil") and falls back tag-less on a
 tags-rejecting 400 (smallest dashboard showed 'Not available' for our clones)."""
-import json
 
-import pytest
 
 from backend.services import smallest_voice
 

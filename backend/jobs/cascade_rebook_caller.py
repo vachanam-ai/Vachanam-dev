@@ -12,7 +12,6 @@ The agent marks the task completed when a replacement booking is confirmed;
 unanswered calls retry until max_attempts then go 'unreachable'.
 """
 import json
-import os
 import uuid
 from datetime import datetime, timedelta, timezone
 

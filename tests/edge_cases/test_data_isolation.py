@@ -9,13 +9,10 @@ Org B with separate branches and verify cross-access is impossible at:
 This file covers (a) — the data layer. API-layer branch_guard tests live in
 tests/integration/ once the HTTP layer comes up in Phase 4 main.py.
 """
-import asyncio
 from datetime import date
 
-import pytest_asyncio
 from sqlalchemy import select
 
-from backend.database import AsyncSessionLocal
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 
 

@@ -6,7 +6,6 @@ _end_call_with_notice answers, speaks the default-language "service stopped,
 please call the clinic directly" line on a raw track (no DB, no LLM, no
 session), and hangs up. Every step is best-effort — it must never raise.
 """
-import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 

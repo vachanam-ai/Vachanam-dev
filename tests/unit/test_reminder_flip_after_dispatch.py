@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
 
 import backend.jobs.pre_appt_reminder as job
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token

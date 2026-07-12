@@ -8,7 +8,6 @@ B2: confirm_booking never checked that appointment_time matches the held slot
 B4: state.token_confirmed never reset when a NEW hold was taken later in the
     same call -> RULE 3 release + cancel/end-call guards inert for booking #2.
 """
-import uuid
 from datetime import date, time, timedelta
 
 import pytest

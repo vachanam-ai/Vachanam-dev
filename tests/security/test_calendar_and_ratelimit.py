@@ -54,7 +54,7 @@ async def _clinic(db, tag, cal_id=None):
 
 
 async def test_cannot_claim_another_clinics_calendar_id(client, db):
-    victim = await _clinic(db, "victim", cal_id="shared-cal@group.calendar.google.com")
+    await _clinic(db, "victim", cal_id="shared-cal@group.calendar.google.com")
     attacker = await _clinic(db, "attacker")
     tok = _owner_jwt(attacker["org_id"], attacker["branch_id"])
     r = await client.patch(

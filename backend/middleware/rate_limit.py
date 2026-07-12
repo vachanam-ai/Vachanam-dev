@@ -45,9 +45,9 @@ from typing import Awaitable
 
 import redis.asyncio as aioredis
 import structlog
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import HTTPException, Request, Response
 from jose import jwt
-from pyrate_limiter import Duration, Limiter, Rate
+from pyrate_limiter import Limiter, Rate
 from pyrate_limiter.abstracts.bucket import AbstractBucket, BucketFactory
 from pyrate_limiter.abstracts.rate import RateItem
 from pyrate_limiter.buckets.redis_bucket import LuaScript, RedisBucket

@@ -66,7 +66,6 @@ def test_stt_node_filters_and_fails_open():
 import pytest
 from types import SimpleNamespace
 
-from agent.livekit_minimal import agent as agent_mod
 from agent.session_state import SessionState
 from livekit.agents import Agent, stt as lk_stt
 

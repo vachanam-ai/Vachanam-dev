@@ -19,7 +19,7 @@ from jose import jwt
 from sqlalchemy import func, select
 
 from backend.config import settings
-from backend.models.schema import BillingCycle, Branch, Organization
+from backend.models.schema import BillingCycle, Organization
 
 pytestmark = pytest.mark.asyncio
 _ALGO = "HS256"

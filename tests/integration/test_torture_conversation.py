@@ -138,7 +138,6 @@ async def test_cancel_after_reschedule_with_stale_id(clinic, db, redis):
 
 async def test_double_cancel_second_is_graceful(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
-    day = _tomorrow()
     booked = await _book(db, branch, doc, time(12, 0))
     agent, state = _agent(db, branch.id)
     state.token_confirmed = True
@@ -178,7 +177,7 @@ async def test_family_sibling_untouched_by_reschedule(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     mine = await _book(db, branch, doc, time(10, 0), name="Chaos Vinay")
-    fam = await _book(db, branch, doc, time(10, 30), name="Amma",
+    await _book(db, branch, doc, time(10, 30), name="Amma",
                       phone="+919666888002", different_person=True)
     agent, _ = _agent(db, branch.id)
 

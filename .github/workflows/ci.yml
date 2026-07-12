@@ -7,6 +7,18 @@ on:
     branches: [main, master]
 
 jobs:
+  # ── Job 0: Lint (fast fail — #343 keeps the tree ruff-clean) ───────────────
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: ruff check backend agent tests
+
   # ── Job 1: Test suite ──────────────────────────────────────────────────────
   test:
     name: pytest (Python 3.11 + PG16 + Redis7)

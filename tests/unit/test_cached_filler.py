@@ -12,7 +12,6 @@ start and replayed from cache with no live TTS synth. Covers:
 import io
 import wave
 
-import pytest
 
 import agent.livekit_minimal.agent as ag
 

@@ -62,10 +62,8 @@ review (Task 7 reviewer) MUST reject and re-dispatch.
 ------------------------------------------------------------------------
 """
 import subprocess
-import sys
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -141,7 +139,7 @@ async def test_successful_google_login_writes_audit_log_row(client, db, monkeypa
     Setup: monkeypatch google.oauth2.id_token.verify_oauth2_token to
     return a fake info dict. Pre-seed a User row so login succeeds.
     """
-    from backend.models.schema import Organization, Branch, User
+    from backend.models.schema import Organization, User
 
     # Seed org + user so login finds the user
     test_email = "audit-login-ok@vachanam.in"
@@ -261,7 +259,7 @@ async def test_mark_attended_writes_audit_log_row(client, db, redis):
     action='token.attend', resource_type='token', resource_id matching
     the token's UUID, user_id from the JWT, and branch_id matching.
     """
-    from backend.models.schema import Organization, Branch, Doctor, Patient, Token, User
+    from backend.models.schema import Organization, Branch, Doctor, Patient, Token
 
     # Seed data
     org = Organization(
@@ -784,7 +782,6 @@ def test_no_update_or_delete_on_audit_log_in_backend_source():
             text=True,
         ).strip()
     )
-    backend_dir = f"{repo_root}/backend"
 
     # Search for ORM-level update/delete patterns on AuditLog
     patterns = [

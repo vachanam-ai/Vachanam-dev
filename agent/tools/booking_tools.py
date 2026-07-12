@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, text, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from agent.session_state import SessionState
 from backend.config import settings
 from backend.models.schema import Doctor, DoctorUnavailability, Token, Patient, Branch
 from backend.services.audit_service import write_audit_row

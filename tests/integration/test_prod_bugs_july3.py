@@ -9,7 +9,6 @@ B3: the same caller must not book two DIFFERENT doctors at the SAME time that
     day — a person can't be in two places at once (prod: 16:30 with both
     Dr.Lakshmi and Dr.Srinivas). Family members (different_person) are exempt.
 """
-import uuid
 from datetime import date, time, timedelta
 
 import pytest
@@ -17,7 +16,7 @@ import pytest_asyncio
 from sqlalchemy import and_, select
 
 from agent.tools.booking_tools import assign_token, confirm_booking
-from backend.models.schema import Branch, Doctor, Organization, Patient, Token
+from backend.models.schema import Branch, Doctor, Organization, Patient
 
 pytestmark = pytest.mark.asyncio
 

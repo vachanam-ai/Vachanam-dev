@@ -10,7 +10,6 @@ All synthetic. No PII, no telephony.
 """
 from __future__ import annotations
 
-import json
 
 from agent.i18n.te_gen import DEFAULT_MODEL, _client
 

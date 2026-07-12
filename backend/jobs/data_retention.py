@@ -28,7 +28,7 @@ from backend.models.schema import (
     Patient,
     Token,
 )
-from backend.services.patient_erasure import ERASED_NAME, erase_patient_pii
+from backend.services.patient_erasure import erase_patient_pii
 
 logger = structlog.get_logger()
 

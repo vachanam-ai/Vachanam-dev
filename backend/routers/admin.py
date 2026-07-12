@@ -890,7 +890,7 @@ async def admin_monitoring(
         avg_duration_seconds=round(float(avg_dur), 1) if avg_dur is not None else None,
         judged=int(judged or 0),
         avg_judge_score=round(float(avg_score), 2) if avg_score is not None else None,
-        by_language={(l or "unknown"): n for l, n in lang_rows},
+        by_language={(lang or "unknown"): n for lang, n in lang_rows},
         tag_frequencies=sorted(
             [{"tag": t, "count": c} for t, c in tag_counts.items()],
             key=lambda x: x["count"], reverse=True,

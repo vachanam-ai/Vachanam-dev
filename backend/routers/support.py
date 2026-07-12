@@ -24,7 +24,7 @@ from backend.middleware.auth_middleware import (
     require_support_staff,
 )
 from backend.middleware.rate_limit import default_limit
-from backend.models.schema import Organization, SupportMessage, SupportTicket, User
+from backend.models.schema import SupportMessage, SupportTicket, User
 from backend.services import support_bot, support_email, support_kb, support_macros
 from backend.services.turnstile import verify_turnstile
 from backend.middleware.rate_limit import client_ip

@@ -91,7 +91,7 @@ async def test_scoring_is_idempotent(branch, db, monkeypatch):
 async def test_scoring_failure_leaves_row_unjudged(branch, db, monkeypatch):
     monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
 
-    async def _fail(t, l):
+    async def _fail(t, lang):
         return None
 
     monkeypatch.setattr(scoring, "_judge_transcript", _fail)  # LLM failed
@@ -121,7 +121,7 @@ async def test_b21_permanently_failing_row_retired_after_cap(branch, db, monkeyp
     being re-selected every run and starving newer calls."""
     monkeypatch.setattr(settings, "gemini_api_key", "test-key", raising=False)
 
-    async def _fail(t, l):
+    async def _fail(t, lang):
         return None
 
     monkeypatch.setattr(scoring, "_judge_transcript", _fail)
@@ -144,7 +144,7 @@ async def test_b21_permanently_failing_row_retired_after_cap(branch, db, monkeyp
     # A subsequent run must NOT re-select it (it now has judged_at set).
     seen = {"n": 0}
 
-    async def _count(t, l):
+    async def _count(t, lang):
         seen["n"] += 1
         return None
 

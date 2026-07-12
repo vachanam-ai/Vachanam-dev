@@ -15,7 +15,7 @@ Tests are pure unit tests — no real DB needed. AsyncSession is mocked to retur
 from __future__ import annotations
 
 import uuid
-from datetime import date, time
+from datetime import date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 

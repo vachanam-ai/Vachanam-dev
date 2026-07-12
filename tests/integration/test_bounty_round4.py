@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, select
 
 from agent.tools.booking_tools import assign_token, confirm_booking
 from backend.models.schema import Branch, Doctor, Organization, Token

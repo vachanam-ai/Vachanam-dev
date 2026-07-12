@@ -2,7 +2,7 @@
 
 All tests are pure unit tests (no DB, no Redis, no network).
 """
-from datetime import date, time
+from datetime import date
 from unittest.mock import patch
 
 import pytest

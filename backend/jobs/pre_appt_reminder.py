@@ -9,7 +9,6 @@ reminder_sent is flipped BEFORE dispatch — a duplicate reminder is worse than
 a missed one, and the call itself confirms with the patient anyway.
 """
 import json
-import os
 import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo

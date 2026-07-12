@@ -10,10 +10,8 @@ write_audit_row is monkeypatched to capture calls.
 """
 from __future__ import annotations
 
-import asyncio
 import uuid
-from datetime import date, time
-from types import SimpleNamespace
+from datetime import date
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -310,7 +308,7 @@ async def test_audit_voice_emergency_keyword_category_only() -> None:
                     "via": "voice",
                 },
             )
-        except Exception as err:
+        except Exception:
             pass  # In production this is logged; here we want to see if it raises
 
     await simulate_emergency_audit(fake_write_audit_row)

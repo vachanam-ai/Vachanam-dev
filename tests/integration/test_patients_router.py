@@ -30,7 +30,7 @@ from httpx import AsyncClient, ASGITransport
 
 from backend.main import app
 from backend.middleware.auth_middleware import get_current_user, CurrentUser
-from backend.models.schema import Branch, Doctor, Patient, Organization, User, Token
+from backend.models.schema import Branch, Doctor, Patient, Organization, Token
 
 
 def _as_user(branch_id, org_id, role="org_admin"):

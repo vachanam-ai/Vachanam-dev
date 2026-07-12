@@ -30,7 +30,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
-from sqlalchemy import select, text, update
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,7 +38,6 @@ from backend.models.schema import (
     CalendarWriteTask,
     DoctorUnavailability,
     FollowupTask,
-    Patient,
     Token,
 )
 
@@ -76,7 +75,6 @@ async def cascade_for_unavailability(
     if min_cancel_date is not None and min_cancel_date > cancel_from:
         cancel_from = min_cancel_date
     unavailable_dates_count = 0
-    cancelled_tokens: list[Token] = []
     followups_scheduled_count = 0
 
     # ------------------------------------------------------------------ #

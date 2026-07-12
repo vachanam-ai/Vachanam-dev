@@ -15,7 +15,6 @@ Tests cover:
 """
 import pytest
 from sqlalchemy import inspect, text
-from sqlalchemy.ext.asyncio import AsyncConnection
 
 
 # ---------------------------------------------------------------------------

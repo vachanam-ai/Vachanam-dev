@@ -59,7 +59,7 @@ from livekit.agents import tts as lk_tts  # noqa: E402
 from livekit.agents.llm import ChatContext  # noqa: E402
 from livekit.agents import utils as _lk_utils  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS as _DEFAULT_CONN  # noqa: E402
-from livekit.plugins import google, noise_cancellation, openai, sarvam, silero, smallestai, soniox  # noqa: E402
+from livekit.plugins import google, noise_cancellation, sarvam, silero, smallestai, soniox  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
 import redis.asyncio as aioredis  # noqa: E402

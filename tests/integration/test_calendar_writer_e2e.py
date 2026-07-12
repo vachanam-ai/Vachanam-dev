@@ -30,7 +30,7 @@ pytest.skip(
 # ── Real test body (runs only when un-skipped) ─────────────────────────────
 
 import uuid
-from datetime import date, time, datetime
+from datetime import date, time
 
 from backend.jobs.calendar_writer import run_calendar_writer
 from backend.models.schema import (

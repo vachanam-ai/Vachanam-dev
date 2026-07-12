@@ -4,7 +4,7 @@ T1: the partial unique index makes token-doctor queue numbers race-proof — a
     duplicate (branch,doctor,date,token_number) confirmed row the TOCTOU
     re-count races past is rejected at the DB, surfaced as already_booked.
 """
-from datetime import date, timedelta, time
+from datetime import date, timedelta
 
 import pytest
 import pytest_asyncio

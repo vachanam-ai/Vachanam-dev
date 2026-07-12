@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from agent.livekit_minimal.agent import VachanamAgent
 from agent.session_state import SessionState
-from backend.models.schema import Branch, Doctor, Organization, Patient, Token
+from backend.models.schema import Branch, Doctor, Organization, Patient
 
 pytestmark = pytest.mark.asyncio
 

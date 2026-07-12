@@ -5,7 +5,7 @@ free-tier restart/gap) dropped the reminder permanently. The window now spans
 [now, now+31min] so a missed 30-min mark still catches up at a later tick, while
 past appointments stay excluded.
 """
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from backend.jobs.pre_appt_reminder import reminder_window, appointment_in_window

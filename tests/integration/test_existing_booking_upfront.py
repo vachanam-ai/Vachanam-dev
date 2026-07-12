@@ -17,7 +17,6 @@ import uuid
 from datetime import date, time, timedelta
 
 import pytest
-import pytest_asyncio
 
 from agent.tools.booking_tools import check_availability
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token

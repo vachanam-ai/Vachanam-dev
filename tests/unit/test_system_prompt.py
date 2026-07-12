@@ -10,7 +10,6 @@ Covers:
 All tests are pure string-match — no LLM call, no DB, no async.
 """
 
-import pytest
 
 from agent.prompts.system_prompt import (
     DISCLOSURE_ENGLISH,

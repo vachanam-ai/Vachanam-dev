@@ -6,8 +6,6 @@ Tests:
   3. configure_structlog_includes_filename_lineno — 'filename' + 'lineno' keys present
 """
 import json
-import sys
-from io import StringIO
 
 import pytest
 import structlog
