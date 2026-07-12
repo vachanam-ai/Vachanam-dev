@@ -186,3 +186,41 @@ async def test_b10_walkin_token_doctor_drops_stray_appointment_time(clinic, clie
             select(Token).where(Token.doctor_id == uuid.UUID(doctor_id))
         )).scalar_one()
     assert tok.appointment_time is None, "token-doctor walk-in must drop the stray time"
+
+
+async def test_td021_urgent_walkin_bypasses_full_token_queue(clinic, client):
+    """TD-021 (Vinay 2026-07-12): an URGENT desk walk-in jumps a FULL token
+    queue — the clinic owns that call. Normal walk-ins still 409. Numbers stay
+    atomic/unique (RULE 2 — only the advisory cap is bypassed)."""
+    bid = clinic["branch_id"]
+    owner = _owner_jwt(clinic["org_id"], bid)
+    dr = await client.post(
+        f"/doctors/{bid}", headers=_auth(owner),
+        json={"name": "Dr Cap One", "specialization": "dentist",
+              "routing_keywords": ["cap"], "booking_type": "token",
+              "daily_token_limit": 1},
+    )
+    assert dr.status_code in (200, 201), dr.text
+    doctor_id = dr.json()["id"]
+
+    r1 = await client.post(
+        f"/queue/{bid}/walkin", headers=_auth(owner),
+        json={"doctor_id": doctor_id, "patient_name": "First In",
+              "patient_phone": "+919888800021"},
+    )
+    assert r1.status_code == 201, r1.text
+
+    r2 = await client.post(
+        f"/queue/{bid}/walkin", headers=_auth(owner),
+        json={"doctor_id": doctor_id, "patient_name": "Turned Away",
+              "patient_phone": "+919888800022"},
+    )
+    assert r2.status_code == 409  # queue full for a NORMAL walk-in
+
+    r3 = await client.post(
+        f"/queue/{bid}/walkin", headers=_auth(owner),
+        json={"doctor_id": doctor_id, "patient_name": "Urgent Case",
+              "patient_phone": "+919888800023", "is_urgent": True},
+    )
+    assert r3.status_code == 201, r3.text
+    assert r3.json()["token_number"] == 2  # unique number, cap bypassed

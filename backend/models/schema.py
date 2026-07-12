@@ -372,8 +372,11 @@ class Token(Base):
     # Plain UUID pattern consistent with marked_by_user_id — survives user deletion.
     # DPDP: pseudonymous (UUID only, no name/phone).
     cancelled_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    # emergency_reason: required when walk-in bypasses daily cap via is_urgent=true.
-    # DPDP: sensitive — describes patient's stated urgency reason. Stored only here, not in audit log.
+    # emergency_reason: DELIBERATELY UNUSED (TD-021 closed 2026-07-12). Urgent
+    # walk-ins bypass the daily cap WITHOUT a stated reason — capturing "why
+    # it's urgent" is health information we promise not to store (data
+    # minimisation; no-triage rule). Column kept nullable/empty; drop in a
+    # future migration batch.
     emergency_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     branch: Mapped["Branch"] = relationship(back_populates="tokens")

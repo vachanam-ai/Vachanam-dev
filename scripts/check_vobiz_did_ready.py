@@ -58,8 +58,19 @@ def check(did: str | None = None) -> int:
 
         # 2 — DID presence + provider + usage_status
         r = c.get(f"{base}/Account/{auth_id}/Number/", headers=headers)
+        if r.status_code == 401:
+            # Baselined 2026-07-12: the account token passes /Account/ (KYC
+            # check) but 401s on /Number/ — number management needs the PARTNER
+            # credentials. Retry with them when configured.
+            pid = getattr(settings, "vobiz_partner_auth_id", "") or ""
+            ptok = getattr(settings, "vobiz_partner_auth_token", "") or ""
+            if pid and ptok:
+                headers = {"X-Auth-ID": pid, "X-Auth-Token": ptok}
+                r = c.get(f"{base}/Account/{auth_id}/Number/", headers=headers)
         if r.status_code != 200:
-            print(f"FAIL [numbers]: HTTP {r.status_code} — cannot list DIDs")
+            print(f"FAIL [numbers]: HTTP {r.status_code} — cannot list DIDs. "
+                  "The account token lacks Number scope; set VOBIZ_PARTNER_AUTH_ID/"
+                  "TOKEN in .env (they live in the Fly secrets) and re-run.")
             return 2
         nums = r.json()
         objects = nums.get("objects") or nums.get("numbers") or nums.get("data") or []

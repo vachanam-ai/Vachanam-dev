@@ -534,6 +534,9 @@ async def create_walkin(
         booking_date=today,
         db=db,
         appointment_time=appt_time,
+        # TD-021: urgent desk walk-in jumps a FULL token queue (clinic's call);
+        # slot-time occupancy is never bypassed.
+        bypass_daily_cap=body.is_urgent,
     )
     if not assignment.get("success"):
         reason = assignment.get("reason", "unavailable")

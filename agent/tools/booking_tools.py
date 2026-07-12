@@ -526,6 +526,7 @@ async def assign_token(
     booking_date: date,
     db: AsyncSession,
     appointment_time: time | None = None,
+    bypass_daily_cap: bool = False,
 ) -> dict:
     """Atomically reserve the next available token for this doctor+date using Redis INCR.
 
@@ -592,7 +593,11 @@ async def assign_token(
         # cancelled. confirm_booking's confirmed-count re-check (RULE 2 tripwire)
         # is the race-authoritative gate, so this seat check can be advisory.
         limit = doctor.daily_token_limit or 50
-        if db_confirmed >= limit:
+        # TD-021 (Vinay 2026-07-12): an URGENT walk-in from the desk bypasses
+        # the daily cap — the clinic is physically looking at the patient and
+        # owns the call. Token-queue cap ONLY; slot occupancy below is never
+        # bypassed (RULE 2). Voice agent never sets this flag.
+        if db_confirmed >= limit and not bypass_daily_cap:
             return {"success": False, "reason": "full"}
 
         # B5: the seed-forward MUST be atomic. The old GET -> (SET floor) ->
