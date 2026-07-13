@@ -136,6 +136,16 @@ When closing a future row, append here with this format:
   - **#10 (LOW)** — `google-service-account.json` private key sits unencrypted in the working tree (gitignored + excluded from image — verified — but it's under OneDrive sync). Move to `GOOGLE_SA_JSON_B64` env even in dev.
 - **TD-027 (P2)** — broken alembic migration chain: `8559268c0c44` (phase45) is a from-scratch *rewrite* of the initial schema `ffcf1134aa8f` — both `create_table('organizations')` + the same full table set, so `alembic upgrade head` from base collides ("relation organizations already exists") and rolls back. Never caught because tests + local + prod startup build schema from models via `Base.metadata.create_all`, not migrations. Neon prod (2026-06-16) was provisioned via create_all + `alembic stamp head` (now at p12consent2026); future migrations apply cleanly from head. Fix when convenient: rewrite `8559` as ALTERs (audit_log add + FK ondelete=RESTRICT) and squash the early chain so a from-base upgrade works for fresh environments. Until then, new envs must bootstrap via create_all + stamp, NOT upgrade-from-base.
 - **TD-028 (P3, bounty B16)** — two BillingCycle conventions coexist: webhook activation writes `cycle_start=today, cycle_end=today+30d` (`backend/routers/payments.py`) while scheduled plan changes use `next_cycle_start` (1st of next month). Latent — nothing meters against BillingCycle yet (metering is calendar-month over CallLog). Pick ONE convention before overage invoicing goes live.
+- **TD-039 (P1 once a paying clinic is live)** — every agent Fly deploy
+  (`--strategy immediate`, both machines replaced at once) leaves a ~2-minute
+  window with NO registered LiveKit worker: inbound calls ring into the void
+  (proven 2026-07-13 15:42 IST — Vinay's call landed mid-deploy, 0s/unanswered;
+  the 15:46 call answered fine). Pre-launch this is a nuisance; with clients
+  it's missed revenue calls on every deploy. Fix: blue-green — boot the new
+  machine, wait until its worker REGISTERS with LiveKit (needs a Fly health
+  check that reflects worker registration, e.g. a tiny HTTP endpoint in the
+  agent process), then stop the old one (LiveKit SIGTERM drain already
+  finishes active calls). Until then: deploy in idle windows only.
 - **TD-038 (P2, #342)** — invoice numbers are `VAC-YYYYMMDD-{payment-tail}` (unique + traceable, NOT statutory consecutive serials). GST rules require consecutive invoice serials per FY once we issue real tax invoices. When VACHANAM_GSTIN lands: add a DB sequence (per-FY) and store the number on BillingCycle. Also revisit CGST/SGST vs IGST split (currently one "GST @ 18%" line — needs place-of-supply once registered). TD-028 partially resolved by #340/#341: cycles are now anniversary-anchored end-to-end and overage meters against the cycle window; the leftover is only the legacy `next_cycle_start` fallback (unused in the main path).
 
 ## Paid down — 2026-07-12 (ledger cleanup pass, FIXLOG #344)

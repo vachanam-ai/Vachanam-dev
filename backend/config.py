@@ -20,8 +20,10 @@ class Settings(BaseSettings):
     smallest_model: str = "lightning_v3.1"
     smallest_sample_rate: int = 24000
 
-    # WhatsApp
+    # WhatsApp (Meta Cloud API — spec 2026-07-13). meta_phone_number_id is the
+    # WABA test number for dev; per-clinic numbers live on Branch.wa_phone_number_id.
     meta_access_token: str = ""
+    meta_phone_number_id: str = ""
     meta_waba_id: str = ""
     meta_webhook_verify_token: str = ""
     meta_app_secret: str = ""

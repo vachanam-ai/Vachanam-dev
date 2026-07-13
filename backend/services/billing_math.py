@@ -44,6 +44,10 @@ PLAN_LANGUAGES: dict[str, list[str] | None] = {
 # Plans that may use clinic voice cloning + the treatment follow-up voice loop.
 PREMIUM_VOICE_PLANS = ("clinic", "multi")
 
+# Plans with WhatsApp (confirmations, reminders, rating asks, chat) — Vinay's
+# positioning call, spec 2026-07-13. Message cost ≈ ₹0.40/booking, absorbed.
+WHATSAPP_PLANS = frozenset({"clinic", "multi"})
+
 # The 14-day free trial grants a flat voice-minute bucket regardless of the
 # plan picked at signup. 500→300 on 2026-07-11 (Vinay): ~100 calls is enough
 # to convince, and the cap is now HARD-enforced for trials in call_blocked

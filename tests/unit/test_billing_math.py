@@ -203,3 +203,11 @@ def test_b3_hard_block_honors_trial_grant_and_adjustment():
     assert call_blocked("active", "solo", True, 720, adjustment=50) is None
     assert call_blocked("active", "solo", True, 750, adjustment=50) == "minutes_exhausted"
     assert call_blocked("active", "clinic", True, 1400, adjustment=-200) == "minutes_exhausted"
+
+
+def test_whatsapp_plans_gate():
+    # Spec 2026-07-13 (Vinay): WhatsApp is a Clinic+Multi differentiator.
+    from backend.services.billing_math import WHATSAPP_PLANS
+
+    assert WHATSAPP_PLANS == {"clinic", "multi"}
+    assert "solo" not in WHATSAPP_PLANS
