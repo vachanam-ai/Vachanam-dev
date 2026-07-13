@@ -1051,9 +1051,21 @@ class VachanamAgent(Agent):
                 # allow_interruptions=False: the intro is ~2s and is the ONLY
                 # thing the new voice says — a caller's "okay" over it must not
                 # clip it into a half-sentence (live 17:49Z: "Please go[ ahead]").
-                await self.session.say(
-                    sanitize_for_tts(self._switch_ack), allow_interruptions=False
-                )
+                # Pre-synthesized frames from switch_language play instantly
+                # (#362 gap fix); fall back to live synth when absent.
+                frames = getattr(self, "_switch_ack_frames", None)
+                text = sanitize_for_tts(self._switch_ack)
+                if frames:
+
+                    async def _replay():
+                        for f in frames:
+                            yield f
+
+                    await self.session.say(
+                        text, audio=_replay(), allow_interruptions=False
+                    )
+                else:
+                    await self.session.say(text, allow_interruptions=False)
             except Exception as e:  # noqa: BLE001 — ack is best-effort (RULE 8)
                 logger.warning("switch_ack_failed: %s", e)
 
@@ -1808,12 +1820,17 @@ class VachanamAgent(Agent):
                 pass
         self._state.preferred_language = code
         self._state.language = code
-        # Spoken fillers must match the new language immediately.
+        # Spoken fillers must match the new language immediately. The CACHED
+        # PCM clips are still the OLD language's audio — drop them NOW or
+        # _say_lookup_filler keeps replaying Telugu "సరే అండి…" after a switch
+        # to English/Hindi (Vinay real call 2026-07-14, FIXLOG #363). Fresh
+        # clips for the new language are re-cached in the background below.
         try:
             ud = getattr(self.session, "userdata", None)
             if isinstance(ud, dict):
                 ud["fillers"] = get_lines(code).fillers
                 ud["language"] = code
+                ud["filler_clips"] = []
         except Exception:  # noqa: BLE001
             pass
         logger.info(
@@ -1832,19 +1849,39 @@ class VachanamAgent(Agent):
             logger.warning("chat_ctx_copy_failed: %s", e)
             _cc = None
         new_agent = self._agent_factory(code, chat_ctx=_cc)
-        # PRIME the new TTS BEFORE the handoff. smallest cold-connects on its
-        # first synth and on Fly that often throws "Connection error" + 2s
-        # retries — exactly the post-switch dead air / self-interruption of the
-        # 2026-07-03 live test (tts_failed x12 at 17:03Z). A tiny synth here
-        # absorbs the cold connect so the spoken ack starts instantly.
+        # PRE-SYNTHESIZE THE FULL ACK before the handoff (upgraded from the
+        # old "ok" prime, FIXLOG #362 — Vinay 2026-07-14: audible gap between
+        # switch and the new voice). Same cold-connect absorption as before,
+        # but the synth time now produces the ACTUAL ack audio: on_enter plays
+        # the cached frames with ZERO synth latency instead of live-synthing
+        # the ack all over again. Failure → on_enter falls back to live say.
         try:
             _new_tts = getattr(new_agent, "_tts_override", None)
-            if _new_tts is not None:
+            _ack_text = sanitize_for_tts(getattr(new_agent, "_switch_ack", "") or "")
+            if _new_tts is not None and _ack_text:
+                frames = []
                 async with asyncio.timeout(8):
-                    async for _ in _new_tts.synthesize("ok"):
-                        break
-        except Exception as e:  # noqa: BLE001 — priming is best-effort (RULE 8)
-            logger.warning("switch_tts_prime_failed: %s", e)
+                    async for ev in _new_tts.synthesize(_ack_text):
+                        frame = getattr(ev, "frame", None)
+                        if frame is not None:
+                            frames.append(frame)
+                if frames:
+                    new_agent._switch_ack_frames = frames
+        except Exception as e:  # noqa: BLE001 — presynth is best-effort (RULE 8)
+            logger.warning("switch_ack_presynth_failed: %s", e)
+        # Re-cache the lookup filler clips in the NEW language (background —
+        # never blocks the handoff; until it lands, _say_lookup_filler
+        # live-synthesizes the new-language filler text set above). #363.
+        try:
+            _voice = getattr(getattr(_new_tts, "_opts", None), "voice_id", None)
+            if _voice:
+                asyncio.create_task(
+                    cache_filler_clips(
+                        self.session, get_lines(code).fillers, _voice, code
+                    )
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("switch_filler_recache_skipped: %s", e)
         # Cut the OLD voice's in-flight sentence ("Okay, I can speak in
         # English. How can I..." — live 17:49Z: THREE utterances played). The
         # LLM streams spoken text alongside the tool call and the old TTS

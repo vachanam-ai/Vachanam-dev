@@ -136,7 +136,15 @@ class GoogleCalendarService:
 
         end_dt = appointment_dt + timedelta(minutes=duration_minutes)
         body = {
-            "summary": f"Apt — {patient_first_name} (xx{patient_phone_last4})",
+            # Doctor name in the summary: on a SHARED clinic calendar (several
+            # doctors, no per-doctor calendar_id yet) an unattributed "Apt —"
+            # reads as busy time for EVERY doctor (Vinay screenshot 2026-07-14,
+            # FIXLOG #364). RULE 9: first name + last4 + doctor only.
+            "summary": (
+                f"Apt — {patient_first_name} (xx{patient_phone_last4})"
+                f" · {doctor_name}" if doctor_name else
+                f"Apt — {patient_first_name} (xx{patient_phone_last4})"
+            ),
             "description": "",
             "start": {
                 "dateTime": appointment_dt.isoformat(),

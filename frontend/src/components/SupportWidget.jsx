@@ -14,10 +14,16 @@ export default function SupportWidget() {
   const [msgs, setMsgs] = useState([]);
   const [ticketId, setTicketId] = useState(null);
   const [busy, setBusy] = useState(false);
-  const endRef = useRef(null);
+  const listRef = useRef(null);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, open, busy]);
-  const scrollToEnd = () => endRef.current?.scrollIntoView({ behavior: "auto" });
+  // Scroll ONLY the message list. scrollIntoView walked every scrollable
+  // ancestor, so each typed chunk yanked the PAGE down under the widget
+  // (Vinay mobile report 2026-07-14).
+  const scrollToEnd = (smooth) => {
+    const el = listRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  };
+  useEffect(() => { scrollToEnd(true); }, [msgs, open, busy]);
   const markTyped = (i) =>
     setMsgs((m) => m.map((msg, j) => (j === i ? { ...msg, typed: true } : msg)));
 
@@ -59,7 +65,7 @@ export default function SupportWidget() {
             </button>
           </div>
 
-          <div className="flex-1 space-y-2 overflow-y-auto bg-cream/40 p-3">
+          <div ref={listRef} className="flex-1 space-y-2 overflow-y-auto bg-cream/40 p-3">
             {msgs.length === 0 && (
               <p className="text-sm text-ink-soft">Hi! Ask me anything about Vachanam — pricing, setup, your plan, a call that didn't work.</p>
             )}
@@ -69,7 +75,7 @@ export default function SupportWidget() {
                   (m.role === "user" ? "bg-teal text-white" : "bg-teal-mint text-ink")}>
                   {m.role === "bot" ? (
                     <TypedText text={m.content} done={m.typed !== false}
-                      onTick={scrollToEnd} onDone={() => markTyped(i)} />
+                      onTick={() => scrollToEnd(false)} onDone={() => markTyped(i)} />
                   ) : (
                     m.content
                   )}
@@ -77,7 +83,6 @@ export default function SupportWidget() {
               </div>
             ))}
             {busy && <TypingDots />}
-            <div ref={endRef} />
           </div>
 
           <form onSubmit={ask} className="flex items-center gap-2 border-t border-hairline p-2.5">

@@ -199,3 +199,26 @@ async def test_update_event_calls_patch(svc) -> None:
     kwargs = mock.events().patch.call_args.kwargs
     assert kwargs.get("calendarId") == "cal_update"
     assert kwargs.get("eventId") == "evt_update"
+
+
+# ── #364: doctor name in summary (shared-calendar readability) ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_event_summary_names_the_doctor(svc) -> None:
+    """On a shared clinic calendar an unattributed event reads as busy time for
+    EVERY doctor (Vinay screenshot 2026-07-14). Summary carries the doctor."""
+    s, mock = svc
+    mock.events().insert().execute.return_value = {"id": "evt_doc"}
+
+    await s.create_booking_event(
+        calendar_id="cal_id",
+        patient_first_name="Veer",
+        patient_phone_last4="7554",
+        appointment_dt=datetime(2026, 7, 14, 10, 0),
+        duration_minutes=30,
+        doctor_name="Dr Karishma",
+    )
+
+    body = mock.events().insert.call_args.kwargs.get("body")
+    assert body["summary"] == "Apt — Veer (xx7554) · Dr Karishma"
