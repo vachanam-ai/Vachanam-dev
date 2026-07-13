@@ -218,6 +218,23 @@ def _say_lookup_filler(context) -> None:
         logger.debug("lookup_filler_skipped: %s", e)
 
 
+def _protect_mutation(context) -> None:
+    """A booking WRITE must finish and be confirmed aloud even if the caller
+    talks over the tool's quiet beat ("hello? hello?"). livekit-agents drops a
+    completed tool step whose speech handle got interrupted (agent_activity:
+    interrupted -> cancel exe_task, tool call/result never reach the chat
+    context) — the LLM then never learns the write happened, tells the caller
+    it failed, and re-fires the tool (live reminder call 2026-07-13,
+    FIXLOG #361). disallow_interruptions() pins the handle for the tool AND
+    its confirmation reply; barge-in everywhere else is untouched. Guarded:
+    raises only when the handle is ALREADY interrupted — proceed unprotected,
+    the stale-token/duplicate recoveries (#283/#286) absorb a re-fire."""
+    try:
+        context.disallow_interruptions()
+    except Exception as e:  # noqa: BLE001 — protection must never block the write
+        logger.warning("mutation_unprotected: %s", str(e)[:120])
+
+
 def _build_caller_context(rows, today) -> tuple[str | None, str]:
     """Identify an inbound caller from their existing bookings (RULE 1 already
     applied — rows are branch-scoped via find_bookings_by_phone).
@@ -1348,6 +1365,9 @@ class VachanamAgent(Agent):
         # Booking touches the DB + writes the calendar (the slowest step) — cover
         # that beat with a spoken filler so the patient never hears dead air mid-
         # booking. Non-blocking + fully guarded (never affects the booking).
+        # Handle pinned: a "hello?" over the write must not discard the booked
+        # result and make the LLM re-book or claim failure (FIXLOG #361).
+        _protect_mutation(context)
         _say_lookup_filler(context)
         if self._calendar is None:
             logger.error("confirm_booking_no_calendar_service")
@@ -1591,6 +1611,7 @@ class VachanamAgent(Agent):
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
         # the #279 upfront existing-booking surface so it doesn't flag the very
         # booking being moved (FIXLOG #281).
+        _say_lookup_filler(context)  # cover the lookup beat (no dead air, #361)
         self._state.existing_booking_intent = True
         phone = phone_number or self._state.patient_phone
         if not phone:
@@ -1854,6 +1875,11 @@ class VachanamAgent(Agent):
         and only after the new booking is confirmed cancels the old one. Use
         this instead of manual assign/confirm/cancel for every reschedule.
         new_time (HH:MM) required only for schedule (appointment) doctors."""
+        # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
+        # Cover the beat with a filler and pin the handle so a mid-write
+        # "hello?" can't discard the completed reschedule (FIXLOG #361).
+        _protect_mutation(context)
+        _say_lookup_filler(context)
         return await self._do_reschedule(old_token_id, new_date, new_time)
 
     async def _do_reschedule(
@@ -2078,6 +2104,10 @@ class VachanamAgent(Agent):
                 "success=true, and only then cancel the old booking. For "
                 "reschedules prefer the reschedule_booking tool."
             )
+        # Booking write (DB + calendar delete): filler over the beat, handle
+        # pinned so barge-in can't discard the completed cancel (FIXLOG #361).
+        _protect_mutation(context)
+        _say_lookup_filler(context)
         return await self._do_cancel(token_id)
 
     def _clear_hold(self) -> None:
