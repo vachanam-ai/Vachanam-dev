@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime, date, time
 from sqlalchemy import (
     String, Boolean, Integer, Text, DateTime, Date, Time, LargeBinary,
-    ForeignKey, Enum, ARRAY, JSON, func, text, false, Index, UniqueConstraint
+    ForeignKey, Enum, ARRAY, JSON, func, text, false, Index, UniqueConstraint,
+    CheckConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -101,6 +102,14 @@ class Branch(Base):
     outbound_trunk_id: Mapped[str | None] = mapped_column(String(255))  # per-clinic LiveKit outbound trunk
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))
+    # Meta Cloud API phone_number_id of the clinic's own WhatsApp number
+    # (Coexistence-linked into Vachanam's WABA — spec 2026-07-13). Presence =
+    # WhatsApp active for this branch. RULE 5 for inbound: webhook events are
+    # resolved to a branch by THIS id (the receiving clinic number), never by
+    # the patient's number. Unique — one linked number belongs to one branch.
+    wa_phone_number_id: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, unique=True
+    )
     # smallest.ai Waves voice_id for this clinic's agent (clinic-selectable; can
     # be a cloned voice). NULL → the agent uses the language's default smallest
     # voice (agent/i18n). Nullable + widened from the old Sarvam-speaker column
@@ -303,6 +312,30 @@ class PatientMessage(Base):
     status: Mapped[str] = mapped_column(String(10), default="pending")  # pending | done
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Rating(Base):
+    """Post-visit patient rating collected over WhatsApp (spec 2026-07-13):
+    patient marked Seen → evening rating_ask template → 1-5 button reply lands
+    here. One rating per token (unique). Score only — no free text is ever
+    solicited or stored (RULE 9). RULE 1: branch-scoped."""
+    __tablename__ = "ratings"
+    __table_args__ = (
+        CheckConstraint("score >= 1 AND score <= 5", name="ck_ratings_score_1_5"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tokens.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"), nullable=True
+    )
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Consent(Base):
