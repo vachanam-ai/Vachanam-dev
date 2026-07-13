@@ -1,17 +1,29 @@
-"""Meta (WhatsApp) service stub. WhatsApp deferred to MVP2.
+"""Meta (WhatsApp) service — REAL sends as of WA T4 (spec 2026-07-13).
 
-Stub logs and no-ops. Real Meta Cloud API integration is post-MVP1.
-Stub emits a structlog warning so it's obvious no WhatsApp message was sent.
+Bridge between the booking path's display-string interface (unchanged since
+the MVP1 stub, so booking code needed no edits) and wa_service. Loads the
+branch + org plan in its OWN short-lived session (the caller's session is
+mid-booking); every failure is swallowed with a log — RULE 4: WhatsApp is a
+notification, a send failure never fails or blocks a booking.
+
+Without META creds / a linked branch number / a gated-in plan this behaves
+exactly like the old stub: logs and no-ops.
 """
+from __future__ import annotations
+
 from datetime import date, time
 
 import structlog
+from sqlalchemy import select
+
+import backend.database as _db_module
+from backend.services import wa_service, wa_templates
 
 logger = structlog.get_logger()
 
 
 class MetaService:
-    """Stub WhatsApp service. Real integration in MVP2."""
+    """WhatsApp notification sender (real — Cloud API via wa_service)."""
 
     async def send_booking_confirmation(
         self,
@@ -22,26 +34,47 @@ class MetaService:
         booking_date: date,
         token_number: int,
         appointment_time: time | None = None,
+        *,
+        branch_id=None,
+        token_id: str | None = None,
+        patient_lang: str | None = None,
     ) -> None:
-        """Send patient WhatsApp confirmation. Stub no-ops + logs.
+        """Send the booking-confirmation template with Reschedule/Cancel
+        buttons. branch_id/token_id are optional for call-site compatibility —
+        without branch_id there is no sender number, so it no-ops (logged)."""
+        if branch_id is None:
+            logger.info("wa_skipped_unconfigured", reason="no_branch_id")
+            return
+        try:
+            from backend.models.schema import Branch, Organization
 
-        Args:
-            to: Patient phone number in E.164 format (masked to last-4 in logs).
-            patient_name: Patient display name (NOT logged — PII).
-            doctor_name: Doctor display name.
-            clinic_name: Branch/clinic name for message body.
-            booking_date: Date of booking.
-            token_number: Assigned token or slot number.
-            appointment_time: Appointment time for slot-type; None for token-type.
-        """
-        logger.warning(
-            "whatsapp_stub_skipped",
-            to_last4=to[-4:] if to else None,
-            doctor_name=doctor_name,
-            clinic_name=clinic_name,
-            token=token_number,
-            booking_date=booking_date.isoformat() if booking_date else None,
-        )
+            async with _db_module.AsyncSessionLocal() as db:
+                row = (
+                    await db.execute(
+                        select(Branch, Organization.plan)
+                        .join(Organization, Organization.id == Branch.org_id)
+                        .where(Branch.id == branch_id)
+                    )
+                ).first()
+            if row is None:
+                logger.warning("wa_branch_not_found", branch_id=str(branch_id))
+                return
+            branch, plan = row
+            if not wa_service.wa_enabled(branch, plan):
+                return
+            template, lang, params, buttons = wa_templates.booking_confirm(
+                clinic=clinic_name,
+                doctor=doctor_name,
+                booking_date=booking_date,
+                appointment_time=appointment_time,
+                token_number=token_number,
+                address=branch.address,
+                token_id=token_id or "",
+                lang=wa_templates.template_lang(patient_lang),
+            )
+            await wa_service.send_template(branch, to, template, lang, params, buttons)
+        except Exception as e:  # noqa: BLE001 — RULE 4: never surfaces to booking
+            logger.warning("wa_confirmation_failed", error=str(e)[:200])
 
     async def send_doctor_notification(
         self,
@@ -50,16 +83,10 @@ class MetaService:
         token_number: int,
         appointment_time: str | None = None,
     ) -> None:
-        """Notify doctor of new booking. Stub no-ops + logs.
-
-        Args:
-            doctor_phone: Doctor's WhatsApp number (masked to last-4 in logs).
-            patient_name: Patient display name (NOT logged — PII).
-            token_number: Assigned token or slot number.
-            appointment_time: Formatted time string, e.g. "14:30" (optional).
-        """
-        logger.warning(
-            "whatsapp_doctor_notification_stub_skipped",
-            doctor_phone_last4=doctor_phone[-4:] if doctor_phone else None,
+        """Doctor pings stay out of WhatsApp scope (spec 2026-07-13: patient-
+        facing only; doctors live on the dashboard/calendar). Logged no-op."""
+        logger.debug(
+            "wa_doctor_notification_skipped",
+            doctor_last4=doctor_phone[-4:] if doctor_phone else None,
             token=token_number,
         )

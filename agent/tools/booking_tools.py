@@ -1150,6 +1150,11 @@ async def confirm_booking(
                 booking_date=booking_date,
                 token_number=token_number,
                 appointment_time=appointment_time,
+                # WA T4: real sends need the sender branch + the button token
+                # id + the patient's template language (te/en day 1).
+                branch_id=branch_id,
+                token_id=str(token.id),
+                patient_lang=getattr(patient, "preferred_language", None),
             )
         except Exception as e:
             logger.error("whatsapp_confirmation_failed", error=str(e), token_id=str(token.id))

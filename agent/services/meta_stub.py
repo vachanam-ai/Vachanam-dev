@@ -1,32 +1,8 @@
-from datetime import date, time
+"""WhatsApp service for the voice agent — delegates to the REAL backend
+implementation as of WA T4 (spec 2026-07-13). The module keeps its historical
+name/import path so agent code is untouched; the backend service carries the
+no-op behavior when WhatsApp isn't configured (no creds / unlinked branch /
+ungated plan), so dev calls still never block on WhatsApp delivery."""
+from backend.services.meta_service import MetaService
 
-import structlog
-
-logger = structlog.get_logger()
-
-
-class MetaService:
-    """Stub WhatsApp Meta Cloud API service for dev/test.
-
-    Real impl deferred to MVP2. No-op so booking flow does not block on
-    WhatsApp delivery during dev calls. Fire-and-forget contract: caller
-    wraps in try/except and treats any exception as a soft failure.
-    """
-
-    async def send_booking_confirmation(
-        self,
-        to: str,
-        patient_name: str,
-        doctor_name: str,
-        clinic_name: str,
-        booking_date: date,
-        token_number: int,
-        appointment_time: time | None,
-    ) -> None:
-        logger.warning(
-            "meta_stub_used",
-            to=to[-4:] if to else "unknown",
-            token_number=token_number,
-            doctor=doctor_name,
-        )
-        return None
+__all__ = ["MetaService"]
