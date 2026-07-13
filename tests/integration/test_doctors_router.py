@@ -710,26 +710,27 @@ async def starter_clinic(db: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_starter_plan_caps_at_one_doctor(client, db: AsyncSession, starter_clinic):
-    """solo/Starter includes exactly 1 doctor: the second POST must 403 with
-    an upgrade message; the first succeeds."""
+async def test_starter_plan_caps_at_three_doctors(client, db: AsyncSession, starter_clinic):
+    """solo/Starter includes 3 doctors (2026-07-12, Vinay — was 1): the fourth
+    POST must 403 with an upgrade message; the first three succeed."""
     token = _make_jwt(
         user_id=str(uuid.uuid4()), email="s@test.com", role="org_admin",
         org_id=starter_clinic["org_id"], branch_ids=[starter_clinic["branch_id"]],
     )
-    r1 = await client.post(
+    for name in ("Dr One", "Dr Two", "Dr Three"):
+        r = await client.post(
+            f"/doctors/{starter_clinic['branch_id']}",
+            json={"name": name, "booking_type": "token"},
+            headers=_auth(token),
+        )
+        assert r.status_code == 201, r.text
+    r4 = await client.post(
         f"/doctors/{starter_clinic['branch_id']}",
-        json={"name": "Dr Only", "booking_type": "token"},
+        json={"name": "Dr Four", "booking_type": "token"},
         headers=_auth(token),
     )
-    assert r1.status_code == 201, r1.text
-    r2 = await client.post(
-        f"/doctors/{starter_clinic['branch_id']}",
-        json={"name": "Dr Two", "booking_type": "token"},
-        headers=_auth(token),
-    )
-    assert r2.status_code == 403, r2.text
-    assert "Upgrade" in r2.json()["detail"]
+    assert r4.status_code == 403, r4.text
+    assert "Upgrade" in r4.json()["detail"]
 
 
 @pytest.mark.asyncio

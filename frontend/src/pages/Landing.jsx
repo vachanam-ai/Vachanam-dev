@@ -11,8 +11,8 @@ const PLANS = [
     key: "solo",
     price: "₹5,999",
     per: "/month + ₹5/min after",
-    tagline: "Solo practitioners",
-    points: ["≈250 calls included (700 min)", "1 doctor · 1 AI phone number", "Telugu voice agent", "Token booking + calendar", "Reminder calls + receptionist app"]
+    tagline: "Small clinics, up to 3 doctors",
+    points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 8 Indian languages", "Token booking + calendar", "Reminder calls + receptionist app"]
   },
   {
     name: "Clinic",
@@ -21,7 +21,7 @@ const PLANS = [
     per: "/month + ₹5/min after",
     tagline: "Growing clinics, up to 5 doctors",
     popular: true,
-    points: ["≈540 calls included (1,500 min)", "5 doctors", "Telugu + Hindi + English", "AI speaks in YOUR cloned voice", "Treatment follow-up calls", "Owner analytics"]
+    points: ["≈540 calls included (1,500 min)", "5 doctors", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "Treatment follow-up calls", "Owner analytics"]
   },
   {
     name: "Multi",

@@ -50,7 +50,8 @@ async def _org_plan(db, branch) -> str:
 
 
 def _assert_plan_language(plan: str, language: str) -> None:
-    """Starter = Telugu; Clinic = te/hi/en; Multi = all (PLAN_LANGUAGES)."""
+    """All plans carry all languages since 2026-07-12 (PLAN_LANGUAGES all
+    None) — this gate stays as the seam in case a future plan re-restricts."""
     from backend.services.billing_math import PLAN_LANGUAGES, PLANS
 
     allowed = PLAN_LANGUAGES.get(plan, None)

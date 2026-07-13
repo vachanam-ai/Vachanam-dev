@@ -227,17 +227,18 @@ async def test_starter_plan_cannot_clone_voice(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_starter_plan_language_locked_to_telugu(db):
-    """PLAN_LANGUAGES: solo = ["te"]. Switching a Starter branch to Hindi must
-    403 with an upgrade message; Telugu stays allowed."""
+async def test_starter_plan_gets_all_languages(db):
+    """2026-07-12 (Vinay): multi-language on EVERY plan — a Starter branch may
+    switch to Hindi (or any supported language); garbage codes still 422."""
     br, org_id = await _starter_branch(db)
     app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
             r_hi = await ac.patch(f"/branches/{br.id}/voice", json={"language": "hi"})
             r_te = await ac.patch(f"/branches/{br.id}/voice", json={"language": "te"})
-        assert r_hi.status_code == 403, r_hi.text
-        assert "Upgrade" in r_hi.json()["detail"]
+            r_bad = await ac.patch(f"/branches/{br.id}/voice", json={"language": "xx"})
+        assert r_hi.status_code == 200, r_hi.text
         assert r_te.status_code == 200, r_te.text
+        assert r_bad.status_code in (400, 422), r_bad.text
     finally:
         app.dependency_overrides.pop(get_current_user, None)

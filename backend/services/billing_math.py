@@ -23,17 +23,21 @@ class Plan:
 # worst-case full use of its included bucket (cost model: Rs3/min + Rs1,500
 # infra/DID per clinic). Internal keys stay solo/clinic/multi (DB enum,
 # Razorpay notes, agent cap logic); "Starter" is display-only.
+# 2026-07-12 (Vinay): Starter doctor cap 1 → 3. Doctor count is zero-variable-
+# cost, so margins are untouched.
 PLANS: dict[str, Plan] = {
-    "solo": Plan(5_999, 700, 5.0, 1, "Starter"),
+    "solo": Plan(5_999, 700, 5.0, 3, "Starter"),
     "clinic": Plan(9_999, 1_500, 5.0, 5, "Clinic"),
     "multi": Plan(17_999, 3_000, 5.0, None, "Multi"),
 }
 
-# Voice-agent languages available per plan (agent.i18n codes). Multi = None =
-# every language the platform supports.
+# Voice-agent languages available per plan (agent.i18n codes). None = every
+# language the platform supports. 2026-07-12 (Vinay): ALL plans get all
+# languages — language is zero-variable-cost; plans now differentiate on
+# minutes, doctors and premium voice (cloning/follow-up loop) instead.
 PLAN_LANGUAGES: dict[str, list[str] | None] = {
-    "solo": ["te"],
-    "clinic": ["te", "hi", "en"],
+    "solo": None,
+    "clinic": None,
     "multi": None,
 }
 

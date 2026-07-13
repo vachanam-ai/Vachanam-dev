@@ -99,7 +99,7 @@ def test_plan_table_matches_claude_md():
     assert PLANS["solo"].base_rupees == 5999
     assert PLANS["solo"].included_minutes == 700
     assert PLANS["solo"].overage_per_min == 5.0
-    assert PLANS["solo"].max_doctors == 1
+    assert PLANS["solo"].max_doctors == 3  # 2026-07-12 (Vinay): 1 → 3
     assert PLANS["solo"].display_name == "Starter"
     assert PLANS["clinic"].base_rupees == 9999
     assert PLANS["clinic"].included_minutes == 1500
@@ -126,9 +126,11 @@ def test_every_plan_holds_40pct_margin_at_worst_case():
 
 
 def test_plan_feature_gates_shape():
-    assert PLAN_LANGUAGES["solo"] == ["te"]
-    assert PLAN_LANGUAGES["clinic"] == ["te", "hi", "en"]
-    assert PLAN_LANGUAGES["multi"] is None      # all languages
+    # 2026-07-12 (Vinay): ALL plans carry all languages (zero variable cost);
+    # differentiation is minutes/doctors/premium voice.
+    assert PLAN_LANGUAGES["solo"] is None
+    assert PLAN_LANGUAGES["clinic"] is None
+    assert PLAN_LANGUAGES["multi"] is None
     assert PREMIUM_VOICE_PLANS == ("clinic", "multi")
 
 

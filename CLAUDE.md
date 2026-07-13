@@ -62,9 +62,12 @@ cap logic); "Starter" is the DISPLAY name for `solo`.
 
 | Plan | Price | Included | Doctors | Languages | Premium |
 |---|---|---|---|---|---|
-| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 1 | te | 4-min AI call cap |
-| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | te+hi+en | voice cloning, follow-up loop |
+| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 3 | all 8 | 4-min AI call cap |
+| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | all 8 | voice cloning, follow-up loop |
 | **Multi** | ₹17,999/mo + ₹5/min | 1 DID, 3,000 min (≈1,080 calls) | unlimited | all 8 | own voice per language |
+
+(2026-07-12, Vinay: Starter doctors 1→3 + all languages on every plan — both
+zero-variable-cost levers, margins unchanged.)
 
 Overage ₹5/min on every plan. Extra DID ₹1,999/mo. Extra branch ₹7,999/mo —
 each extra branch is provisioned as a full new clinic (own DID, Vobiz

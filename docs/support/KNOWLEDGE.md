@@ -44,20 +44,16 @@ drops before confirmation, the slot is freed immediately for others.
 ## Languages
 
 Eight Indian languages: Telugu, Hindi, English, Tamil, Kannada, Malayalam,
-Marathi, Bengali, Odia (as per plan). Each patient's language is remembered
-for their next call. A caller can ask mid-call to switch language and the
-agent continues in the new language.
-
-- Starter plan: Telugu.
-- Clinic plan: Telugu + Hindi + English.
-- Multi plan: all languages.
+Marathi, Bengali, Odia — included on EVERY plan (2026-07-12). Each patient's
+language is remembered for their next call. A caller can ask mid-call to
+switch language and the agent continues in the new language.
 
 ## Plans and pricing (all prices exclusive of 18% GST)
 
 | Plan | Price | Included calling | Doctors | Languages | Extras |
 |---|---|---|---|---|---|
-| Starter | ₹5,999/month | 700 minutes (≈250 calls) | 1 | Telugu | AI calls capped at 4 minutes |
-| Clinic (most popular) | ₹9,999/month | 1,500 minutes (≈540 calls) | up to 5 | Telugu + Hindi + English | custom cloned voice, treatment follow-up calls |
+| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 | AI calls capped at 4 minutes |
+| Clinic (most popular) | ₹9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 8 | custom cloned voice, treatment follow-up calls |
 | Multi | ₹17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 8 | your own voice in every language |
 
 - Overage on every plan: ₹5 per minute beyond included minutes, billed with
