@@ -275,8 +275,9 @@ async def test_voice_cloning_included_on_every_plan(client, db):
     g = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
     assert g.status_code == 200
     assert g.json()["voice_cloning_allowed"] is False
-    # Starter also only sees its own language in the dropdown.
-    assert [o["code"] for o in g.json()["allowed_languages"]] == ["te"]
+    # All languages on every plan (2026-07-12): Starter sees the full dropdown.
+    codes = [o["code"] for o in g.json()["allowed_languages"]]
+    assert {"te", "hi", "en", "or"} <= set(codes) and len(codes) >= 8
 
     r = await client.post(
         f"/branches/{bid}/cloned-voices", headers=_auth(owner),
