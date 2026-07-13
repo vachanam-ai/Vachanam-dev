@@ -171,6 +171,16 @@ LINES: dict[str, Lines] = {
             "thing with you. {message}"
         ),
         followup_name_prefix="{patient}, ",
+        # Vinay 2026-07-14: SAME short-intro rule as Telugu, across ALL
+        # languages — one sentence, AI disclosure, "how can I help", no
+        # "welcome to the clinic" (the intro replaces the welcome+greeting
+        # pair entirely; greeting.py returns it as the single segment).
+        inbound_intro=(
+            "Hello, I'm the AI assistant from {clinic}. How can I help you?"
+        ),
+        inbound_intro_known=(
+            "Hello, I'm the AI assistant from {clinic}. How can I help you, {patient}?"
+        ),
         brevity=_BREVITY_EN,
     ),
 
@@ -205,6 +215,14 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="थोड़ा रुकिए, समय खत्म हो रहा है। चलिए आपकी बुकिंग जल्दी कन्फर्म कर दें?",
         cap_goodbye="धन्यवाद, चलती हूँ फिर!",
+        # Short single-sentence intro (Vinay 2026-07-14 — "Hindi intro is too
+        # large and repeating itself"; same rule as Telugu). ⚠ first-pass.
+        inbound_intro=(
+            "नमस्ते, मैं {clinic} की AI असिस्टेंट बोल रही हूँ। बताइए, मैं आपकी क्या मदद करूँ?"
+        ),
+        inbound_intro_known=(
+            "नमस्ते, मैं {clinic} की AI असिस्टेंट बोल रही हूँ। बताइए {patient} जी, क्या मदद करूँ?"
+        ),
         brevity=_BREVITY_EN,
     ),
 
@@ -240,6 +258,13 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="கொஞ்சம் இருங்க, டைம் முடியப் போகுது. உங்க புக்கிங்கை சீக்கிரம் கன்ஃபர்ம் பண்ணலாமா?",
         cap_goodbye="நன்றி, வர்றேன்!",
+        # Short single-sentence intro (Vinay 2026-07-14, all languages). ⚠ first-pass.
+        inbound_intro=(
+            "வணக்கம், {clinic} கிளினிக்கின் AI அசிஸ்டெண்ட் பேசுறேன். சொல்லுங்க, என்ன உதவி வேணும்?"
+        ),
+        inbound_intro_known=(
+            "வணக்கம், {clinic} கிளினிக்கின் AI அசிஸ்டெண்ட் பேசுறேன். சொல்லுங்க {patient}, என்ன உதவி வேணும்?"
+        ),
         brevity=_BREVITY_EN,
     ),
 
@@ -274,6 +299,13 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="ಸ್ವಲ್ಪ ಇರಿ, ಟೈಮ್ ಮುಗಿಯುತ್ತಿದೆ. ನಿಮ್ಮ ಬುಕಿಂಗ್ ಬೇಗ ಕನ್ಫರ್ಮ್ ಮಾಡೋಣವಾ?",
         cap_goodbye="ಧನ್ಯವಾದ, ಬರ್ತೀನಿ!",
+        # Short single-sentence intro (Vinay 2026-07-14, all languages). ⚠ first-pass.
+        inbound_intro=(
+            "ನಮಸ್ಕಾರ, {clinic} ಕ್ಲಿನಿಕ್‌ನ AI ಅಸಿಸ್ಟೆಂಟ್ ಮಾತಾಡ್ತಿದ್ದೀನಿ. ಹೇಳಿ, ಏನು ಸಹಾಯ ಬೇಕು?"
+        ),
+        inbound_intro_known=(
+            "ನಮಸ್ಕಾರ, {clinic} ಕ್ಲಿನಿಕ್‌ನ AI ಅಸಿಸ್ಟೆಂಟ್ ಮಾತಾಡ್ತಿದ್ದೀನಿ. ಹೇಳಿ {patient}, ಏನು ಸಹಾಯ ಬೇಕು?"
+        ),
         brevity=_BREVITY_EN,
     ),
 
@@ -309,6 +341,13 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="കുറച്ച് നിൽക്കൂ, സമയം കഴിയുകയാണ്. നിങ്ങളുടെ ബുക്കിംഗ് വേഗം കൺഫേം ചെയ്യാമോ?",
         cap_goodbye="നന്ദി, ഞാൻ പോകട്ടെ!",
+        # Short single-sentence intro (Vinay 2026-07-14, all languages). ⚠ first-pass.
+        inbound_intro=(
+            "നമസ്കാരം, {clinic} ക്ലിനിക്കിലെ AI അസിസ്റ്റന്റാണ്. പറയൂ, എന്ത് സഹായം വേണം?"
+        ),
+        inbound_intro_known=(
+            "നമസ്കാരം, {clinic} ക്ലിനിക്കിലെ AI അസിസ്റ്റന്റാണ്. പറയൂ {patient}, എന്ത് സഹായം വേണം?"
+        ),
         brevity=_BREVITY_EN,
     ),
 
@@ -343,6 +382,13 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="जरा थांबा, वेळ संपत आली आहे. तुमची बुकिंग लवकर कन्फर्म करूया का?",
         cap_goodbye="धन्यवाद, येते मी!",
+        # Short single-sentence intro (Vinay 2026-07-14, all languages). ⚠ first-pass.
+        inbound_intro=(
+            "नमस्कार, मी {clinic} क्लिनिकची AI असिस्टंट बोलत आहे. सांगा, काय मदत करू?"
+        ),
+        inbound_intro_known=(
+            "नमस्कार, मी {clinic} क्लिनिकची AI असिस्टंट बोलत आहे. सांगा {patient}, काय मदत करू?"
+        ),
         brevity=_BREVITY_EN,
     ),
 
@@ -377,6 +423,13 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="একটু দাঁড়ান, সময় শেষ হয়ে আসছে। আপনার বুকিংটা তাড়াতাড়ি কনফার্ম করি?",
         cap_goodbye="ধন্যবাদ, আসি তাহলে!",
+        # Short single-sentence intro (Vinay 2026-07-14, all languages). ⚠ first-pass.
+        inbound_intro=(
+            "নমস্কার, আমি {clinic} ক্লিনিকের AI অ্যাসিস্ট্যান্ট বলছি। বলুন, কী সাহায্য করতে পারি?"
+        ),
+        inbound_intro_known=(
+            "নমস্কার, আমি {clinic} ক্লিনিকের AI অ্যাসিস্ট্যান্ট বলছি। বলুন {patient}, কী সাহায্য করতে পারি?"
+        ),
         brevity=_BREVITY_EN,
     ),
 
@@ -411,6 +464,13 @@ LINES: dict[str, Lines] = {
         ),
         cap_warning="ଟିକେ ରୁହନ୍ତୁ, ସମୟ ସରିଯାଉଛି। ଆପଣଙ୍କ ବୁକିଂ ଶୀଘ୍ର କନଫର୍ମ କରିଦେବା?",
         cap_goodbye="ଧନ୍ୟବାଦ, ଯାଉଛି!",
+        # Short single-sentence intro (Vinay 2026-07-14, all languages). ⚠ first-pass.
+        inbound_intro=(
+            "ନମସ୍କାର, ମୁଁ {clinic} କ୍ଲିନିକ୍‌ର AI ଆସିଷ୍ଟାଣ୍ଟ କହୁଛି। କୁହନ୍ତୁ, କଣ ସାହାଯ୍ୟ କରିପାରିବି?"
+        ),
+        inbound_intro_known=(
+            "ନମସ୍କାର, ମୁଁ {clinic} କ୍ଲିନିକ୍‌ର AI ଆସିଷ୍ଟାଣ୍ଟ କହୁଛି। କୁହନ୍ତୁ {patient}, କଣ ସାହାଯ୍ୟ କରିପାରିବି?"
+        ),
         brevity=_BREVITY_EN,
     ),
 }

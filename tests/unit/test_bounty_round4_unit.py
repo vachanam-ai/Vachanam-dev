@@ -156,3 +156,13 @@ def test_confirmed_at_is_timezone_aware():
     src = inspect.getsource(booking_tools.confirm_booking)
     assert "datetime.utcnow()" not in src
     assert "datetime.now(timezone.utc)" in src
+
+
+def test_conftest_email_fuse_is_engaged():
+    """FIXLOG #369: the suite must NEVER hold a live Resend key — full-suite
+    runs were really mailing support@vachanam.in (tickets, receipts). Tests
+    that assert payloads set their own fake key + mock the transport."""
+    from backend.config import settings as live_settings
+
+    assert live_settings.resend_api_key == ""
+    assert live_settings.smtp_host == ""

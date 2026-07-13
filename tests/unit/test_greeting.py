@@ -227,9 +227,11 @@ def test_te_known_caller_intro_greets_by_name_single_segment():
 
 
 def test_trim_does_not_touch_followup_or_other_languages():
-    """Follow-up path keeps welcome+message; languages without the trimmed
-    fields keep the two-segment composition."""
+    """Follow-up path keeps welcome+message. (2026-07-14, Vinay: the trimmed
+    ONE-segment intro now applies to EVERY language, not just Telugu — the
+    old two-segment hi assertion is superseded; full coverage lives in
+    test_short_intro_all_languages.)"""
     fup = g.inbound_greeting_texts("te", "క్లినిక్", spk_caller="రవి",
                                  followup_message="ఎలా ఉన్నారు?")
     assert len(fup) >= 2
-    assert len(g.inbound_greeting_texts("hi", "Clinic")) == 2
+    assert len(g.inbound_greeting_texts("hi", "Clinic")) == 1

@@ -171,7 +171,19 @@ def build_system_prompt(
         "the new language and voice. Switch ONLY on an explicit request — "
         "NEVER because they mixed some words of another language. If they "
         "ask for a language not in that list, apologise briefly and continue "
-        "in the current one.\n\n"
+        "in the current one.\n"
+        "GARBLED SWITCH REQUEST — the transcriber only understands the "
+        "CURRENT language, so a caller asking IN Hindi/English for Hindi/"
+        "English arrives as broken text. If a turn is confused or unnatural "
+        "but contains ANY language name (హిందీ / Hindi / ఇంగ్లీష్ / English / "
+        "urdu ...), in ANY form — even third person like 'హిందీనే "
+        "మాట్లాడగలిగాడు' — treat it as a POSSIBLE switch request: ask ONE "
+        "short confirm in the current language ('మీరు హిందీలో మాట్లాడాలా?'). "
+        "Yes → switch_language. If the caller mentions that language name "
+        "AGAIN in any following turn (they may not understand your confirm "
+        "question at all), stop confirming — call switch_language for it "
+        "IMMEDIATELY. Repeated 'hello hello' + a language name = they "
+        "cannot follow you; switch, do not keep asking.\n\n"
     )
 
     doctor_list = "\n".join(
