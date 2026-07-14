@@ -13,6 +13,41 @@ Format per session:
 
 ---
 
+## 2026-07-13/14 — WhatsApp MVP2 build (spec → T1-T10) + real-call fixes #361-370
+
+**Decisions (Vinay, brainstorm 2026-07-13):** clinic's own WhatsApp number
+from day 1 (Meta Coexistence — "perfect from day 1, no changing back and
+forth"); direct Meta Cloud API, no BSP (margin + PII chain); buttons + Gemini
+free text; all four outbound moments; **Clinic+Multi plans only**. Build
+paused mid-T2 on Vinay's word during the unanswered-calls incident (which was
+the TD-039 deploy deaf-window, not an outage), resumed same day.
+
+**WhatsApp commits:** 1e2dfd6 (T1 gate/config) · 794d590 (T2 ff29 schema:
+wa_phone_number_id + ratings) · f11bc16 (T3 wa_service) · 0483a71 (T4
+templates + MetaService bridge; agent meta_stub now delegates to backend) ·
+513a541 (T5-T7 webhook/buttons/chat) · fc6b707 (T8 jobs) · db6c2ef (T9 admin
+link + dashboard). Day-1 scope: WA reschedule/cancel buttons file a Dashboard
+PatientMessage + honest "clinic will call you" — NO new booking-write
+surface; T6b (self-serve slot pick) gated on extracting the agent's
+_do_reschedule into a shared service. Runbooks: META_WHATSAPP_SETUP.md
+(Vinay's Phase A/B) + META_TEMPLATES.md (4 templates × te/en). Everything
+no-ops without creds; ff29 deploy-gated (NOT on prod).
+
+**Real-call fixes (deployed, Fly v106):** #361 disallow_interruptions on
+booking writes + fillers; #362 switch-ack presynth; #363 per-language filler
+recache; #364 per-doctor calendar UI + doctor name in event summaries; #365
+whose-number ask (family bookings); #366 mobile Help link; #367 chat widget
+scroll; #368 one-sentence intros ALL languages; #369 conftest EMAIL fuse
+(the "mails shooting" bursts were our own suite via the live Resend key);
+#370 garbled cross-language switch ladder.
+
+**Parked:** "Vachanam for Doctors" (multi-hospital doctor secretary) —
+honest assessment delivered (hospital OPD slots are permission-walled; own
+clinic + elsewhere-schedule slice is the viable probe); build only if the
+requesting doctor returns.
+
+---
+
 ## 2026-07-12 — DECISION: no SSO/SAML for MVP (deferred until enterprise demand)
 
 Vinay asked whether SSO / SAML / multi-tenant SSO are needed. Assessment: **NO

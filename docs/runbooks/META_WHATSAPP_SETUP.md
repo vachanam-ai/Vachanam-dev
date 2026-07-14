@@ -90,8 +90,16 @@ the same number.
   tell Claude — fallback path is Embedded Signup (post-verification) and we
   schedule accordingly. Do not migrate a clinic off their app.
 
-**B4.** Copy the new number's **Phone number ID** → set it on the branch via
-the admin endpoint (Claude provides the exact call in the pilot runbook).
+**B4.** Copy the new number's **Phone number ID** → link it to the branch
+(super_admin JWT, from the Admin console origin):
+```
+PATCH https://vachanam-backend.onrender.com/admin/branches/{branch_id}/whatsapp
+Authorization: Bearer <super_admin JWT>
+{"wa_phone_number_id": "<numeric phone number id>"}
+```
+(409 = that id is already linked to another branch; null clears the link and
+turns WhatsApp off for the branch.) Also register the 4 templates first:
+see `docs/runbooks/META_TEMPLATES.md`.
 
 **B5.** Test on the clinic's phone: one booking-confirmation template + a
 free-text "hi" reply. Both sides working = clinic live.

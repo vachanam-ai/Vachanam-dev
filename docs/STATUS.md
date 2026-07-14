@@ -1,5 +1,27 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-14 — WHATSAPP MVP2 CODE-COMPLETE (spec 2026-07-13, T1-T10) + REAL-CALL FIXES #361-370.**
+> WhatsApp: clinic-number Coexistence, direct Meta Cloud API. Built: plan
+> gate (Clinic+Multi) · ff29 migration (wa_phone_number_id + ratings —
+> DEPLOY-GATED, not on prod) · wa_service sends · 4 template builders + real
+> MetaService bridge (agent stub delegates) · HMAC webhook w/ RULE 5 branch
+> resolution + Redis dedupe · buttons (rating FULL; reschedule/cancel day-1
+> = Dashboard PatientMessage + honest "clinic will call you" — self-serve
+> slot-pick = T6b after _do_reschedule extraction) · Gemini free-text chat
+> (RULE 7) · reminder ride-along + 19:00 IST rating batch + cascade leave
+> ping · admin PATCH link + Dashboard RatingsCard + Settings status.
+> EVERYTHING no-ops without creds — prod-safe from first deploy. GO-LIVE
+> GATES: Vinay's Meta setup (runbooks/META_WHATSAPP_SETUP.md; webhook A7
+> after next backend deploy) + templates (runbooks/META_TEMPLATES.md) +
+> ff29 applied to prod + branch link (B1-B5, max 2 numbers pre-verification).
+> Real-call fixes DEPLOYED (Fly v106): #361 booking writes survive barge-in,
+> #362/363 switch gap + per-language fillers, #364 per-doctor calendars
+> (Vinay: paste calendar IDs in Doctors page), #365 whose-number ask,
+> #368 short intros all languages, #370 garbled-switch ladder, #369 test
+> EMAIL fuse (mail bursts were our own suite via live Resend key), #366/367
+> mobile Help + chat scroll. TD-039 deploy deaf-window (~2 min) logged.
+> "Vachanam for Doctors" assessed + PARKED (build only if the doctor returns).
+
 > **2026-07-12 (evening) — MAIL-SPAM ROOT-CAUSED + CI GREEN PATH, MESSAGES-FOR-DOCTOR, TRANSFER ESCALATION, PAY BUTTON (FIXLOG #346-351).**
 > The "spam" was GitHub Actions: keepalive bash exit-code bug red EVERY 5 MIN
 > since Jul 3 (~2,600 runs) + secrets-scan conftest import + npm form-data HIGH
