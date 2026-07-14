@@ -26,7 +26,13 @@ jobs:
         run: pip-audit -r backend/requirements.txt
       - name: Audit voice-agent dependencies
         # The Fly agent ships its own pinned set — audit it too (was missed).
-        run: pip-audit -r agent/livekit_minimal/requirements.txt
+        # GHSA-xf7x-x43h-rpqh (json-repair <0.60.1): transitive via
+        # livekit-agents, which CAPS json-repair below the fixed version —
+        # the fix is uninstallable with our stack (checked 2026-07-14,
+        # livekit-agents 1.6.5 is latest). Exposure is bounded: json-repair
+        # parses LLM output, not caller-controlled bytes. Drop this ignore
+        # when livekit-agents relaxes the cap.
+        run: pip-audit -r agent/livekit_minimal/requirements.txt --ignore-vuln GHSA-xf7x-x43h-rpqh
 
   secrets-scan:
     runs-on: ubuntu-latest
