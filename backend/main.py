@@ -336,6 +336,7 @@ from backend.routers import payments as payments_router
 from backend.routers import queue as queue_router
 from backend.routers import support as support_router
 from backend.routers import treatment as treatment_router
+from backend.routers import whatsapp_webhook as whatsapp_webhook_router
 
 app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
 app.include_router(queue_router.router, prefix="/queue", tags=["queue"])
@@ -350,6 +351,8 @@ app.include_router(analytics_router.router, tags=["analytics"])
 app.include_router(treatment_router.router, prefix="/treatment", tags=["treatment"])
 app.include_router(patients_router.router, prefix="/patients", tags=["patients"])
 app.include_router(support_router.router, prefix="/support", tags=["support"])
+# WhatsApp webhook — public (Meta calls it); HMAC-verified inside (WA T5).
+app.include_router(whatsapp_webhook_router.router)
 
 # Landing page (Vachanam marketing mirror + Razorpay test target).
 # Static files served from backend/static/ — landing index.html at /,

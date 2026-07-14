@@ -102,6 +102,33 @@ async def notify_clinic_message(
     )
 
 
+async def notify_owner_low_rating(branch_id, score: int, last4: str) -> None:
+    """Owner alert on a 1-2 star WhatsApp rating (WA T6). RULE 9: score +
+    last-4 only — ratings carry no text at all by design. Own short session,
+    fully guarded by the caller."""
+    import backend.database as dbm
+    from sqlalchemy import select
+
+    from backend.models.schema import Branch, Organization
+
+    async with dbm.AsyncSessionLocal() as db:
+        row = (
+            await db.execute(
+                select(Organization.owner_email, Branch.name)
+                .join(Branch, Branch.org_id == Organization.id)
+                .where(Branch.id == branch_id)
+            )
+        ).first()
+    if not row or not row[0]:
+        return
+    await _send(
+        row[0],
+        f"Low rating: {score}/5 after a visit at {row[1]}",
+        f"A patient (…{last4}) rated their visit {score}/5 on WhatsApp.\n\n"
+        "A quick call from the clinic often turns this around.\n\n— Vachanam",
+    )
+
+
 async def notify_resolved(to_email: str, subject: str) -> None:
     """To the CLINIC when their ticket is resolved. Sent from support@."""
     await _send(
