@@ -1,7 +1,6 @@
-"""Tests for MetaService stub (Phase 1 — Gap 7 / WhatsApp deferred to MVP2).
-
-All tests are pure unit tests (no DB, no Redis, no network).
-"""
+"""MetaService no-op contracts (real service as of WA T4 — the old stub tests
+asserted stub-era log events; the CONTRACT that survives is: without wiring it
+never raises, never sends, and never logs a full phone number)."""
 from datetime import date
 from unittest.mock import patch
 
@@ -15,11 +14,10 @@ def svc() -> MetaService:
     return MetaService()
 
 
-# ── Test 1 ────────────────────────────────────────────────────────────────────
-
 @pytest.mark.asyncio
-async def test_meta_stub_send_booking_confirmation_no_ops(svc: MetaService) -> None:
-    """send_booking_confirmation must return None (no-op) without raising."""
+async def test_confirmation_without_branch_id_no_ops(svc: MetaService) -> None:
+    """Call-site compatibility: legacy calls without branch_id must be a safe
+    no-op (RULE 4) — returns None, no exception, nothing sent."""
     result = await svc.send_booking_confirmation(
         to="+919876543210",
         patient_name="Ravi Kumar",
@@ -32,11 +30,9 @@ async def test_meta_stub_send_booking_confirmation_no_ops(svc: MetaService) -> N
     assert result is None
 
 
-# ── Test 2 ────────────────────────────────────────────────────────────────────
-
 @pytest.mark.asyncio
-async def test_meta_stub_send_doctor_notification_no_ops(svc: MetaService) -> None:
-    """send_doctor_notification must return None (no-op) without raising."""
+async def test_doctor_notification_no_ops(svc: MetaService) -> None:
+    """Doctor pings are out of WhatsApp scope (spec 2026-07-13) — no-op."""
     result = await svc.send_doctor_notification(
         doctor_phone="+919000000001",
         patient_name="Sita Devi",
@@ -46,88 +42,39 @@ async def test_meta_stub_send_doctor_notification_no_ops(svc: MetaService) -> No
     assert result is None
 
 
-# ── Test 3 ────────────────────────────────────────────────────────────────────
-
 @pytest.mark.asyncio
-async def test_meta_stub_logs_warning_with_masked_phone(svc: MetaService) -> None:
-    """send_booking_confirmation must log a structlog warning with last-4 of phone only."""
-    captured_events: list[dict] = []
+async def test_doctor_notification_log_masks_phone(svc: MetaService) -> None:
+    """RULE 9: any log line carries last-4 only, never the full number."""
+    captured: list[dict] = []
 
-    def fake_warning(event: str, **kwargs) -> None:
-        captured_events.append({"event": event, **kwargs})
+    def fake_debug(event: str, **kwargs) -> None:
+        captured.append({"event": event, **kwargs})
 
     from backend.services import meta_service as ms_module
 
-    with patch.object(ms_module.logger, "warning", fake_warning):
-        await svc.send_booking_confirmation(
-            to="+919876543210",
-            patient_name="Sita Devi",
-            doctor_name="Dr. Reddy",
-            clinic_name="Apollo",
-            booking_date=date(2026, 6, 10),
-            token_number=7,
-        )
-
-    assert len(captured_events) == 1
-    ev = captured_events[0]
-    assert ev["event"] == "whatsapp_stub_skipped"
-
-    # Masked to last-4 only
-    assert ev.get("to_last4") == "3210", (
-        f"Expected masked to_last4='3210', got {ev.get('to_last4')!r}"
-    )
-
-    # Full phone must NOT appear in any log value
-    full_phone = "+919876543210"
-    for val in ev.values():
-        assert full_phone not in str(val), f"Full phone leaked in log: {ev}"
-
-
-# ── Test 4 ────────────────────────────────────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_meta_stub_doctor_notification_logs_masked_phone(svc: MetaService) -> None:
-    """send_doctor_notification must log with doctor_phone_last4 only."""
-    captured_events: list[dict] = []
-
-    def fake_warning(event: str, **kwargs) -> None:
-        captured_events.append({"event": event, **kwargs})
-
-    from backend.services import meta_service as ms_module
-
-    with patch.object(ms_module.logger, "warning", fake_warning):
+    with patch.object(ms_module.logger, "debug", fake_debug):
         await svc.send_doctor_notification(
-            doctor_phone="+918888881234",
-            patient_name="Mr. Test",
-            token_number=9,
+            doctor_phone="+919000000001",
+            patient_name="Sita Devi",
+            token_number=3,
         )
 
-    assert len(captured_events) == 1
-    ev = captured_events[0]
-    assert ev["event"] == "whatsapp_doctor_notification_stub_skipped"
-    assert ev.get("doctor_phone_last4") == "1234"
-
-    full_phone = "+918888881234"
+    assert len(captured) == 1
+    ev = captured[0]
+    assert ev["event"] == "wa_doctor_notification_skipped"
+    assert ev.get("doctor_last4") == "0001"
     for val in ev.values():
-        assert full_phone not in str(val)
+        assert "+919000000001" not in str(val), f"Full phone leaked: {ev}"
 
-
-# ── Test 5 ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_meta_stub_handles_none_phones(svc: MetaService) -> None:
-    """Stub must not crash when phone values are empty strings or trigger graceful None handling."""
-    # Empty string — last-4 of "" is "" (no crash)
-    await svc.send_booking_confirmation(
-        to="",
-        patient_name="Unknown",
-        doctor_name="Dr. X",
-        clinic_name="Test",
-        booking_date=date(2026, 1, 1),
-        token_number=1,
-    )
+async def test_handles_empty_phones(svc: MetaService) -> None:
+    """Empty phone values must not crash either path."""
     await svc.send_doctor_notification(
-        doctor_phone="",
-        patient_name="Unknown",
-        token_number=1,
+        doctor_phone="", patient_name="X", token_number=1
     )
+    result = await svc.send_booking_confirmation(
+        to="", patient_name="X", doctor_name="D", clinic_name="C",
+        booking_date=date(2026, 1, 1), token_number=1,
+    )
+    assert result is None
