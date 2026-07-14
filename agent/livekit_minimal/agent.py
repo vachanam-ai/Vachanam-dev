@@ -2935,19 +2935,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     _td = _spoken_target_date(inbound_followup.get("target_date", ""), lang_code)
                     caller_prompt_extra += (
                         "\n\nPENDING FOLLOW-UP: your opening already asked the doctor's "
-                        "question. IF the patient's answer is fine/normal, tell them the "
-                        f"doctor wants them back around {_td} for a follow-up with "
-                        f"{inbound_followup['doctor_name']} and OFFER TO BOOK it — book "
-                        f"with {inbound_followup['doctor_name']}, never ask which doctor. "
-                        "On agreement, FIRST ask what time of day suits them — NEVER "
-                        "pick a time yourself; the patient chooses, you check it with "
-                        "check_availability. The patient is already in our records — do "
-                        "NOT ask their name or age; book on their existing record. "
+                        "question. After their answer, ALWAYS mention the doctor's "
+                        f"requested date ONCE (Vinay 2026-07-14 — the date must never "
+                        f"go unsaid): the doctor wants them back around {_td} for a "
+                        f"follow-up with {inbound_followup['doctor_name']}.\n"
+                        "IF their answer is fine/normal: OFFER TO BOOK that visit — "
+                        f"book with {inbound_followup['doctor_name']}, never ask which "
+                        "doctor. On agreement, FIRST ask what time of day suits them — "
+                        "NEVER pick a time yourself; the patient chooses, you check it "
+                        "with check_availability. The patient is already in our records "
+                        "— do NOT ask their name or age; book on their existing record. "
                         "IF instead they report a problem/pain: say you will inform the "
-                        "doctor and they will get back soon, and do NOT push the booking "
-                        "— book only if the patient explicitly asks. Speak the date "
-                        "using the words BEFORE the parenthesis; the parenthesis is the "
-                        "ISO for tools only."
+                        "doctor AND still mention the requested date in the same breath "
+                        "('doctor wanted to see you around {date} anyway'), then ask if "
+                        "they want it booked now or after the doctor's reply — book "
+                        "only on a yes. Speak the date using the words BEFORE the "
+                        "parenthesis; the parenthesis is the ISO for tools only."
                     )
                     try:
                         state.followup_task_id = UUID(inbound_followup["task_id"])
@@ -3484,22 +3487,45 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             _t = (getattr(_it, "text_content", None) or "").strip()
                             if _t:
                                 _replies.append(_t)
-                        _summary = (" | ".join(_replies))[:500] or "(no reply captured)"
+                        # GIST, not transcript (Vinay 2026-07-14): the doctor
+                        # reads what the patient REPORTS, not raw STT rambling.
+                        from backend.services.reply_summary import (
+                            summarize_patient_reply,
+                        )
+
+                        _summary = await summarize_patient_reply(_replies)
                         import backend.database as _dbm2
-                        from sqlalchemy import update as _sa_upd
 
                         from backend.models.schema import FollowupTask as _FT2
 
                         async with _dbm2.AsyncSessionLocal() as _fdb:
-                            await _fdb.execute(
-                                _sa_upd(_FT2)
-                                .where(
-                                    _FT2.id == UUID(_task_id),
-                                    _FT2.branch_id == state.branch_id,
+                            _task = (
+                                await _fdb.execute(
+                                    select(_FT2).where(
+                                        _FT2.id == UUID(_task_id),
+                                        _FT2.branch_id == state.branch_id,
+                                    )
                                 )
-                                .values(response_summary=_summary, status="completed")
-                            )
-                            await _fdb.commit()
+                            ).scalar_one_or_none()
+                            if _task is not None:
+                                _task.response_summary = _summary
+                                # COMPLETION SEMANTICS (Vinay 2026-07-14: the
+                                # scheduled booking call never fired): an
+                                # INBOUND delivery of a next_visit_book task
+                                # completes it ONLY when the next visit was
+                                # actually BOOKED this call — otherwise the
+                                # task stays pending and the outbound call
+                                # still fires on its scheduled date. Outbound
+                                # dispatches (meta task_id) and doctor_advice
+                                # deliveries complete as before.
+                                _inbound = not meta.get("task_id")
+                                if (
+                                    not _inbound
+                                    or _task.task_type != "next_visit_book"
+                                    or state.token_confirmed
+                                ):
+                                    _task.status = "completed"
+                                await _fdb.commit()
                     except Exception as _fe:  # noqa: BLE001
                         logger.warning("followup_response_writeback_failed: %s", _fe)
             finally:

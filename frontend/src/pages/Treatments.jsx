@@ -256,8 +256,10 @@ export default function Treatments() {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Couldn't send the reply")
   });
 
+  const hasPatientReply = followups.some((f) => Boolean(f.response && f.response.trim()));
   const canReply =
-    Boolean(patientId) && Boolean(doctorId) && Boolean(replyMessage.trim()) && !reply.isPending;
+    Boolean(patientId) && Boolean(doctorId) && Boolean(replyMessage.trim()) &&
+    hasPatientReply && !reply.isPending;
 
   // One-time visitors don't need a treatment thread; completed treatments can
   // be closed out. Never erases patient data — that lives on the Patients page.
@@ -532,7 +534,10 @@ export default function Treatments() {
                 rows={2}
                 value={replyMessage}
                 onChange={(e) => setReplyMessage(e.target.value)}
-                placeholder="Advice to relay on the next call…"
+                disabled={!hasPatientReply}
+                placeholder={hasPatientReply
+                  ? "Advice to relay on the next call…"
+                  : "Unlocks after the patient's first reply — until then, put your message in the visit note's follow-up question below."}
               />
               <button type="submit" disabled={!canReply} className="btn-primary w-full py-3">
                 {reply.isPending ? "Sending…" : "Send reply"}
@@ -570,9 +575,10 @@ export default function Treatments() {
                 <input
                   id="visit-date"
                   type="date"
-                  className="field"
+                  className="field w-full"
                   value={visitDate}
-                  onChange={(e) => setVisitDate(e.target.value)}
+                  readOnly
+                  disabled
                   required
                 />
               </div>
@@ -642,7 +648,7 @@ export default function Treatments() {
               <input
                 id="next-date"
                 type="date"
-                className="field"
+                className="field w-full"
                 value={nextReportingDate}
                 onChange={(e) => setNextReportingDate(e.target.value)}
                 disabled={isFinal}
