@@ -162,11 +162,43 @@ async def run_pre_appt_reminders() -> None:
                 if ok:
                     token.reminder_sent = True
                     await db.commit()
+                    # WA T8: WhatsApp reminder rides ALONGSIDE the voice call
+                    # (spec 2026-07-13 — not replacing it yet). Independent
+                    # guard: a WhatsApp hiccup never touches the voice path
+                    # (RULE 4/8); no-ops unless branch linked + plan gated.
+                    try:
+                        await _send_wa_reminder(db, branch, token, doctor, patient)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("wa_reminder_failed", error=str(e)[:150])
 
         # #299: park until the next reminder is genuinely due, so every tick
         # before then is a Redis read and Postgres can suspend. Capped by
         # wake_gate.SAFETY_SECONDS, so a stale value self-heals within the hour.
         await wake_gate.set_next_at("reminders", await _next_due_epoch(db, branches))
+
+
+async def _send_wa_reminder(db, branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> None:
+    """WhatsApp appt_reminder template next to the voice reminder (WA T8)."""
+    from sqlalchemy import select as _select
+
+    from backend.models.schema import Organization
+    from backend.services import wa_service, wa_templates
+
+    plan = (
+        await db.execute(
+            _select(Organization.plan).where(Organization.id == branch.org_id)
+        )
+    ).scalar_one_or_none()
+    if not wa_service.wa_enabled(branch, plan):
+        return
+    template, lang, params, buttons = wa_templates.appt_reminder(
+        doctor=doctor.name,
+        appointment_time=token.appointment_time,
+        token_number=token.token_number,
+        token_id=str(token.id),
+        lang=wa_templates.template_lang(patient.preferred_language),
+    )
+    await wa_service.send_template(branch, patient.phone, template, lang, params, buttons)
 
 
 async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> bool:

@@ -130,6 +130,18 @@ async def lifespan(app: FastAPI):
             run_next_visit_followups, IntervalTrigger(minutes=5),
             id="next_visit_followups", replace_existing=True,
         )
+        # WA T8: evening rating asks (19:00 IST, cron). Cheap when idle: the
+        # branch query filters on wa_phone_number_id IS NOT NULL — zero linked
+        # branches = one indexed read a day.
+        from apscheduler.triggers.cron import CronTrigger
+
+        from backend.jobs.wa_rating_ask import run_wa_rating_ask
+
+        scheduler.add_job(
+            run_wa_rating_ask,
+            CronTrigger(hour=19, minute=0, timezone="Asia/Kolkata"),
+            id="wa_rating_ask", replace_existing=True,
+        )
         # SELF KEEP-ALIVE: ping our own PUBLIC url so Render's idle detector
         # sees traffic and never sleeps the instance (its in-process scheduler
         # dies with it — missed reminders/follow-ups). Render sets

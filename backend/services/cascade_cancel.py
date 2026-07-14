@@ -174,6 +174,14 @@ async def cascade_for_unavailability(
 
     await db.commit()
 
+    # WA T8: leave-rebook WhatsApp ping ALONGSIDE the rebook call (spec
+    # 2026-07-13). Fully guarded — a WhatsApp failure never touches the
+    # cascade (RULE 4/8); no-ops unless the branch is linked + plan gated.
+    try:
+        await _send_wa_leave_pings(db, branch_id, token_snapshots)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("wa_leave_ping_failed", error=str(e)[:150])
+
     if followups_scheduled_count:
         # #299: the cascade job is parked in Redis until its cached next-due
         # time. Drop it so these fresh rebook calls go out on the next tick.
@@ -276,3 +284,48 @@ async def cascade_for_unavailability(
         "cancelled_tokens": cancelled_count,
         "followups_scheduled": followups_scheduled_count,
     }
+
+
+async def _send_wa_leave_pings(
+    db: AsyncSession, branch_id: uuid.UUID, token_snapshots: list[dict]
+) -> None:
+    """WA T8: one leave_rebook template per cascade-cancelled token, alongside
+    the rebook call. Caller wraps in try/except (RULE 4); wa_enabled gates
+    creds/link/plan, so this is a no-op until WhatsApp is live for the branch."""
+    if not token_snapshots:
+        return
+    from backend.models.schema import Branch, Doctor, Organization, Patient
+    from backend.services import wa_service, wa_templates
+
+    row = (
+        await db.execute(
+            select(Branch, Organization.plan)
+            .join(Organization, Organization.id == Branch.org_id)
+            .where(Branch.id == branch_id)
+        )
+    ).first()
+    if row is None:
+        return
+    branch, plan = row
+    if not wa_service.wa_enabled(branch, plan):
+        return
+    doctor = (
+        await db.execute(
+            select(Doctor).where(Doctor.id == token_snapshots[0]["doctor_id"])
+        )
+    ).scalar_one_or_none()
+    for snap in token_snapshots:
+        patient = (
+            await db.execute(select(Patient).where(Patient.id == snap["patient_id"]))
+        ).scalar_one_or_none()
+        if patient is None or not patient.phone:
+            continue
+        template, lang, params, buttons = wa_templates.leave_rebook(
+            doctor=doctor.name if doctor else "the doctor",
+            on_date=snap["date"],
+            token_id=str(snap["id"]),
+            lang=wa_templates.template_lang(patient.preferred_language),
+        )
+        await wa_service.send_template(
+            branch, patient.phone, template, lang, params, buttons
+        )
