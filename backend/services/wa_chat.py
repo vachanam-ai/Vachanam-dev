@@ -68,6 +68,10 @@ async def _upcoming_token_id(db: AsyncSession, branch: Branch, sender: str) -> s
     last10 = wa_actions._last10(sender)
     if len(last10) < 10:
         return None
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo(branch.timezone or "Asia/Kolkata")).date()
     token = (
         await db.execute(
             select(Token)
@@ -75,6 +79,7 @@ async def _upcoming_token_id(db: AsyncSession, branch: Branch, sender: str) -> s
             .where(
                 Token.branch_id == branch.id,  # RULE 1
                 Token.status == "confirmed",
+                Token.date >= today,  # audit #7: never a stale past booking
                 Patient.phone.like(f"%{last10}"),
             )
             .order_by(Token.date)
