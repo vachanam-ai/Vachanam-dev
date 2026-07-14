@@ -2096,7 +2096,9 @@ class VachanamAgent(Agent):
         self._state.token_number = confirmed.get("token_number") or assigned["token_number"]
 
         # New booking exists — NOW it is safe to drop the old one.
-        cancelled = await self._do_cancel(str(old_token.id))
+        # "rescheduled" (Vinay 2026-07-14): analytics must NOT count a moved
+        # booking as a cancellation — the patient still comes, on a new row.
+        cancelled = await self._do_cancel(str(old_token.id), reason="rescheduled")
         # Live call 2026-07-03 16:55Z: a reschedule that SUCCEEDED (DB showed the
         # moved booking) was announced as "unable to reschedule" — the model
         # misread the result. Log it (evidence for next time) and make success
@@ -2178,7 +2180,7 @@ class VachanamAgent(Agent):
         except Exception as e:
             logger.warning("reschedule_hold_release_failed: %s", e)
 
-    async def _do_cancel(self, token_id: str) -> dict:
+    async def _do_cancel(self, token_id: str, reason: str = "patient_cancelled_or_rescheduled_on_call") -> dict:
         """Shared cancel core (no guards) — used by cancel_booking and
         reschedule_booking after their preconditions hold."""
         from sqlalchemy import and_ as _and
@@ -2259,7 +2261,7 @@ class VachanamAgent(Agent):
         # patient ever getting a rebook call (rebook context filters on
         # cancelled_by_clinic only).
         token.status = "cancelled_by_patient"
-        token.cancellation_reason = "patient_cancelled_or_rescheduled_on_call"
+        token.cancellation_reason = reason
         await self._db.commit()
 
         # Release capacity — SLOT doctors only. Token counters must NEVER be

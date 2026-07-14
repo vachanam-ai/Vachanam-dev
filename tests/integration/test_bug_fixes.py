@@ -945,3 +945,29 @@ async def test_echo_guard_keeps_real_patient_turn(clinic, db):
     ) is None
     # short confirmation is below the length floor → never dropped
     assert await agent.on_user_turn_completed(ctx, _EchoMsg("user", "సరే అండి")) is None
+
+
+# ── #375: rescheduled ≠ cancelled in analytics (Vinay 2026-07-14) ────────────
+
+
+def test_reschedule_sets_rescheduled_reason():
+    """The atomic reschedule stamps the OLD token cancellation_reason=
+    'rescheduled' so analytics can exclude it from the Cancelled series."""
+    import inspect
+
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    src = inspect.getsource(VachanamAgent._do_reschedule)
+    assert 'reason="rescheduled"' in src
+    src_cancel = inspect.getsource(VachanamAgent._do_cancel)
+    assert "cancellation_reason = reason" in src_cancel
+
+
+def test_analytics_excludes_rescheduled():
+    import inspect
+
+    from backend.routers import analytics
+
+    src = inspect.getsource(analytics)
+    assert 'reason == "rescheduled"' in src
+    assert "moved, not lost" in src

@@ -233,10 +233,13 @@ async def analytics_overview(
     today = await _branch_today(branch_uuid, db)
     start = today - timedelta(days=days - 1)
 
-    # One grouped query for the whole period: date x status counts.
+    # One grouped query for the whole period: date x status counts. A token
+    # cancelled because the booking was RESCHEDULED is not a cancellation —
+    # the patient still comes, on the replacement row (Vinay 2026-07-14: the
+    # chart showed every reschedule as "Cancelled").
     rows = (
         await db.execute(
-            select(Token.date, Token.status, func.count())
+            select(Token.date, Token.status, Token.cancellation_reason, func.count())
             .where(
                 and_(
                     Token.branch_id == branch_uuid,  # Rule 1
@@ -244,13 +247,15 @@ async def analytics_overview(
                     Token.date <= today,
                 )
             )
-            .group_by(Token.date, Token.status)
+            .group_by(Token.date, Token.status, Token.cancellation_reason)
         )
     ).all()
 
     by_day: dict[date, dict[str, int]] = {}
-    for d, status, n in rows:
-        by_day.setdefault(d, {})[status] = n
+    for d, status, reason, n in rows:
+        if status in ("cancelled_by_patient", "cancelled_by_clinic") and reason == "rescheduled":
+            continue  # moved, not lost
+        by_day.setdefault(d, {})[status] = by_day.setdefault(d, {}).get(status, 0) + n
 
     daily: list[DayPoint] = []
     for i in range(days):
