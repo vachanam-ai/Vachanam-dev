@@ -37,6 +37,9 @@ async def run_wa_rating_ask() -> None:
             if not wa_service.wa_enabled(branch, plan):
                 continue
             today = await _branch_today(branch)
+            from datetime import timedelta as _td
+
+            window_start = today - _td(days=2)  # audit #11: late attendance marking
             rows = (
                 await db.execute(
                     select(Token, Patient)
@@ -45,7 +48,8 @@ async def run_wa_rating_ask() -> None:
                     .where(
                         and_(
                             Token.branch_id == branch.id,  # RULE 1
-                            Token.date == today,
+                            Token.date >= window_start,
+                            Token.date <= today,
                             Token.status == "attended",
                             Rating.id.is_(None),
                         )

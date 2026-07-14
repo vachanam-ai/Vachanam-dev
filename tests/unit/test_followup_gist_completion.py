@@ -42,3 +42,45 @@ def test_gist_empty_reply():
 
     out = asyncio.run(summarize_patient_reply(["", "  "]))
     assert out == "(no reply captured)"
+
+
+# ── Audit gap-closes 2026-07-14 (#5 #6 #9 #18 #23) ───────────────────────────
+
+
+def test_inbound_recovery_covers_doctor_advice():
+    import agent.livekit_minimal.agent as agent_mod
+
+    src = inspect.getsource(agent_mod._inbound_pending_followup)
+    assert '"doctor_advice"' in src and '"next_visit_book"' in src
+
+
+def test_decline_tool_exists_and_completes_task():
+    from agent.livekit_minimal.agent import VachanamAgent
+    import agent.livekit_minimal.agent as agent_mod
+
+    src = inspect.getsource(VachanamAgent.followup_visit_declined)
+    assert "followup_declined" in src
+    tear = inspect.getsource(agent_mod)
+    assert "_declined" in tear and "Patient DECLINED the next visit" in tear
+
+
+def test_completion_is_doctor_scoped():
+    import agent.livekit_minimal.agent as agent_mod
+
+    src = inspect.getsource(agent_mod)
+    assert "confirmed_doctor_ids" in src
+    assert "_booked_this_doctor" in src
+
+
+def test_gist_prompt_frames_untrusted_input():
+    from backend.services.reply_summary import _PROMPT
+
+    assert "UNTRUSTED SPOKEN DATA" in _PROMPT
+    assert "[BEGIN PATIENT TURNS]" in _PROMPT
+
+
+def test_caller_context_mentions_attempted_reminder():
+    import agent.livekit_minimal.agent as agent_mod
+
+    src = inspect.getsource(agent_mod._build_caller_context)
+    assert "reminder_sent" in src and "that was us" in src

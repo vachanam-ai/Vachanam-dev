@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
@@ -20,6 +20,15 @@ class SessionState:
     # Token / slot tracking
     token_held: bool = False
     token_confirmed: bool = False
+    # Audit #9: which doctors got a CONFIRMED booking this call — the
+    # follow-up teardown completes a next_visit_book task only when ITS
+    # doctor is in here (a sibling's unrelated booking must not complete it).
+    confirmed_doctor_ids: list = field(default_factory=list)
+    # Audit #6: patient explicitly declined the follow-up visit → task
+    # completes with a decline note instead of re-calling them.
+    followup_declined: bool = False
+    followup_decline_note: str = ""
+
     token_redis_key: str | None = None
     token_number: int | None = None
     appointment_time: str | None = None  # "HH:MM" for appointment-type

@@ -264,6 +264,17 @@ def _build_caller_context(rows, today) -> tuple[str | None, str]:
             f"date={t.date.isoformat()} | {ref} | type={d.booking_type}"
         )
     bookings_block = "\n".join(lines)
+    # Audit #23: if we already tried a reminder call for a TODAY booking, say
+    # so knowingly instead of acting like the call never happened.
+    if any(
+        t.date == today and getattr(t, "reminder_sent", False)
+        for (t, _, _) in confirmed
+    ):
+        bookings_block += (
+            "\n  (We already placed a reminder call for today's booking — if "
+            "they mention a missed call, that was us; confirm they're coming "
+            "or reschedule.)"
+        )
     who = (
         f" by name ({greeting_name})."
         if greeting_name
@@ -692,10 +703,11 @@ async def _localize_message(message: str, lang_code: str) -> str:
 
 
 async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
-    """For an INBOUND caller, find a pending next_visit_book follow-up so the agent
-    can deliver the doctor's question + offer the scheduled visit when the patient
-    missed the outbound call and rang back. Branch-scoped (RULE 1). Best-effort —
-    returns None on anything missing/failed."""
+    """For an INBOUND caller, find a pending follow-up (next_visit_book OR
+    doctor_advice — audit #5: missed doctor's-message calls previously had no
+    inbound recovery) so the agent delivers the doctor's question/message when
+    the patient missed the outbound call and rang back. next_visit_book wins
+    when both exist (it carries the booking). Branch-scoped (RULE 1)."""
     try:
         from sqlalchemy import select as _sel
 
@@ -716,9 +728,13 @@ async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
             _sel(_FT).join(_P, _FT.patient_id == _P.id).where(
                 _FT.branch_id == branch_id,
                 _P.phone.like(f"%{digits}"),
-                _FT.task_type == "next_visit_book",
+                _FT.task_type.in_(("next_visit_book", "doctor_advice")),
                 _FT.status == "pending",
-            ).order_by(_FT.scheduled_date.asc())
+            ).order_by(
+                # next_visit_book first (it carries the booking), then oldest
+                (_FT.task_type != "next_visit_book").asc(),
+                _FT.scheduled_date.asc(),
+            )
         )).scalars().first()
         if task is None:
             return None
@@ -736,6 +752,7 @@ async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
             "doctor_name": doc.name if doc else "the doctor",
             "message": task.what_to_ask or "",
             "target_date": target_iso,
+            "task_type": task.task_type,
         }
     except Exception as e:  # noqa: BLE001 — never block answering
         logger.warning("inbound_followup_lookup_failed: %s", e)
@@ -1545,6 +1562,10 @@ class VachanamAgent(Agent):
             return {"success": False, "error": "booking_failed"}
         if result.get("success"):
             self._state.token_confirmed = True
+            try:  # audit #9: doctor-scoped completion for follow-up teardown
+                self._state.confirmed_doctor_ids.append(str(doctor_id))
+            except Exception:  # noqa: BLE001
+                pass
             self._state.patient_name = patient_name
             # The caller now HAS a booking this call — any further "change it"
             # is a reschedule, not a new booking. Suppress the #279 upfront
@@ -1772,6 +1793,24 @@ class VachanamAgent(Agent):
                 logger.warning("urgent_message_alert_failed: %s", e)
         return {"logged": True, "next": "Tell the caller their message is with "
                 "the clinic and they will get a call back."}
+
+    @function_tool()
+    async def followup_visit_declined(self, context: RunContext, reason: str = "") -> dict:
+        """Call ONLY on a follow-up call/thread when the patient CLEARLY says
+        they will NOT come for the doctor's suggested next visit ("రాను",
+        "not coming", "don't want another visit"). Marks the follow-up
+        handled so we do NOT call them again about it (audit #6). A "maybe" /
+        "later" is NOT a decline — leave it and the team follows up.
+
+        Args:
+            reason: their words for the doctor, short
+        """
+        self._state.followup_declined = True
+        note = (reason or "").strip()[:200]
+        if note:
+            self._state.followup_decline_note = note
+        logger.info("followup_declined branch_id=%s", str(self._state.branch_id))
+        return {"noted": True, "next": "Acknowledge warmly; the doctor will see it."}
 
     @function_tool()
     async def switch_language(self, context: RunContext, language: str) -> object:
@@ -2093,6 +2132,10 @@ class VachanamAgent(Agent):
             self._clear_hold()
             return {"success": False, "step": "confirm", **confirmed}
         self._state.token_confirmed = True
+        try:  # audit #9: doctor-scoped completion for follow-up teardown
+            self._state.confirmed_doctor_ids.append(str(old_token.doctor_id))
+        except Exception:  # noqa: BLE001
+            pass
         self._state.token_number = confirmed.get("token_number") or assigned["token_number"]
 
         # New booking exists — NOW it is safe to drop the old one.
@@ -2951,7 +2994,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         "doctor AND still mention the requested date in the same breath "
                         "('doctor wanted to see you around {date} anyway'), then ask if "
                         "they want it booked now or after the doctor's reply — book "
-                        "only on a yes. Speak the date using the words BEFORE the "
+                        "only on a yes. IF they CLEARLY refuse the visit ('రాను', "
+                        "'not coming'): call followup_visit_declined with their "
+                        "words — never argue; a vague 'later' is NOT a decline. "
+                        "Speak the date using the words BEFORE the "
                         "parenthesis; the parenthesis is the ISO for tools only."
                     )
                     try:
@@ -3521,10 +3567,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 # dispatches (meta task_id) and doctor_advice
                                 # deliveries complete as before.
                                 _inbound = not meta.get("task_id")
+                                _booked_this_doctor = (
+                                    str(_task.doctor_id)
+                                    in (getattr(state, "confirmed_doctor_ids", None) or [])
+                                )
+                                _declined = bool(getattr(state, "followup_declined", False))
+                                if _declined:
+                                    _note = getattr(state, "followup_decline_note", "")
+                                    _task.response_summary = (
+                                        "Patient DECLINED the next visit"
+                                        + (f": {_note}" if _note else ".")
+                                        + " — " + _summary
+                                    )[:500]
                                 if (
                                     not _inbound
                                     or _task.task_type != "next_visit_book"
-                                    or state.token_confirmed
+                                    or _booked_this_doctor  # audit #9: THIS doctor's booking
+                                    or _declined            # audit #6: clear no = done
                                 ):
                                     _task.status = "completed"
                                 await _fdb.commit()

@@ -106,14 +106,22 @@ async def handle_rating(
         await db.execute(select(Rating).where(Rating.token_id == token.id))
     ).scalar_one_or_none()
     if existing is None:
-        db.add(Rating(
-            branch_id=branch.id, token_id=token.id,
-            patient_id=token.patient_id, score=score,
-        ))
-        await db.commit()
-        logger.info("wa_rating_stored", branch_id=str(branch.id), score=score)
-        if score <= 2:
-            await _notify_low_score(branch, sender, score)
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            db.add(Rating(
+                branch_id=branch.id, token_id=token.id,
+                patient_id=token.patient_id, score=score,
+            ))
+            await db.commit()
+        except IntegrityError:
+            # Audit #10: concurrent double-tap — unique(token_id) won the
+            # race for the other insert. Idempotent thank-you, no error path.
+            await db.rollback()
+        else:
+            logger.info("wa_rating_stored", branch_id=str(branch.id), score=score)
+            if score <= 2:
+                await _notify_low_score(branch, sender, score)
     await wa_service.send_text(
         branch, sender, "Thank you for your feedback! 🙏"
     )
