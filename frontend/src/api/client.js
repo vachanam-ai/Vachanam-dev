@@ -95,6 +95,10 @@ export const fetchMessages = (branchId) =>
 export const resolveMessage = (branchId, messageId) =>
   api.patch(`/branches/${branchId}/messages/${messageId}`).then((r) => r.data);
 
+// ── WhatsApp post-visit ratings (WA T9) ──
+export const fetchRatingsSummary = (branchId) =>
+  api.get(`/branches/${branchId}/ratings/summary`).then((r) => r.data);
+
 // ── Queue (receptionist) ──
 export const fetchTodayQueue = (branchId) =>
   api.get(`/queue/${branchId}/today`).then((r) => r.data);

@@ -90,6 +90,7 @@ class BranchSettings(BaseModel):
     staff_count: int = 0
     did_wired: bool | None = None  # set on PATCH when DID trunk sync runs
     voice_cloning_allowed: bool = True  # plan-gated UI hint: Clinic/Multi only (2026-07-11)
+    whatsapp_linked: bool = False  # WA T9: read-only status (linking is concierge)
 
 
 # Voice cloning is included on EVERY plan (Vinay 2026-06-20) — no plan gate.
@@ -136,6 +137,7 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         staff_count=staff_count,
         did_wired=did_wired,
         voice_cloning_allowed=plan in PREMIUM_VOICE_PLANS,
+        whatsapp_linked=bool(getattr(branch, "wa_phone_number_id", None)),
     )
 
 
@@ -415,6 +417,36 @@ async def list_messages(
             for m, name in rows
         ],
         "pending": sum(1 for m, _ in rows if m.status == "pending"),
+    }
+
+
+@router.get("/{branch_id}/ratings/summary")
+async def ratings_summary(
+    branch_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """WhatsApp post-visit ratings rollup for the Dashboard (WA T9).
+    RULE 1: branch-scoped; scores only — ratings never carry text."""
+    await assert_branch_access(current_user, branch_id, db)
+    from sqlalchemy import func as safunc
+
+    from backend.models.schema import Rating
+
+    row = (
+        await db.execute(
+            select(
+                safunc.avg(Rating.score),
+                safunc.count(Rating.id),
+                safunc.count(Rating.id).filter(Rating.score <= 2),
+            ).where(Rating.branch_id == uuid.UUID(branch_id))
+        )
+    ).one()
+    avg, count, low = row
+    return {
+        "avg": round(float(avg), 2) if avg is not None else None,
+        "count": int(count or 0),
+        "low_count": int(low or 0),
     }
 
 

@@ -593,6 +593,27 @@ export default function Settings() {
         </InfoBox>
       </Section>
 
+      {/* WhatsApp (WA T9) — read-only status; linking is done with our team */}
+      <Section id="whatsapp" title="WhatsApp"
+        sub="Booking confirmations, reminders and post-visit rating asks on your clinic's own WhatsApp number.">
+        {data?.whatsapp_linked ? (
+          <p className="font-ui text-sm">
+            <span className="chip bg-teal-mint text-teal">Linked</span>{" "}
+            Your WhatsApp number is connected — patients get confirmations and
+            can reply here.
+          </p>
+        ) : (
+          <p className="font-ui text-sm text-slate">
+            Not linked yet. We connect your clinic's WhatsApp number together
+            with you (about 15 minutes, you keep using your WhatsApp app) —{" "}
+            <a className="text-teal underline underline-offset-2"
+              href={`mailto:hello@vachanam.in?subject=WhatsApp%20setup%20—%20${encodeURIComponent(data?.name ?? "clinic")}`}>
+              request setup
+            </a>.
+          </p>
+        )}
+      </Section>
+
       {/* 5 — Language */}
       <Section id="language" title="Agent language"
         sub="The language the AI speaks and understands on calls. Applies from the next call.">

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  fetchAnalytics, fetchCallQuality, fetchMessages, fetchTodayQueue, resolveMessage,
+  fetchAnalytics, fetchCallQuality, fetchMessages, fetchRatingsSummary,
+  fetchTodayQueue, resolveMessage,
 } from "../api/client.js";
 import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
 import Heatmap from "../components/dash/Heatmap.jsx";
@@ -277,6 +278,38 @@ function MessagesCard({ branchId }) {
   );
 }
 
+function RatingsCard({ branchId }) {
+  const { data } = useQuery({
+    queryKey: ["ratings", branchId],
+    queryFn: () => fetchRatingsSummary(branchId),
+    enabled: Boolean(branchId),
+    refetchInterval: 300_000,
+  });
+  const ref = useRef(null);
+  useEffect(() => {
+    if (data?.count) revealNow(ref.current);
+  });
+  if (!data?.count) return null; // hidden until the first WhatsApp rating
+  const stars = "★".repeat(Math.round(data.avg)) + "☆".repeat(5 - Math.round(data.avg));
+  return (
+    <section ref={ref} data-reveal className="card flex items-center gap-4 px-5 py-4">
+      <div>
+        <p className="font-display text-2xl font-semibold text-gold-ink">{stars}</p>
+        <p className="font-ui text-xs text-slate">Patient ratings on WhatsApp</p>
+      </div>
+      <div className="ml-auto text-right">
+        <p className="font-display text-xl font-semibold">{data.avg}</p>
+        <p className="font-ui text-xs text-slate">
+          {data.count} rating{data.count === 1 ? "" : "s"}
+          {data.low_count > 0 && (
+            <span className="chip-danger ml-2">{data.low_count} low</span>
+          )}
+        </p>
+      </div>
+    </section>
+  );
+}
+
 export default function Dashboard() {
   const { branchId } = useAuth();
   const pageRef = useRef(null);
@@ -333,6 +366,7 @@ export default function Dashboard() {
 
       {/* Caller messages awaiting a callback (#349) — hidden when empty */}
       <MessagesCard branchId={branchId} />
+      <RatingsCard branchId={branchId} />
 
       {/* Lifetime totals — since day one */}
       {an?.lifetime && <LifetimeBand lifetime={an.lifetime} />}

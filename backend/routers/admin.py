@@ -997,3 +997,57 @@ async def admin_resilience_chaos_clear(
     logger.warning("chaos_cleared_by_admin", user_id=current_user.user_id,
                    dependency=dependency or "ALL")
     return {"cleared": dependency or "ALL"}
+
+
+# ── WhatsApp branch linking (WA T9, spec 2026-07-13) ─────────────────────────
+# Concierge Phase B: after adding the clinic's number to the WABA, the owner
+# (super_admin) pastes the new number's phone_number_id here. Setting it turns
+# WhatsApp ON for the branch; clearing (null) turns it off. No clinic PII.
+
+
+class WaLinkBody(BaseModel):
+    wa_phone_number_id: str | None = None
+
+
+@router.patch("/branches/{branch_id}/whatsapp")
+@audit("admin.wa_link_changed", resource_type="branch")
+async def set_branch_wa_number(
+    branch_id: str,
+    body: WaLinkBody,
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> dict:
+    """Set/clear a branch's linked WhatsApp phone_number_id (unique — 409 on
+    a value already claimed by another branch)."""
+    import uuid as _uuid
+
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        bid = _uuid.UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid branch_id")
+    value = (body.wa_phone_number_id or "").strip() or None
+    if value and (len(value) > 32 or not value.isdigit()):
+        raise HTTPException(
+            status_code=422,
+            detail="wa_phone_number_id must be the numeric Meta phone number ID",
+        )
+    async with AsyncSessionLocal() as db:
+        branch = (
+            await db.execute(select(Branch).where(Branch.id == bid))
+        ).scalar_one_or_none()
+        if branch is None:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        branch.wa_phone_number_id = value
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail="This phone_number_id is already linked to another branch",
+            )
+    logger.info("wa_branch_linked", branch_id=branch_id, linked=bool(value))
+    return {"branch_id": branch_id, "wa_phone_number_id": value}
