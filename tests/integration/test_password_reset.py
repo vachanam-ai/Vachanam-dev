@@ -142,16 +142,25 @@ async def test_wrong_reset_code_does_not_feed_ip_blocklist(client, db, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_older_reset_code_still_valid(client, db):
-    """Two codes issued (user requested twice / tapped resend) — the OLDER code
-    they still have in their inbox must verify, not just the newest."""
+async def test_only_latest_reset_code_valid(client, db):
+    """SECURITY (#379): only the newest code is valid. Two codes issued (user
+    requested twice / tapped resend) — the OLDER code is rejected (401), the
+    NEWEST resets the password (200). A pool of valid codes would widen brute
+    force."""
     email = _unique_email()
     await _register(client, email)
     c1 = (await client.post("/auth/forgot-password", json={"email": email})).json()["dev_email_code"]
     c2 = (await client.post("/auth/forgot-password", json={"email": email})).json()["dev_email_code"]
-    assert c1 and c2  # both issued
-    r = await client.post(
+    assert c1 and c2 and c1 != c2
+
+    older = await client.post(
         "/auth/reset-password",
         json={"email": email, "code": c1, "new_password": NEW_PW},
     )
-    assert r.status_code == 200, r.text
+    assert older.status_code == 401  # superseded code is dead
+
+    latest = await client.post(
+        "/auth/reset-password",
+        json={"email": email, "code": c2, "new_password": NEW_PW},
+    )
+    assert latest.status_code == 200, latest.text

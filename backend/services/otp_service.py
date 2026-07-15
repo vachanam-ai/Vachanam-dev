@@ -27,11 +27,12 @@ def _redis() -> "aioredis.Redis":
 
 
 def _code_key(channel: str, dest: str) -> str:
-    # A Redis SET of the codes issued within the current TTL window (2026-07-15).
-    # New namespace ("otpset:", was "otp:") so it can never collide with a
-    # legacy single-value string key from before this change — that would raise
-    # WRONGTYPE. Legacy "otp:" keys simply expire on their own (10-min TTL).
-    return f"otpset:{channel}:{dest}"
+    # ONE valid code per destination — the latest. Namespace "otpv2:" so it can
+    # never collide with the short-lived "otpset:" SET keys from the reverted
+    # multi-code experiment (#378) nor legacy "otp:" string keys; both expire on
+    # their own 10-min TTL. Single-latest-code is the standard, brute-force-safe
+    # shape (a widened valid-code pool multiplies guess odds — #379).
+    return f"otpv2:{channel}:{dest}"
 
 
 def _attempts_key(channel: str, dest: str) -> str:
@@ -66,15 +67,12 @@ async def issue_code(channel: str, dest: str) -> str | None:
     code = f"{secrets.randbelow(1_000_000):06d}"
     r = _redis()
     try:
-        # Keep EVERY code issued within the TTL window valid, not just the
-        # latest. A user who requested twice (or tapped "resend") gets two
-        # emails; entering EITHER code must work. Overwriting the old code
-        # silently invalidated a code the user legitimately received — the root
-        # cause of "I entered the correct code and it says wrong" (Vinay, two
-        # emails 1 min apart, 2026-07-15). SADD accumulates; the 5-attempt cap
-        # still bounds brute force, and the send-cooldown bounds set growth.
-        await r.sadd(_code_key(channel, dest), code)
-        await r.expire(_code_key(channel, dest), settings.otp_ttl_seconds)
+        # ONE valid code — the latest overwrites any prior one. When a user
+        # requests again / taps resend, ONLY the newest code is valid (they must
+        # use the most recent email). This keeps the brute-force guess space at a
+        # single 6-digit value; a pool of simultaneously-valid codes would
+        # multiply an attacker's odds (#379, reverting #378's multi-code set).
+        await r.setex(_code_key(channel, dest), settings.otp_ttl_seconds, code)
         await r.delete(_attempts_key(channel, dest))
         await r.delete(_verified_key(channel, dest))
     finally:
@@ -106,18 +104,18 @@ async def verify_code(channel: str, dest: str, code: str) -> bool:
     """True if code matches and isn't expired/exhausted. Marks channel verified."""
     r = _redis()
     try:
-        if not await r.exists(_code_key(channel, dest)):
+        stored = await r.get(_code_key(channel, dest))
+        if stored is None:
             return False
         attempts = await r.incr(_attempts_key(channel, dest))
         await r.expire(_attempts_key(channel, dest), settings.otp_ttl_seconds)
         if attempts > _MAX_ATTEMPTS:
-            await r.delete(_code_key(channel, dest))  # burn every code for this dest
+            await r.delete(_code_key(channel, dest))  # burn it
             logger.warning("otp_attempts_exhausted", channel=channel, dest=_mask(dest))
             return False
-        # Any code issued within the TTL window is accepted (see issue_code).
-        if not await r.sismember(_code_key(channel, dest), code):
+        if not secrets.compare_digest(stored, code):
             return False
-        await r.delete(_code_key(channel, dest))  # one-shot: burn all codes on success
+        await r.delete(_code_key(channel, dest))  # one-shot
         await r.setex(_verified_key(channel, dest), settings.otp_ttl_seconds, "1")
         return True
     finally:
