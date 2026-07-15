@@ -164,6 +164,49 @@ async def _async_true():
     return True
 
 
+@pytest.mark.asyncio
+async def test_both_recent_codes_valid_older_not_invalidated(monkeypatch, redis):
+    """ROOT CAUSE (Vinay, two emails 1 min apart, 2026-07-15): a 2nd issued code
+    used to OVERWRITE the 1st, so the older code the user still had in their
+    inbox was silently rejected. Now every code within the TTL window is valid —
+    entering the OLDER code must succeed."""
+    import uuid
+
+    # No provider → dev echo returns the code so we can capture both.
+    monkeypatch.setattr(settings, "resend_api_key", "", raising=False)
+    monkeypatch.setattr(settings, "smtp_host", "", raising=False)
+    monkeypatch.setattr(settings, "msg91_auth_key", "", raising=False)
+    monkeypatch.setattr(settings, "otp_dev_echo", True, raising=False)
+    monkeypatch.setattr(settings, "app_env", "development", raising=False)
+
+    dest = f"two-{uuid.uuid4().hex[:8]}@realclinic.in"
+    code1 = await otp_service.issue_code("email", dest)
+    code2 = await otp_service.issue_code("email", dest)
+    assert code1 and code2
+
+    # The OLDER code (code1) must still verify — this is the exact bug.
+    assert await otp_service.verify_code("email", dest, code1) is True
+    # One-shot: after a successful verify every code for the dest is burned.
+    assert await otp_service.verify_code("email", dest, code2) is False
+
+
+@pytest.mark.asyncio
+async def test_newer_code_also_valid(monkeypatch, redis):
+    """The complement: after two issues, the NEWER code verifies too."""
+    import uuid
+
+    monkeypatch.setattr(settings, "resend_api_key", "", raising=False)
+    monkeypatch.setattr(settings, "smtp_host", "", raising=False)
+    monkeypatch.setattr(settings, "msg91_auth_key", "", raising=False)
+    monkeypatch.setattr(settings, "otp_dev_echo", True, raising=False)
+    monkeypatch.setattr(settings, "app_env", "development", raising=False)
+
+    dest = f"two-{uuid.uuid4().hex[:8]}@realclinic.in"
+    await otp_service.issue_code("email", dest)
+    code2 = await otp_service.issue_code("email", dest)
+    assert await otp_service.verify_code("email", dest, code2) is True
+
+
 def test_recording_hard_off_in_production():
     """No-voice-recording: production never records even if the flag is on."""
     prod = Settings(app_env="production", recording_enabled=True)

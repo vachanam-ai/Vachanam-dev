@@ -149,6 +149,7 @@ export default function Login() {
       const detail = err?.response?.data?.detail;
       if (st === 401) toast.error("That code is wrong or expired — tap Resend for a fresh one");
       else if (st === 422) toast.error(detail ?? "Password doesn't meet the rules");
+      else if (st === 403) toast.error("This device is temporarily locked from repeated attempts — wait a bit, then try again");
       else if (st === 429) toast.error("Too many attempts — wait a minute, then try again");
       else toast.error(detail ?? "Reset failed — try again");
       setFpBusy(false);

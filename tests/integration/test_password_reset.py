@@ -113,3 +113,45 @@ async def test_reset_rejects_wrong_code(client, db):
         json={"email": email, "code": "000000", "new_password": NEW_PW},
     )
     assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wrong_reset_code_does_not_feed_ip_blocklist(client, db, monkeypatch):
+    """Vinay 2026-07-15 ("both codes, none worked"): a wrong reset code must NOT
+    increment the 1-hour IP blocklist. Otherwise 5 fumbled codes ban the device
+    and then reject even the CORRECT code at check_ip_blocklist before it is
+    checked. Brute force is already bounded by the per-code attempt cap."""
+    import backend.routers.auth as auth_mod
+
+    email = _unique_email()
+    await _register(client, email)
+    await client.post("/auth/forgot-password", json={"email": email})
+
+    calls = {"n": 0}
+
+    async def _spy(ip):
+        calls["n"] += 1
+
+    monkeypatch.setattr(auth_mod, "record_failed_login", _spy)
+    r = await client.post(
+        "/auth/reset-password",
+        json={"email": email, "code": "000000", "new_password": NEW_PW},
+    )
+    assert r.status_code == 401
+    assert calls["n"] == 0  # reset failures must never feed the IP block
+
+
+@pytest.mark.asyncio
+async def test_older_reset_code_still_valid(client, db):
+    """Two codes issued (user requested twice / tapped resend) — the OLDER code
+    they still have in their inbox must verify, not just the newest."""
+    email = _unique_email()
+    await _register(client, email)
+    c1 = (await client.post("/auth/forgot-password", json={"email": email})).json()["dev_email_code"]
+    c2 = (await client.post("/auth/forgot-password", json={"email": email})).json()["dev_email_code"]
+    assert c1 and c2  # both issued
+    r = await client.post(
+        "/auth/reset-password",
+        json={"email": email, "code": c1, "new_password": NEW_PW},
+    )
+    assert r.status_code == 200, r.text

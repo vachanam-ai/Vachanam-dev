@@ -586,8 +586,20 @@ async def reset_password(request: Request, body: ResetPasswordRequest) -> TokenR
         raise HTTPException(status_code=422, detail=str(e))
 
     if not await otp_service.verify_code("email", email, body.code):
-        await record_failed_login(client_ip)
-        raise HTTPException(status_code=401, detail="Invalid or expired code")
+        # Do NOT feed the 1-hour IP blocklist from a wrong reset code. A legit
+        # user fumbling codes (or entering a SUPERSEDED one — see otp_service,
+        # every recent code is now valid) must never earn an IP ban that then
+        # rejects even the CORRECT code at check_ip_blocklist before it is ever
+        # checked (Vinay 2026-07-15: "both codes, none worked"). Brute force is
+        # already bounded by otp_service's 5-attempt-per-code cap + the send
+        # cooldown, and reset additionally requires possession of the emailed
+        # code, which the IP blocklist does not guard. Diagnostic only (RULE 9:
+        # last-4 IP, no email/code).
+        logger.info("password_reset_code_rejected", ip=client_ip[-4:])
+        raise HTTPException(
+            status_code=401,
+            detail="That code is wrong or expired — tap Resend for a new one",
+        )
 
     async with AsyncSessionLocal() as db:
         user = (
