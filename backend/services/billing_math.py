@@ -25,7 +25,16 @@ class Plan:
 # Razorpay notes, agent cap logic); "Starter" is display-only.
 # 2026-07-12 (Vinay): Starter doctor cap 1 → 3. Doctor count is zero-variable-
 # cost, so margins are untouched.
+# 2026-07-15 (Vinay): NEW entry plan "Lite" (₹1,999) for genuinely low-volume
+# clinics that still pay a receptionist full salary. It DELIBERATELY does NOT
+# hold the 40%-worst-case invariant the others do — the per-clinic fixed cost
+# (DID ₹1,000-1,500/mo) is too large a share of ₹1,999 for that to be possible
+# under ₹2k. Vinay accepted the tradeoff: at the TYPICAL cost (₹2/min + ₹1,000
+# DID) and its low-volume target, 150 min holds ~35% margin; overage (₹5/min)
+# caps the downside (a heavy month pays extra or upgrades). The margin guard
+# test carves Lite out explicitly. Follow-up loop IS included (retention).
 PLANS: dict[str, Plan] = {
+    "lite": Plan(1_999, 150, 5.0, 1, "Lite"),
     "solo": Plan(5_999, 700, 5.0, 3, "Starter"),
     "clinic": Plan(9_999, 1_500, 5.0, 5, "Clinic"),
     "multi": Plan(17_999, 3_000, 5.0, None, "Multi"),
@@ -36,13 +45,26 @@ PLANS: dict[str, Plan] = {
 # languages — language is zero-variable-cost; plans now differentiate on
 # minutes, doctors and premium voice (cloning/follow-up loop) instead.
 PLAN_LANGUAGES: dict[str, list[str] | None] = {
+    "lite": None,
     "solo": None,
     "clinic": None,
     "multi": None,
 }
 
-# Plans that may use clinic voice cloning + the treatment follow-up voice loop.
-PREMIUM_VOICE_PLANS = ("clinic", "multi")
+# Voice CLONING (own recorded voice per language) stays a Clinic/Multi feature.
+CLONING_PLANS = ("clinic", "multi")
+
+# Treatment FOLLOW-UP voice loop — split out of the old PREMIUM_VOICE_PLANS
+# 2026-07-15 (Vinay: "follow-up is the main part to retain patients, include
+# it"). Available on EVERY plan now: it is just metered outbound minutes
+# (revenue, not a cost sink), so gating retention behind premium made no
+# economic sense. This ALSO enables the loop on Starter, which previously
+# lacked it — a deliberate consistency fix.
+FOLLOWUP_PLANS = ("lite", "solo", "clinic", "multi")
+
+# Back-compat alias: some call sites imported PREMIUM_VOICE_PLANS for the
+# CLONING gate. Keep it pointing at CLONING_PLANS so nothing silently breaks.
+PREMIUM_VOICE_PLANS = CLONING_PLANS
 
 # Plans with WhatsApp (confirmations, reminders, rating asks, chat) — Vinay's
 # positioning call, spec 2026-07-13. Message cost ≈ ₹0.40/booking, absorbed.

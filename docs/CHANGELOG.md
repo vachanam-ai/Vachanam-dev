@@ -13,6 +13,43 @@ Format per session:
 
 ---
 
+## 2026-07-15 — Lite ₹1,999 entry plan + follow-up on every plan (FIXLOG #376)
+
+**Decisions (Vinay):** add a cheap **Lite** tier for low-volume clinics that
+still pay a receptionist full salary; make the treatment **follow-up loop
+included on every plan** (it is the main retention lever — gate it to nobody);
+in the pricing UI, keep **Lite as a small separate strip**, not a fourth equal
+plan card.
+
+**Lite economics:** ₹1,999/mo + ₹5/min, 150 min (≈55 calls), 1 doctor, all 8
+languages, follow-up. DELIBERATELY exempt from the ≥40%-worst-case margin
+invariant that binds the other plans — the per-clinic DID+infra floor is too
+large a share of ₹1,999; ~35% margin at typical cost + low volume, ₹5/min
+overage caps the downside. Vinay accepted the tradeoff.
+
+**Feature gates:** old `PREMIUM_VOICE_PLANS` split into `CLONING_PLANS`
+(clinic, multi — voice cloning + WhatsApp stay premium) and `FOLLOWUP_PLANS`
+(all four). Single source stays `backend/services/billing_math.py`.
+
+**Two model/doc gaps found + fixed:** (a) `Organizations.plan` SQLAlchemy Enum
+still listed only solo/clinic/multi — added `lite` so fresh `create_all` DBs
+(all test DBs, any new prod) carry it; gg30 already ALTERed the existing prod
+type. (b) legal terms-of-service.md pinned by test_legal_routes to every
+PLANS price+minutes — added the Lite row (4 plans; also corrected stale Starter
+doctors 1→3 and languages → all 8).
+
+**Files:** billing_math.py, next_visit_followup_caller.py, branches.py,
+auth.py, payments.py, admin.py, models/schema.py, Landing.jsx (small Lite
+strip), backend/static/index.html (small Lite strip), Register/Settings/static
+JSON-LD labels, docs/legal/terms-of-service.md, CLAUDE.md, docs/support/*,
+alembic gg30_plan_lite (applied to prod). Tests: test_billing_math,
+test_next_visit_followup_caller_run (starter+lite RUN follow-up),
+test_legal_routes, test_settings_end_to_end.
+
+**Follow-ups:** merge Lite into feat/vachanam-sales to keep it current.
+
+---
+
 ## 2026-07-13/14 — WhatsApp MVP2 build (spec → T1-T10) + real-call fixes #361-370
 
 **Decisions (Vinay, brainstorm 2026-07-13):** clinic's own WhatsApp number

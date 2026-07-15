@@ -246,7 +246,22 @@ export default function Landing() {
         <h2 data-item className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
           Pays for itself with two saved patients a day
         </h2>
-        <div className="mt-10 grid gap-6 lg:grid-cols-3">
+        {/* Lite: entry tier, deliberately small and set apart from the main plans */}
+        <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-mist/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-ui text-sm">
+              <span className="font-semibold">Lite · <span className="numeral text-teal-deep">₹1,999</span>/mo</span>
+              <span className="text-slate"> + ₹5/min after</span>
+            </p>
+            <p className="font-ui text-xs text-slate">
+              Low-volume clinics — ≈55 calls (150 min), 1 doctor, all 8 languages, reminder + treatment follow-up calls.
+            </p>
+          </div>
+          <Link to="/register?plan=lite" className="btn-ghost shrink-0 px-5 py-2 text-sm">
+            Start with Lite
+          </Link>
+        </div>
+        <div className="mt-6 grid gap-6 lg:grid-cols-3">
           {PLANS.map((p) => (
             <div
               key={p.name}

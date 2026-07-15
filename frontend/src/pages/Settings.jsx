@@ -21,8 +21,8 @@ import {
   verifyPayment
 } from "../api/client.js";
 
-const PLAN_LABELS = { solo: "Starter · ₹5,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹17,999/mo" };
-const PLAN_PRICES = { solo: 5999, clinic: 9999, multi: 17999 };
+const PLAN_LABELS = { lite: "Lite · ₹1,999/mo", solo: "Starter · ₹5,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹17,999/mo" };
+const PLAN_PRICES = { lite: 1999, solo: 5999, clinic: 9999, multi: 17999 };
 
 // Razorpay checkout script — loaded on demand, once.
 function loadRazorpay() {
@@ -409,6 +409,7 @@ export default function Settings() {
             <select className="field min-w-[220px]" value={plan.data?.plan ?? "clinic"}
               disabled={planChange.isPending}
               onChange={(e) => planChange.mutate(e.target.value)}>
+              <option value="lite">{PLAN_LABELS.lite}</option>
               <option value="solo">{PLAN_LABELS.solo}</option>
               <option value="clinic">{PLAN_LABELS.clinic}</option>
               <option value="multi">{PLAN_LABELS.multi}</option>

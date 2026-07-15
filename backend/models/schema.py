@@ -18,7 +18,7 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     owner_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     owner_email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
-    plan: Mapped[str] = mapped_column(Enum("solo", "clinic", "multi", name="plan_type"), nullable=False)
+    plan: Mapped[str] = mapped_column(Enum("lite", "solo", "clinic", "multi", name="plan_type"), nullable=False)
     subscription_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     razorpay_customer_id: Mapped[str | None] = mapped_column(String(255))
     razorpay_subscription_id: Mapped[str | None] = mapped_column(String(255))

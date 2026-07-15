@@ -223,7 +223,7 @@ class RegisterRequest(BaseModel):
     # SEC: validated at the boundary — a junk plan used to hit the DB enum and
     # 500; an out-of-enum string is now a clean 422. Keys are the internal plan
     # ids (billing_math.PLANS); "Starter" is the DISPLAY name for solo.
-    plan: Literal["solo", "clinic", "multi"] = "clinic"
+    plan: Literal["lite", "solo", "clinic", "multi"] = "clinic"
     email_otp: str | None = None  # email-OTP verification (Vinay 2026-06-15)
 
 
@@ -290,7 +290,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         raise HTTPException(status_code=422, detail="Clinic name is required")
     if not body.owner_name.strip():
         raise HTTPException(status_code=422, detail="Your name is required")
-    if body.plan not in ("solo", "clinic", "multi"):
+    if body.plan not in ("lite", "solo", "clinic", "multi"):
         raise HTTPException(status_code=422, detail="Invalid plan")
 
     google_sub: str | None = None

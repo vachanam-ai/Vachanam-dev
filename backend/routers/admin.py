@@ -618,7 +618,7 @@ async def set_org_plan(
 ) -> dict:
     """Upgrade/downgrade a clinic's plan (effective immediately for limits)."""
     if body.plan not in PLANS:
-        raise HTTPException(status_code=422, detail="plan must be solo|clinic|multi")
+        raise HTTPException(status_code=422, detail="plan must be lite|solo|clinic|multi")
     async with AsyncSessionLocal() as db:
         org = await _load_org(db, org_id)
         org.plan = body.plan

@@ -116,22 +116,59 @@ def test_every_plan_holds_40pct_margin_at_worst_case():
     is the guard that stops a future 'more generous minutes' edit from
     silently breaking the economics."""
     WORST_COST_PER_MIN, INFRA = 3.0, 1500.0
+    # Lite (2026-07-15) is EXEMPT by Vinay's explicit decision: the per-clinic
+    # fixed cost makes a 40%-worst plan impossible under Rs2,000. Its own
+    # typical-margin guard is test_lite_plan_economics below.
     for key, p in PLANS.items():
+        if key == "lite":
+            continue
         cost = p.included_minutes * WORST_COST_PER_MIN + INFRA
         margin = (p.base_rupees - cost) / p.base_rupees
         assert margin >= 0.399, f"{key}: worst-case margin {margin:.1%} < 40%"
-    # Overage must hold the same bar.
+    # Overage must hold the same bar (Lite included — overage is Rs5/min vs
+    # Rs3 worst cost = 40%, so it passes).
     for p in PLANS.values():
         assert (p.overage_per_min - WORST_COST_PER_MIN) / p.overage_per_min >= 0.399
+
+
+def test_lite_plan_economics():
+    """Lite (Vinay 2026-07-15): ₹1,999, 150 min, 1 DID, 1 doctor, all
+    languages, follow-up INCLUDED. Deliberately NOT 40%-worst (per-clinic
+    fixed cost too large under ₹2k); holds ~35% at TYPICAL cost, and overage
+    protects the downside."""
+    from backend.services.billing_math import CLONING_PLANS, FOLLOWUP_PLANS
+
+    lite = PLANS["lite"]
+    assert lite.base_rupees == 1999
+    assert lite.included_minutes == 150
+    assert lite.overage_per_min == 5.0
+    assert lite.max_doctors == 1
+    assert lite.display_name == "Lite"
+    assert PLAN_LANGUAGES["lite"] is None  # all languages
+
+    # Typical cost (Rs2/min + Rs1,000 DID) at full bucket >= 30% margin.
+    typical_cost = lite.included_minutes * 2.0 + 1000.0
+    typical_margin = (lite.base_rupees - typical_cost) / lite.base_rupees
+    assert typical_margin >= 0.30, f"lite typical margin {typical_margin:.1%}"
+
+    # Follow-up loop included; cloning NOT.
+    assert "lite" in FOLLOWUP_PLANS
+    assert "lite" not in CLONING_PLANS
 
 
 def test_plan_feature_gates_shape():
     # 2026-07-12 (Vinay): ALL plans carry all languages (zero variable cost);
     # differentiation is minutes/doctors/premium voice.
+    assert PLAN_LANGUAGES["lite"] is None
     assert PLAN_LANGUAGES["solo"] is None
     assert PLAN_LANGUAGES["clinic"] is None
     assert PLAN_LANGUAGES["multi"] is None
-    assert PREMIUM_VOICE_PLANS == ("clinic", "multi")
+    # 2026-07-15 split: cloning stays Clinic/Multi; follow-up on every plan.
+    from backend.services.billing_math import CLONING_PLANS, FOLLOWUP_PLANS
+
+    assert CLONING_PLANS == ("clinic", "multi")
+    assert set(FOLLOWUP_PLANS) == {"lite", "solo", "clinic", "multi"}
+    assert PREMIUM_VOICE_PLANS == ("clinic", "multi")  # back-compat alias
 
 
 def test_revenue_active_within_bucket_is_base_only():

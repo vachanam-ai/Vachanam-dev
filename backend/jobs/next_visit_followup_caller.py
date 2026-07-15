@@ -126,15 +126,16 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
                             phone_last4=(patient.phone or "")[-4:])
                 await db.commit()
                 continue
-            # PLAN GATE (repricing 2026-07-11): the treatment follow-up voice
-            # loop is a Clinic/Multi feature. Starter tasks close silently —
-            # the clinic UI never offered the loop, so no user-visible break.
+            # PLAN GATE: the treatment follow-up loop is available on EVERY
+            # plan since 2026-07-15 (Vinay: retention lever; it is just metered
+            # minutes). FOLLOWUP_PLANS lists them all — the gate stays as the
+            # seam in case a future plan drops the loop.
             from backend.models.schema import Organization
-            from backend.services.billing_math import PREMIUM_VOICE_PLANS
+            from backend.services.billing_math import FOLLOWUP_PLANS
 
             org = (await db.execute(select(Organization).where(
                 Organization.id == branch.org_id))).scalar_one_or_none()
-            if org is not None and org.plan not in PREMIUM_VOICE_PLANS:
+            if org is not None and org.plan not in FOLLOWUP_PLANS:
                 t.status = "completed"
                 logger.info("followup_skipped_plan", task_id=str(t.id), plan=org.plan)
                 await db.commit()

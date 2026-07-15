@@ -52,7 +52,8 @@ switch language and the agent continues in the new language.
 
 | Plan | Price | Included calling | Doctors | Languages | Extras |
 |---|---|---|---|---|---|
-| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 | AI calls capped at 4 minutes |
+| Lite | ₹1,999/month | 150 minutes (≈55 calls) | 1 | all 8 | treatment follow-up calls; AI calls capped at 4 minutes |
+| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 | treatment follow-up calls; AI calls capped at 4 minutes |
 | Clinic (most popular) | ₹9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 8 | custom cloned voice, treatment follow-up calls |
 | Multi | ₹17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 8 | your own voice in every language |
 
@@ -89,7 +90,7 @@ of the Clinic plan to evaluate.
 
 - Each doctor has working days, start/end hours, specialization, a booking
   style (token queue or time slots), and a daily token limit (default 50).
-- Doctor caps by plan: Starter 1, Clinic 5, Multi unlimited. Adding a doctor
+- Doctor caps by plan: Lite 1, Starter 3, Clinic 5, Multi unlimited. Adding a doctor
   beyond the cap prompts an upgrade.
 - Doctor leave: mark leave dates in the app under Doctor leave. Vachanam then
   automatically CALLS the affected booked patients and rebooks them onto

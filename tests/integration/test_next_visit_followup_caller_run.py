@@ -130,10 +130,10 @@ async def test_no_consent_skips_call_and_completes_task(db, monkeypatch, redis):
 
 
 @pytest.mark.asyncio
-async def test_starter_plan_skips_followup_loop(db, monkeypatch, redis):
-    """Repricing 2026-07-11: the treatment follow-up voice loop is a
-    Clinic/Multi feature. A solo/Starter org's task closes silently — zero
-    dispatch, no crash, no retry loop."""
+async def test_starter_plan_runs_followup_loop(db, monkeypatch, redis):
+    """2026-07-15 (Vinay): follow-up is now on EVERY plan (FOLLOWUP_PLANS) —
+    retention is the point of the loop. A solo/Starter org's task must dial,
+    not close silently."""
     br, doc, pat, note, task = await _seed(db, plan="solo")
     called = {"n": 0}
 
@@ -143,7 +143,22 @@ async def test_starter_plan_skips_followup_loop(db, monkeypatch, redis):
 
     monkeypatch.setattr(job, "_dispatch", fake_dispatch)
     n = await job.run_next_visit_followups(now=NOW_IN_HOURS)
-    assert n == 0
-    assert called["n"] == 0
-    await db.refresh(task)
-    assert task.status == "completed"
+    assert n == 1
+    assert called["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_lite_plan_runs_followup_loop(db, monkeypatch, redis):
+    """Lite (₹1,999) also includes follow-up — Vinay: it is the main retention
+    lever, gate it to nobody."""
+    br, doc, pat, note, task = await _seed(db, plan="lite")
+    called = {"n": 0}
+
+    async def fake_dispatch(*a, **k):
+        called["n"] += 1
+        return True
+
+    monkeypatch.setattr(job, "_dispatch", fake_dispatch)
+    n = await job.run_next_visit_followups(now=NOW_IN_HOURS)
+    assert n == 1
+    assert called["n"] == 1

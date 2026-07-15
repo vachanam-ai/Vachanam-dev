@@ -62,19 +62,27 @@ cap logic); "Starter" is the DISPLAY name for `solo`.
 
 | Plan | Price | Included | Doctors | Languages | Premium |
 |---|---|---|---|---|---|
-| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 3 | all 8 | 4-min AI call cap |
-| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | all 8 | voice cloning, follow-up loop |
-| **Multi** | ₹17,999/mo + ₹5/min | 1 DID, 3,000 min (≈1,080 calls) | unlimited | all 8 | own voice per language |
+| **Lite** (`lite`) | ₹1,999/mo + ₹5/min | 1 DID, 150 min (≈55 calls) | 1 | all 8 | follow-up loop; 4-min AI call cap |
+| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 3 | all 8 | follow-up loop; 4-min AI call cap |
+| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | all 8 | voice cloning, WhatsApp, follow-up loop |
+| **Multi** | ₹17,999/mo + ₹5/min | 1 DID, 3,000 min (≈1,080 calls) | unlimited | all 8 | own voice per language, WhatsApp |
 
 (2026-07-12, Vinay: Starter doctors 1→3 + all languages on every plan — both
 zero-variable-cost levers, margins unchanged.)
+(2026-07-15, Vinay: NEW **Lite** ₹1,999 entry plan for low-volume clinics that
+still pay a receptionist full salary. It DELIBERATELY does NOT hold the
+40%-worst invariant — the per-clinic DID+infra floor is too large a share of
+₹1,999. Vinay accepted the tradeoff: ~35% margin at TYPICAL cost + low volume,
+overage ₹5/min caps the downside. Follow-up loop is NOW on every plan — split
+`PREMIUM_VOICE_PLANS` → `CLONING_PLANS` (clinic/multi) + `FOLLOWUP_PLANS` (all);
+cloning + WhatsApp stay Clinic+. plan_type enum gains `lite` (migration gg30).)
 
 Overage ₹5/min on every plan. Extra DID ₹1,999/mo. Extra branch ₹7,999/mo —
 each extra branch is provisioned as a full new clinic (own DID, Vobiz
 sub-account, trunk, doctors, staff; nothing carries over — RULE 1 isolation).
 Market in CALLS, meter in MINUTES. Single source of truth for plan economics
 AND feature gates: `backend/services/billing_math.py` (PLANS, PLAN_LANGUAGES,
-PREMIUM_VOICE_PLANS, TRIAL_MINUTES).
+CLONING_PLANS, FOLLOWUP_PLANS, WHATSAPP_PLANS, TRIAL_MINUTES).
 
 All prices are **exclusive of 18% GST** (shown as "+18% GST"; B2B clinics reclaim
 it via input credit).

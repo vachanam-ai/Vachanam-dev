@@ -86,7 +86,7 @@ def _get_client() -> razorpay.Client:
 class CreateOrderRequest(BaseModel):
     # The amount is NEVER client-controlled (TD-025/G1): a subscription order is
     # for a fixed plan price, derived server-side. The client only names the plan.
-    plan: str = Field(..., description="solo | clinic | multi")
+    plan: str = Field(..., description="lite | solo | clinic | multi")
 
 
 class CreateOrderResponse(BaseModel):
@@ -138,7 +138,7 @@ async def create_order(
     plan = req.plan.strip().lower()
     plan_def = PLANS.get(plan)
     if plan_def is None:
-        raise HTTPException(status_code=422, detail="plan must be solo, clinic or multi")
+        raise HTTPException(status_code=422, detail="plan must be lite, solo, clinic or multi")
 
     # Renewal? Bill the ending cycle's extra usage along with the next cycle.
     org = await _load_my_org(current_user, db)
@@ -336,7 +336,7 @@ async def change_plan(
         raise HTTPException(status_code=403, detail="Only a clinic owner can change the plan")
     plan = req.plan.strip().lower()
     if plan not in PLANS:
-        raise HTTPException(status_code=422, detail="plan must be solo, clinic or multi")
+        raise HTTPException(status_code=422, detail="plan must be lite, solo, clinic or multi")
 
     org = await _load_my_org(current_user, db)
     if plan == org.plan:

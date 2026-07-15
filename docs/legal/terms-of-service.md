@@ -111,17 +111,18 @@ When you cancel your subscription (see Section 4.4):
 
 ### 4.1 Plans
 
-Vachanam offers three subscription plans. All prices are exclusive of 18% GST (charged additionally; B2B clinics can reclaim it via input credit).
+Vachanam offers four subscription plans. All prices are exclusive of 18% GST (charged additionally; B2B clinics can reclaim it via input credit).
 
 | Plan | Monthly price | Included minutes | Doctors | Languages |
 |---|---|---|---|---|
-| **Starter** | INR 5,999/month | 700 minutes (≈250 calls) | 1 | Telugu |
-| **Clinic** | INR 9,999/month | 1,500 minutes (≈540 calls) | up to 5 | Telugu + Hindi + English |
+| **Lite** | INR 1,999/month | 150 minutes (≈55 calls) | 1 | all 8 supported languages |
+| **Starter** | INR 5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 supported languages |
+| **Clinic** | INR 9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 8 supported languages |
 | **Multi** | INR 17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 8 supported languages |
 
 - Overage on every plan: INR 5 per minute beyond the included minutes, billed with the next invoice. Included minutes reset monthly and do not carry over.
 - Optional add-ons: additional phone number INR 1,999/month; additional branch INR 7,999/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
-- On the Starter plan, individual AI calls are capped at 4 minutes.
+- On the Lite and Starter plans, individual AI calls are capped at 4 minutes.
 
 Current pricing and what each plan includes are always published at vachanam.in; if this table and the website ever differ, the website's published pricing at the time of purchase governs.
 

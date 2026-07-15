@@ -65,9 +65,9 @@ def _assert_plan_language(plan: str, language: str) -> None:
 
 def _assert_premium_voice(plan: str) -> None:
     """Voice cloning is a Clinic/Multi feature (repricing 2026-07-11)."""
-    from backend.services.billing_math import PREMIUM_VOICE_PLANS
+    from backend.services.billing_math import CLONING_PLANS
 
-    if plan not in PREMIUM_VOICE_PLANS:
+    if plan not in CLONING_PLANS:
         raise HTTPException(
             status_code=403,
             detail="Voice cloning is available on the Clinic and Multi plans. Upgrade to use your own voice.",
@@ -113,7 +113,7 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
     ).scalar_one()
     # Plan-aware UI hints (repricing 2026-07-11): the Settings page only offers
     # what the org's plan includes — languages list filtered, cloning flagged.
-    from backend.services.billing_math import PLAN_LANGUAGES, PREMIUM_VOICE_PLANS
+    from backend.services.billing_math import CLONING_PLANS, PLAN_LANGUAGES
 
     plan = await _org_plan(db, branch)
     plan_langs = PLAN_LANGUAGES.get(plan, None)
@@ -136,7 +136,7 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         doctors_count=doctors_count,
         staff_count=staff_count,
         did_wired=did_wired,
-        voice_cloning_allowed=plan in PREMIUM_VOICE_PLANS,
+        voice_cloning_allowed=plan in CLONING_PLANS,
         whatsapp_linked=bool(getattr(branch, "wa_phone_number_id", None)),
     )
 
