@@ -124,6 +124,9 @@ export const previewAffected = (branchId, doctorId, from, to) =>
   api
     .get(`/availability/${branchId}/${doctorId}/affected`, { params: { from, to } })
     .then((r) => r.data);
+export const fetchUpcomingLeave = (branchId, days = 30) =>
+  api.get(`/availability/${branchId}/leave/upcoming`, { params: { days } })
+    .then((r) => r.data);
 
 // ── Branch settings / team ──
 export const fetchBranchSettings = (branchId) =>

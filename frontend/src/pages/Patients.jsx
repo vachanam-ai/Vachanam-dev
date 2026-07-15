@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { toast } from "sonner";
-import { listPatients, editPatient, deletePatient } from "../api/patients.js";
+import { listPatients, editPatient, deletePatient, fetchUpcoming } from "../api/patients.js";
+import { fetchDoctors } from "../api/client.js";
 
 export default function Patients() {
   const { branchId } = useAuth();
@@ -83,6 +84,8 @@ export default function Patients() {
         <p className="eyebrow">Records</p>
         <h1 className="section-title text-2xl">Patient information</h1>
       </div>
+
+      <UpcomingAppointments branchId={branchId} />
 
       {err && <p className="font-ui text-sm text-red-600">{err}</p>}
 
@@ -210,5 +213,81 @@ export default function Patients() {
         )}
       </div>
     </div>
+  );
+}
+
+
+function UpcomingAppointments({ branchId }) {
+  const [doctorId, setDoctorId] = useState("");
+  const [onDate, setOnDate] = useState("");
+
+  const { data: doctorsRaw } = useQuery({
+    queryKey: ["doctors", branchId],
+    queryFn: () => fetchDoctors(branchId),
+    enabled: Boolean(branchId)
+  });
+  const doctors = Array.isArray(doctorsRaw) ? doctorsRaw : doctorsRaw?.doctors ?? [];
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["upcoming", branchId, doctorId, onDate],
+    queryFn: () => fetchUpcoming(branchId, { doctorId: doctorId || undefined, onDate: onDate || undefined, days: 15 }),
+    enabled: Boolean(branchId)
+  });
+  const appts = data?.appointments ?? [];
+
+  return (
+    <section className="card overflow-hidden">
+      <header className="flex flex-wrap items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+        <h2 className="font-display text-lg font-semibold">Upcoming appointments · next 15 days</h2>
+        <span className="chip-muted">{appts.length}</span>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <select className="field h-9 py-1 text-sm" value={doctorId} onChange={(e) => setDoctorId(e.target.value)}>
+            <option value="">All doctors</option>
+            {doctors.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+          </select>
+          <input type="date" className="field h-9 w-40 py-1 text-sm" value={onDate}
+            onChange={(e) => setOnDate(e.target.value)} />
+          {onDate && (
+            <button className="btn-ghost h-9 px-3 text-xs" onClick={() => setOnDate("")}>Clear date</button>
+          )}
+        </div>
+      </header>
+      {isLoading ? (
+        <p className="px-4 py-6 font-ui text-sm text-slate">Loading…</p>
+      ) : appts.length === 0 ? (
+        <p className="px-4 py-6 font-ui text-sm text-slate">No appointments in this window.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full font-ui text-sm">
+            <thead>
+              <tr className="text-left text-slate">
+                <th className="px-4 py-2 font-medium">Date</th>
+                <th className="px-4 py-2 font-medium">Time / Token</th>
+                <th className="px-4 py-2 font-medium">Patient</th>
+                <th className="px-4 py-2 font-medium">Doctor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {appts.map((a, i) => (
+                <tr key={i} className="border-t border-hairline">
+                  <td className="whitespace-nowrap px-4 py-2 numeral tabular-nums">
+                    {new Date(a.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2">
+                    {a.time
+                      ? new Date(`2000-01-01T${a.time}`).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })
+                      : `Token ${a.token_number ?? "—"}`}
+                  </td>
+                  <td className="px-4 py-2 font-medium">{a.patient_name}</td>
+                  <td className="px-4 py-2">{a.doctor_name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

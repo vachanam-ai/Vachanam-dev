@@ -86,6 +86,73 @@ async def list_patients(
     return {"patients": patients}
 
 
+@router.get(
+    "/branches/{branch_id}/upcoming",
+    dependencies=[Depends(default_limit)],
+)
+async def upcoming_appointments(
+    branch_id: uuid.UUID,
+    days: int = 15,
+    doctor_id: str | None = None,
+    on_date: str | None = None,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Confirmed bookings from today through today+days (default 15), for the
+    Patients page forward view (Vinay 2026-07-15). Filters: doctor_id, on_date
+    (YYYY-MM-DD). RULE 1 branch-scoped; one join, no N+1."""
+    from datetime import date as _date
+    from datetime import timedelta as _td
+
+    from backend.routers.queue import _branch_today
+
+    await assert_branch_access(user, str(branch_id), db)
+    days = max(1, min(days, 90))
+    today = await _branch_today(branch_id, db)
+    end = today + _td(days=days)
+
+    q = (
+        select(Token, Patient.name, Doctor.name.label("doc"))
+        .join(Patient, Patient.id == Token.patient_id)
+        .join(Doctor, Doctor.id == Token.doctor_id)
+        .where(
+            Token.branch_id == branch_id,  # RULE 1
+            Token.status == "confirmed",
+            Token.date >= today,
+            Token.date <= end,
+        )
+    )
+    if doctor_id:
+        try:
+            q = q.where(Token.doctor_id == uuid.UUID(doctor_id))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid doctor_id")
+    if on_date:
+        try:
+            q = q.where(Token.date == _date.fromisoformat(on_date))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="on_date must be YYYY-MM-DD")
+
+    rows = (
+        await db.execute(
+            q.order_by(Token.date, Token.appointment_time.is_(None), Token.appointment_time)
+        )
+    ).all()
+    return {
+        "appointments": [
+            {
+                "patient_name": pname,
+                "doctor_name": doc,
+                "date": t.date.isoformat(),
+                "time": t.appointment_time.strftime("%H:%M") if t.appointment_time else None,
+                "token_number": t.token_number,
+            }
+            for (t, pname, doc) in rows
+        ],
+        "days": days,
+    }
+
+
 @router.delete("/{patient_id}")
 async def delete_patient(
     patient_id: uuid.UUID,

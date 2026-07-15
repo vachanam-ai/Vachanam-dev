@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { fetchDoctors, markUnavailable, previewAffected } from "../api/client.js";
+import { fetchDoctors, markUnavailable, previewAffected, fetchUpcomingLeave } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
@@ -74,6 +74,8 @@ export default function Availability() {
         </p>
       </div>
 
+      <UpcomingLeave branchId={branchId} />
+
       <form
         data-reveal
         className="card space-y-5 p-6"
@@ -144,5 +146,46 @@ export default function Availability() {
         </p>
       </form>
     </div>
+  );
+}
+
+
+function UpcomingLeave({ branchId }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["upcoming-leave", branchId],
+    queryFn: () => fetchUpcomingLeave(branchId, 30),
+    enabled: Boolean(branchId)
+  });
+  const leave = data?.leave ?? [];
+
+  return (
+    <section data-reveal className="card overflow-hidden">
+      <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+        <h2 className="font-display text-lg font-semibold">On leave · next 30 days</h2>
+        <span className="chip-muted">{leave.length}</span>
+      </header>
+      {isLoading ? (
+        <p className="px-4 py-6 font-ui text-sm text-slate">Loading…</p>
+      ) : leave.length === 0 ? (
+        <p className="px-4 py-6 font-ui text-sm text-slate">No doctors on leave in the next 30 days.</p>
+      ) : (
+        <ul className="divide-y divide-hairline">
+          {leave.map((l, i) => {
+            const from = new Date(l.from);
+            const to = new Date(l.to);
+            const fmt = (d) => d.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+            const same = l.from === l.to;
+            return (
+              <li key={i} className="flex items-center justify-between px-4 py-3">
+                <span className="font-ui text-sm font-medium">{l.doctor_name}</span>
+                <span className="font-ui text-sm text-slate numeral tabular-nums">
+                  {same ? fmt(from) : `${fmt(from)} → ${fmt(to)}`}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

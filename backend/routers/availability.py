@@ -544,3 +544,64 @@ async def remove_unavailability(
         "date": date_str,
         "doctor_id": doctor_id,
     }
+
+
+@router.get("/{branch_id}/leave/upcoming")
+async def upcoming_leave(
+    branch_id: str,
+    days: int = 30,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """All doctors on leave from today through today+days (default 30),
+    grouped into consecutive from-to ranges (Vinay 2026-07-15). RULE 1
+    branch-scoped; read-only. Roles: receptionist + org_admin."""
+    from datetime import timedelta as _td
+
+    from backend.routers.queue import _branch_today
+
+    await assert_branch_access(current_user, branch_id, db)
+    try:
+        branch_uuid = uuid.UUID(branch_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid branch_id")
+
+    today = await _branch_today(branch_uuid, db)
+    end = today + _td(days=days)
+
+    rows = (
+        await db.execute(
+            select(DoctorUnavailability.doctor_id, DoctorUnavailability.date, Doctor.name)
+            .join(Doctor, Doctor.id == DoctorUnavailability.doctor_id)
+            .where(
+                DoctorUnavailability.branch_id == branch_uuid,  # RULE 1
+                DoctorUnavailability.date >= today,
+                DoctorUnavailability.date <= end,
+            )
+            .order_by(Doctor.name, DoctorUnavailability.date)
+        )
+    ).all()
+
+    # Group consecutive dates per doctor into [from, to] ranges.
+    ranges: list[dict] = []
+    cur_doc = None
+    cur_name = None
+    run_start = None
+    prev = None
+    for doctor_id, d, name in rows:
+        if doctor_id != cur_doc or (prev is not None and (d - prev).days > 1):
+            if run_start is not None:
+                ranges.append({
+                    "doctor_name": cur_name,
+                    "from": run_start.isoformat(),
+                    "to": prev.isoformat(),
+                })
+            cur_doc, cur_name, run_start = doctor_id, name, d
+        prev = d
+        cur_name = name
+    if run_start is not None:
+        ranges.append({
+            "doctor_name": cur_name, "from": run_start.isoformat(), "to": prev.isoformat(),
+        })
+
+    return {"leave": ranges, "days": days}
