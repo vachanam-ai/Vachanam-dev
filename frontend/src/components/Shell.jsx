@@ -25,6 +25,7 @@ const NAV = {
   ],
   doctor: [
     { to: "/my-schedule", label: "My Schedule" },
+    { to: "/queue", label: "Queue" },
     { to: "/treatments", label: "Treatments" },
     { to: "/tickets", label: "Support" }
   ],

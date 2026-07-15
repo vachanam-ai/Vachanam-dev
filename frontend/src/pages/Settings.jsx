@@ -7,6 +7,7 @@ import {
   cloneBranchVoice,
   createPaymentOrder,
   fetchBranchSettings,
+  fetchDoctors,
   fetchPlan,
   fetchStaff,
   getBranchFaq,
@@ -111,7 +112,7 @@ export default function Settings() {
 
   const [form, setForm] = useState(null);
   const [calOk, setCalOk] = useState(null);
-  const [newStaff, setNewStaff] = useState({ name: "", email: "", password: "", role: "receptionist" });
+  const [newStaff, setNewStaff] = useState({ name: "", email: "", password: "", role: "receptionist", doctor_id: "" });
 
   useEffect(() => {
     if (data && form === null) {
@@ -844,9 +845,22 @@ export default function Settings() {
         <form className="mt-5 grid gap-3 border-t border-hairline pt-5 sm:grid-cols-2"
           onSubmit={(e) => { e.preventDefault(); invite.mutate(); }}>
           <div>
-            <label className="label">Name</label>
-            <input className="field" required value={newStaff.name}
-              onChange={(e) => setNewStaff((s) => ({ ...s, name: e.target.value }))} />
+            <label className="label">{newStaff.role === "doctor" ? "Which doctor" : "Name"}</label>
+            {newStaff.role === "doctor" ? (
+              <select className="field" required value={newStaff.doctor_id}
+                onChange={(e) => {
+                  const doc = allDoctors.find((d) => d.id === e.target.value);
+                  setNewStaff((s) => ({ ...s, doctor_id: e.target.value, name: doc?.name ?? "" }));
+                }}>
+                <option value="">Select a doctor…</option>
+                {unlinkedDoctors.map((d) => (
+                  <option key={d.id} value={d.id}>{d.name}</option>
+                ))}
+              </select>
+            ) : (
+              <input className="field" required value={newStaff.name}
+                onChange={(e) => setNewStaff((s) => ({ ...s, name: e.target.value }))} />
+            )}
           </div>
           <div>
             <label className="label">Email (their login)</label>
@@ -861,7 +875,7 @@ export default function Settings() {
           <div>
             <label className="label">Role</label>
             <select className="field" value={newStaff.role}
-              onChange={(e) => setNewStaff((s) => ({ ...s, role: e.target.value }))}>
+              onChange={(e) => setNewStaff((s) => ({ ...s, role: e.target.value, name: "", doctor_id: "" }))}>
               <option value="receptionist">Receptionist</option>
               <option value="doctor">Doctor</option>
             </select>
@@ -870,10 +884,17 @@ export default function Settings() {
             {invite.isPending ? "Creating…" : "Add team member"}
           </button>
         </form>
+        {newStaff.role === "doctor" && unlinkedDoctors.length === 0 && (
+          <p className="mt-2 font-ui text-sm text-slate">
+            Every doctor already has a login. Add the doctor first under
+            Settings → Doctors, then create their account here.
+          </p>
+        )}
         <InfoBox>
-          <p>Share the email + temporary password with them. They sign in at this site — reception lands on
-            the Queue, doctors on their schedule. They can also use "Continue with Google" if the Google
-            account has the same email.</p>
+          <p>A doctor login is linked to an existing doctor — pick them from the list so their
+            schedule, queue and treatments show only their own patients. Share the email + temporary
+            password; they sign in here (or "Continue with Google" with the same email). Reception lands
+            on the Queue, doctors on their schedule.</p>
         </InfoBox>
       </Section>
     </div>

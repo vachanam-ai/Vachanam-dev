@@ -76,7 +76,7 @@ export default function App() {
         <Route
           path="/queue"
           element={
-            <Protected roles={["receptionist", "org_admin"]}>
+            <Protected roles={["receptionist", "org_admin", "doctor"]}>
               <Queue />
             </Protected>
           }

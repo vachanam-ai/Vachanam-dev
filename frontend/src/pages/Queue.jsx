@@ -72,7 +72,7 @@ function PatientRow({ p, doctor, onAttend, onNoShow, busy }) {
 }
 
 export default function Queue() {
-  const { branchId } = useAuth();
+  const { branchId, role, user } = useAuth();
   const qc = useQueryClient();
   const pageRef = useRef(null);
 
@@ -154,7 +154,10 @@ export default function Queue() {
         <SummaryStat label="No-shows" value={s.no_show} />
       </div>
 
-      {data.doctors.map((d) => (
+      {(role === "doctor"
+        ? data.doctors.filter((d) => d.doctor_user_id === user?.user_id)
+        : data.doctors
+      ).map((d) => (
         <section key={d.doctor_id} data-reveal className="card overflow-hidden">
           <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
             <h2 className="font-display text-lg font-semibold">{d.doctor_name}</h2>

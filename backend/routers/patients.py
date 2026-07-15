@@ -111,6 +111,22 @@ async def upcoming_appointments(
     today = await _branch_today(branch_id, db)
     end = today + _td(days=days)
 
+    # A doctor login sees ONLY their own patients (Vinay 2026-07-15): force the
+    # filter to their linked Doctor row, ignoring any doctor_id they pass. An
+    # unlinked doctor account (shouldn't happen — add_staff binds it) sees none.
+    if user.role == "doctor":
+        own = (
+            await db.execute(
+                select(Doctor.id).where(
+                    Doctor.branch_id == branch_id,
+                    Doctor.user_id == uuid.UUID(user.user_id),
+                )
+            )
+        ).scalar_one_or_none()
+        if own is None:
+            return {"appointments": [], "days": days}
+        doctor_id = str(own)
+
     q = (
         select(Token, Patient.name, Doctor.name.label("doc"))
         .join(Patient, Patient.id == Token.patient_id)

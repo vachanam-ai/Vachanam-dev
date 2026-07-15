@@ -10,6 +10,7 @@ import {
   updateDoctor
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
+import { fetchUpcoming } from "../api/patients.js";
 import { revealStagger } from "../lib/motion.js";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 0-6
@@ -329,5 +330,55 @@ export default function DoctorSchedule() {
         />
       )}
     </div>
+  );
+}
+
+
+function MyUpcomingPatients({ branchId }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["my-upcoming", branchId],
+    queryFn: () => fetchUpcoming(branchId, { days: 30 }),
+    enabled: Boolean(branchId)
+  });
+  const appts = data?.appointments ?? [];
+  return (
+    <section data-reveal className="card overflow-hidden">
+      <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+        <h2 className="font-display text-lg font-semibold">My patients · next 30 days</h2>
+        <span className="chip-muted">{appts.length}</span>
+      </header>
+      {isLoading ? (
+        <p className="px-4 py-6 font-ui text-sm text-slate">Loading…</p>
+      ) : appts.length === 0 ? (
+        <p className="px-4 py-6 font-ui text-sm text-slate">No upcoming patients.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full font-ui text-sm">
+            <thead>
+              <tr className="text-left text-slate">
+                <th className="px-4 py-2 font-medium">Date</th>
+                <th className="px-4 py-2 font-medium">Time / Token</th>
+                <th className="px-4 py-2 font-medium">Patient</th>
+              </tr>
+            </thead>
+            <tbody>
+              {appts.map((a, i) => (
+                <tr key={i} className="border-t border-hairline">
+                  <td className="whitespace-nowrap px-4 py-2 numeral tabular-nums">
+                    {new Date(a.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-2">
+                    {a.time
+                      ? new Date(`2000-01-01T${a.time}`).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })
+                      : `Token ${a.token_number ?? "—"}`}
+                  </td>
+                  <td className="px-4 py-2 font-medium">{a.patient_name}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

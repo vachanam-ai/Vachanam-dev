@@ -157,3 +157,64 @@ async def test_leave_excludes_beyond_window_and_isolates(client, db):
     r2 = await client.get(f"/availability/{b2.id}/leave/upcoming",
                           headers=_auth(_owner(str(org.id), str(b.id))))
     assert r2.status_code in (403, 404)
+
+
+# ── Doctor-scoped views (Vinay 2026-07-15) ───────────────────────────────────
+
+
+def _doctor_jwt(org_id, branch_id, user_id):
+    now = datetime.now(timezone.utc)
+    return jwt.encode({
+        "sub": user_id, "email": "doc@t.test", "role": "doctor",
+        "org_id": org_id, "branch_ids": [branch_id], "is_admin": False,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(hours=8)).timestamp()), "jti": str(uuid.uuid4()),
+    }, settings.jwt_secret, algorithm=_ALGO)
+
+
+@pytest.mark.asyncio
+async def test_doctor_upcoming_is_forced_to_own_patients(client, db):
+    from backend.models.schema import User
+
+    org, b = await _clinic(db)
+    d1 = await _doctor(db, b, "Dr Self")
+    d2 = await _doctor(db, b, "Dr Other")
+    uid = uuid.uuid4()
+    db.add(User(id=uid, email="docself@t.test", name="Dr Self", role="doctor",
+                org_id=org.id, branch_ids=[str(b.id)]))
+    await db.flush()
+    d1.user_id = uid
+    await db.commit()
+
+    today = date.today()
+    await _booking(db, b, d1, today + timedelta(days=1), time(10, 0), "Mine")
+    await _booking(db, b, d2, today + timedelta(days=1), time(11, 0), "Theirs")
+
+    tok = _doctor_jwt(str(org.id), str(b.id), str(uid))
+    # even if the doctor passes the OTHER doctor's id, they get only their own
+    r = await client.get(f"/patients/branches/{b.id}/upcoming",
+                         params={"doctor_id": str(d2.id)}, headers=_auth(tok))
+    assert r.status_code == 200, r.text
+    names = [a["patient_name"] for a in r.json()["appointments"]]
+    assert names == ["Mine"]
+
+
+@pytest.mark.asyncio
+async def test_queue_exposes_doctor_user_id_for_filtering(client, db):
+    from backend.models.schema import User
+
+    org, b = await _clinic(db)
+    d = await _doctor(db, b, "Dr Q")
+    uid = uuid.uuid4()
+    db.add(User(id=uid, email="docq@t.test", name="Dr Q", role="doctor",
+                org_id=org.id, branch_ids=[str(b.id)]))
+    await db.flush()
+    d.user_id = uid
+    await db.commit()
+    await _booking(db, b, d, date.today(), time(10, 0), "QPat")
+
+    tok = _owner(str(org.id), str(b.id))
+    r = await client.get(f"/queue/{b.id}/today", headers=_auth(tok))
+    assert r.status_code == 200, r.text
+    docs = r.json()["doctors"]
+    assert any(x.get("doctor_user_id") == str(uid) for x in docs)

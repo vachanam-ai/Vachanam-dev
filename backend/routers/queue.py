@@ -56,6 +56,7 @@ class PatientEntry(BaseModel):
 class DoctorEntry(BaseModel):
     doctor_id: str
     doctor_name: str
+    doctor_user_id: str | None = None  # lets a doctor login filter to own queue
     booking_type: str
     stats: dict
     patients: list[PatientEntry]
@@ -142,6 +143,7 @@ async def get_today_queue(
             doctors_map[did] = DoctorEntry(
                 doctor_id=did,
                 doctor_name=doctor.name,
+                doctor_user_id=str(doctor.user_id) if doctor.user_id else None,
                 booking_type=doctor.booking_type,
                 stats={"attended": 0, "no_show": 0, "remaining": 0},
                 patients=[],
