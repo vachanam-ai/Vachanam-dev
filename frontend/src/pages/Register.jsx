@@ -7,6 +7,7 @@ import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
+import PasswordField from "../components/PasswordField.jsx";
 
 const PLANS = { lite: "Lite", solo: "Starter", clinic: "Clinic", multi: "Multi" };
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -203,7 +204,7 @@ export default function Register() {
                 onBlur={blur("owner_name")} placeholder="Dr. Srinivas" />
             </Field>
             <Field label="Password" err={fieldErr("password")}>
-              <input className="field" type="password" value={form.password} onChange={set("password")}
+              <PasswordField value={form.password} onChange={set("password")} autoComplete="new-password"
                 onBlur={blur("password")} placeholder="Password" />
             </Field>
 

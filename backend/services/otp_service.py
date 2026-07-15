@@ -40,15 +40,19 @@ def _verified_key(channel: str, dest: str) -> str:
 
 async def issue_code(channel: str, dest: str) -> str | None:
     """Generate + store a code, send it, and (dev) return it. channel: sms|email."""
-    # G16: per-destination send cooldown — one real send per dest per 60s, so a
-    # single attacker can't SMS-bomb a victim's number (and burn MSG91 credits)
-    # by spamming /request-otp. Only throttle when a provider is actually wired;
-    # dev/no-provider keeps echoing so the signup flow stays testable. The
-    # previously-issued code is still valid (TTL 600s) during the cooldown.
+    # G16: per-destination send cooldown — one real send per dest per window, so
+    # a single attacker can't bomb a victim (and burn provider credits) by
+    # spamming /request-otp or /forgot-password. Only throttle when a provider is
+    # actually wired; dev/no-provider keeps echoing so the signup flow stays
+    # testable. The previously-issued code is still valid (TTL 600s) during the
+    # cooldown. SMS = 60s (costs money per send). Email = 25s: it MUST sit below
+    # the client's first "resend" tier (30s, Login.jsx) so a legitimate resend
+    # the user waited for is never silently swallowed — email is cheap.
     if _provider_configured(channel):
+        cooldown = 25 if channel == "email" else 60
         r_cd = _redis()
         try:
-            fresh = await r_cd.set(f"otp_cd:{channel}:{dest}", "1", ex=60, nx=True)
+            fresh = await r_cd.set(f"otp_cd:{channel}:{dest}", "1", ex=cooldown, nx=True)
         finally:
             await r_cd.aclose()
         if not fresh:

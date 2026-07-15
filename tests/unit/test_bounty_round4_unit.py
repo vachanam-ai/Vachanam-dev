@@ -137,6 +137,33 @@ async def test_otp_send_throttled_per_destination(monkeypatch, redis):
     assert sends["n"] == 1
 
 
+@pytest.mark.asyncio
+async def test_email_cooldown_below_client_resend_tier(monkeypatch, redis):
+    """The email send-cooldown MUST be <= the client's first resend tier (30s,
+    Login.jsx), so a legit resend the user waited 30s for is never silently
+    swallowed. SMS stays the longer 60s anti-bomb window (real per-send cost)."""
+    import uuid
+
+    monkeypatch.setattr(settings, "resend_api_key", "re_key", raising=False)
+    monkeypatch.setattr(settings, "msg91_auth_key", "key", raising=False)
+    monkeypatch.setattr(settings, "app_env", "development", raising=False)
+    monkeypatch.setattr(otp_service, "_send", lambda *a, **k: _async_true())
+
+    email = f"cd-{uuid.uuid4().hex[:8]}@realclinic.in"
+    await otp_service.issue_code("email", email)
+    email_ttl = await redis.ttl(f"otp_cd:email:{email}")
+    assert 0 < email_ttl <= 30, f"email cooldown {email_ttl}s must be <= 30s resend tier"
+
+    phone = f"+9199{uuid.uuid4().int % 10**8:08d}"
+    await otp_service.issue_code("sms", phone)
+    sms_ttl = await redis.ttl(f"otp_cd:sms:{phone}")
+    assert sms_ttl > 30, f"sms cooldown {sms_ttl}s should stay the longer anti-bomb window"
+
+
+async def _async_true():
+    return True
+
+
 def test_recording_hard_off_in_production():
     """No-voice-recording: production never records even if the flag is on."""
     prod = Settings(app_env="production", recording_enabled=True)
