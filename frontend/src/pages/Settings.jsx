@@ -109,6 +109,15 @@ export default function Settings() {
     queryFn: () => fetchStaff(branchId),
     enabled: Boolean(branchId)
   });
+  // Doctors, to offer as the "Which doctor" dropdown when creating a doctor
+  // login. A doctor account links to an existing Doctor row — only those
+  // without a login yet (user_id null) are selectable.
+  const { data: doctors = [] } = useQuery({
+    queryKey: ["doctors", branchId],
+    queryFn: () => fetchDoctors(branchId),
+    enabled: Boolean(branchId)
+  });
+  const unlinkedDoctors = doctors.filter((d) => !d.user_id);
 
   const [form, setForm] = useState(null);
   const [calOk, setCalOk] = useState(null);
@@ -850,7 +859,7 @@ export default function Settings() {
             {newStaff.role === "doctor" ? (
               <select className="field" required value={newStaff.doctor_id}
                 onChange={(e) => {
-                  const doc = allDoctors.find((d) => d.id === e.target.value);
+                  const doc = doctors.find((d) => d.id === e.target.value);
                   setNewStaff((s) => ({ ...s, doctor_id: e.target.value, name: doc?.name ?? "" }));
                 }}>
                 <option value="">Select a doctor…</option>
