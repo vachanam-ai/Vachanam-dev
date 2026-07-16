@@ -269,7 +269,7 @@ export default function Landing() {
               className={`card relative flex flex-col p-7 ${p.popular ? "border-teal shadow-lift ring-1 ring-teal/30" : ""}`}
             >
               {p.popular && (
-                <span className="absolute -top-3 left-6 rounded-full bg-gold px-3 py-1 font-ui text-xs font-semibold text-gold-ink">
+                <span className="absolute -top-3 left-6 rounded-full bg-gold px-3 py-1 font-ui text-xs font-semibold text-black">
                   Most popular
                 </span>
               )}
