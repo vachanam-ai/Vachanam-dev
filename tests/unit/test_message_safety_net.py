@@ -28,7 +28,6 @@ def test_teardown_net_present_and_guarded():
     assert "not state.message_taken" in net
     assert "not state.question_logged" in net
     assert "not state.token_confirmed" in net
-    assert 'org_vertical != "sales"' in net
     assert "auto-captured" in net
     # the exact phrase the failed call used is a marker
     assert "తెలియజేస్తాను" in net

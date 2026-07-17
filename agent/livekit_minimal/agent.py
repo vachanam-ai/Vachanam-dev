@@ -3540,9 +3540,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # words as a PatientMessage so the clinic never loses it. Extra
                 # capture on a false positive is benign; a lost message is not.
                 try:
+                    # (master is clinic-only; the sales branch adds a vertical
+                    # guard here so Kiran's sales promises never trigger this.)
                     if (
-                        org_vertical != "sales"
-                        and not state.message_taken
+                        not state.message_taken
                         and not state.question_logged
                         and not state.token_confirmed
                     ):
