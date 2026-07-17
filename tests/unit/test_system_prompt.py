@@ -443,3 +443,14 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     # phone digit-by-digit hard rule (never joined)
     assert "PHONE NUMBERS ARE ALWAYS ENGLISH, DIGIT BY DIGIT" in prompt
     assert "NEVER write the ten digits joined" in prompt
+
+
+def test_system_prompt_lead_in_rule():
+    """Vinay 2026-07-17: cut perceived turn latency — every reply opens with a
+    tiny spoken lead-in ("ఓకే,"/"సరే,") so the first TTS chunk is 1-2 words and
+    audio starts near-instantly; connectors keep mid-reply sentences flowing."""
+    prompt = _make_prompt()
+    assert "OPEN EVERY REPLY WITH A SHORT SPOKEN LEAD-IN" in prompt
+    assert "ONE lead-in only" in prompt
+    # verbose filler sentences stay banned — the cached checking-filler covers tools
+    assert "ఒక్క నిమిషం" in prompt
