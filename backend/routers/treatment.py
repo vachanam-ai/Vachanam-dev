@@ -101,6 +101,29 @@ async def _assert_visit_not_future(
         raise HTTPException(status_code=422, detail="visit_date cannot be in the future")
 
 
+async def _forced_doctor_id(
+    user: CurrentUser, branch_id: uuid.UUID, db: AsyncSession
+) -> uuid.UUID | None:
+    """A doctor login acts ONLY as its own Doctor row (Vinay 2026-07-16: a
+    doctor could read/write every doctor's treatments — the client-side
+    doctor_id filter was optional and forgeable). Returns the linked Doctor id
+    to FORCE for role=doctor; None for other roles (no forcing). An unlinked
+    doctor login (should not happen — add_staff binds it) gets 403."""
+    if user.role != "doctor":
+        return None
+    own = (
+        await db.execute(
+            select(Doctor.id).where(
+                Doctor.branch_id == branch_id,
+                Doctor.user_id == uuid.UUID(user.user_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if own is None:
+        raise HTTPException(status_code=403, detail="No doctor profile linked to this login")
+    return own
+
+
 @router.post("/patients/{patient_id}/treatment-notes", status_code=201, response_model=NoteOut)
 async def create_note(
     patient_id: uuid.UUID,
@@ -109,6 +132,9 @@ async def create_note(
     db: AsyncSession = Depends(get_db),
 ) -> NoteOut:
     await assert_branch_access(user, str(body.branch_id), db)
+    own = await _forced_doctor_id(user, body.branch_id, db)
+    if own is not None and body.doctor_id != own:
+        raise HTTPException(status_code=403, detail="Doctors can only write their own treatment notes")
     await _load_patient(patient_id, body.branch_id, db)
     await _load_doctor(body.doctor_id, body.branch_id, db)
     await _assert_visit_not_future(body.visit_date, body.branch_id, db)  # B7
@@ -150,6 +176,9 @@ async def edit_note(
     db: AsyncSession = Depends(get_db),
 ) -> NoteOut:
     await assert_branch_access(user, str(body.branch_id), db)
+    own = await _forced_doctor_id(user, body.branch_id, db)
+    if own is not None and body.doctor_id != own:
+        raise HTTPException(status_code=403, detail="Doctors can only edit their own treatment notes")
     await _load_doctor(body.doctor_id, body.branch_id, db)
     await _assert_visit_not_future(body.visit_date, body.branch_id, db)  # B7
     if body.next_reporting_date and body.next_reporting_date < body.visit_date:
@@ -162,6 +191,8 @@ async def edit_note(
     )).scalar_one_or_none()
     if note is None:
         raise HTTPException(status_code=404, detail="note not found")
+    if own is not None and note.doctor_id != own:
+        raise HTTPException(status_code=403, detail="Doctors can only edit their own treatment notes")
     note.visit_date = body.visit_date
     note.steps_performed = body.steps_performed
     note.next_steps = body.next_steps
@@ -193,7 +224,11 @@ async def list_notes(
 ) -> dict:
     await assert_branch_access(user, str(branch_id), db)
     # doctor_id: scope the visit history to ONE treatment thread — a patient
-    # can run concurrent treatments with different doctors.
+    # can run concurrent treatments with different doctors. A doctor login is
+    # FORCED to its own thread regardless of what the client sent.
+    own = await _forced_doctor_id(user, branch_id, db)
+    if own is not None:
+        doctor_id = own
     q = select(TreatmentNote).where(
         TreatmentNote.patient_id == patient_id,
         TreatmentNote.branch_id == branch_id,
@@ -222,6 +257,10 @@ async def list_patients(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await assert_branch_access(user, str(branch_id), db)
+    # A doctor login sees ONLY its own patients — forced server-side.
+    own = await _forced_doctor_id(user, branch_id, db)
+    if own is not None:
+        doctor_id = own
     # Latest note per patient (branch-scoped) drives active/last-visit/next-date.
     q = select(TreatmentNote).where(TreatmentNote.branch_id == branch_id)
     if doctor_id:
@@ -307,6 +346,11 @@ async def end_treatment(
     job. RULE 1: branch-scoped; RULE 9: audit row keeps IDs only.
     """
     await assert_branch_access(user, str(body.branch_id), db)
+    # A doctor login may only end ITS OWN treatment thread — never another
+    # doctor's, never "all threads" for the patient.
+    own = await _forced_doctor_id(user, body.branch_id, db)
+    if own is not None:
+        body.doctor_id = own
     await _load_patient(patient_id, body.branch_id, db)
 
     note_filter = [
@@ -372,6 +416,9 @@ async def list_followups(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await assert_branch_access(user, str(branch_id), db)
+    own = await _forced_doctor_id(user, branch_id, db)
+    if own is not None:
+        doctor_id = own
     q = select(FollowupTask).where(
         FollowupTask.patient_id == patient_id,
         FollowupTask.branch_id == branch_id,
@@ -404,6 +451,9 @@ async def doctor_reply(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     await assert_branch_access(user, str(body.branch_id), db)
+    own = await _forced_doctor_id(user, body.branch_id, db)
+    if own is not None and body.doctor_id != own:
+        raise HTTPException(status_code=403, detail="Doctors can only reply on their own treatment threads")
     await _load_patient(patient_id, body.branch_id, db)
     await _load_doctor(body.doctor_id, body.branch_id, db)
     task = FollowupTask(

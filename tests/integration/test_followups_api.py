@@ -29,8 +29,8 @@ from backend.models.schema import (
 from backend.middleware.auth_middleware import get_current_user, CurrentUser
 
 
-def _u(b, o, user_id=None):
-    return CurrentUser(user_id=str(user_id or uuid.uuid4()), email="d@c", role="doctor",
+def _u(b, o, user_id=None, role="doctor"):
+    return CurrentUser(user_id=str(user_id or uuid.uuid4()), email="d@c", role=role,
                        org_id=str(o), branch_ids=[str(b)], is_admin=False,
                        jti=str(uuid.uuid4()))
 
@@ -52,7 +52,10 @@ async def test_doctor_reply_creates_advice_task(db):
     usr = _user(o)
     br = Branch(id=uuid.uuid4(), org_id=o, name="C", whatsapp_number="+910000000040")
     db.add_all([usr, br]); await db.flush()
-    doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token")
+    # Doctor-role scoping (2026-07-16): a doctor login must be LINKED to its
+    # Doctor row and may only act on its own thread.
+    doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token",
+                 user_id=usr.id)
     pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000040")
     db.add_all([doc, pat]); await db.commit()
     app.dependency_overrides[get_current_user] = lambda: _u(br.id, o, user_id=usr.id)
@@ -81,7 +84,8 @@ async def test_list_followups_thread_ordered(db):
     usr = _user(o)
     br = Branch(id=uuid.uuid4(), org_id=o, name="C", whatsapp_number="+910000000041")
     db.add_all([usr, br]); await db.flush()
-    doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token")
+    doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token",
+                 user_id=usr.id)  # linked: doctor login reads its own thread
     pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000041")
     db.add_all([doc, pat]); await db.flush()
     # In-thread: next_visit_book + doctor_advice; out-of-thread: post_appt_check (hidden).
@@ -116,7 +120,10 @@ async def test_list_followups_thread_ordered(db):
 @pytest.mark.asyncio
 async def test_cross_branch_doctor_id_rejected_on_reply(db):
     """RULE 1 write-hygiene: doctor_reply with a doctor_id from another branch is
-    rejected with 404, even when the user's branch_access is legitimate."""
+    rejected with 404, even when the user's branch_access is legitimate.
+    Uses org_admin: a doctor-role login is now stopped EARLIER (403, own-thread
+    forcing, 2026-07-16) — this test guards the cross-branch 404 for the roles
+    that may pick a doctor_id freely."""
     o = uuid.uuid4()
     other_o = uuid.uuid4()
     db.add_all([_org(o), _org(other_o)]); await db.flush()
@@ -127,7 +134,7 @@ async def test_cross_branch_doctor_id_rejected_on_reply(db):
     other_doc = Doctor(id=uuid.uuid4(), branch_id=other.id, name="Dr Out", booking_type="token")
     pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000044")
     db.add_all([other_doc, pat]); await db.commit()
-    app.dependency_overrides[get_current_user] = lambda: _u(br.id, o, user_id=usr.id)
+    app.dependency_overrides[get_current_user] = lambda: _u(br.id, o, user_id=usr.id, role="org_admin")
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
             r = await ac.post(f"/treatment/patients/{pat.id}/followups", json={
