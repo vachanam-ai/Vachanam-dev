@@ -452,5 +452,8 @@ def test_system_prompt_lead_in_rule():
     prompt = _make_prompt()
     assert "OPEN EVERY REPLY WITH A SHORT SPOKEN LEAD-IN" in prompt
     assert "ONE lead-in only" in prompt
+    # lead-in must match the language being spoken — per-language examples present
+    assert "LANGUAGE YOU ARE CURRENTLY SPEAKING" in prompt
+    assert "ठीक है," in prompt and "Okay," in prompt
     # verbose filler sentences stay banned — the cached checking-filler covers tools
     assert "ఒక్క నిమిషం" in prompt
