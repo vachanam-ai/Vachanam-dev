@@ -95,9 +95,10 @@ offer price labeled "Offer price — first 3 months". Source of truth:
 `billing_math.py` OFFER_PRICES / in_offer_window / effective_price /
 cloning_allowed.
 
-Free trial: 14 days, no card, 300 min (≈100 calls) — HARD-enforced (trials
-always block on exhaust in `call_blocked`, 2026-07-11). Day 12 Razorpay link;
-day 14 pause if unpaid.
+Free trial: REMOVED 2026-07-17 (Vinay) — new signups start `paused`; the AI
+line answers with the blocked line until the first payment activates. Legacy
+trial logic (TRIAL_MINUTES, call_blocked trial branches, trial jobs) stays for
+pre-existing trial orgs only.
 
 Cost (VARIABLE only): ~₹2.0/min typical, ₹2.6 worst (Vobiz + Soniox +
 smallest.ai + Gemini + LiveKit); pricing assumes ₹3/min for safety, + ₹1,000/mo

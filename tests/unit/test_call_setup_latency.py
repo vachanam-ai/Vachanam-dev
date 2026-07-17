@@ -35,7 +35,9 @@ def test_gate_keeps_fail_closed_semantics():
 def test_blocked_org_still_decided_before_greeting():
     # The gate unpack (and blocked-path return) must appear BEFORE the
     # greeting task is created — a blocked org never hears the greeting.
-    assert SRC.index("blocked_reason, org_plan = _gate_res") < SRC.index(
+    # Prefix match: master unpacks 2 values, the sales branch adds
+    # org_vertical — the guard must hold on both.
+    assert SRC.index("blocked_reason, org_plan") < SRC.index(
         "ctx.room, _greet_texts, tts_voice"
     )
 

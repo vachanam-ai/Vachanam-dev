@@ -126,7 +126,7 @@ export default function Landing() {
               in under four minutes, around the clock.
             </p>
             <div data-hero className="mt-8 flex flex-wrap items-center gap-4">
-              <a href="#pricing" className="btn-primary px-6 py-3">Start 14-day free trial</a>
+              <a href="#pricing" className="btn-primary px-6 py-3">Get started</a>
               <a href="#voices" className="btn-ghost px-6 py-3">Hear the voices</a>
             </div>
             <p data-hero className="mt-4 font-ui text-xs text-slate">
@@ -301,13 +301,13 @@ export default function Landing() {
                 ))}
               </ul>
               <Link to={`/register?plan=${p.key}`} className={p.popular ? "btn-primary mt-6 w-full" : "btn-ghost mt-6 w-full"}>
-                Start free trial
+                Get started
               </Link>
             </div>
           ))}
         </div>
         <p data-item className="mt-6 text-center font-ui text-xs text-slate">
-          14-day trial · no card · 300 minutes (≈100 calls) · payment link arrives only when you&rsquo;re ready
+          No trial period — activate with the offer price and go live the same day · cancel anytime
           <br />
           Launch offer: pay the offer price for your first 3 months — no GST added, nothing extra.
         </p>
@@ -324,7 +324,7 @@ export default function Landing() {
           {" · "}India
         </p>
         <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
-          <Link to="/register" className="btn-gold inline-flex px-8 py-3">Start free trial</Link>
+          <Link to="/register" className="btn-gold inline-flex px-8 py-3">Get started</Link>
           <a href="mailto:hello@vachanam.in?subject=Talk%20to%20Vachanam" className="btn inline-flex border border-white/30 px-8 py-3 text-white hover:bg-surface/10">
             Talk to us
           </a>

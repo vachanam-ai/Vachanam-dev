@@ -102,7 +102,7 @@ export default function Register() {
               id_token: resp.credential,
               accepted_terms: true
             });
-            toast.success("Clinic created — 14-day trial started");
+            toast.success("Clinic created — activate your plan in Settings to go live");
             navigate(roleHome(me.role), { replace: true });
           } catch (e) {
             toast.error(e?.response?.data?.detail ?? "Google signup failed");
@@ -177,7 +177,7 @@ export default function Register() {
         email_otp: otp,
         accepted_terms: true
       });
-      toast.success("Clinic created — 14-day trial started");
+      toast.success("Clinic created — activate your plan in Settings to go live");
       navigate(roleHome(me.role), { replace: true });
     } catch (err) {
       toast.error(err?.response?.data?.detail ?? "Registration failed");
@@ -194,13 +194,13 @@ export default function Register() {
       <ThemeToggle float />
       <div className="w-full max-w-md">
         <Link to="/" data-reveal className="font-brand text-3xl text-teal">Vachanam</Link>
-        <p data-reveal className="eyebrow mt-8">Start free trial · {PLANS[form.plan]} plan</p>
+        <p data-reveal className="eyebrow mt-8">Get started · {PLANS[form.plan]} plan</p>
         <h1 data-reveal className="mt-2 font-display text-3xl font-semibold tracking-tight">
           {step === "details" ? "Create an account" : "Verify it's you"}
         </h1>
         <p data-reveal className="mt-2 font-ui text-sm text-slate">
           {step === "details"
-            ? "14 days free · 300 call minutes · no card needed"
+            ? "Launch offer — first 3 months at the offer price"
             : `Enter the 6-digit code we emailed to ${form.email}.`}
         </p>
 
@@ -309,7 +309,7 @@ export default function Register() {
             <Turnstile onToken={setTs} />
             <button className="btn-primary w-full py-3"
               disabled={busy || (TURNSTILE_ON && !ts)}>
-              {busy ? "Creating clinic…" : "Create clinic & start trial"}
+              {busy ? "Creating clinic…" : "Create clinic"}
             </button>
             <button type="button" className="btn-ghost w-full" onClick={() => setStep("details")}>
               Back to details

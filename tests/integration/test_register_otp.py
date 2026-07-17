@@ -171,6 +171,10 @@ async def test_full_signup_email_only(client, db):
     ).scalar_one()
     assert org.plan == "clinic"
     assert org.owner_phone == ""
+    # #392 (Vinay 2026-07-17): 14-day trial REMOVED — new orgs start paused
+    # (AI line blocked until first payment activates), no trial window.
+    assert org.status == "paused"
+    assert org.trial_ends_at is None
     user = (await db.execute(select(User).where(User.email == email))).scalar_one()
     assert user.role == "org_admin"
     assert user.phone is None

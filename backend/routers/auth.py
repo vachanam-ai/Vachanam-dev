@@ -339,7 +339,7 @@ def _verify_password(password: str, password_hash: str) -> bool:
     dependencies=[Depends(auth_google_limit), Depends(require_turnstile)],
 )
 async def register_clinic(request: Request, body: RegisterRequest) -> TokenResponse:
-    """Self-serve clinic signup: creates Organization (14-day trial) + Branch +
+    """Self-serve clinic signup: creates Organization (paused until first payment, #392) + Branch +
     org_admin User in one transaction, then signs the user in.
 
     Identity: either email+password (bcrypt) or a Google ID token.
@@ -434,8 +434,13 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             owner_phone="",
             owner_email=email,
             plan=body.plan,
-            status="trial",
-            trial_ends_at=datetime.now(_tz.utc) + timedelta(days=14),
+            # #392 (Vinay 2026-07-17: "remove 14-day trial"): no free window.
+            # New orgs start PAUSED — dashboard/Settings fully usable, the AI
+            # line answers with the polite blocked line until the first payment
+            # activates (Settings "Activate — pay" → webhook flips to active).
+            # Existing trial orgs keep their trial logic (call_blocked et al).
+            status="paused",
+            trial_ends_at=None,
         )
         db.add(org)
         await db.flush()
