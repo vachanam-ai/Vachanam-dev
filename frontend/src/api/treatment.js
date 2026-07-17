@@ -24,6 +24,13 @@ export const listFollowups = (patientId, branchId, doctorId) =>
 export const replyToPatient = (patientId, payload) =>
   api.post(`/treatment/patients/${patientId}/followups`, payload).then((r) => r.data);
 
+// Opening a thread marks the patient's messages seen (clears the unread
+// highlight) — WhatsApp model. Dashboard pending/done workflow untouched.
+export const markMessagesRead = (patientId, branchId) =>
+  api.post(`/treatment/patients/${patientId}/messages/mark-read`, {
+    branch_id: branchId,
+  }).then((r) => r.data);
+
 // Ends the thread only — never erases patient data (that lives on the
 // Patients page, deletePatient).
 export const endTreatment = (patientId, { branchId, doctorId }) =>

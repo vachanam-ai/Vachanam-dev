@@ -10,14 +10,14 @@ from datetime import date
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user, forbid_admin
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import default_limit  # SEC #4
-from backend.models.schema import TreatmentNote, Patient, FollowupTask, Doctor
+from backend.models.schema import TreatmentNote, Patient, FollowupTask, Doctor, PatientMessage
 from backend.services.treatment_logic import resolve_is_final
 
 logger = structlog.get_logger()
@@ -301,6 +301,23 @@ async def list_patients(
             )
         )).scalars().all()
     }
+    # Unread caller messages per patient (hh31 — WhatsApp-style highlight):
+    # a message has no doctor_id (it's for "the doctor/clinic"), so it lights
+    # up every thread of that patient. RULE 1: branch-scoped.
+    unread = {
+        row[0]: (row[1], row[2])
+        for row in (await db.execute(
+            select(
+                PatientMessage.patient_id,
+                func.count(PatientMessage.id),
+                func.max(PatientMessage.created_at),
+            ).where(
+                PatientMessage.branch_id == branch_id,
+                PatientMessage.patient_id.in_(pat_ids),
+                PatientMessage.read_at.is_(None),
+            ).group_by(PatientMessage.patient_id)
+        )).all()
+    }
     out = []
     for (pid, _did), n in latest.items():
         active = not n.is_final
@@ -309,6 +326,7 @@ async def list_patients(
         p = pats.get(pid)
         if p is None:
             continue
+        u_count, u_last = unread.get(pid, (0, None))
         out.append({
             "patient_id": str(pid),
             "name": p.name,
@@ -318,6 +336,8 @@ async def list_patients(
             "last_visit_date": n.visit_date.isoformat(),
             "next_reporting_date": n.next_reporting_date.isoformat() if n.next_reporting_date else None,
             "active": active,
+            "unread_messages": u_count,
+            "last_message_at": u_last.isoformat() if u_last else None,
         })
     return {"patients": out}
 
@@ -427,20 +447,77 @@ async def list_followups(
     if doctor_id:  # one thread per (patient, doctor) treatment
         q = q.where(FollowupTask.doctor_id == doctor_id)
     rows = (await db.execute(q.order_by(FollowupTask.created_at.asc()))).scalars().all()
-    return {
-        "thread": [
-            {
-                "id": str(t.id),
-                "task_type": t.task_type,
-                "message": t.what_to_ask,
-                "response": t.response_summary,
-                "status": t.status,
-                "scheduled_date": t.scheduled_date.isoformat() if t.scheduled_date else None,
-                "created_at": t.created_at.isoformat(),
-            }
-            for t in rows
-        ]
-    }
+    items = [
+        {
+            "id": str(t.id),
+            "task_type": t.task_type,
+            "message": t.what_to_ask,
+            "response": t.response_summary,
+            "status": t.status,
+            "scheduled_date": t.scheduled_date.isoformat() if t.scheduled_date else None,
+            "created_at": t.created_at.isoformat(),
+            "_sort": t.created_at,
+        }
+        for t in rows
+    ]
+    # Caller messages taken by the voice agent belong in this thread too
+    # (Vinay 2026-07-17: "patient in treatment called with a message — log it
+    # in their treatment"). No doctor_id on a message → shown on every thread
+    # of the patient. RULE 1: branch-scoped.
+    msgs = (await db.execute(
+        select(PatientMessage).where(
+            PatientMessage.patient_id == patient_id,
+            PatientMessage.branch_id == branch_id,
+        ).order_by(PatientMessage.created_at.asc())
+    )).scalars().all()
+    items += [
+        {
+            "id": str(m.id),
+            "task_type": "patient_message",
+            "message": None,
+            "response": m.message,
+            "status": m.status,
+            "urgent": m.urgent,
+            "unread": m.read_at is None,
+            "created_at": m.created_at.isoformat(),
+            "_sort": m.created_at,
+        }
+        for m in msgs
+    ]
+    items.sort(key=lambda x: x["_sort"])
+    for it in items:
+        it.pop("_sort")
+    return {"thread": items}
+
+
+class MarkReadIn(BaseModel):
+    branch_id: uuid.UUID
+
+
+@router.post("/patients/{patient_id}/messages/mark-read")
+async def mark_messages_read(
+    patient_id: uuid.UUID,
+    body: MarkReadIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Opening a treatment thread marks that patient's messages seen — the
+    WhatsApp model: highlight clears, list order returns to normal. Touches
+    ONLY read_at; the dashboard's pending/done callback workflow is separate.
+    Idempotent (already-read rows never match)."""
+    await assert_branch_access(user, str(body.branch_id), db)
+    await _load_patient(patient_id, body.branch_id, db)
+    res = await db.execute(
+        update(PatientMessage)
+        .where(
+            PatientMessage.branch_id == body.branch_id,
+            PatientMessage.patient_id == patient_id,
+            PatientMessage.read_at.is_(None),
+        )
+        .values(read_at=func.now())
+    )
+    await db.commit()
+    return {"marked": res.rowcount}
 
 
 @router.post("/patients/{patient_id}/followups", status_code=201)

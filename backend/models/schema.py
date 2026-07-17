@@ -310,6 +310,11 @@ class PatientMessage(Base):
     message: Mapped[str] = mapped_column(String(500), nullable=False)
     urgent: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(10), default="pending")  # pending | done
+    # Seen-in-treatment-thread marker (hh31, Vinay 2026-07-17: WhatsApp-style
+    # unread highlight on the Treatments list). NULL = unread. Independent of
+    # `status` — read is "the doctor saw it in the thread"; pending/done stays
+    # the owner's callback workflow on the dashboard.
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

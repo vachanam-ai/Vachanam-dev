@@ -23,7 +23,7 @@ def test_tools_set_flags_on_success():
 
 
 def test_teardown_net_present_and_guarded():
-    net = AGENT_SRC.split("MESSAGE SAFETY NET")[1][:3000]
+    net = AGENT_SRC.split("MESSAGE SAFETY NET")[1][:5000]
     # fires only when NOTHING was recorded, never for sales, never breaks teardown
     assert "not state.message_taken" in net
     assert "not state.question_logged" in net

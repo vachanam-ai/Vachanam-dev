@@ -3565,11 +3565,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 if ln.startswith("patient:")
                             )[:450]
                             if _caller_words:
+                                from backend.models.schema import Patient as _Pat
                                 from backend.models.schema import PatientMessage as _PM
 
                                 await db.rollback()
+                                # Link the message to the patient record when the
+                                # caller's phone matches (same rule take_message
+                                # uses) — a treating patient's message must land
+                                # in their treatment thread, not just the inbox.
+                                _net_pid = None
+                                if state.patient_phone:
+                                    _net_pid = (await db.execute(
+                                        select(_Pat.id).where(and_(
+                                            _Pat.branch_id == state.branch_id,
+                                            _Pat.phone == state.patient_phone,
+                                        )).limit(1)
+                                    )).scalar_one_or_none()
                                 db.add(_PM(
                                     branch_id=state.branch_id,
+                                    patient_id=_net_pid,
                                     caller_phone=state.patient_phone,
                                     message=(
                                         "[auto-captured — the agent promised to pass this on "

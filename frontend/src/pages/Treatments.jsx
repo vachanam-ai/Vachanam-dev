@@ -9,7 +9,8 @@ import {
   editNote,
   listFollowups,
   replyToPatient,
-  endTreatment
+  endTreatment,
+  markMessagesRead
 } from "../api/treatment.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
@@ -67,6 +68,21 @@ function NoteCard({ n, isLatest, isLast, onEdit }) {
 function ThreadRow({ item }) {
   const hasReply = Boolean(item.response && item.response.trim());
   const unreachable = item.status === "unreachable";
+  // A message the caller left for the doctor via the voice agent — patient
+  // side of the conversation, so right-aligned like a patient reply.
+  if (item.task_type === "patient_message") {
+    return (
+      <div className="flex flex-col items-end gap-1 px-4 py-3">
+        <div className="max-w-[85%] rounded-2xl rounded-tr-sm border border-amber-300 bg-amber-50 px-4 py-2">
+          <p className="font-ui text-sm text-amber-900">{item.response}</p>
+        </div>
+        <span className="flex items-center gap-2 pr-1 font-ui text-[11px] uppercase tracking-wide text-amber-700">
+          message from patient
+          {item.urgent && <span className="chip-token bg-red-100 text-red-800">urgent</span>}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="space-y-2 px-4 py-3">
       {/* Clinic / agent message — left aligned */}
@@ -169,11 +185,21 @@ export default function Treatments() {
 
   const filteredPatients = useMemo(() => {
     const q = patientSearch.trim().toLowerCase();
-    return patients.filter(
+    const rows = patients.filter(
       (p) =>
         (!filterDoctorId || p.doctor_id === filterDoctorId) &&
         (!q || p.name.toLowerCase().includes(q) || (p.phone_last4 || "").includes(q))
     );
+    // WhatsApp ordering: threads with unread messages float to the top,
+    // newest message first; everyone else keeps their existing order
+    // (Array.sort is stable).
+    return rows.slice().sort((a, b) => {
+      const ua = (a.unread_messages || 0) > 0;
+      const ub = (b.unread_messages || 0) > 0;
+      if (ua !== ub) return ua ? -1 : 1;
+      if (ua && ub) return (b.last_message_at || "").localeCompare(a.last_message_at || "");
+      return 0;
+    });
   }, [patients, patientSearch, filterDoctorId]);
 
   // Default the note's doctor to the patient's treating doctor.
@@ -307,6 +333,17 @@ export default function Treatments() {
       return next;
     });
 
+  // Opening a thread marks that patient's messages seen — highlight clears
+  // and the row drops back to normal order (WhatsApp model). Refetch shows
+  // the truth; on failure the highlight simply stays until the next open.
+  const markRead = useMutation({
+    mutationFn: (pid) => markMessagesRead(pid, branchId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
+      qc.invalidateQueries({ queryKey: ["followups"] });
+    }
+  });
+
   const needsAttention = followups.some(
     (f) => (f.response && f.response.trim()) || f.status === "unreachable"
   );
@@ -391,8 +428,9 @@ export default function Treatments() {
             {filteredPatients.map((p) => {
               const key = `${p.patient_id}:${p.doctor_id}`;
               const isOpen = p.patient_id === patientId && p.doctor_id === threadDoctorId;
+              const hasUnread = (p.unread_messages || 0) > 0;
               return (
-                <li key={key} className={`flex items-center ${isOpen ? "bg-teal-mint/60" : "hover:bg-teal-mint/30"} transition-colors`}>
+                <li key={key} className={`flex items-center ${isOpen ? "bg-teal-mint/60" : hasUnread ? "bg-amber-50 hover:bg-amber-100/70" : "hover:bg-teal-mint/30"} transition-colors`}>
                   {/* mass-select checkbox — separate hit target from the row */}
                   <label className="grid h-12 w-11 shrink-0 cursor-pointer place-items-center">
                     <input
@@ -408,19 +446,38 @@ export default function Treatments() {
                     onClick={() => {
                       setPatientId(isOpen ? "" : p.patient_id);
                       setThreadDoctorId(isOpen ? "" : p.doctor_id);
+                      // Opening (not closing) a thread with unread messages
+                      // marks them seen — clears the highlight + re-sorts.
+                      if (!isOpen && hasUnread) markRead.mutate(p.patient_id);
                     }}
                     className="flex min-w-0 flex-1 items-center justify-between gap-3 py-3 pr-4 text-left"
                     aria-expanded={isOpen}
                   >
                     <span className="min-w-0">
-                      <span className="block truncate font-ui font-medium">
+                      <span className={`block truncate font-ui ${hasUnread ? "font-semibold" : "font-medium"}`}>
                         {p.name} <span className="text-slate">· …{p.phone_last4}</span>
                       </span>
                       <span className="block truncate font-ui text-sm text-slate">
-                        {p.doctor_name || "—"}
-                        {p.next_reporting_date ? ` · next ${p.next_reporting_date}` : ""}
+                        {hasUnread ? (
+                          <span className="font-medium text-amber-800">
+                            New message from patient
+                          </span>
+                        ) : (
+                          <>
+                            {p.doctor_name || "—"}
+                            {p.next_reporting_date ? ` · next ${p.next_reporting_date}` : ""}
+                          </>
+                        )}
                       </span>
                     </span>
+                    {hasUnread && (
+                      <span
+                        className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-teal px-1.5 font-ui text-xs font-semibold text-white"
+                        aria-label={`${p.unread_messages} unread message${p.unread_messages === 1 ? "" : "s"}`}
+                      >
+                        {p.unread_messages}
+                      </span>
+                    )}
                     <span className={p.active ? "chip-muted shrink-0" : "chip-token shrink-0"}>
                       {p.active ? "Active" : "Completed"}
                     </span>
