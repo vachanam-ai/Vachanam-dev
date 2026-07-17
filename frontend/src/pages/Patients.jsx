@@ -25,6 +25,9 @@ export default function Patients() {
     onSuccess: () => {
       setDeleting(null);
       qc.invalidateQueries({ queryKey: ["patients", branchId] });
+      // An erased patient leaves the dashboard numbers too — refresh them now.
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+      qc.invalidateQueries({ queryKey: ["treatment-patients", branchId] });
       toast.success("Patient data erased");
     },
     onError: () => toast.error("Could not erase — try again")

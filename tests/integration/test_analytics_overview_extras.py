@@ -154,3 +154,62 @@ async def test_rule1_lifetime_isolated_between_branches(client, db):
     assert body_b["lifetime"]["bookings"] == 0
     assert body_b["lifetime"]["calls"] == 0
     assert body_b["lifetime"]["patients"] == 1  # only its own fixture patient
+
+
+async def test_erased_patient_leaves_the_numbers(client, db):
+    """Vinay 2026-07-17: "if some patients get deleted, these numbers should
+    also change." Erasure keeps Token rows (audit) — analytics must exclude
+    them; calls + minutes are billing metering and must NOT change."""
+    org, b, doc, pat = await _mk_branch(db, "erase")
+    today = date.today()
+    db.add_all([
+        Token(branch_id=b.id, doctor_id=doc.id, patient_id=pat.id,
+              token_number=1, date=today, status="attended", source="voice"),
+        Token(branch_id=b.id, doctor_id=doc.id, patient_id=pat.id,
+              token_number=2, date=today, status="confirmed", source="voice"),
+        CallLog(branch_id=b.id, call_type="inbound", answered=True,
+                started_at=datetime.now(timezone.utc), duration_seconds=120,
+                booking_made=True),
+    ])
+    await db.commit()
+
+    before = await _overview(client, org, b)
+    assert before["lifetime"]["bookings"] == 2
+    assert before["lifetime"]["patients"] == 1
+    assert before["month"]["new_patients"] == 1
+
+    from backend.services.patient_erasure import erase_patient_pii
+
+    await erase_patient_pii(db, pat)
+    await db.commit()
+
+    after = await _overview(client, org, b)
+    assert after["lifetime"]["bookings"] == 0, "erased patient's bookings must vanish"
+    assert after["lifetime"]["patients"] == 0
+    assert after["month"]["new_patients"] == 0
+    assert after["month"]["bookings"] == 0
+    assert after["today"]["booked"] == 0, "daily chart must drop them too"
+    # Billing metering unchanged: the calls happened.
+    assert after["lifetime"]["calls"] == before["lifetime"]["calls"] == 1
+    assert after["lifetime"]["minutes"] == before["lifetime"]["minutes"] == 2
+
+
+async def test_rescheduled_cancel_not_counted_as_cancelled(client, db):
+    """A booking moved to a new time is not a lost booking: only cancels
+    WITHOUT reason='rescheduled' appear in the daily Cancelled series
+    (prod rows backfilled 2026-07-17 where a replacement booking existed)."""
+    org, b, doc, pat = await _mk_branch(db, "resch")
+    today = date.today()
+    db.add_all([
+        Token(branch_id=b.id, doctor_id=doc.id, patient_id=pat.id,
+              token_number=1, date=today, status="cancelled_by_patient",
+              cancellation_reason="rescheduled", source="voice"),
+        Token(branch_id=b.id, doctor_id=doc.id, patient_id=pat.id,
+              token_number=2, date=today, status="cancelled_by_patient",
+              cancellation_reason="patient_cancelled_or_rescheduled_on_call",
+              source="voice"),
+    ])
+    await db.commit()
+
+    body = await _overview(client, org, b)
+    assert body["today"]["cancelled"] == 1, "rescheduled must not count as cancelled"

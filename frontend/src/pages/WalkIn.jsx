@@ -70,6 +70,7 @@ export default function WalkIn() {
     onSuccess: (data) => {
       setReceipt(data);
       qc.invalidateQueries({ queryKey: ["queue", branchId] });
+      qc.invalidateQueries({ queryKey: ["analytics"] });
       setName(""); setPhone(""); setComplaint(""); setSlot(""); setUrgent(false);
       toast.success(
         data.booking_type === "token"

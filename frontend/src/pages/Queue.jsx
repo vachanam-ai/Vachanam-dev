@@ -108,7 +108,11 @@ export default function Queue() {
       qc.setQueryData(["queue", branchId], ctx.prev);
       toast.error("Update failed — queue restored");
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["queue", branchId] })
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["queue", branchId] });
+      // Attendance changes the dashboard's show-rate/booked numbers live.
+      qc.invalidateQueries({ queryKey: ["analytics"] });
+    }
   });
 
   const attend = useMutation({

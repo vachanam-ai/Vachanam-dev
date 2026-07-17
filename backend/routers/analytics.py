@@ -32,6 +32,20 @@ router = APIRouter()
 
 ACTIVE = ["confirmed", "attended", "no_show"]  # cancelled tracked separately
 
+# Erased patients leave the dashboard (Vinay 2026-07-17: "if some patients get
+# deleted, these numbers should also change"). Erasure keeps the Token rows
+# (audit) but anonymizes the Patient — booking/patient COUNTS must exclude
+# them. Calls answered + minutes are branch-level phone events and BILLING
+# metering — those deliberately do NOT change on erasure.
+_LIVE_PATIENT = Patient.anonymized_at.is_(None)
+
+
+def _tokens_of_live_patients(branch_uuid):
+    """Subquery: token.patient_id values whose patient is not erased."""
+    return Token.patient_id.in_(
+        select(Patient.id).where(Patient.branch_id == branch_uuid, _LIVE_PATIENT)
+    )
+
 
 class DayPoint(BaseModel):
     date: str
@@ -245,6 +259,7 @@ async def analytics_overview(
                     Token.branch_id == branch_uuid,  # Rule 1
                     Token.date >= start,
                     Token.date <= today,
+                    _tokens_of_live_patients(branch_uuid),
                 )
             )
             .group_by(Token.date, Token.status, Token.cancellation_reason)
@@ -281,6 +296,7 @@ async def analytics_overview(
                     Token.branch_id == branch_uuid,
                     Token.date == today,
                     Token.status == "confirmed",
+                    _tokens_of_live_patients(branch_uuid),
                 )
             )
         )
@@ -299,6 +315,7 @@ async def analytics_overview(
             select(func.count()).select_from(Patient).where(
                 and_(
                     Patient.branch_id == branch_uuid,
+                    _LIVE_PATIENT,
                     func.date(func.timezone(_patient_tz, Patient.created_at)) == today,
                 )
             )
@@ -314,6 +331,7 @@ async def analytics_overview(
                     Token.branch_id == branch_uuid,
                     Token.date >= start,
                     Token.date <= today,
+                    _tokens_of_live_patients(branch_uuid),
                 )
             )
             .group_by(Doctor.name, Doctor.booking_type, Token.status)
@@ -347,6 +365,7 @@ async def analytics_overview(
                     Token.date >= start,
                     Token.date <= today,
                     Token.status.in_(ACTIVE),
+                    _tokens_of_live_patients(branch_uuid),
                 )
             )
             .group_by(Token.source)
@@ -435,7 +454,11 @@ async def analytics_overview(
     lifetime_bookings = (
         await db.execute(
             select(func.count()).select_from(Token).where(
-                and_(Token.branch_id == branch_uuid, Token.status.in_(ACTIVE))
+                and_(
+                    Token.branch_id == branch_uuid,
+                    Token.status.in_(ACTIVE),
+                    _tokens_of_live_patients(branch_uuid),
+                )
             )
         )
     ).scalar_one()
@@ -449,7 +472,11 @@ async def analytics_overview(
     lifetime_patients = (
         await db.execute(
             select(func.count()).select_from(Patient).where(
-                and_(Patient.branch_id == branch_uuid, Patient.is_primary.is_(True))
+                and_(
+                    Patient.branch_id == branch_uuid,
+                    Patient.is_primary.is_(True),
+                    _LIVE_PATIENT,
+                )
             )
         )
     ).scalar_one()
@@ -468,6 +495,7 @@ async def analytics_overview(
                     Token.branch_id == branch_uuid,
                     Token.status.in_(ACTIVE),
                     Token.date >= month_start,
+                    _tokens_of_live_patients(branch_uuid),
                 )
             )
         )
@@ -488,6 +516,7 @@ async def analytics_overview(
             select(func.count()).select_from(Patient).where(
                 and_(
                     Patient.branch_id == branch_uuid,
+                    _LIVE_PATIENT,
                     func.date(func.timezone(_patient_tz, Patient.created_at)) >= month_start,
                 )
             )
