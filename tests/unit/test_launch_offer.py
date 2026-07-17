@@ -31,10 +31,12 @@ def test_offer_margins_hold_10_to_15_percent_worst_case():
         assert 0.095 <= margin <= 0.15, f"{key}: {margin:.1%} outside 10-15%"
 
 
-def test_lite_offer_below_actual_and_flagged_exception():
-    # Lite cannot hold 10% at worst case (fixed DID floor — accepted 07-15
-    # below-invariant at Rs1,999). The offer just keeps a visible discount.
-    assert OFFER_PRICES["lite"] < PLANS["lite"].base_rupees
+def test_lite_has_no_offer_price_but_keeps_window_perks():
+    # Vinay 2026-07-17 follow-up: "keep lite 1999" — Lite already sits below
+    # the margin invariant; no discount. Window perks (cloning) still apply.
+    assert "lite" not in OFFER_PRICES
+    assert effective_price("lite", _NOW) == (1_999, False)
+    assert cloning_allowed("lite", _NOW) is True
 
 
 def test_offer_window_boundaries():
@@ -66,11 +68,13 @@ def test_ui_surfaces_show_offer_prices_and_label():
     'first 3 months' label + struck-through actual price."""
     landing = Path("frontend/src/pages/Landing.jsx").read_text(encoding="utf-8")
     static = Path("backend/static/index.html").read_text(encoding="utf-8")
-    for text, offers in ((landing, ("₹3,999", "₹6,999", "₹11,999", "₹1,799")),
+    for text, offers in ((landing, ("₹3,999", "₹6,999", "₹11,999")),
                          (static, ("&#8377;3,999", "&#8377;6,999",
-                                   "&#8377;11,999", "&#8377;1,799"))):
+                                   "&#8377;11,999"))):
         for price in offers:
             assert price in text, f"offer price {price} missing"
+    # Lite keeps its standard price — no discount shown anywhere.
+    assert "₹1,799" not in landing and "&#8377;1,799" not in static
     assert "Offer price — first 3 months" in landing
     assert "line-through" in landing and "line-through" in static
     assert "exclude 18% GST" not in landing

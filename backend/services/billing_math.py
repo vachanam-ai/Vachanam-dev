@@ -55,8 +55,10 @@ PLANS: dict[str, Plan] = {
 # After the window: standard price, standard gates. UI shows the actual price
 # struck through + the offer price, labeled "Offer price — first 3 months".
 OFFER_MONTHS = 3
+# Lite has NO offer price (Vinay 2026-07-17 follow-up: "keep lite 1999" — it
+# already sits below the margin invariant; a discount would be a loss). Lite
+# still gets the window's cloning unlock + 3 doctors.
 OFFER_PRICES: dict[str, int] = {
-    "lite": 1_799,
     "solo": 3_999,
     "clinic": 6_999,
     "multi": 11_999,

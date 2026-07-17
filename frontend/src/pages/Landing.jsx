@@ -256,12 +256,8 @@ export default function Landing() {
         <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-mist/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-ui text-sm">
-              <span className="font-semibold">Lite · <span className="numeral text-slate line-through">₹1,999</span>{" "}
-              <span className="numeral text-teal-deep">₹1,799</span>/mo</span>
+              <span className="font-semibold">Lite · <span className="numeral text-teal-deep">₹1,999</span>/mo</span>
               <span className="text-slate"> + ₹5/min after</span>
-              <span className="ml-2 rounded-full bg-gold/20 px-2 py-0.5 font-ui text-[11px] font-semibold text-amber-900">
-                Offer — first 3 months
-              </span>
             </p>
             <p className="font-ui text-xs text-slate">
               Low-volume clinics — ≈55 calls (150 min), 3 doctors, all 8 languages, your cloned voice, reminder + treatment follow-up calls.
