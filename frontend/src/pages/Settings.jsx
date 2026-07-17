@@ -273,7 +273,10 @@ export default function Settings() {
         faqQuery.data.faq?.length ? faqQuery.data.faq : faqQuery.data.template
       );
     }
-  }, [faqQuery.data, faqRows]);
+    // GET failed (network blip / redeploy): fall back to an empty editor so
+    // Save is never silently stuck disabled forever (faqRows stayed null).
+    if (faqQuery.isError && faqRows === null) setFaqRows([{ q: "", a: "" }]);
+  }, [faqQuery.data, faqQuery.isError, faqRows]);
   const faqSave = useMutation({
     mutationFn: () => saveBranchFaq(branchId, faqRows ?? []),
     onSuccess: (d) => {
@@ -650,19 +653,34 @@ export default function Settings() {
       <Section id="voice" title="Clinic voices"
         sub="Your agent speaks ONLY in voices you provide — record one per language below. Languages without your voice use a stock voice until you add yours. Applies from the next call.">
 
-        {/* One clinic voice per language — coverage at a glance */}
-        <div className="space-y-1">
-          {(data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES).map((l) => {
-            const cv = (voices.data?.voices ?? []).find(
-              (v) => v.cloned && (v.languages ?? []).includes(l.code)
-            );
+        {/* Only languages the clinic HAS voiced get a row (Vinay 2026-07-17:
+            nine "stock voice — add yours" rows looked bad). No clones yet →
+            one hint line instead of the full language list. */}
+        {(() => {
+          const langs = data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES;
+          const voiced = langs
+            .map((l) => ({
+              lang: l,
+              cv: (voices.data?.voices ?? []).find(
+                (v) => v.cloned && (v.languages ?? []).includes(l.code)
+              )
+            }))
+            .filter((x) => x.cv);
+          if (!voiced.length)
             return (
-              <div key={l.code}
-                className="flex items-center justify-between rounded-lg bg-teal-mint/40 px-3 py-2">
-                <span className="font-ui text-sm">
-                  {l.name} <span className="text-xs text-slate">{l.native_name}</span>
-                </span>
-                {cv ? (
+              <p className="rounded-lg bg-teal-mint/40 px-3 py-2 font-ui text-sm text-slate">
+                No clinic voice yet — the agent uses a stock voice. Record yours below;
+                each language appears here once you add its voice.
+              </p>
+            );
+          return (
+            <div className="space-y-1">
+              {voiced.map(({ lang: l, cv }) => (
+                <div key={l.code}
+                  className="flex items-center justify-between rounded-lg bg-teal-mint/40 px-3 py-2">
+                  <span className="font-ui text-sm">
+                    {l.name} <span className="text-xs text-slate">{l.native_name}</span>
+                  </span>
                   <span className="flex items-center gap-3 font-ui text-xs">
                     <span className="text-teal">Your voice · {cv.display_name}</span>
                     <button type="button"
@@ -672,13 +690,11 @@ export default function Settings() {
                       Remove
                     </button>
                   </span>
-                ) : (
-                  <span className="font-ui text-xs text-slate">stock voice — add yours below</span>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {/* Stock-voice picker for the clinic language (fallback / until cloned) */}
         <select

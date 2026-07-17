@@ -169,7 +169,10 @@ FAQ_TEMPLATE: list[dict] = [
 
 _FAQ_MAX_ITEMS = 30
 _FAQ_Q_MAX = 200
-_FAQ_A_MAX = 500
+# 500 was too tight for real clinic answers (insurance lists, per-day timings)
+# and failed the WHOLE save (Vinay 2026-07-17: "unable to save FAQs"). The
+# agent's LLM grounds on these and compresses for speech, so 1000 is safe.
+_FAQ_A_MAX = 1000
 
 
 class FaqItem(BaseModel):
@@ -362,10 +365,17 @@ async def save_faq(
         a = item.a.strip()
         if not q:
             continue  # empty question row from the editor — drop silently
-        if len(q) > _FAQ_Q_MAX or len(a) > _FAQ_A_MAX:
+        # Name the offending row — a bare "too long" left the owner unable to
+        # find which of 11+ rows blocked the whole save.
+        if len(q) > _FAQ_Q_MAX:
             raise HTTPException(
                 status_code=422,
-                detail=f"Question ≤{_FAQ_Q_MAX} chars, answer ≤{_FAQ_A_MAX} chars",
+                detail=f'Question "{q[:60]}…" is too long ({len(q)}/{_FAQ_Q_MAX} characters)',
+            )
+        if len(a) > _FAQ_A_MAX:
+            raise HTTPException(
+                status_code=422,
+                detail=f'Answer for "{q[:60]}" is too long ({len(a)}/{_FAQ_A_MAX} characters)',
             )
         cleaned.append({"q": q, "a": a})
     branch = (

@@ -64,6 +64,29 @@ async def test_faq_save_and_roundtrip(db):
 
 
 @pytest.mark.asyncio
+async def test_faq_long_answer_saves_and_overlong_names_the_row(db):
+    """Vinay 2026-07-17 ("unable to save FAQs"): 500-char answers are normal
+    for real clinics — cap is now 1000, and an over-cap 422 must NAME the
+    offending question so the owner can find it among 11+ rows."""
+    org_id, br = await _seed(db, "+910000000092")
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            ok = await ac.put(f"/branches/{br.id}/faq", json={"faq": [
+                {"q": "Insurance list?", "a": "x" * 900},   # was rejected at 500
+            ]})
+            assert ok.status_code == 200, ok.text
+
+            over = await ac.put(f"/branches/{br.id}/faq", json={"faq": [
+                {"q": "Insurance list?", "a": "x" * 1001},
+            ]})
+            assert over.status_code == 422
+            assert "Insurance list?" in over.json()["detail"]  # names the row
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
 async def test_faq_staff_cannot_save(db):
     org_id, br = await _seed(db, "+910000000091")
     app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, role="receptionist")
