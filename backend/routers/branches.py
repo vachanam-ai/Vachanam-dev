@@ -39,6 +39,13 @@ LANGUAGE_OPTIONS = [
 
 async def _org_plan(db, branch) -> str:
     """The owning org's plan key (repricing 2026-07-11 plan gates)."""
+    plan, _ = await _org_plan_and_start(db, branch)
+    return plan
+
+
+async def _org_plan_and_start(db, branch) -> tuple:
+    """(plan, subscription_started_at) — the launch-offer gates (#391) need
+    the subscription start to know whether the first-3-months window applies."""
     from backend.models.schema import Organization
 
     org = (
@@ -46,7 +53,10 @@ async def _org_plan(db, branch) -> str:
             select(Organization).where(Organization.id == branch.org_id)
         )
     ).scalar_one_or_none()
-    return (org.plan if org and org.plan else "clinic")
+    return (
+        (org.plan if org and org.plan else "clinic"),
+        getattr(org, "subscription_started_at", None) if org else None,
+    )
 
 
 def _assert_plan_language(plan: str, language: str) -> None:
@@ -63,11 +73,12 @@ def _assert_plan_language(plan: str, language: str) -> None:
         )
 
 
-def _assert_premium_voice(plan: str) -> None:
-    """Voice cloning is a Clinic/Multi feature (repricing 2026-07-11)."""
-    from backend.services.billing_math import CLONING_PLANS
+def _assert_premium_voice(plan: str, subscription_started_at=None) -> None:
+    """Voice cloning: Clinic/Multi always; every plan during the first-3-months
+    launch-offer window (#391, Vinay 2026-07-17)."""
+    from backend.services.billing_math import cloning_allowed
 
-    if plan not in CLONING_PLANS:
+    if not cloning_allowed(plan, subscription_started_at):
         raise HTTPException(
             status_code=403,
             detail="Voice cloning is available on the Clinic and Multi plans. Upgrade to use your own voice.",
@@ -113,9 +124,9 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
     ).scalar_one()
     # Plan-aware UI hints (repricing 2026-07-11): the Settings page only offers
     # what the org's plan includes — languages list filtered, cloning flagged.
-    from backend.services.billing_math import CLONING_PLANS, PLAN_LANGUAGES
+    from backend.services.billing_math import PLAN_LANGUAGES, cloning_allowed
 
-    plan = await _org_plan(db, branch)
+    plan, _sub_start = await _org_plan_and_start(db, branch)
     plan_langs = PLAN_LANGUAGES.get(plan, None)
     lang_options = (
         LANGUAGE_OPTIONS if plan_langs is None
@@ -136,7 +147,7 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         doctors_count=doctors_count,
         staff_count=staff_count,
         did_wired=did_wired,
-        voice_cloning_allowed=plan in CLONING_PLANS,
+        voice_cloning_allowed=cloning_allowed(plan, _sub_start),
         whatsapp_linked=bool(getattr(branch, "wa_phone_number_id", None)),
     )
 
@@ -527,7 +538,7 @@ async def register_cloned_voice(
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
-    _assert_premium_voice(await _org_plan(db, branch))
+    _assert_premium_voice(*await _org_plan_and_start(db, branch))
 
     # ONE clinic voice PER language (Vinay 2026-07-05: the agent speaks only
     # clinic-provided voices, one per language) — registering for a language
@@ -621,7 +632,7 @@ async def clone_branch_voice(
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
-    _assert_premium_voice(await _org_plan(db, branch))
+    _assert_premium_voice(*await _org_plan_and_start(db, branch))
 
     from backend.services import smallest_voice
 

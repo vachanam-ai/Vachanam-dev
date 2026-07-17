@@ -33,12 +33,67 @@ class Plan:
 # DID) and its low-volume target, 150 min holds ~35% margin; overage (₹5/min)
 # caps the downside (a heavy month pays extra or upgrades). The margin guard
 # test carves Lite out explicitly. Follow-up loop IS included (retention).
+# 2026-07-17 (Vinay): Lite doctor cap 1 → 3 (zero-variable-cost, same lever
+# as Starter's 07-12 bump).
 PLANS: dict[str, Plan] = {
-    "lite": Plan(1_999, 150, 5.0, 1, "Lite"),
+    "lite": Plan(1_999, 150, 5.0, 3, "Lite"),
     "solo": Plan(5_999, 700, 5.0, 3, "Starter"),
     "clinic": Plan(9_999, 1_500, 5.0, 5, "Clinic"),
     "multi": Plan(17_999, 3_000, 5.0, None, "Multi"),
 }
+
+# LAUNCH OFFER (Vinay 2026-07-17 — clinic feedback: "pricing too much; keep it
+# low until you get some clients"). For a clinic's FIRST 3 PAID MONTHS:
+#   * offer price targets only 10-15% gross margin at the table's own
+#     WORST-case cost discipline (Rs3/min x full bucket + Rs1,500 infra/DID):
+#     solo 3,999 (10.0%) · clinic 6,999 (14.3%) · multi 11,999 (12.5%).
+#     Lite 1,799 CANNOT hold 10% at worst case (fixed DID floor — it already
+#     sat below the 40% invariant at Rs1,999, accepted 07-15); ~breakeven at
+#     typical cost, flagged to Vinay.
+#   * voice CLONING unlocked on EVERY plan (see cloning_allowed).
+#   * GST not added on top (GST_WAIVED below — "for now remove gst 18%").
+# After the window: standard price, standard gates. UI shows the actual price
+# struck through + the offer price, labeled "Offer price — first 3 months".
+OFFER_MONTHS = 3
+OFFER_PRICES: dict[str, int] = {
+    "lite": 1_799,
+    "solo": 3_999,
+    "clinic": 6_999,
+    "multi": 11_999,
+}
+
+
+def in_offer_window(subscription_started_at, now=None) -> bool:
+    """True while the org is inside its first 3 PAID months. No subscription
+    yet (trial / pre-signup pricing display) → True: the offer is what they
+    are being sold. Window = 92 days from first payment (~3 calendar months,
+    predictable regardless of month lengths)."""
+    from datetime import datetime, timedelta, timezone
+
+    if subscription_started_at is None:
+        return True
+    now = now or datetime.now(timezone.utc)
+    started = subscription_started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return now < started + timedelta(days=31 * OFFER_MONTHS - 1)
+
+
+def effective_price(plan: str, subscription_started_at=None, now=None) -> tuple[int, bool]:
+    """(rupees, is_offer) — the price this org actually pays this cycle."""
+    p = PLANS.get(plan)
+    if p is None:
+        return 0, False
+    if plan in OFFER_PRICES and in_offer_window(subscription_started_at, now):
+        return OFFER_PRICES[plan], True
+    return p.base_rupees, False
+
+
+def cloning_allowed(plan: str, subscription_started_at=None, now=None) -> bool:
+    """Voice cloning: Clinic/Multi always; EVERY plan during the launch-offer
+    window (Vinay 2026-07-17: "cloned voice in all plans for 3 months").
+    Existing clones keep working after the window — only NEW cloning is gated."""
+    return plan in CLONING_PLANS or in_offer_window(subscription_started_at, now)
 
 # Voice-agent languages available per plan (agent.i18n codes). None = every
 # language the platform supports. 2026-07-12 (Vinay): ALL plans get all
@@ -79,6 +134,14 @@ TRIAL_MINUTES = 300
 # CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
 # charge) adds GST on top; B2B clinics reclaim it via input credit.
 GST_RATE = 0.18
+# 2026-07-17 (Vinay): "for now remove gst 18%" — launch pricing is charged
+# as-is with NO GST line added on top. Flip to False to restore GST-on-top
+# everywhere (breakdowns keep the gst field, it just computes 0 while waived).
+GST_WAIVED = True
+
+
+def _gst_on(amount: float) -> float:
+    return 0.0 if GST_WAIVED else round(amount * GST_RATE, 2)
 
 # Vachanam's own VARIABLE cost floor (CLAUDE.md, 2026-06 repricing): per voice
 # minute (Vobiz + Sarvam STT + smallest.ai TTS + Gemini + LiveKit) + DID rent.
@@ -145,7 +208,7 @@ def overage_breakdown(
     used = int(round(minutes_used))
     overage_min = max(0, used - included)
     overage_amount = round(overage_min * rate, 2)
-    gst = round(overage_amount * GST_RATE, 2)
+    gst = _gst_on(overage_amount)
     total = round(overage_amount + gst, 2)
     return {
         "plan": plan,
@@ -161,30 +224,35 @@ def overage_breakdown(
 
 
 def subscription_order_breakdown(
-    plan: str, cycle_minutes_used: float = 0.0, adjustment: int = 0
+    plan: str,
+    cycle_minutes_used: float = 0.0,
+    adjustment: int = 0,
+    subscription_started_at=None,
 ) -> dict:
     """What a Razorpay activation/renewal order charges (#341, Vinay 2026-07-12:
     GST ON TOP, overage collected WITH the renewal).
 
-    total = plan base + previous-cycle overage minutes × rate, + 18% GST on the
-    whole subtotal. First activation passes cycle_minutes_used=0 (trial minutes
-    are free service; exhaust hard-blocks — never billed).
-    Example: clinic plan, 50 min over → 9,999 + 250 = 10,249 + 1,844.82 GST
-    = ₹12,093.82 total.
+    total = plan base + previous-cycle overage minutes × rate, + GST on the
+    whole subtotal (0 while GST_WAIVED). First activation passes
+    cycle_minutes_used=0 (trial minutes are free service; exhaust hard-blocks —
+    never billed). #391: base honors the first-3-months launch-offer price —
+    pass the org's subscription_started_at; None (first activation) = offer.
     """
     p = PLANS.get(plan)
     if p is None:
         return {"plan": plan, "base": 0, "overage_minutes": 0, "overage_amount": 0.0,
-                "gst": 0.0, "total": 0.0, "amount_paise": 0}
+                "gst": 0.0, "total": 0.0, "amount_paise": 0, "is_offer": False}
+    base, is_offer = effective_price(plan, subscription_started_at)
     included = max(0, p.included_minutes + (adjustment or 0))
     over_min = max(0, int(round(cycle_minutes_used)) - included)
     overage_amount = round(over_min * p.overage_per_min, 2)
-    subtotal = round(p.base_rupees + overage_amount, 2)
-    gst = round(subtotal * GST_RATE, 2)
+    subtotal = round(base + overage_amount, 2)
+    gst = _gst_on(subtotal)
     total = round(subtotal + gst, 2)
     return {
         "plan": plan,
-        "base": p.base_rupees,
+        "base": base,
+        "is_offer": is_offer,
         "overage_minutes": over_min,
         "overage_amount": overage_amount,
         "gst": gst,

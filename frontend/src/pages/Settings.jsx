@@ -6,6 +6,7 @@ import {
   changePlan,
   cloneBranchVoice,
   createPaymentOrder,
+  deleteAccount,
   fetchBranchSettings,
   fetchDoctors,
   fetchPlan,
@@ -488,11 +489,16 @@ export default function Settings() {
                   <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
                     {paying ? "Opening payment…"
                       : `${p.status !== "active" ? "Activate"
-                          : p.cycle_end ? "Renew" : "Pay"} — ₹${(PLAN_PRICES[p.plan] ?? 0).toLocaleString("en-IN")} + GST${p.status === "active" && p.cycle_end ? " & usage" : ""}`}
+                          : p.cycle_end ? "Renew" : "Pay"} — ₹${(p.next_base_rupees || PLAN_PRICES[p.plan] || 0).toLocaleString("en-IN")}${p.is_offer ? " (offer)" : ""}${p.status === "active" && p.cycle_end ? " + usage" : ""}`}
                   </button>
                 ) : (
                   <span className="chip-muted" title="Renewal opens 3 days before your cycle ends">
                     Paid — renewal opens {fmt(new Date(new Date(p.cycle_end) - 3 * 86400000))}
+                  </span>
+                )}
+                {p.is_offer && (
+                  <span className="font-ui text-xs font-semibold text-amber-800">
+                    Offer price — first 3 months (regular ₹{(PLAN_PRICES[p.plan] ?? 0).toLocaleString("en-IN")}/mo)
                   </span>
                 )}
               </>

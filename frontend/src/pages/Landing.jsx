@@ -5,19 +5,24 @@ import gsap from "gsap";
 import VoicePicker from "../components/VoicePicker.jsx";
 import { API_BASE } from "../api/client.js";
 
+// #391 launch offer (Vinay 2026-07-17): actual price struck through, offer
+// price for the first 3 months shown big. Source of truth: billing_math
+// OFFER_PRICES — keep in sync (guarded by tests/unit/test_launch_offer.py).
 const PLANS = [
   {
     name: "Starter",
     key: "solo",
-    price: "₹5,999",
+    price: "₹3,999",
+    actual: "₹5,999",
     per: "/month + ₹5/min after",
     tagline: "Small clinics, up to 3 doctors",
-    points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 8 Indian languages", "Token booking + calendar", "Reminder calls + receptionist app"]
+    points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "Token booking + calendar", "Reminder calls + receptionist app"]
   },
   {
     name: "Clinic",
     key: "clinic",
-    price: "₹9,999",
+    price: "₹6,999",
+    actual: "₹9,999",
     per: "/month + ₹5/min after",
     tagline: "Growing clinics, up to 5 doctors",
     popular: true,
@@ -26,7 +31,8 @@ const PLANS = [
   {
     name: "Multi",
     key: "multi",
-    price: "₹17,999",
+    price: "₹11,999",
+    actual: "₹17,999",
     per: "/month + ₹5/min after",
     tagline: "Multi-specialty, unlimited doctors",
     points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "Multi-doctor routing", "CSV exports"]
@@ -250,11 +256,15 @@ export default function Landing() {
         <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-mist/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-ui text-sm">
-              <span className="font-semibold">Lite · <span className="numeral text-teal-deep">₹1,999</span>/mo</span>
+              <span className="font-semibold">Lite · <span className="numeral text-slate line-through">₹1,999</span>{" "}
+              <span className="numeral text-teal-deep">₹1,799</span>/mo</span>
               <span className="text-slate"> + ₹5/min after</span>
+              <span className="ml-2 rounded-full bg-gold/20 px-2 py-0.5 font-ui text-[11px] font-semibold text-amber-900">
+                Offer — first 3 months
+              </span>
             </p>
             <p className="font-ui text-xs text-slate">
-              Low-volume clinics — ≈55 calls (150 min), 1 doctor, all 8 languages, reminder + treatment follow-up calls.
+              Low-volume clinics — ≈55 calls (150 min), 3 doctors, all 8 languages, your cloned voice, reminder + treatment follow-up calls.
             </p>
           </div>
           <Link to="/register?plan=lite" className="btn-ghost shrink-0 px-5 py-2 text-sm">
@@ -276,8 +286,12 @@ export default function Landing() {
               <h3 className="font-display text-xl font-semibold">{p.name}</h3>
               <p className="font-ui text-sm text-slate">{p.tagline}</p>
               <p className="mt-4">
+                <span className="numeral text-lg text-slate line-through">{p.actual}</span>{" "}
                 <span className="numeral text-4xl text-teal-deep">{p.price}</span>
                 <span className="font-ui text-sm text-slate"> {p.per}</span>
+              </p>
+              <p className="mt-1 font-ui text-xs font-semibold text-amber-800">
+                Offer price — first 3 months, then {p.actual}/month
               </p>
               <ul className="mt-5 flex-1 space-y-2.5">
                 {p.points.map((pt) => (
@@ -295,7 +309,7 @@ export default function Landing() {
         <p data-item className="mt-6 text-center font-ui text-xs text-slate">
           14-day trial · no card · 300 minutes (≈100 calls) · payment link arrives only when you&rsquo;re ready
           <br />
-          All prices exclude 18% GST.
+          Launch offer: pay the offer price for your first 3 months — no GST added, nothing extra.
         </p>
       </section>
 

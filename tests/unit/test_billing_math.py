@@ -19,30 +19,40 @@ from backend.services.billing_math import (
 )
 
 
-def test_subscription_order_first_activation_is_base_plus_gst():
+def test_subscription_order_first_activation_offer_no_gst():
+    # #391 (Vinay 2026-07-17): first activation = launch-offer base, GST waived.
     bd = subscription_order_breakdown("solo")
-    assert bd["base"] == 5999
+    assert bd["base"] == 3999 and bd["is_offer"] is True
     assert bd["overage_minutes"] == 0
-    assert bd["gst"] == round(5999 * 0.18, 2)
-    assert bd["amount_paise"] == int(round(5999 * 1.18 * 100))
+    assert bd["gst"] == 0.0
+    assert bd["amount_paise"] == 399900
 
 
-def test_subscription_order_renewal_adds_overage_then_gst():
-    # Vinay's example (2026-07-12): 50 extra minutes → ₹250. Clinic renewal:
-    # 9,999 + 250 = 10,249 subtotal → +18% GST = ₹12,093.82.
-    bd = subscription_order_breakdown("clinic", cycle_minutes_used=1550)
-    assert bd["overage_minutes"] == 50
-    assert bd["overage_amount"] == 250.0
-    assert bd["gst"] == 1844.82
-    assert bd["total"] == 12093.82
-    assert bd["amount_paise"] == 1209382
+def test_subscription_order_after_offer_window_standard_base(monkeypatch):
+    # 4th month on: standard price. GST math itself preserved for when Vinay
+    # restores it (GST_WAIVED=False) — old #341 contract still holds then.
+    from datetime import datetime, timedelta, timezone
+
+    from backend.services import billing_math as bm
+
+    old_start = datetime.now(timezone.utc) - timedelta(days=200)
+    bd = subscription_order_breakdown("clinic", cycle_minutes_used=1550,
+                                      subscription_started_at=old_start)
+    assert bd["base"] == 9999 and bd["is_offer"] is False
+    assert bd["overage_minutes"] == 50 and bd["overage_amount"] == 250.0
+    assert bd["gst"] == 0.0  # still waived globally for now
+    monkeypatch.setattr(bm, "GST_WAIVED", False)
+    bd2 = subscription_order_breakdown("clinic", cycle_minutes_used=1550,
+                                       subscription_started_at=old_start)
+    assert bd2["gst"] == 1844.82 and bd2["total"] == 12093.82
+    assert bd2["amount_paise"] == 1209382
 
 
 def test_subscription_order_honors_minute_adjustment():
     # +100 goodwill minutes → bucket 1600, so 1550 used = no overage.
     bd = subscription_order_breakdown("clinic", cycle_minutes_used=1550, adjustment=100)
     assert bd["overage_minutes"] == 0
-    assert bd["amount_paise"] == int(round(9999 * 1.18 * 100))
+    assert bd["amount_paise"] == 699900  # offer base, no GST
 
 
 def test_overage_breakdown_solo_1000_minutes():
@@ -52,9 +62,9 @@ def test_overage_breakdown_solo_1000_minutes():
     assert bd["overage_minutes"] == 300
     assert bd["overage_rate"] == 5.0
     assert bd["overage_amount"] == 1500.0       # 300 × ₹5
-    assert bd["gst"] == 270.0                    # 18% of 1500
-    assert bd["total_with_gst"] == 1770.0
-    assert bd["amount_paise"] == 177000          # exact paise sent to Razorpay
+    assert bd["gst"] == 0.0                      # GST waived (#391)
+    assert bd["total_with_gst"] == 1500.0
+    assert bd["amount_paise"] == 150000          # exact paise sent to Razorpay
 
 
 def test_overage_breakdown_no_overage_within_bucket():
@@ -69,7 +79,7 @@ def test_overage_breakdown_respects_minute_adjustment():
     bd = overage_breakdown("solo", 1500, "active", 500)
     assert bd["included_minutes"] == 1200
     assert bd["overage_minutes"] == 300
-    assert bd["amount_paise"] == int(round(300 * 5 * 1.18 * 100))
+    assert bd["amount_paise"] == 300 * 5 * 100  # GST waived (#391)
 
 
 def test_trial_org_gets_flat_300_minutes_regardless_of_plan():
@@ -142,7 +152,7 @@ def test_lite_plan_economics():
     assert lite.base_rupees == 1999
     assert lite.included_minutes == 150
     assert lite.overage_per_min == 5.0
-    assert lite.max_doctors == 1
+    assert lite.max_doctors == 3  # 2026-07-17 (Vinay): 1 -> 3, zero-variable-cost
     assert lite.display_name == "Lite"
     assert PLAN_LANGUAGES["lite"] is None  # all languages
 

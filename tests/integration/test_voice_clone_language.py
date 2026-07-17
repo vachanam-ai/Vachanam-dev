@@ -188,9 +188,15 @@ async def test_clone_upserts_one_voice_per_language(db, monkeypatch):
 # ---------------------------------------------------------------------------
 
 async def _starter_branch(db):
+    # subscription_started_at pushed PAST the #391 launch-offer window: during
+    # the first 3 months every plan may clone; this fixture tests the
+    # STANDARD (post-offer) Clinic/Multi gate.
+    from datetime import datetime, timedelta, timezone
+
     org_id = uuid.uuid4()
     db.add(Organization(id=org_id, name="Org", owner_phone=f"+9190000{str(uuid.uuid4().int)[:5]}",
-                        owner_email=f"o-{org_id}@c.com", plan="solo"))
+                        owner_email=f"o-{org_id}@c.com", plan="solo",
+                        subscription_started_at=datetime.now(timezone.utc) - timedelta(days=200)))
     await db.flush()
     br = Branch(id=uuid.uuid4(), org_id=org_id, name="C",
                 whatsapp_number=f"+9100000{str(uuid.uuid4().int)[:5]}", language="te")

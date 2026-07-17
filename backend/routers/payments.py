@@ -30,7 +30,7 @@ from backend.middleware.rate_limit import (
     verify_payment_limit,
 )
 from backend.models.schema import Organization
-from backend.services.billing_math import PLANS, subscription_order_breakdown
+from backend.services.billing_math import PLANS, effective_price, subscription_order_breakdown
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -170,7 +170,8 @@ async def create_order(
     if last is not None:
         used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
     bd = subscription_order_breakdown(
-        plan, used, int(getattr(org, "minutes_adjustment", 0) or 0)
+        plan, used, int(getattr(org, "minutes_adjustment", 0) or 0),
+        subscription_started_at=getattr(org, "subscription_started_at", None),
     )
 
     client = _get_client()
@@ -225,6 +226,10 @@ class PlanInfo(BaseModel):
     cycle_end: str | None = None  # ISO date the current PAID cycle ends (renewal day)
     last_payment_date: str | None = None  # ISO date the last payment was confirmed (#353)
     gstin: str | None = None  # clinic's GSTIN (shown on invoices)
+    # #391 launch offer: the base this org pays NEXT charge (offer-aware) and
+    # whether it is the first-3-months offer price — UI shows exact numbers.
+    next_base_rupees: int = 0
+    is_offer: bool = False
 
 
 class PlanChangeRequest(BaseModel):
@@ -287,7 +292,10 @@ async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
 
 
 def _plan_info(org: Organization, last_cycle=None) -> "PlanInfo":
+    _base, _is_offer = effective_price(org.plan, org.subscription_started_at)
     return PlanInfo(
+        next_base_rupees=_base,
+        is_offer=_is_offer,
         plan=org.plan,
         status=org.status,
         pending_plan=org.pending_plan,
@@ -582,7 +590,8 @@ async def activate_subscription(
             cycle_start=start,
             cycle_end=start + timedelta(days=30),
             plan=chosen_plan,
-            base_amount=plan_def.base_rupees,
+            # #391: record the base actually charged (launch-offer aware).
+            base_amount=effective_price(chosen_plan, org.subscription_started_at)[0],
             included_minutes=plan_def.included_minutes,
             minutes_used=0,
             overage_minutes=0,
@@ -602,7 +611,8 @@ async def activate_subscription(
         from backend.services.invoice_email import send_payment_invoice
 
         bd = subscription_order_breakdown(
-            chosen_plan, used_closing, int(getattr(org, "minutes_adjustment", 0) or 0)
+            chosen_plan, used_closing, int(getattr(org, "minutes_adjustment", 0) or 0),
+            subscription_started_at=org.subscription_started_at,
         )
         await send_payment_invoice(
             to_email=org.owner_email or "", org_name=org.name,

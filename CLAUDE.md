@@ -85,7 +85,15 @@ AND feature gates: `backend/services/billing_math.py` (PLANS, PLAN_LANGUAGES,
 CLONING_PLANS, FOLLOWUP_PLANS, WHATSAPP_PLANS, TRIAL_MINUTES).
 
 All prices are **exclusive of 18% GST** (shown as "+18% GST"; B2B clinics reclaim
-it via input credit).
+it via input credit). **2026-07-17 LAUNCH OFFER (Vinay — clinic feedback "pricing
+too much; keep low until first clients"):** for a clinic's FIRST 3 PAID months —
+offer prices at 10-15% worst-case margin (Lite ₹1,799 · Starter ₹3,999 · Clinic
+₹6,999 · Multi ₹11,999; Lite is below 10%, accepted), GST NOT added for now
+(`GST_WAIVED` in billing_math — flip to restore), voice cloning on EVERY plan
+during the window, Lite doctors 1→3. UI shows actual price struck through +
+offer price labeled "Offer price — first 3 months". Source of truth:
+`billing_math.py` OFFER_PRICES / in_offer_window / effective_price /
+cloning_allowed.
 
 Free trial: 14 days, no card, 300 min (≈100 calls) — HARD-enforced (trials
 always block on exhaust in `call_blocked`, 2026-07-11). Day 12 Razorpay link;
