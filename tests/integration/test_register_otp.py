@@ -68,6 +68,7 @@ async def test_register_rejects_weak_password(client):
             "owner_name": "Tester",
             "email": email,
             "password": "Clinic2024",  # no special char
+            "accepted_terms": True,
             "email_otp": codes["dev_email_code"],
         },
     )
@@ -84,6 +85,7 @@ async def test_register_rejects_bad_email(client):
             "owner_name": "Tester",
             "email": "not-an-email",
             "password": GOOD_PW,
+            "accepted_terms": True,
             "email_otp": "000000",
         },
     )
@@ -104,6 +106,7 @@ async def test_register_blocked_without_otp(client):
             "owner_name": "Tester",
             "email": email,
             "password": GOOD_PW,
+            "accepted_terms": True,
             "email_otp": "111111",
         },
     )
@@ -125,6 +128,7 @@ async def test_register_needs_no_phone(client, db):
             "owner_name": "Tester",
             "email": email,
             "password": GOOD_PW,
+            "accepted_terms": True,
             "email_otp": codes["dev_email_code"],
             # NO phone supplied — must still succeed.
         },
@@ -154,6 +158,7 @@ async def test_full_signup_email_only(client, db):
             "email": email,
             "password": GOOD_PW,
             "plan": "clinic",
+            "accepted_terms": True,
             "email_otp": email_code,
         },
     )
@@ -186,6 +191,7 @@ async def test_otp_code_is_single_use(client, db):
         "owner_name": "Tester",
         "email": email,
         "password": GOOD_PW,
+        "accepted_terms": True,
         "email_otp": codes["dev_email_code"],
     }
     first = await client.post("/auth/register", json=base)
@@ -198,3 +204,28 @@ async def test_otp_code_is_single_use(client, db):
     second = await client.post("/auth/register", json=base2)
     assert second.status_code == 403
     assert "email not verified" in second.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_register_requires_terms_consent(client, db):
+    """DPDP (Vinay 2026-07-17): the clinic (Data Fiduciary) must explicitly
+    accept the Terms + DPA — signup without accepted_terms is a clean 422 and
+    creates nothing."""
+    email = _unique_email()
+    codes = (await client.post("/auth/request-otp", json={"email": email})).json()
+    r = await client.post("/auth/register", json={
+        "clinic_name": "NoConsent Clinic", "owner_name": "Owner",
+        "email": email, "password": GOOD_PW,
+        "email_otp": codes["dev_email_code"],
+        # accepted_terms deliberately omitted
+    })
+    assert r.status_code == 422
+    assert "Data Processing Agreement" in r.json()["detail"]
+    # Nothing persisted — same email can register once consent is given.
+    ok = await client.post("/auth/register", json={
+        "clinic_name": "NoConsent Clinic", "owner_name": "Owner",
+        "email": email, "password": GOOD_PW,
+        "accepted_terms": True,
+        "email_otp": codes["dev_email_code"],
+    })
+    assert ok.status_code == 201, ok.text

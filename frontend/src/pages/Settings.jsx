@@ -10,6 +10,7 @@ import {
   fetchDoctors,
   fetchPlan,
   fetchStaff,
+  removeStaff,
   getBranchFaq,
   getBranchVoices,
   registerClonedVoice,
@@ -96,7 +97,7 @@ function InfoBox({ title, children }) {
 }
 
 export default function Settings() {
-  const { branchId, user } = useAuth();
+  const { branchId, user, logout } = useAuth();
   const qc = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -363,6 +364,31 @@ export default function Settings() {
       toast.success(`${m.role} account created — share the login with them`);
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not add member")
+  });
+
+  // Remove a staff login (owner only; doctor rows unlink, records stay).
+  const fireStaff = useMutation({
+    mutationFn: (userId) => removeStaff(branchId, userId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["staff", branchId] });
+      toast.success("Login removed");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove the login")
+  });
+
+  // DPDP erasure: delete the whole clinic, then sign out to the landing page.
+  const [delConfirm, setDelConfirm] = useState("");
+  const nukeClinic = useMutation({
+    mutationFn: () => deleteAccount(
+      delConfirm.trim().toUpperCase() === "DELETE"
+        ? { confirm: "DELETE" }
+        : { password: delConfirm }
+    ),
+    onSuccess: () => {
+      toast.success("Clinic deleted — goodbye");
+      logout();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not delete the clinic")
   });
 
   if (error)
@@ -865,6 +891,16 @@ export default function Settings() {
                 <p className="truncate font-ui text-xs text-slate">{m.email}</p>
               </div>
               <span className="chip-token">{m.role}</span>
+              {m.role !== "org_admin" && m.user_id !== user?.user_id && (
+                <button type="button" className="ml-2 font-ui text-xs text-danger underline-offset-2 hover:underline"
+                  disabled={fireStaff.isPending}
+                  onClick={() => {
+                    if (window.confirm(`Remove ${m.name ?? m.email}'s login? Their clinic records stay; only the login is deleted.`))
+                      fireStaff.mutate(m.user_id);
+                  }}>
+                  Remove
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -922,6 +958,30 @@ export default function Settings() {
             password; they sign in here (or "Continue with Google" with the same email). Reception lands
             on the Queue, doctors on their schedule.</p>
         </InfoBox>
+      </Section>
+
+      {/* DPDP erasure (Vinay 2026-07-17): the fiduciary can close the account
+          and erase everything — patients, bookings, notes, logins, billing. */}
+      <Section id="danger" title="Delete clinic"
+        sub="Permanently erase this clinic and ALL its data — patients, bookings, treatment notes, logins, billing. This cannot be undone.">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">Your password (or type DELETE if you sign in with Google)</label>
+            <input className="field" type="password" value={delConfirm}
+              onChange={(e) => setDelConfirm(e.target.value)} placeholder="Password or DELETE" />
+          </div>
+          <div className="flex items-end">
+            <button type="button"
+              className="w-full rounded-xl border border-danger px-4 py-2 font-ui text-sm font-semibold text-danger transition hover:bg-danger hover:text-white disabled:opacity-50"
+              disabled={nukeClinic.isPending || !delConfirm.trim()}
+              onClick={() => {
+                if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))
+                  nukeClinic.mutate();
+              }}>
+              {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
+            </button>
+          </div>
+        </div>
       </Section>
     </div>
   );

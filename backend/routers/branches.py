@@ -1159,3 +1159,61 @@ async def add_staff(
     logger.info("staff_added", branch_id=branch_id, role=body.role)
 
     return StaffMember(user_id=str(user.id), email=user.email, name=user.name, role=user.role)
+
+
+@router.delete(
+    "/{branch_id}/staff/{user_id}",
+    dependencies=[Depends(queue_today_limit)],
+)
+@audit("branch.staff_removed", resource_type="user")
+async def remove_staff(
+    branch_id: str,
+    user_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Owner removes a staff login (DPDP account deletion, Vinay 2026-07-17).
+    Doctor rows are unlinked (their schedule/treatments stay — the LOGIN dies,
+    not the clinic's records). Owners cannot delete themselves here — the
+    delete-clinic flow handles the whole org."""
+    await assert_branch_access(current_user, branch_id, db)
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can remove logins")
+    if user_id == current_user.user_id:
+        raise HTTPException(
+            status_code=422,
+            detail="You can't remove your own login — use Delete clinic to close the account",
+        )
+    from backend.models.schema import Doctor, User
+
+    try:
+        uid = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid user id")
+    target = (
+        await db.execute(
+            select(User).where(
+                User.id == uid,
+                User.org_id == uuid.UUID(current_user.org_id),  # RULE 1
+            )
+        )
+    ).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if target.role == "org_admin":
+        raise HTTPException(status_code=422, detail="Another owner login can't be removed here")
+
+    # Unlink any doctor bound to this login; clinical records stay.
+    await db.execute(
+        Doctor.__table__.update()
+        .where(Doctor.user_id == uid)
+        .values(user_id=None)
+    )
+    await db.execute(User.__table__.delete().where(User.id == uid))
+    await db.commit()
+    request.state.audit_resource_id = user_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("staff_removed", branch_id=branch_id, removed=user_id[-4:])
+    return {"deleted": True, "user_id": user_id}

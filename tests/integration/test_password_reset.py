@@ -53,6 +53,7 @@ async def _register(client, email):
             "owner_name": "Owner",
             "email": email,
             "password": GOOD_PW,
+            "accepted_terms": True,
             "email_otp": codes["dev_email_code"],
         },
     )

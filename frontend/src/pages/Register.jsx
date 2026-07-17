@@ -2,7 +2,7 @@ import ThemeToggle from "../components/ThemeToggle.jsx";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { requestOtp } from "../api/client.js";
+import { API_BASE, requestOtp } from "../api/client.js";
 import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
@@ -49,6 +49,12 @@ export default function Register() {
   const [devCode, setDevCode] = useState(null);
   const [busy, setBusy] = useState(false);
   const [ts, setTs] = useState(""); // current Turnstile token ("" = not solved yet)
+  // DPDP: clinic (Data Fiduciary) must accept Terms + DPA before signup.
+  const [terms, setTerms] = useState(false);
+  // Ref mirror: the Google callback is registered once in a useEffect whose
+  // closure would otherwise capture a stale `terms`.
+  const termsRef = useRef(false);
+  useEffect(() => { termsRef.current = terms; }, [terms]);
 
   const gsiRef = useRef(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -83,13 +89,18 @@ export default function Register() {
             toast.error("Fill clinic name and your name first");
             return;
           }
+          if (!termsRef.current) {
+            toast.error("Please accept the Terms and Data Processing Agreement first");
+            return;
+          }
           setBusy(true);
           try {
             const me = await register({
               clinic_name: form.clinic_name.trim(),
               owner_name: form.owner_name.trim(),
               plan: form.plan,
-              id_token: resp.credential
+              id_token: resp.credential,
+              accepted_terms: true
             });
             toast.success("Clinic created — 14-day trial started");
             navigate(roleHome(me.role), { replace: true });
@@ -128,6 +139,10 @@ export default function Register() {
       toast.error("Fix the highlighted fields first");
       return;
     }
+    if (!terms) {
+      toast.error("Please accept the Terms and Data Processing Agreement first");
+      return;
+    }
     setBusy(true);
     try {
       const r = await requestOtp({ email: form.email.trim() });
@@ -159,7 +174,8 @@ export default function Register() {
         email: form.email.trim(),
         password: form.password,
         plan: form.plan,
-        email_otp: otp
+        email_otp: otp,
+        accepted_terms: true
       });
       toast.success("Clinic created — 14-day trial started");
       navigate(roleHome(me.role), { replace: true });
@@ -236,9 +252,27 @@ export default function Register() {
                 ))}
               </div>
             </div>
+            {/* DPDP consent — the clinic is the Data Fiduciary; Vachanam is the
+                Data Processor acting on its instructions. Server enforces too. */}
+            <label className="flex items-start gap-2.5 font-ui text-xs text-ink-soft">
+              <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-teal" />
+              <span>
+                I agree to the{" "}
+                <a href={`${API_BASE}/terms`} target="_blank" rel="noreferrer"
+                  className="text-teal underline-offset-2 hover:underline">Terms of Service</a>{" "}
+                and the{" "}
+                <a href={`${API_BASE}/dpa`} target="_blank" rel="noreferrer"
+                  className="text-teal underline-offset-2 hover:underline">Data Processing Agreement</a>.
+                My clinic is the Data Fiduciary for patient data; Vachanam processes it
+                only on my clinic&rsquo;s instructions ({""}
+                <a href={`${API_BASE}/privacy`} target="_blank" rel="noreferrer"
+                  className="text-teal underline-offset-2 hover:underline">Privacy Policy</a>).
+              </span>
+            </label>
             <Turnstile onToken={setTs} />
             <button className="btn-primary w-full py-3"
-              disabled={busy || (TURNSTILE_ON && !ts)}>
+              disabled={busy || !terms || (TURNSTILE_ON && !ts)}>
               {busy ? "Sending code…" : "Create account"}
             </button>
 

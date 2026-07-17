@@ -12,6 +12,7 @@ Flow:
 
 No password storage. Google handles password + 2FA.
 """
+import uuid as uuid_mod
 from typing import Literal
 
 import structlog
@@ -211,6 +212,74 @@ async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
     logger.info("user_logout", user_id=current_user.user_id, jti=current_user.jti)
 
 
+class DeleteAccountRequest(BaseModel):
+    # Password for password accounts; Google-only accounts type DELETE instead.
+    password: str | None = None
+    confirm: str | None = None
+
+
+@router.post("/delete-account", dependencies=[Depends(default_limit)])
+async def delete_account(
+    request: Request,
+    body: DeleteAccountRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Owner permanently deletes their clinic and ALL its data (DPDP erasure,
+    Vinay 2026-07-17). Irreversible. Requires the owner's password (or the
+    typed word DELETE for Google-only accounts). Reuses the FK-safe admin
+    cascade; audited (no-FK audit table survives the deletion)."""
+    from backend.models.schema import Organization as _Org
+    from backend.routers.admin import _hard_delete_org
+
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only the clinic owner can delete the clinic")
+    if not current_user.org_id:
+        raise HTTPException(status_code=422, detail="No clinic linked to this login")
+
+    client_ip = _client_ip(request)
+    async with AsyncSessionLocal() as db:
+        me = (
+            await db.execute(select(User).where(User.id == uuid_mod.UUID(current_user.user_id)))
+        ).scalar_one_or_none()
+        if me is None:
+            raise HTTPException(status_code=404, detail="Account not found")
+        # Re-authenticate the destructive action (a stolen session must not
+        # suffice): password when one exists, else explicit typed DELETE.
+        if me.password_hash:
+            if not (body.password and _verify_password(body.password, me.password_hash)):
+                await record_failed_login(client_ip)
+                raise HTTPException(status_code=401, detail="Password incorrect")
+        elif (body.confirm or "").strip().upper() != "DELETE":
+            raise HTTPException(status_code=422, detail='Type DELETE to confirm')
+
+        org = (
+            await db.execute(select(_Org).where(_Org.id == uuid_mod.UUID(current_user.org_id)))
+        ).scalar_one_or_none()
+        if org is None:
+            raise HTTPException(status_code=404, detail="Clinic not found")
+        org_id = str(org.id)
+        await _hard_delete_org(db, org)
+        await db.commit()
+
+    # Kill the session; audit AFTER the commit (audit table has no tenant FKs).
+    import time as _time
+
+    await revoke_jwt(current_user.jti, int(_time.time()) + settings.jwt_expire_hours * 3600)
+    try:
+        await _audit_svc.write_audit_row(
+            action="org.self_deleted",
+            user_id=uuid_mod.UUID(current_user.user_id),
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent"),
+            success=True,
+            metadata={"org_id": org_id, "initiated_by": "owner"},
+        )
+    except Exception as audit_err:
+        logger.error("audit_write_failed", action="org.self_deleted", error=str(audit_err))
+    logger.info("org_self_deleted", org_id=org_id)
+    return {"deleted": True}
+
+
 # ── Self-serve clinic registration + email/password login ───────────────────
 
 
@@ -225,6 +294,10 @@ class RegisterRequest(BaseModel):
     # ids (billing_math.PLANS); "Starter" is the DISPLAY name for solo.
     plan: Literal["lite", "solo", "clinic", "multi"] = "clinic"
     email_otp: str | None = None  # email-OTP verification (Vinay 2026-06-15)
+    # DPDP (Vinay 2026-07-17): the clinic (Data Fiduciary) must explicitly
+    # accept the Terms + DPA at signup — Vachanam is the Data Processor acting
+    # on its instructions. Enforced server-side; recorded in the audit log.
+    accepted_terms: bool = False
 
 
 class LoginRequest(BaseModel):
@@ -292,6 +365,13 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         raise HTTPException(status_code=422, detail="Your name is required")
     if body.plan not in ("lite", "solo", "clinic", "multi"):
         raise HTTPException(status_code=422, detail="Invalid plan")
+    # DPDP consent gate: the clinic is the Data Fiduciary; Vachanam processes
+    # patient data only on its instructions. No consent, no account.
+    if not body.accepted_terms:
+        raise HTTPException(
+            status_code=422,
+            detail="Please accept the Terms of Service and Data Processing Agreement to continue",
+        )
 
     google_sub: str | None = None
     email = (body.email or "").strip().lower()
@@ -406,6 +486,9 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             ip_address=client_ip,
             user_agent=request.headers.get("user-agent"),
             success=True,
+            # DPDP consent record: timestamp+IP+UA of the fiduciary's Terms/DPA
+            # acceptance live in this row (accepted_terms is gated above).
+            metadata={"accepted_terms": True, "terms_context": "signup"},
         )
     except Exception as audit_err:
         logger.error("audit_write_failed", action="user.register", error=str(audit_err))

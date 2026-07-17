@@ -170,6 +170,10 @@ export const fetchStaff = (branchId) =>
   api.get(`/branches/${branchId}/staff`).then((r) => r.data);
 export const addStaff = (branchId, payload) =>
   api.post(`/branches/${branchId}/staff`, payload).then((r) => r.data);
+export const removeStaff = (branchId, userId) =>
+  api.delete(`/branches/${branchId}/staff/${userId}`).then((r) => r.data);
+export const deleteAccount = (payload) =>
+  api.post("/auth/delete-account", payload).then((r) => r.data);
 export const createDoctor = (branchId, payload) =>
   api.post(`/doctors/${branchId}`, payload).then((r) => r.data);
 export const updateDoctor = (branchId, doctorId, payload) =>
