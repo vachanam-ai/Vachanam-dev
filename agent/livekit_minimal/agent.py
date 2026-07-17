@@ -1725,6 +1725,7 @@ class VachanamAgent(Agent):
             except Exception:
                 pass
             return {"logged": False}
+        self._state.question_logged = True
         return {"logged": True, "next": "Tell the caller the clinic will check "
                 "with the doctor and get back to them."}
 
@@ -1791,6 +1792,7 @@ class VachanamAgent(Agent):
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning("urgent_message_alert_failed: %s", e)
+        self._state.message_taken = True
         return {"logged": True, "next": "Tell the caller their message is with "
                 "the clinic and they will get a call back."}
 
@@ -3524,6 +3526,64 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     await db.commit()
                 except Exception as e:  # noqa: BLE001
                     logger.warning("call_quality_write_failed: %s", e)
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+
+                # MESSAGE SAFETY NET (2026-07-17 real call): the agent SPOKE a
+                # delivery promise ("డాక్టర్ గారికి తెలియజేస్తాను") but never
+                # called take_message — the caller's message silently vanished.
+                # Deterministic net: if an agent turn contains a delivery-promise
+                # marker and NOTHING was recorded this call (no message, no
+                # clinic question, no booking), auto-capture the caller's own
+                # words as a PatientMessage so the clinic never loses it. Extra
+                # capture on a false positive is benign; a lost message is not.
+                try:
+                    if (
+                        org_vertical != "sales"
+                        and not state.message_taken
+                        and not state.question_logged
+                        and not state.token_confirmed
+                    ):
+                        _, _net_tx = _extract_call_record(session)
+                        _agent_lines = [
+                            ln[len("agent:"):].strip()
+                            for ln in (_net_tx or "").split("\n")
+                            if ln.startswith("agent:")
+                        ]
+                        _PROMISES = (
+                            "తెలియజేస్తాను", "తిరిగి కాల్ చేస్తారు",
+                            "pass it on", "inform the doctor",
+                            "let the doctor know", "get back to you",
+                        )
+                        if any(p in ln for ln in _agent_lines for p in _PROMISES):
+                            _caller_words = " / ".join(
+                                ln[len("patient:"):].strip()
+                                for ln in (_net_tx or "").split("\n")
+                                if ln.startswith("patient:")
+                            )[:450]
+                            if _caller_words:
+                                from backend.models.schema import PatientMessage as _PM
+
+                                await db.rollback()
+                                db.add(_PM(
+                                    branch_id=state.branch_id,
+                                    caller_phone=state.patient_phone,
+                                    message=(
+                                        "[auto-captured — the agent promised to pass this on "
+                                        "but no message was recorded on the call] "
+                                        + _caller_words
+                                    ),
+                                    urgent=False,
+                                ))
+                                await db.commit()
+                                logger.warning(
+                                    "message_safety_net_captured branch_id=%s",
+                                    str(state.branch_id),
+                                )
+                except Exception as e:  # noqa: BLE001 — net must never break teardown
+                    logger.warning("message_safety_net_failed: %s", e)
                     try:
                         await db.rollback()
                     except Exception:

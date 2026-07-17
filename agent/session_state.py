@@ -28,6 +28,12 @@ class SessionState:
     # completes with a decline note instead of re-calling them.
     followup_declined: bool = False
     followup_decline_note: str = ""
+    # Message safety net (2026-07-17 real call: agent PROMISED to inform the
+    # doctor but never called take_message — message lost). Set on successful
+    # take_message / log_clinic_question so teardown knows whether a spoken
+    # delivery promise was actually backed by a recorded row.
+    message_taken: bool = False
+    question_logged: bool = False
 
     token_redis_key: str | None = None
     token_number: int | None = None
