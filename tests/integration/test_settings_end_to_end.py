@@ -121,6 +121,18 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     assert body["did_number"] == normalize_did(DID)
     assert body["did_wired"] is True
 
+    # LOOP GUARD (Vinay 2026-07-17): escalation number == clinic's own number
+    # would route blocked/urgent callers straight back into the AI — rejected.
+    bad = await client.patch(
+        f"/branches/{bid}/settings", headers=_auth(owner),
+        json={"emergency_contact": normalize_did(DID)},
+    )
+    assert bad.status_code == 422
+    assert "own number" in bad.json()["detail"]
+    # the original escalation number survives the rejected save
+    g0 = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
+    assert g0.json()["emergency_contact"] == "+919812345678"
+
     # GET reflects the same persisted state.
     g = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
     assert g.status_code == 200

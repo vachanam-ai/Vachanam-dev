@@ -621,11 +621,44 @@ async def assign_token(
             token=token_number,
             date=str(booking_date),
         )
+        # WHEN TO COME — grounded facts so the LLM never improvises "come now"
+        # (real call 2026-07-17 03:00: token 1 assigned, agent said "come now
+        # itself"; the doctor sits from morning). Computed in BRANCH time.
+        hours = None
+        queue_open_now = False
+        if doctor.working_hours_start and doctor.working_hours_end:
+            hours = (
+                f"{doctor.working_hours_start.strftime('%H:%M')}–"
+                f"{doctor.working_hours_end.strftime('%H:%M')}"
+            )
+            queue_open_now = (
+                booking_date == now_branch.date()
+                and doctor.working_hours_start <= now_branch.time() <= doctor.working_hours_end
+            )
+        if queue_open_now:
+            when_to_come = (
+                "The queue is running NOW — tell the patient they can come right away."
+            )
+        elif hours:
+            when_to_come = (
+                f"The doctor sits {hours} on {booking_date.isoformat()} — the queue "
+                f"is NOT running right now. Tell the patient to come once the doctor "
+                f"starts (from {doctor.working_hours_start.strftime('%H:%M')}); NEVER "
+                "say 'come now'."
+            )
+        else:
+            when_to_come = (
+                "Doctor's sitting hours are not configured — do NOT promise a time "
+                "or say 'come now'; say the clinic will confirm the timing."
+            )
         return {
             "success": True,
             "token_number": token_number,
             "redis_key": redis_key,
             "booking_type": "token",
+            "doctor_hours": hours,
+            "queue_open_now": queue_open_now,
+            "when_to_come": when_to_come,
         }
 
     else:  # appointment type

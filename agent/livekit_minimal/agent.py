@@ -2851,7 +2851,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             room=ctx.room,
             agent=Agent(instructions="Say nothing. The call is being ended."),
         )
-        await gate_session.say(sanitize_for_tts(lines.service_blocked))
+        _blocked_text = lines.service_blocked
+        # Never leave a patient with a dead end (Vinay 2026-07-17): when the
+        # clinic set an escalation number, speak it so an urgent caller has a
+        # human path. Digits spaced so TTS reads them one by one. te + en;
+        # other languages get the en line (rides the humanizer pipeline later).
+        _em = (getattr(branch, "emergency_contact", "") or "").strip()
+        if _em:
+            _spaced = " ".join(_em.removeprefix("+91"))
+            if lang_cfg.code == "te":
+                _blocked_text += f" అర్జెంట్ అయితే ఈ నంబర్‌కి డైరెక్ట్‌గా కాల్ చేయండి: {_spaced}."
+            else:
+                _blocked_text += f" For anything urgent, please call the clinic directly at {_spaced}."
+        await gate_session.say(sanitize_for_tts(_blocked_text))
         await asyncio.sleep(1.0)  # let the tail of the audio flush
         try:
             lkapi = api.LiveKitAPI()

@@ -632,7 +632,11 @@ NOTHING outside them. The canonical new-booking sequence is exactly:
      booking ONLY if the caller says this new one is for a DIFFERENT person (then
      pass different_person=true at confirm_booking).
    - "booking: token"  → assign_token, then ALWAYS tell the token number (their
-     place in the queue): "మీ టోకెన్ నంబర్ ఎనిమిది."
+     place in the queue): "మీ టోకెన్ నంబర్ ఎనిమిది." AND when to come — OBEY the
+     tool's when_to_come field EXACTLY: if the queue is not running right now
+     (night/early-morning call), state when the doctor starts ("డాక్టర్ గారు
+     ఉదయం పది గంటల నుంచి చూస్తారండి, అప్పుడు వచ్చేయండి") — NEVER say "come now"
+     unless the tool says the queue is running now.
    - "booking: appointment" — TIME HANDLING (do exactly this, it keeps you brief):
      * Patient ALREADY gave a specific time (e.g. "నాలుగున్నరకి"): do NOT repeat
        the time back, do NOT say "okay 4:30". SILENTLY check_availability for it.

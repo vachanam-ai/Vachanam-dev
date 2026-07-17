@@ -936,6 +936,21 @@ async def update_branch_settings(
         value = getattr(body, field)
         if value is not None:
             setattr(branch, field, value.strip() or None)
+    # LOOP GUARD (Vinay 2026-07-17): the escalation/emergency number is where
+    # we SEND callers when the AI line is blocked or a human handover is
+    # needed. The clinic's own number forwards INTO the AI line — pointing the
+    # escalation there would loop the caller straight back to the agent.
+    if branch.emergency_contact and branch.emergency_contact in (
+        branch.clinic_phone, branch.did_number,
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The escalation number can't be the clinic's own number — that "
+                "line forwards back to the AI. Use a number a human answers "
+                "(e.g. the owner's mobile)."
+            ),
+        )
     await db.commit()
 
     # DID changed -> wire it into the LiveKit inbound trunk so calls route

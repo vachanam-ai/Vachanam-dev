@@ -224,6 +224,32 @@ def test_trial_always_hard_blocks_on_exhaust():
     assert call_blocked("trial", "solo", False, 300, adjustment=100) is None
 
 
+def test_trial_expiry_hard_stops_even_before_pause_job():
+    """Vinay 2026-07-17 ("hard stop after free trial limit ended"): an expired
+    trial blocks IMMEDIATELY via call_blocked — no free service in the window
+    before the daily trial_pause job flips status to paused. Both trial
+    dimensions hard-stop: days (here) and minutes (test above)."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    assert call_blocked("trial", "clinic", False, 0,
+                        trial_ends_at=now + timedelta(hours=1)) is None
+    assert call_blocked("trial", "clinic", False, 0,
+                        trial_ends_at=now - timedelta(minutes=1)) == "trial_expired"
+    # naive datetime from the DB is treated as UTC, still blocks
+    assert call_blocked("trial", "clinic", False, 0,
+                        trial_ends_at=(now - timedelta(days=2)).replace(tzinfo=None)) == "trial_expired"
+
+
+def test_blocked_call_speaks_emergency_number_source_guard():
+    """The blocked-call path must offer the clinic's escalation number — a
+    patient must never get a dead end (RULE 8)."""
+    from pathlib import Path
+
+    src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
+    assert "emergency_contact" in src.split("_blocked_text = lines.service_blocked")[1][:1200]
+
+
 def test_b3_hard_block_honors_trial_grant_and_adjustment():
     # B3: a solo-plan TRIAL org has the flat trial grant, not the plan bucket.
     assert minutes_exhausted("solo", 100, status="trial") is False
