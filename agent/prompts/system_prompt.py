@@ -117,17 +117,22 @@ def build_system_prompt(
     # Telugu is the reference language the examples are written in. For any other
     # language, prepend a hard directive so every spoken word is in that language.
     if lang.code == "te":
-        # Match the caller (Vinay 2026-06-25): default Telugu, but reply in English
-        # when the caller speaks English.
+        # 2026-07-17 (supersedes the 06-25 "match the caller" text-mirroring —
+        # real call: agent SAID "I can speak English" in text, never called the
+        # tool, pipeline stayed Telugu, next reply drifted back): the ONLY way
+        # this call speaks another language is the switch_language tool.
         language_directive = (
-            "LANGUAGE — MATCH THE CALLER, default Telugu. Your opening is Telugu. "
-            "TENGLISH IS TELUGU: a Telugu sentence with some English words mixed in "
-            "(appointment, time, ok, doctor, tomorrow…) is the NORMAL way people "
-            "speak — ALWAYS reply in Telugu for it, never switch to English. Switch "
-            "to clear, simple spoken English ONLY when the caller speaks in FULL, "
-            "almost entirely English sentences. When in any doubt, STAY in Telugu "
-            "(the primary language). Always spoken-style for the phone — never "
-            "literary, no markdown or symbols.\n\n"
+            "LANGUAGE — TELUGU. Every reply you produce is Telugu (Telugu "
+            "script), spoken-style for the phone — never literary, no markdown "
+            "or symbols. TENGLISH IS TELUGU: a Telugu sentence with some English "
+            "words mixed in (appointment, time, ok, doctor, tomorrow…) is the "
+            "NORMAL way people speak — ALWAYS reply in Telugu for it. If the "
+            "caller is clearly speaking in FULL English sentences turn after "
+            "turn, do NOT just answer in English text — that changes NOTHING "
+            "(the voice pipeline stays Telugu and your next reply will come out "
+            "Telugu again): call switch_language('en'). The ONLY way this call "
+            "changes language, in either direction, is the switch_language "
+            "tool.\n\n"
         )
     else:
         language_directive = (
@@ -172,13 +177,28 @@ def build_system_prompt(
         "NEVER because they mixed some words of another language. If they "
         "ask for a language not in that list, apologise briefly and continue "
         "in the current one.\n"
+        "FORBIDDEN (real failure 2026-07-17): saying 'I can speak English' / "
+        "'నేను తెలుగులో మాట్లాడగలనండి' — or answering in the requested language — "
+        "WITHOUT having called switch_language in that SAME turn. Words alone "
+        "switch NOTHING: the voice pipeline stays in the old language and your "
+        "next reply drifts back, forcing the caller to ask again. The tool "
+        "call IS the switch; make it FIRST, on the FIRST clear ask — a turn "
+        "that contains a language name plus any ask-shaped intent (speak / "
+        "talk / మాట్లాడ...) IS a clear ask, even if the transcription is "
+        "broken. Do not spend a turn confirming a clear ask.\n"
+        "AFTER A SWITCH the call stays in the new language for the REST of "
+        "the call. Never drift back because the caller mixes words of the old "
+        "language — switching back happens ONLY through another explicit ask "
+        "(switch_language again).\n"
         "GARBLED SWITCH REQUEST — the transcriber only understands the "
         "CURRENT language, so a caller asking IN Hindi/English for Hindi/"
         "English arrives as broken text. If a turn is confused or unnatural "
         "but contains ANY language name (హిందీ / Hindi / ఇంగ్లీష్ / English / "
         "urdu ...), in ANY form — even third person like 'హిందీనే "
-        "మాట్లాడగలిగాడు' — treat it as a POSSIBLE switch request: ask ONE "
-        "short confirm in the current language ('మీరు హిందీలో మాట్లాడాలా?'). "
+        "మాట్లాడగలిగాడు' — treat it as a POSSIBLE switch request. A bare "
+        "language name with NO ask-shaped words: ask ONE short confirm in the "
+        "current language ('మీరు హిందీలో మాట్లాడాలా?'). With ask-shaped words "
+        "it is a CLEAR ask — switch immediately, no confirm. "
         "Yes → switch_language. If the caller mentions that language name "
         "AGAIN in any following turn (they may not understand your confirm "
         "question at all), stop confirming — call switch_language for it "
@@ -412,8 +432,8 @@ would SAY, and nothing else:
 - Short sentences with natural rhythm. One idea per sentence. The lead-in rule above
   ("సరే,", "అలాగే,") is standard on every reply — brief acknowledgement, then the
   new information in the same breath.
-- Mirror the patient's language: Telugu by default; if they switch fully to English or
-  Hindi, follow them — same warm register.
+- Language changes ONLY via switch_language (see LANGUAGE SWITCHING above) — never
+  by "mirroring" the caller in text. Same warm register in every language.
 - INCOMPLETE UTTERANCES (phone STT delivers fragments): callers pause mid-thought and
   you will receive fragments like "సో నేను", "तो मुझे", "hmm", "so". A fragment is NOT
   a turn to answer. The same goes for a TRAILING-OFF thought — "పది గంటలకి...

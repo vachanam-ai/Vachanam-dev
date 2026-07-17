@@ -2720,22 +2720,133 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # bad value can never break a live call (RULE 8).
     branch_lang_code = getattr(branch, "language", None) or "te"
     lang_code = branch_lang_code
-    # PER-CALLER LANGUAGE MAPPING (Vinay 2026-07-03): a caller who once asked
-    # "can you speak English/Hindi?" is mapped (Patient.preferred_language) and
-    # every later call — inbound AND outbound reminder/follow-up (patient_phone
-    # is the dialed number there) — starts in THEIR language, not the branch
-    # default. Branch context still comes from the DID (RULE 5); only the
-    # spoken language is per-caller. Lookup is branch-scoped (RULE 1) and can
-    # never block the call (RULE 8).
-    try:
-        if state.patient_phone:
-            _pref = await get_preferred_language(branch.id, state.patient_phone, db)
-            if _pref and _pref in LANGUAGES:
-                lang_code = _pref
-                state.preferred_language = _pref
-                logger.info("caller_lang_mapped lang=%s branch_id=%s", _pref, str(branch.id))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("pref_lang_lookup_failed: %s", e)
+    # LATENCY (#390, real call 2026-07-17: lat_pre_session_build=4.66s → first
+    # audio 5.81s): the three independent pre-call DB reads — per-caller
+    # language, service gate, caller identification — used to run SERIALLY on
+    # the call session, so a sleeping Neon (#299) plus 7+ round-trips all
+    # stacked in front of the greeting. They now run CONCURRENTLY on their own
+    # pooled sessions: the cold-DB wake is paid once across all three, and the
+    # greeting starts sooner. Semantics unchanged — the gate still decides
+    # BEFORE the greeting plays, fail-closed rules intact.
+
+    async def _service_gate_check(_b) -> tuple:
+        # Super-admin service gate: paused/cancelled org, expired trial, or
+        # hard-block with the month's minutes exhausted. Logic IDENTICAL to the
+        # old inline block — including the iter1 #23 fail-closed rule (a
+        # billing/DB hiccup must not grant free service to a shut-off org) —
+        # only moved onto its own pooled session so it runs concurrently.
+        _blocked = None
+        _plan = "clinic"
+        _last_status: str | None = None
+        try:
+            from zoneinfo import ZoneInfo as _ZoneInfo
+
+            from backend.models.schema import CallLog, Organization
+            from backend.services.billing_math import call_blocked
+
+            async with AsyncSessionLocal() as _s:
+                _org = (
+                    await _s.execute(
+                        select(Organization).where(Organization.id == _b.org_id)
+                    )
+                ).scalar_one_or_none()
+                if _org is not None:
+                    _last_status = (_org.status or "").lower()
+                    _plan = _org.plan or "clinic"
+                    _used_min = 0.0
+                    if getattr(_org, "hard_block_on_exhaust", False):
+                        # Month boundary in the BRANCH timezone, not server UTC.
+                        try:
+                            _now_b = datetime_cls.now(
+                                _ZoneInfo(_b.timezone or "Asia/Kolkata")
+                            )
+                        except Exception:
+                            _now_b = datetime_cls.now(_ZoneInfo("Asia/Kolkata"))
+                        _month_start = _now_b.replace(
+                            day=1, hour=0, minute=0, second=0, microsecond=0
+                        )
+                        from sqlalchemy import func as _func
+
+                        _org_branch_ids = select(Branch.id).where(
+                            Branch.org_id == _org.id
+                        )
+                        _secs = (
+                            await _s.execute(
+                                select(
+                                    _func.coalesce(
+                                        _func.sum(CallLog.duration_seconds), 0
+                                    )
+                                ).where(
+                                    and_(
+                                        CallLog.branch_id.in_(_org_branch_ids),
+                                        CallLog.started_at >= _month_start,
+                                    )
+                                )
+                            )
+                        ).scalar_one()
+                        _used_min = _secs / 60.0
+                    _blocked = call_blocked(
+                        _org.status,
+                        _org.plan,
+                        bool(getattr(_org, "hard_block_on_exhaust", False)),
+                        _used_min,
+                        trial_ends_at=getattr(_org, "trial_ends_at", None),
+                        adjustment=int(getattr(_org, "minutes_adjustment", 0) or 0),
+                    )
+        except Exception as e:  # noqa: BLE001
+            _blocked = _gate_failure_blocked_reason(_last_status)
+            if _blocked:
+                logger.warning(
+                    "service_gate_check_failed_failing_closed status=%s err=%s",
+                    _last_status,
+                    e,
+                )
+            else:
+                logger.warning("service_gate_check_failed_failing_open: %s", e)
+        return _blocked, _plan
+
+    async def _read_pref_lang() -> str | None:
+        # PER-CALLER LANGUAGE MAPPING (Vinay 2026-07-03): a caller who once
+        # asked "can you speak English/Hindi?" starts every later call in THEIR
+        # language. Branch context still comes from the DID (RULE 5); only the
+        # spoken language is per-caller. Branch-scoped (RULE 1); never blocks
+        # the call (RULE 8).
+        if not state.patient_phone:
+            return None
+        try:
+            async with AsyncSessionLocal() as _s:
+                return await get_preferred_language(branch.id, state.patient_phone, _s)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pref_lang_lookup_failed: %s", e)
+            return None
+
+    async def _read_caller() -> tuple | None:
+        # CALLER IDENTIFICATION (2026-06-14): look the inbound caller up by
+        # number BEFORE the greeting so the opening welcomes a returning
+        # patient by name. Raw reads only — language-dependent localization
+        # happens after the preferred language is known. RULE 1 branch-scoped;
+        # a failure never blocks answering (RULE 8).
+        if outbound_number or is_reminder or is_rebook_call or not state.patient_phone:
+            return None
+        try:
+            async with AsyncSessionLocal() as _s:
+                _rows = await find_bookings_by_phone(branch.id, state.patient_phone, _s)
+                _known = await recognize_caller_name(branch.id, state.patient_phone, _s)
+                _pending = await _inbound_pending_followup(branch.id, state.patient_phone, _s)
+                return _rows, _known, _pending
+        except Exception as e:  # noqa: BLE001
+            logger.warning("caller_lookup_failed: %s", e)
+            return None
+
+    _pref_res, _gate_res, _caller_res = await asyncio.gather(
+        _read_pref_lang(),
+        _service_gate_check(branch),
+        _read_caller(),
+    )
+    if _pref_res and _pref_res in LANGUAGES:
+        lang_code = _pref_res
+        state.preferred_language = _pref_res
+        logger.info("caller_lang_mapped lang=%s branch_id=%s", _pref_res, str(branch.id))
     lang_cfg = get_lang(lang_code)
     lines = get_lines(lang_code)
 
@@ -2750,82 +2861,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             followup_meta["message"], lang_code
         )
 
-    # Super-admin service gate: paused/cancelled org, expired trial, or
-    # hard-block with the month's minutes exhausted -> answer, speak ONE line,
-    # hang up (RULE 8). Also captures the org plan for the call-duration cap.
-    blocked_reason = None
-    org_plan = "clinic"
-    # iter1 #23: the gate must FAIL CLOSED for known terminal states. We record
-    # the org's last-known status the moment we read it; if a LATER step in this
-    # block raises (e.g. the minutes-sum query), the except handler refuses the
-    # call when that status is paused/cancelled — a billing/DB hiccup must not
-    # grant free service to an org the owner has already shut off. Genuinely
-    # transient/unknown lookups (org row not even read yet) still fail open so a
-    # blip never hangs up on a paying, active clinic.
-    last_known_status: str | None = None
-    try:
-        from zoneinfo import ZoneInfo as _ZoneInfo
-
-        from backend.models.schema import CallLog, Organization
-        from backend.services.billing_math import call_blocked
-
-        org = (
-            await db.execute(select(Organization).where(Organization.id == branch.org_id))
-        ).scalar_one_or_none()
-        if org is not None:
-            last_known_status = (org.status or "").lower()
-            org_plan = org.plan or "clinic"
-            used_min = 0.0
-            if getattr(org, "hard_block_on_exhaust", False):
-                # Month boundary in the BRANCH timezone, not server UTC —
-                # otherwise IST calls 00:00-05:30 on the 1st meter into the
-                # previous month and the hard-block trigger shifts 5.5h.
-                try:
-                    now_branch = datetime_cls.now(_ZoneInfo(branch.timezone or "Asia/Kolkata"))
-                except Exception:
-                    now_branch = datetime_cls.now(_ZoneInfo("Asia/Kolkata"))
-                month_start = now_branch.replace(
-                    day=1, hour=0, minute=0, second=0, microsecond=0
-                )
-                from sqlalchemy import func as _func
-
-                # LATENCY: one round-trip, not two. The org's branch ids are an
-                # in-DB scalar subquery instead of a separate SELECT-then-IN.
-                _org_branch_ids = select(Branch.id).where(Branch.org_id == org.id)
-                secs = (
-                    await db.execute(
-                        select(_func.coalesce(_func.sum(CallLog.duration_seconds), 0)).where(
-                            and_(
-                                CallLog.branch_id.in_(_org_branch_ids),
-                                CallLog.started_at >= month_start,
-                            )
-                        )
-                    )
-                ).scalar_one()
-                used_min = secs / 60.0
-            blocked_reason = call_blocked(
-                org.status,
-                org.plan,
-                bool(getattr(org, "hard_block_on_exhaust", False)),
-                used_min,
-                trial_ends_at=getattr(org, "trial_ends_at", None),
-                # B3: honor the trial grant + super-admin minutes_adjustment so
-                # the gate blocks at the SAME bucket the dashboard shows.
-                adjustment=int(getattr(org, "minutes_adjustment", 0) or 0),
-            )
-    except Exception as e:
-        # iter1 #23: fail CLOSED for a known terminal status, fail OPEN otherwise.
-        # If we already learned the org is paused/cancelled/suspended, a downstream
-        # error must NOT let the call through (free service to a shut-off org).
-        blocked_reason = _gate_failure_blocked_reason(last_known_status)
-        if blocked_reason:
-            logger.warning(
-                "service_gate_check_failed_failing_closed status=%s err=%s",
-                last_known_status,
-                e,
-            )
-        else:
-            logger.warning("service_gate_check_failed_failing_open: %s", e)
+    # Gate result from the concurrent read above (#390) — same decision point:
+    # a blocked org never hears the greeting.
+    blocked_reason, org_plan = _gate_res
 
     if blocked_reason:
         logger.warning(
@@ -2955,11 +2993,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         caller_greeting_name: str | None = None
         caller_prompt_extra = ""
         inbound_followup: dict | None = None  # missed-call callback (set below)
-        if not outbound_number and not is_reminder and not is_rebook_call and state.patient_phone:
+        if _caller_res is not None:
             try:
-                _caller_rows = await find_bookings_by_phone(
-                    state.branch_id, state.patient_phone, db
-                )
+                _caller_rows, _known, inbound_followup = _caller_res
                 caller_greeting_name, caller_prompt_extra = _build_caller_context(
                     _caller_rows, now_b.date()
                 )
@@ -2968,9 +3004,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # returning caller is greeted by name even years later, not
                 # asked "who are you?". Only when nothing ambiguous is on file.
                 if caller_greeting_name is None and not caller_prompt_extra:
-                    _known = await recognize_caller_name(
-                        state.branch_id, state.patient_phone, db
-                    )
                     if _known:
                         caller_greeting_name = _known
                         caller_prompt_extra = KNOWN_CALLER_BOOKING_EXTRA.format(
@@ -2980,9 +3013,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # doctor scheduled, the agent proactively raises the doctor's question
                 # + offers the booking (instead of a plain inbound). Booking marks the
                 # task complete (state.followup_task_id), stopping the outbound retry.
-                inbound_followup = await _inbound_pending_followup(
-                    state.branch_id, state.patient_phone, db
-                )
                 if inbound_followup:
                     # Speak the doctor's note in the call's language (translate English).
                     if inbound_followup.get("message"):
@@ -3301,6 +3331,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # read the real rate from the header.
             output_format="wav",
         )
+        _session_llm = ctx.proc.userdata.get("llm") or _build_fallback_llm()
+
+        async def _prewarm_llm() -> None:
+            # First-turn Gemini ttft measured 3.35s vs ~1.3s on later turns
+            # (#390, real call 2026-07-17): the per-call connection/model warmup
+            # lands on the FIRST patient turn. One tiny request during the
+            # greeting cover window makes the first real turn hit a warm path.
+            # Best-effort — any failure is invisible to the call (RULE 8).
+            try:
+                _cc = ChatContext.empty()
+                _cc.add_message(role="user", content="Reply with just: Ok")
+                async with asyncio.timeout(8):
+                    _stream = _session_llm.chat(chat_ctx=_cc)
+                    try:
+                        async for _ in _stream:
+                            break
+                    finally:
+                        await _stream.aclose()
+                logger.info("llm_prewarmed")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("llm_prewarm_skipped: %s", e)
+
+        asyncio.create_task(_prewarm_llm())
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
             # speaks the clinic's language (falls back to Telugu). filler_clips is
@@ -3315,7 +3368,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # own STT/TTS built through the same _build_stt factory — never a
             # hot-swap of this session pipeline, never speech auto-detection.
             stt=_build_stt(lang_cfg),
-            llm=ctx.proc.userdata.get("llm") or _build_fallback_llm(),
+            llm=_session_llm,
             # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
             # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
             # (or a cloned voice); language is the clinic's short code (smallest uses
