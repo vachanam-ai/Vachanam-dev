@@ -924,35 +924,78 @@ def _build_stt(lang_cfg, context_terms: list | None = None):
     )
 
 
+def _vertex_credentials() -> tuple[str, str] | None:
+    """(sa_json_path, project_id) when Vertex service-account creds are usable,
+    else None. Fly ships the SA JSON only as GOOGLE_SA_JSON_B64 (no file in the
+    image) — decode to /tmp exactly like calendar_service._resolve_sa_path;
+    dev uses the repo-root file. Sets GOOGLE_APPLICATION_CREDENTIALS so
+    google.auth.default() inside the genai client finds it."""
+    import base64
+
+    path: str | None = None
+    if settings.google_sa_json_b64:
+        tmp = Path("/tmp/google-sa.json")
+        if not tmp.exists():
+            tmp.write_bytes(base64.b64decode(settings.google_sa_json_b64))
+        path = str(tmp)
+    elif settings.google_application_credentials and Path(
+        settings.google_application_credentials
+    ).exists():
+        path = settings.google_application_credentials
+    if not path:
+        return None
+    try:
+        project = json.loads(Path(path).read_text())["project_id"]
+    except (OSError, ValueError, KeyError):
+        return None
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = path
+    return path, project
+
+
 def _build_fallback_llm() -> lk_llm.FallbackAdapter:
-    """Gemini-only. Primary gemini-3.1-flash-lite, fallback gemini-2.5-flash
-    (Vinay 2026-07-08: flash-lite promoted to primary for lower TTFT — the
-    ~1.4s 2.5-flash ttft was the biggest chunk of the felt turn lag; flash-lite
-    is materially faster and already carried every fallback turn well). If
-    flash-lite is overloaded/slow the FallbackAdapter swaps to 2.5-flash.
-    thinking is minimised on both (gemini-3 uses thinking_level; 2.5-flash uses
-    thinking_budget).
+    """Gemini-only. #404 (2026-07-18): primary = gemini-2.5-flash on Vertex
+    asia-south1 (Mumbai — same region as this Fly worker). Measured at prod
+    prompt size (~12k tok): Mumbai ttft 0.67-0.69s steady vs global
+    3.1-flash-lite 1.05-1.28s with 1.7-3.1s spikes. Mumbai serves NO flash-lite
+    model (404), so the regional win rides 2.5-flash — our pre-2026-07-08
+    primary, quality-proven on this prompt family.
+
+    Fallbacks stay on the global API key path (RULE 8: Vertex outage, missing
+    SA creds, or region trouble must never kill a call): 3.1-flash-lite then
+    2.5-flash, both exactly as before. thinking minimised everywhere (gemini-3
+    uses thinking_level — #397: "low" still THINKS on ~half the turns, bimodal
+    ttft 1.2s/3.2s; 2.5-flash uses thinking_budget=0).
     """
     from google.genai import types as genai_types
 
-    return lk_llm.FallbackAdapter(
-        llm=[
+    llms: list[lk_llm.LLM] = []
+    vertex = _vertex_credentials()
+    if vertex is not None:
+        _, project = vertex
+        llms.append(
             google.LLM(
-                api_key=settings.gemini_api_key,
-                model="gemini-3.1-flash-lite",
-                # #397: "low" still THINKS on ~half the turns — measured
-                # bimodal ttft 1.2s vs 3.2s in the same call (06:05Z).
-                # "minimal" suppresses the bursts; probed live OK 2026-07-18.
-                thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
-            ),
-            google.LLM(
-                api_key=settings.gemini_api_key,
+                vertexai=True,
+                project=project,
+                location="asia-south1",
                 model="gemini-2.5-flash",
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
-            ),
-        ],
-        attempt_timeout=10.0,
-    )
+            )
+        )
+    else:
+        logger.warning("vertex_creds_missing primary stays on global API")
+    llms += [
+        google.LLM(
+            api_key=settings.gemini_api_key,
+            model="gemini-3.1-flash-lite",
+            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+        ),
+        google.LLM(
+            api_key=settings.gemini_api_key,
+            model="gemini-2.5-flash",
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+        ),
+    ]
+    return lk_llm.FallbackAdapter(llm=llms, attempt_timeout=10.0)
 
 
 async def update_call_duration(call_log_id, seconds: int) -> None:

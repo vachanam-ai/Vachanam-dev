@@ -3,7 +3,12 @@
 Razorpay is mocked — these assert the payload we send (the per-minute overage
 math reaches the provider as the right paise total), not the network.
 """
+from backend.services.billing_math import GST_WAIVED
 from backend.services.overage_billing import create_overage_order
+
+# 300 over-minutes x Rs5/min, +18% GST unless the 2026-07-17 launch-offer
+# waiver is on (GST_WAIVED in billing_math — flip there restores GST here).
+_EXPECTED_PAISE = 150000 if GST_WAIVED else 177000
 
 
 class _FakeOrders:
@@ -26,8 +31,8 @@ def test_create_overage_order_sends_correct_amount_and_notes():
 
     # solo/Starter bucket = 700 (repriced 2026-07-11): 1000 used -> 300 over.
     assert bd["overage_minutes"] == 300
-    assert bd["amount_paise"] == 177000           # 300 x Rs5 x 1.18 GST
-    assert client.order.created["amount"] == 177000
+    assert bd["amount_paise"] == _EXPECTED_PAISE
+    assert client.order.created["amount"] == _EXPECTED_PAISE
     assert client.order.created["currency"] == "INR"
     assert client.order.created["notes"]["type"] == "overage"
     assert client.order.created["notes"]["overage_minutes"] == "300"

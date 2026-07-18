@@ -69,3 +69,49 @@ def test_hello_immune_barge_in_403():
     assert "min_interruption_words=2" in SRC
     assert "resume_false_interruption=True" in SRC
     assert "min_interruption_words=0" not in SRC
+
+
+def test_vertex_mumbai_primary_404(tmp_path, monkeypatch):
+    """#404: with SA creds present, the turn LLM chain is Vertex Mumbai
+    2.5-flash first (measured ttft 0.67-0.69s at prod prompt size vs
+    1.05-1.28s global), then the unchanged global-API pair (RULE 8)."""
+    from agent.livekit_minimal import agent as ag
+
+    sa = tmp_path / "sa.json"
+    sa.write_text('{"project_id": "vachanam-498912"}')
+    monkeypatch.setattr(ag.settings, "google_sa_json_b64", None, raising=False)
+    monkeypatch.setattr(
+        ag.settings, "google_application_credentials", str(sa), raising=False
+    )
+
+    adapter = ag._build_fallback_llm()
+    opts = [l._opts for l in adapter._llm_instances]
+    assert opts[0].model == "gemini-2.5-flash"
+    assert opts[0].vertexai is True
+    assert opts[0].project == "vachanam-498912"
+    assert opts[0].location == "asia-south1"
+    # fallbacks: exactly the pre-#404 global chain
+    assert opts[1].model == "gemini-3.1-flash-lite"
+    assert opts[1].vertexai is False
+    assert opts[2].model == "gemini-2.5-flash"
+    assert opts[2].vertexai is False
+
+
+def test_vertex_missing_creds_falls_back_404(tmp_path, monkeypatch):
+    """#404 RULE 8: no SA creds -> chain is exactly the old global config;
+    a broken Vertex setup must never block call handling."""
+    from agent.livekit_minimal import agent as ag
+
+    monkeypatch.setattr(ag.settings, "google_sa_json_b64", None, raising=False)
+    monkeypatch.setattr(
+        ag.settings,
+        "google_application_credentials",
+        str(tmp_path / "missing.json"),
+        raising=False,
+    )
+    assert ag._vertex_credentials() is None
+
+    adapter = ag._build_fallback_llm()
+    opts = [l._opts for l in adapter._llm_instances]
+    assert [o.model for o in opts] == ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    assert all(o.vertexai is False for o in opts)
