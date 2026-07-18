@@ -874,48 +874,13 @@ class _HttpSmallestTTS(smallestai.TTS):
         return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
 
 
-# #396 ("previously the reply used to come fast — what changed?"): the 07-10
-# Sarvam→Soniox switch silently LOST Sarvam's flush_signal behavior (final
-# transcript forced the moment client VAD hears speech end). Nothing in
-# livekit-agents flushes a streaming STT on VAD end, and the Soniox plugin
-# never sends the finalize control message its protocol supports — so every
-# turn waited 0.6-1.8s for Soniox's own endpoint detection. This is the
-# Soniox port of flush_signal: on caller speech end we push
-# {"type":"finalize"} down each live Soniox socket (the plugin's send task
-# forwards strings verbatim; the server finalizes buffered tokens and emits
-# <fin>, which the plugin already consumes). PROVEN against the live API
-# 2026-07-18 before shipping: finalize → <fin>, no error. Recognition
-# continues after a finalize, so a mid-pause fire is harmless.
-import weakref as _weakref  # noqa: E402
-
-_SONIOX_STREAMS: "_weakref.WeakSet" = _weakref.WeakSet()
-
-
-class _FinalizingSonioxSTT(soniox.STT):
-    """soniox.STT that registers its live streams so the session's VAD-end
-    handler can force-finalize them (see _soniox_finalize_all)."""
-
-    def stream(self, **kwargs):
-        s = super().stream(**kwargs)
-        try:
-            _SONIOX_STREAMS.add(s)
-        except Exception:  # noqa: BLE001 — registration is best-effort
-            pass
-        return s
-
-
-def _soniox_finalize_all() -> None:
-    """Ask every live Soniox stream to finalize NOW (caller stopped talking).
-    Empty registry (Sarvam fallback) = no-op. Never raises (RULE 8)."""
-    for s in list(_SONIOX_STREAMS):
-        try:
-            q = getattr(s, "audio_queue", None)
-            if q is not None:
-                q.put_nowait('{"type": "finalize"}')
-        except Exception:  # noqa: BLE001
-            pass
-
-
+# #399 REVERT of #394/#396 (real call 06:29Z 2026-07-18): forced finalize on
+# VAD end + eager endpointing (max_endpoint_delay_ms=800, sensitivity=0.3)
+# DEGRADED Telugu recognition — "కరిష్మా" transcribed as "హరీష్ కుమార్", caller
+# utterances chopped into fragments mid-sentence. Latency won, accuracy lost —
+# unacceptable trade. STT runs at PLUGIN DEFAULTS (yesterday's proven config);
+# turn-gap work continues on the LLM side only (thinking=minimal #397, prompt
+# diet next) — never again by cutting the transcript short.
 def _build_stt(lang_cfg):
     """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_API_KEY
     is set (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu vs
@@ -926,26 +891,17 @@ def _build_stt(lang_cfg):
     strict-language rule as Sarvam's fixed `language=` (Vinay 2026-06-17:
     auto-detect degrades on shared Indian-language words). Language change
     happens ONLY via the switch_language agent handoff, which builds a new
-    STT through this same factory.
-
-    ENDPOINTING (#394, tuned FROM real-call lat_* evidence — clinics called
-    the 2-3s reply gap the single purchase blocker): measured
-    transcription_delay was 0.74-0.97s per turn = Soniox waiting to declare
-    the endpoint (plugin default max_endpoint_delay_ms=2000, sensitivity
-    unset). 800ms cap + mildly eager sensitivity finalize the transcript
-    ~0.3-0.5s sooner; the turn COMMIT is still LiveKit's VAD/turn-detector
-    (min 0.2/max 0.6s), so slow speakers are not cut off — only the
-    transcript wait shrinks.
+    STT through this same factory. Endpointing params stay at PLUGIN DEFAULTS
+    (#399: the 07-18 latency tuning of these knobs corrupted Telugu
+    recognition — see the revert note above; do not re-tune them).
     """
     if settings.soniox_api_key:
-        return _FinalizingSonioxSTT(
+        return soniox.STT(
             api_key=settings.soniox_api_key,
             params=soniox.STTOptions(
                 model="stt-rt-v5",
                 language_hints=[lang_cfg.code],
                 language_hints_strict=True,
-                max_endpoint_delay_ms=800,
-                endpoint_sensitivity=0.3,
             ),
         )
     return sarvam.STT(
@@ -3524,62 +3480,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
-        # THINKING ACK v2 (#395 — v1 armed at turn COMMIT and gated on
-        # current_speech, which preemptive generation sets the instant the
-        # turn commits, so the ack NEVER played — log-proven on the 05:47Z
-        # call: zero thinking_ack lines, caller still heard 3-4s silence).
-        # v2 is session-state driven: the timer arms the moment the CALLER
-        # stops speaking (so it also covers the 0.6-1.8s transcription wait),
-        # and is cancelled the instant the agent starts speaking (real reply,
-        # tool filler — anything) or the caller resumes. Fires → play one
-        # pre-cached filler clip instantly (call's language + voice, zero
-        # synth, never in history). Perceived reaction ≈1s on every slow turn.
-        _ack_ref: dict = {"task": None}
-
-        def _ack_cancel() -> None:
-            t = _ack_ref["task"]
-            if t is not None and not t.done():
-                t.cancel()
-
-        async def _ack_fire() -> None:
-            try:
-                await asyncio.sleep(1.0)
-                # #397 (real call 06:05Z: "సరే" after the agent's own
-                # sentences): phone-line echo makes VAD see "user speech"
-                # during agent audio; when the agent then went idle the timer
-                # fired with NO reply pending. Fire ONLY while the agent is
-                # genuinely working on a reply ("thinking") — idle listening
-                # or already speaking must stay silent.
-                if getattr(session, "agent_state", None) != "thinking":
-                    return
-                _play_cached_filler(session)
-                logger.info("thinking_ack_played")
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:  # noqa: BLE001 — masking must never break a turn
-                logger.debug("thinking_ack_skipped: %s", e)
-
-        @session.on("user_state_changed")
-        def _ack_on_user_state(ev) -> None:
-            try:
-                if ev.new_state == "listening" and ev.old_state == "speaking":
-                    # #396: force Soniox to finalize the transcript NOW — the
-                    # Sarvam flush_signal behavior the 07-10 switch lost.
-                    _soniox_finalize_all()
-                    _ack_cancel()
-                    _ack_ref["task"] = asyncio.create_task(_ack_fire())
-                elif ev.new_state == "speaking":
-                    _ack_cancel()  # caller resumed — never talk over them
-            except Exception:  # noqa: BLE001
-                pass
-
-        @session.on("agent_state_changed")
-        def _ack_on_agent_state(ev) -> None:
-            try:
-                if ev.new_state == "speaking":
-                    _ack_cancel()  # the real reply made it — ack not needed
-            except Exception:  # noqa: BLE001
-                pass
+        # THINKING ACK: REMOVED (#399). Two attempts (#395 turn-commit timer,
+        # #397 thinking-state gate) both misfired on real calls — phone-line
+        # echo flaps user_state, and agent_state passes through "thinking"
+        # BETWEEN the TTS sentences of one reply, so fillers landed after
+        # every agent sentence (Vinay 06:29Z call). Perceived-latency masking
+        # stays PROMPT-side only (the #387 spoken lead-in) — deterministic
+        # audio injection into a live dialogue is retired. Do not re-add.
 
         # Per-turn latency breakdown so the 7s "stop speaking -> agent speaks"
         # gap is attributable to a stage (STT finalize / LLM TTFT / TTS TTFB /
