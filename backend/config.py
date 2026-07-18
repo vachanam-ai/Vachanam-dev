@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     # better + cheaper, ~$0.12/hr real-time Telugu). Empty key = agent falls
     # back to Sarvam Saaras so a missing/revoked key can never block calls.
     soniox_api_key: str = ""
+    # #406: Soniox regional WS endpoint. Keys are REGION-SCOPED — pair a JP key
+    # with wss://stt-rt.jp.soniox.com/transcribe-websocket (4ms from Fly bom vs
+    # 230ms to the US default; big slice of transcription_delay).
+    soniox_ws_url: str = "wss://stt-rt.soniox.com/transcribe-websocket"
     sarvam_api_key: str           # Sarvam Saaras v3 — STT fallback
     openai_api_key: str
     gemini_api_key: str

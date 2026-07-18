@@ -1004,6 +1004,15 @@ def _build_stt(lang_cfg, context_terms: list | None = None):
             ctx = soniox.ContextObject(terms=terms[:50])
         return soniox.STT(
             api_key=settings.soniox_api_key,
+            # #406: region-configurable endpoint. Measured from the Fly bom
+            # machine (2026-07-18): tcp connect 4ms to the JP edge vs 230ms US
+            # / 254ms EU — every audio chunk and final token pays that round
+            # trip inside transcription_delay (~0.75s). Soniox keys are
+            # REGION-SCOPED (US key → 401 on JP), so the switch is env-driven:
+            # once a JP key exists, set SONIOX_API_KEY + SONIOX_WS_URL
+            # (wss://stt-rt.jp.soniox.com/transcribe-websocket) on Fly. Same
+            # model, same accuracy — the #399 endpointing ban is untouched.
+            base_url=settings.soniox_ws_url,
             params=soniox.STTOptions(
                 model="stt-rt-v5",
                 language_hints=[lang_cfg.code],

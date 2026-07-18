@@ -168,6 +168,20 @@ def test_streaming_script_guard_and_warm_405():
     assert "_RawRestChunked" in stream_cls
 
 
+def test_soniox_region_configurable_406():
+    """#406: Soniox WS endpoint rides settings.soniox_ws_url (US default; JP is
+    4ms from Fly bom vs 230ms US — measured 2026-07-18). Keys are region-scoped,
+    so the flip is env-only. Endpointing params stay at plugin defaults (#399)."""
+    from backend.config import settings as s
+
+    stt = SRC.split("def _build_stt")[1][:4000]
+    assert "base_url=settings.soniox_ws_url" in stt
+    assert s.soniox_ws_url.startswith("wss://stt-rt")
+    # the ban stands: no endpoint tuning snuck in with the region change
+    assert "max_endpoint_delay_ms" not in stt
+    assert "endpoint_sensitivity" not in stt
+
+
 def test_vertex_missing_creds_falls_back_404(tmp_path, monkeypatch):
     """#404 RULE 8: no SA creds -> chain is exactly the old global config;
     a broken Vertex setup must never block call handling."""
