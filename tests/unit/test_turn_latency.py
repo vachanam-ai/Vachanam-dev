@@ -48,3 +48,19 @@ def test_cached_filler_helper_shared_with_tool_fillers():
     # one clip mechanism — tool fillers and the thinking ack must not drift
     assert "def _play_cached_filler(sess)" in SRC
     assert "_play_cached_filler(getattr(context" in SRC
+
+
+def test_soniox_finalize_on_vad_end_396():
+    """#396 root cause of "it was faster before": the 07-10 Sarvam->Soniox
+    switch lost flush_signal (force-final on VAD end); Soniox waited 0.6-1.8s
+    for its own endpointing. The port: caller stops -> {"type":"finalize"}
+    down every live Soniox socket (proven live: server answers <fin>)."""
+    assert "class _FinalizingSonioxSTT(soniox.STT)" in SRC
+    assert "_FinalizingSonioxSTT(" in SRC.split("def _build_stt")[1][:1500]
+    fin = SRC.split("def _soniox_finalize_all")[1][:900]
+    assert '\'{"type": "finalize"}\'' in fin
+    # fired from the caller-stopped handler, BEFORE the ack timer arms
+    handler = SRC.split("def _ack_on_user_state")[1][:900]
+    assert handler.index("_soniox_finalize_all()") < handler.index("_ack_fire()")
+    # weak registry: dead streams never accumulate
+    assert "_weakref.WeakSet()" in SRC

@@ -864,6 +864,48 @@ class _HttpSmallestTTS(smallestai.TTS):
         return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
 
 
+# #396 ("previously the reply used to come fast — what changed?"): the 07-10
+# Sarvam→Soniox switch silently LOST Sarvam's flush_signal behavior (final
+# transcript forced the moment client VAD hears speech end). Nothing in
+# livekit-agents flushes a streaming STT on VAD end, and the Soniox plugin
+# never sends the finalize control message its protocol supports — so every
+# turn waited 0.6-1.8s for Soniox's own endpoint detection. This is the
+# Soniox port of flush_signal: on caller speech end we push
+# {"type":"finalize"} down each live Soniox socket (the plugin's send task
+# forwards strings verbatim; the server finalizes buffered tokens and emits
+# <fin>, which the plugin already consumes). PROVEN against the live API
+# 2026-07-18 before shipping: finalize → <fin>, no error. Recognition
+# continues after a finalize, so a mid-pause fire is harmless.
+import weakref as _weakref  # noqa: E402
+
+_SONIOX_STREAMS: "_weakref.WeakSet" = _weakref.WeakSet()
+
+
+class _FinalizingSonioxSTT(soniox.STT):
+    """soniox.STT that registers its live streams so the session's VAD-end
+    handler can force-finalize them (see _soniox_finalize_all)."""
+
+    def stream(self, **kwargs):
+        s = super().stream(**kwargs)
+        try:
+            _SONIOX_STREAMS.add(s)
+        except Exception:  # noqa: BLE001 — registration is best-effort
+            pass
+        return s
+
+
+def _soniox_finalize_all() -> None:
+    """Ask every live Soniox stream to finalize NOW (caller stopped talking).
+    Empty registry (Sarvam fallback) = no-op. Never raises (RULE 8)."""
+    for s in list(_SONIOX_STREAMS):
+        try:
+            q = getattr(s, "audio_queue", None)
+            if q is not None:
+                q.put_nowait('{"type": "finalize"}')
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _build_stt(lang_cfg):
     """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_API_KEY
     is set (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu vs
@@ -886,7 +928,7 @@ def _build_stt(lang_cfg):
     transcript wait shrinks.
     """
     if settings.soniox_api_key:
-        return soniox.STT(
+        return _FinalizingSonioxSTT(
             api_key=settings.soniox_api_key,
             params=soniox.STTOptions(
                 model="stt-rt-v5",
@@ -3502,6 +3544,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         def _ack_on_user_state(ev) -> None:
             try:
                 if ev.new_state == "listening" and ev.old_state == "speaking":
+                    # #396: force Soniox to finalize the transcript NOW — the
+                    # Sarvam flush_signal behavior the 07-10 switch lost.
+                    _soniox_finalize_all()
                     _ack_cancel()
                     _ack_ref["task"] = asyncio.create_task(_ack_fire())
                 elif ev.new_state == "speaking":
