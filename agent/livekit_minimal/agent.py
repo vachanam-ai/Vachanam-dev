@@ -60,6 +60,7 @@ from livekit.agents.llm import ChatContext  # noqa: E402
 from livekit.agents import utils as _lk_utils  # noqa: E402
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS as _DEFAULT_CONN  # noqa: E402
 from livekit.plugins import google, noise_cancellation, sarvam, silero, smallestai, soniox  # noqa: E402
+from livekit.plugins.smallestai.tts import SynthesizeStream as _SmallestSynthStream  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
 import redis.asyncio as aioredis  # noqa: E402
@@ -864,7 +865,8 @@ class _RawRestChunked(lk_tts.ChunkedStream):
 class _HttpSmallestTTS(smallestai.TTS):
     """Session TTS over the RAW REST /tts path (_RawRestChunked). streaming=False
     so AgentSession synthesizes per sentence; reuses smallestai.TTS only for its
-    _opts/voice config."""
+    _opts/voice config. Since #405 this is the RULE 8 FALLBACK — the exact
+    pre-#405 behavior — behind the WS-streaming primary."""
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -872,6 +874,99 @@ class _HttpSmallestTTS(smallestai.TTS):
 
     def synthesize(self, text, *, conn_options=_DEFAULT_CONN):
         return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
+
+
+class _AgcEmitterProxy:
+    """Streaming loudness normalization (#405). The REST path peak-normalized
+    each WHOLE clip (greeting.normalize_pcm — smallest voices differ ~13 dB);
+    a streaming chunk arrives before the clip's true peak is known, so track
+    the RUNNING peak and apply the same capped gain per chunk. Gain only ever
+    DECREASES as louder audio arrives — no mid-word upward volume jumps."""
+
+    _TARGET = 0.89 * 32767.0  # same constants as normalize_pcm
+    _MAX_GAIN = 6.0
+
+    def __init__(self, emitter) -> None:
+        self._emitter = emitter
+        self._peak = 1.0
+
+    def __getattr__(self, name):
+        return getattr(self._emitter, name)
+
+    def push(self, data: bytes) -> None:
+        import numpy as np
+
+        a = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+        if a.size:
+            self._peak = max(self._peak, float(np.abs(a).max()))
+            gain = min(self._TARGET / self._peak, self._MAX_GAIN)
+            if gain > 1.02:
+                data = np.clip(a * gain, -32768, 32767).astype(np.int16).tobytes()
+        self._emitter.push(data)
+
+
+class _GuardedSmallestStream(_SmallestSynthStream):
+    """Plugin WS synth stream + the #270 script guard: an utterance whose
+    script differs from the session language is synthesized AS its own
+    language (post-switch drift sounded like garbled 'Bengali')."""
+
+    async def _run_ws(self, text: str, output_emitter) -> None:
+        base = (
+            self._opts.language.language
+            if hasattr(self._opts.language, "language")
+            else str(self._opts.language)
+        )
+        lang = _detect_script_lang(text, base)
+        if lang != base:
+            logger.warning(
+                "tts_script_lang_mismatch configured=%s detected=%s", base, lang
+            )
+            self._opts.language = lang  # per-stream copy — session opts untouched
+        await super()._run_ws(text, _AgcEmitterProxy(output_emitter))
+
+
+class _StreamingSmallestTTS(smallestai.TTS):
+    """#405 session TTS primary: smallest.ai WS streaming. Measured (2026-07-18,
+    same Telugu sentence): first audio 0.18-0.21s vs 1.09-1.26s on the raw REST
+    path — REST waits for the WHOLE clip server-side before byte one. The
+    2026-06-25 objections that forced REST are both gone: WS returns raw PCM at
+    the requested sample_rate (the 5x-speed bug was WAV-header-as-PCM on the
+    HTTP path), and the plugin's connection POOL + prewarm cover the Fly cold
+    connect. Always wrapped with _HttpSmallestTTS in a FallbackAdapter (RULE 8)."""
+
+    def stream(self, *, conn_options=_DEFAULT_CONN):
+        return _GuardedSmallestStream(tts=self, conn_options=conn_options)
+
+    def synthesize(self, text, *, conn_options=_DEFAULT_CONN):
+        # One-shot synth (warm probes etc.) rides the proven REST path — the
+        # plugin's own ChunkedStream would hit HTTP /tts declaring "pcm" and
+        # replay the 2026-06-25 WAV-header-as-PCM 5x-speed bug.
+        return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
+
+
+def _build_session_tts(voice_id: str, tts_lang: str) -> lk_tts.FallbackAdapter:
+    """WS-streaming primary + raw-REST fallback for one voice/language pair.
+    Pro-catalog voices (sravani) ride model lightning_v3.1_pro; standard
+    voices and clinic clones stay on settings.smallest_model."""
+    from backend.services.welcome_synth import model_for_voice
+
+    model = model_for_voice(voice_id)
+    common = dict(
+        api_key=settings.smallest_api_key,
+        model=model,
+        voice_id=voice_id,
+        language=tts_lang,
+        sample_rate=settings.smallest_sample_rate,
+    )
+    return lk_tts.FallbackAdapter(
+        [
+            _StreamingSmallestTTS(output_format="pcm", **common),
+            # WAV, not pcm: the HTTP /tts endpoint returns a WAV container even
+            # when asked for pcm (2026-06-25) — the decoder reads the header.
+            _HttpSmallestTTS(output_format="wav", **common),
+        ],
+        sample_rate=settings.smallest_sample_rate,
+    )
 
 
 # #399 REVERT of #394/#396 (real call 06:29Z 2026-07-18): forced finalize on
@@ -3377,14 +3472,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 agent_factory=_agent_for_lang,
                 switch_ack=get_switch_ack(lc),
                 stt=_build_stt(cfg2, _stt_terms),
-                tts=_HttpSmallestTTS(
-                    api_key=settings.smallest_api_key,
-                    model=settings.smallest_model,
-                    voice_id=_voice_for_lang(branch, lc),
-                    language=cfg2.tts_code,
-                    sample_rate=settings.smallest_sample_rate,
-                    output_format="wav",
-                ),
+                tts=_build_session_tts(_voice_for_lang(branch, lc), cfg2.tts_code),
             )
 
         # The instant greeting bypasses the session pipeline — seed it into the
@@ -3428,18 +3516,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # 2s backoff = ~6s of dead air on the first real response ("silent for 10s
         # after intro", 2026-06-24). Priming it while the clip plays makes that cold
         # connect happen invisibly.
-        _session_tts = _HttpSmallestTTS(
-            api_key=settings.smallest_api_key,
-            model=settings.smallest_model,
-            voice_id=tts_voice,
-            language=lang_cfg.tts_code,
-            sample_rate=settings.smallest_sample_rate,
-            # WAV, not pcm: the HTTP /tts endpoint returns a WAV container even when
-            # asked for pcm, so declaring "pcm" made the emitter play WAV bytes as
-            # raw PCM → garbled/too-fast speech (2026-06-25). "wav" lets the decoder
-            # read the real rate from the header.
-            output_format="wav",
-        )
+        # #405: WS-streaming primary (first audio ~0.2s vs ~1.1s REST) with the
+        # raw-REST path as RULE 8 fallback inside the adapter.
+        _session_tts = _build_session_tts(tts_voice, lang_cfg.tts_code)
         _session_llm = ctx.proc.userdata.get("llm") or _build_fallback_llm()
 
         async def _prewarm_llm() -> None:
@@ -3897,8 +3976,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         async def _warm_session_tts() -> None:
             _t = _perf.monotonic()
             try:
-                async for _ in _session_tts.synthesize("సరే"):
-                    break  # first frame = connection established; discard audio
+                # #405: warm the STREAMING path (opens the WS pool connection and
+                # validates it end-to-end — a broken WS falls back inside the
+                # adapter here, in the masked window, not on the first reply).
+                _ws = _session_tts.stream()
+                _ws.push_text("సరే")
+                _ws.end_input()
+                try:
+                    async for _ in _ws:
+                        break  # first frame = pipeline hot; discard audio
+                finally:
+                    await _ws.aclose()
                 logger.info("tts_warm_ok=%.2fs", _perf.monotonic() - _t)
             except Exception as _e:  # noqa: BLE001
                 logger.warning("tts_warm_failed: %s", str(_e)[:100])

@@ -30,13 +30,14 @@ class LangConfig:
 
 # TTS = smallest.ai Waves Lightning v3.1. Language codes match smallest's short
 # codes exactly (verified against GET /lightning-v3.1/get_voices, 2026-06-15).
-# Default voices picked from the live catalog: `padmaja` covers the Dravidian
-# pool (te/ta/kn/ml) — Vinay confirmed padmaja stays default 2026-07-08 after
-# the shootout (loudness gap vs anitha is handled by normalize_pcm; timbre
-# preference = padmaja). `niharika` covers hi/mr/bn/or. STT stays Sarvam
-# Saaras (the *-IN codes). Telugu first (reference/default).
+# Default voices picked from the live catalog: te = `sravani` (pro catalog,
+# Vinay 2026-07-18 — heard on smallest's playground; supersedes the 2026-07-08
+# padmaja pick; pro voices need model lightning_v3.1_pro — welcome_synth.
+# model_for_voice maps it). `padmaja` still covers the rest of the Dravidian
+# pool (ta/kn/ml); `niharika` covers hi/mr/bn/or. STT stays Sarvam Saaras
+# (the *-IN codes). Telugu first (reference/default).
 LANGUAGES: dict[str, LangConfig] = {
-    "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "padmaja"),
+    "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "sravani"),
     # Indian English (Saaras en-IN / smallest "en") — added 2026-07-03 for the
     # per-caller language mapping ("can you speak English?").
     "en": LangConfig("en", "English", "English", "Latin", "en-IN", "en", "niharika"),

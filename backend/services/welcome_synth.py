@@ -13,12 +13,21 @@ from backend.config import settings
 
 _TTS_URL = "https://api.smallest.ai/waves/v1/tts"
 
+# #405: voices from the pro catalog (44.1 kHz premium pool, incl. sravani —
+# Vinay 2026-07-18) must be requested with the pro model; standard-catalog
+# voices AND clinic clones stay on settings.smallest_model.
+PRO_VOICES = frozenset({"sravani"})
+
+
+def model_for_voice(voice_id: str) -> str:
+    return "lightning_v3.1_pro" if voice_id in PRO_VOICES else settings.smallest_model
+
 
 def synth_wav(text: str, voice_id: str, lang_code: str = "te", speed: float = 1.0) -> bytes:
     """Synthesize ``text`` to WAV bytes via smallest.ai. Raises on HTTP error.
     ``speed`` < 1 slows the voice for clarity (the live agent uses ~0.9)."""
     payload = {
-        "model": settings.smallest_model,
+        "model": model_for_voice(voice_id),
         "voice_id": voice_id,
         "sample_rate": settings.smallest_sample_rate,
         "speed": speed,

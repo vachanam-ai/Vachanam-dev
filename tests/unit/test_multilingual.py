@@ -40,7 +40,7 @@ def test_stt_tts_codes_correct():
     assert get_lang("te").tts_code == "te"          # smallest short code
     assert get_lang("or").stt_code == "od-IN"        # Sarvam Odia
     assert get_lang("or").tts_code == "or"           # smallest Odia
-    assert get_lang("te").default_voice == "padmaja"
+    assert get_lang("te").default_voice == "sravani"  # #405, Vinay 2026-07-18
     assert get_lang("hi").default_voice == "niharika"
 
 

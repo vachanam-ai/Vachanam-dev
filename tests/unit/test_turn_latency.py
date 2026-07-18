@@ -97,6 +97,77 @@ def test_vertex_mumbai_primary_404(tmp_path, monkeypatch):
     assert opts[2].vertexai is False
 
 
+def test_streaming_tts_chain_405():
+    """#405: session TTS = WS-streaming primary (measured first-audio 0.2-0.46s
+    vs 1.09-1.26s REST) + the exact pre-#405 REST path as RULE 8 fallback.
+    Pro-catalog voices (sravani) ride lightning_v3.1_pro; clones stay standard."""
+    from agent.i18n import get_lang
+    from agent.livekit_minimal import agent as ag
+
+    adapter = ag._build_session_tts("sravani", "te")
+    prim, fb = adapter._tts_instances
+    assert type(prim).__name__ == "_StreamingSmallestTTS"
+    assert prim.capabilities.streaming is True
+    assert prim._opts.model == "lightning_v3.1_pro"
+    assert prim._opts.voice_id == "sravani"
+    assert type(fb).__name__ == "_HttpSmallestTTS"
+    assert fb.capabilities.streaming is False
+    assert fb._opts.output_format == "wav"  # 2026-06-25 WAV-header rule holds
+
+    clone = ag._build_session_tts("clinic-clone-abc", "te")
+    assert clone._tts_instances[0]._opts.model == "lightning_v3.1"
+
+    # sravani is the Telugu catalog default (Vinay 2026-07-18)
+    assert get_lang("te").default_voice == "sravani"
+    from backend.services.welcome_synth import model_for_voice
+
+    assert model_for_voice("sravani") == "lightning_v3.1_pro"
+    assert model_for_voice("padmaja") == "lightning_v3.1"
+
+
+def test_streaming_agc_405():
+    """#405: running-peak AGC replaces whole-clip normalize_pcm on the streaming
+    path — quiet voices boosted (capped 6x), loud audio untouched, and gain
+    never INCREASES mid-segment after loud audio raised the peak."""
+    import numpy as np
+
+    from agent.livekit_minimal import agent as ag
+
+    class _Sink:
+        def __init__(self):
+            self.chunks = []
+
+        def push(self, d):
+            self.chunks.append(d)
+
+    sink = _Sink()
+    p = ag._AgcEmitterProxy(sink)
+    p.push((np.ones(500, dtype=np.int16) * 1000).tobytes())
+    assert np.frombuffer(sink.chunks[0], dtype=np.int16).max() == 6000  # 6x cap
+    p.push((np.ones(500, dtype=np.int16) * 30000).tobytes())
+    assert np.frombuffer(sink.chunks[1], dtype=np.int16).max() == 30000  # no clip
+    # after the loud chunk raised the running peak, a quiet chunk gets the
+    # REDUCED gain (target/30000 ≈ 0.97 → no boost), not the old 6x
+    p.push((np.ones(500, dtype=np.int16) * 1000).tobytes())
+    assert np.frombuffer(sink.chunks[2], dtype=np.int16).max() == 1000
+
+
+def test_streaming_script_guard_and_warm_405():
+    """#405: the WS stream carries the #270 script guard, and the session warm
+    probe exercises the STREAMING path (not synthesize) so a broken WS falls
+    back during the masked window."""
+    assert "class _GuardedSmallestStream(_SmallestSynthStream)" in SRC
+    guard = SRC.split("class _GuardedSmallestStream")[1][:1500]
+    assert "_detect_script_lang" in guard
+    assert "_AgcEmitterProxy(output_emitter)" in guard
+    warm = SRC.split("async def _warm_session_tts")[1][:900]
+    assert "_session_tts.stream()" in warm
+    # one-shot synthesize on the streaming class must NEVER hit the plugin's
+    # HTTP ChunkedStream (5x-speed bug) — it rides _RawRestChunked
+    stream_cls = SRC.split("class _StreamingSmallestTTS")[1][:2200]
+    assert "_RawRestChunked" in stream_cls
+
+
 def test_vertex_missing_creds_falls_back_404(tmp_path, monkeypatch):
     """#404 RULE 8: no SA creds -> chain is exactly the old global config;
     a broken Vertex setup must never block call handling."""
