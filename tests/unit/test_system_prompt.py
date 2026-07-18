@@ -457,3 +457,14 @@ def test_system_prompt_lead_in_rule():
     assert "ठीक है," in prompt and "Okay," in prompt
     # verbose filler sentences stay banned — the cached checking-filler covers tools
     assert "ఒక్క నిమిషం" in prompt
+
+
+def test_no_availability_claims_without_tool_result_402():
+    """#402 (real call 2026-07-18, Hindi): agent said '1:30 not available'
+    from its own guess while reschedule_booking was RUNNING; the tool then
+    succeeded and it contradicted itself ('why faking?' — Vinay). Availability
+    words, positive or NEGATIVE, only from a held tool result."""
+    prompt = _make_prompt()
+    assert "THE SAME RULE CUTS THE OTHER WAY" in prompt
+    assert "NOT available either" in prompt
+    assert "उपलब्ध नहीं है" in prompt  # the real failure, named
