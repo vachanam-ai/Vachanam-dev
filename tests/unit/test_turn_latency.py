@@ -60,3 +60,12 @@ def test_soniox_context_biasing_400():
     # #401: a switch ask must survive cross-language transcription — the
     # language names ride the bias terms in both scripts.
     assert '"English", "ఇంగ్లీష్", "Hindi", "హిందీ"' in SRC
+
+
+def test_hello_immune_barge_in_403():
+    """#403: a lone "hello"/backchannel must never CUT the agent — interruption
+    commits only on >=2 transcribed words; a false (one-word) barge-in resumes
+    the same sentence. VAD still pauses instantly, so real barge-in stays fast."""
+    assert "min_interruption_words=2" in SRC
+    assert "resume_false_interruption=True" in SRC
+    assert "min_interruption_words=0" not in SRC

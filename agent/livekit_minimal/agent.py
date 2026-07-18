@@ -1127,10 +1127,10 @@ class VachanamAgent(Agent):
         """BACKCHANNEL FILTER (Vinay 2026-07-04): while the agent is SPEAKING,
         drop transcript events that are pure listening noises ("hmm", "okay",
         "acha", "ఆ", "हाँ"...) so the LLM never treats a backchannel as a real
-        user turn. (2026-07-06: interruption itself is now VAD-gated —
-        min_interruption_words=0, min_interruption_duration=0.4 — so short
-        backchannels are filtered by LENGTH; this transcript filter still keeps
-        them out of the conversation history / content path.) When the agent is
+        user turn. (#403: interruption now commits only on >=2 transcribed
+        words with false-interruption resume — a lone hello/backchannel never
+        cuts the agent; this transcript filter additionally keeps such noises
+        out of the conversation history / content path.) When the agent is
         silent the same word is a real short turn and passes through.
         Multi-word content ("okay cancel it", "no no wait") always passes."""
         async for ev in Agent.default.stt_node(self, audio, model_settings):
@@ -3498,12 +3498,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # 0.65-0.85s) on top of VAD (0.2s). Interruption was transcript-gated.
             # Fix: words=0 → yield on VAD speech alone (no transcript wait), and
             # duration 0.2->0.4s so a short backchannel ("haan"/"mm", <0.4s) is
-            # filtered by LENGTH instead of by waiting for a transcript. Barge-in
-            # ~1-2s -> ~0.4s; the 2026-06-22 backchannel guard is preserved by
-            # duration. Raise duration toward 0.6 if longer backchannels cut in.
+            # filtered by LENGTH instead of by waiting for a transcript.
+            # #403 (Vinay 2026-07-18: "Hello should NEVER interrupt the
+            # conversation. Always ignore hello."): words=0 let any ≥0.4s sound
+            # — including a lone "హలో?" line-check — cut the agent mid-sentence.
+            # Now: VAD still PAUSES the audio instantly (barge-in stays fast),
+            # but the interruption COMMITS only when ≥2 words are transcribed;
+            # a lone hello/haan resumes the very sentence it paused
+            # (resume_false_interruption). The 06-24 "it resumed on real
+            # interruptions" objection was Sarvam-final-latency (0.65-0.85s);
+            # Soniox interims arrive in ~0.1-0.3s, inside the false-interruption
+            # window, so real multi-word interruptions still stop and stay
+            # stopped.
             min_interruption_duration=0.4,
-            min_interruption_words=0,
-            resume_false_interruption=False,
+            min_interruption_words=2,
+            resume_false_interruption=True,
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 

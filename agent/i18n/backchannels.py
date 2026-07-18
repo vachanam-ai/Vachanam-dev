@@ -18,16 +18,22 @@ only runs while the agent is speaking).
 import re
 
 # Universal sounds (Latin STT renderings) + per-script listening tokens.
+# #403 (Vinay 2026-07-18: "Hello should never interrupt the conversation.
+# Never. Always ignore hello."): hello in every rendering is a LINE CHECK,
+# not content — added across scripts.
 _TOKENS: frozenset[str] = frozenset({
     # universal / English
     "ok", "okay", "kay", "hmm", "hmmm", "hm", "mm", "mmm", "mhm", "mmhm",
     "uh", "huh", "uhhuh", "aha", "ah", "aah", "oh", "ohh", "oho", "um",
     "right", "haan", "han", "ha", "haa", "aa", "acha", "accha", "achha",
     "alage", "alagey",
+    "hello", "helo", "hallo", "hullo", "hey", "hai",
     # Telugu
     "ఓకే", "ఆ", "ఆఁ", "ఊ", "హా", "హ్మ్", "అచ్చా", "ఓహో", "హు", "అలాగే",
+    "హలో", "హెలో",
     # Hindi / Marathi (Devanagari)
     "हाँ", "हां", "हा", "हम्म", "हम्", "अच्छा", "अच्छ", "ओके", "ओह", "अहा",
+    "हैलो", "हेलो",
     # Tamil
     "ம்", "ம்ம்", "ஆமா்", "ஓகே", "ஆ",
     # Kannada

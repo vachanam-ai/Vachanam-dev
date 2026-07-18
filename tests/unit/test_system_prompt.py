@@ -468,3 +468,11 @@ def test_no_availability_claims_without_tool_result_402():
     assert "THE SAME RULE CUTS THE OTHER WAY" in prompt
     assert "NOT available either" in prompt
     assert "उपलब्ध नहीं है" in prompt  # the real failure, named
+
+
+def test_hello_never_interrupts_403():
+    """Vinay 2026-07-18: "Hello should never interrupt the conversation.
+    Always ignore hello." Prompt: bare hello = line check, continue in place."""
+    prompt = _make_prompt()
+    assert "HELLO IS NEVER A REQUEST" in prompt
+    assert "CHECKING THE LINE" in prompt

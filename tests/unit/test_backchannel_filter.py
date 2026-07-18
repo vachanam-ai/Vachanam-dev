@@ -119,3 +119,15 @@ def test_alagey_is_backchannel_mid_speech_but_consent_when_silent():
     for t in ("అలాగే", "alagey", "okay"):
         assert suppress_backchannel(t, agent_speaking=True), t
         assert not suppress_backchannel(t, agent_speaking=False), t
+
+
+def test_hello_is_a_line_check_403():
+    """#403 (Vinay: "Hello should never interrupt the conversation. Never."):
+    hello in any rendering is a backchannel while the agent speaks."""
+    from agent.i18n.backchannels import is_backchannel, suppress_backchannel
+
+    for t in ("hello", "Hello?", "హలో", "హలో హలో", "हैलो", "hello hello"):
+        assert is_backchannel(t), t
+        assert suppress_backchannel(t, agent_speaking=True), t
+    # content with hello attached still passes through
+    assert not is_backchannel("hello cancel my appointment")
