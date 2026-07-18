@@ -45,3 +45,15 @@ def test_tool_lookup_fillers_untouched():
     # the PROVEN filler (inside tool calls) survives the ack removal
     assert "def _play_cached_filler(sess)" in SRC
     assert "_say_lookup_filler(context)" in SRC
+
+
+def test_soniox_context_biasing_400():
+    """#400 (real call: "కరిష్మా" heard as "హరీష్ కుమార్"): the clinic's doctor
+    names + clinic name ride Soniox context biasing on every live STT build
+    (session + language-switch handoff). Accuracy lever — endpointing stays
+    at plugin defaults."""
+    stt = SRC.split("def _build_stt")[1][:3500]
+    assert "soniox.ContextObject(terms=" in stt
+    assert "_stt_terms = [d.name for d in doctor_contexts]" in SRC
+    assert "_build_stt(lang_cfg, _stt_terms)" in SRC   # session pipeline
+    assert "_build_stt(cfg2, _stt_terms)" in SRC       # switch_language handoff

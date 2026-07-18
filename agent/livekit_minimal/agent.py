@@ -881,7 +881,7 @@ class _HttpSmallestTTS(smallestai.TTS):
 # unacceptable trade. STT runs at PLUGIN DEFAULTS (yesterday's proven config);
 # turn-gap work continues on the LLM side only (thinking=minimal #397, prompt
 # diet next) — never again by cutting the transcript short.
-def _build_stt(lang_cfg):
+def _build_stt(lang_cfg, context_terms: list | None = None):
     """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_API_KEY
     is set (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu vs
     Sarvam), Sarvam Saaras v3 fallback otherwise so a missing/revoked Soniox
@@ -894,14 +894,26 @@ def _build_stt(lang_cfg):
     STT through this same factory. Endpointing params stay at PLUGIN DEFAULTS
     (#399: the 07-18 latency tuning of these knobs corrupted Telugu
     recognition — see the revert note above; do not re-tune them).
+
+    context_terms (#400, Vinay 2026-07-18 real call: he said "కరిష్మా", Soniox
+    heard "హరీష్ కుమార్" and the agent argued about a phantom patient): Soniox
+    CONTEXT BIASING — the clinic's doctor names + clinic name + core booking
+    vocabulary are passed as recognition terms, so names snap to the clinic's
+    real roster instead of phonetic lookalikes. Accuracy lever only — zero
+    endpointing/latency risk.
     """
     if settings.soniox_api_key:
+        ctx = None
+        terms = [t for t in (context_terms or []) if t and t.strip()]
+        if terms:
+            ctx = soniox.ContextObject(terms=terms[:50])
         return soniox.STT(
             api_key=settings.soniox_api_key,
             params=soniox.STTOptions(
                 model="stt-rt-v5",
                 language_hints=[lang_cfg.code],
                 language_hints_strict=True,
+                context=ctx,
             ),
         )
     return sarvam.STT(
@@ -3194,6 +3206,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             for d in doctors
         ]
 
+        # #400: Soniox context biasing — the clinic's own vocabulary, so
+        # recognition snaps to the real roster ("కరిష్మా") instead of phonetic
+        # lookalikes ("హరీష్ కుమార్", real call 2026-07-18).
+        _stt_terms = [d.name for d in doctor_contexts]
+        _stt_terms += [branch_name, _spk_clinic, "appointment", "token", "cancel"]
+
         # (now_b/date_context + caller identification moved ABOVE the greeting —
         # the instant opening needs the caller's name and branch-local clock.)
 
@@ -3306,7 +3324,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 lang_code=lc,
                 agent_factory=_agent_for_lang,
                 switch_ack=get_switch_ack(lc),
-                stt=_build_stt(cfg2),
+                stt=_build_stt(cfg2, _stt_terms),
                 tts=_HttpSmallestTTS(
                     api_key=settings.smallest_api_key,
                     model=settings.smallest_model,
@@ -3411,7 +3429,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # (explicit caller ask, 2026-07-03): an AGENT HANDOFF carrying its
             # own STT/TTS built through the same _build_stt factory — never a
             # hot-swap of this session pipeline, never speech auto-detection.
-            stt=_build_stt(lang_cfg),
+            stt=_build_stt(lang_cfg, _stt_terms),
             llm=_session_llm,
             # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
             # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
