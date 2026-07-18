@@ -3211,6 +3211,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # lookalikes ("హరీష్ కుమార్", real call 2026-07-18).
         _stt_terms = [d.name for d in doctor_contexts]
         _stt_terms += [branch_name, _spk_clinic, "appointment", "token", "cancel"]
+        # #401 (real call 06:57Z: "can you speak English with me" NEVER
+        # surfaced in the te-strict transcript — the agent had nothing to act
+        # on and kept talking appointments): bias the LANGUAGE NAMES so a
+        # switch ask survives cross-language transcription and the prompt's
+        # switch rule can fire. Both scripts — STT may emit either.
+        _stt_terms += [
+            "English", "ఇంగ్లీష్", "Hindi", "హిందీ", "Telugu", "తెలుగు",
+            "speak English", "language",
+        ]
 
         # (now_b/date_context + caller identification moved ABOVE the greeting —
         # the instant opening needs the caller's name and branch-local clock.)

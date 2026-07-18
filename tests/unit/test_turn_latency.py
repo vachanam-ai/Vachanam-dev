@@ -57,3 +57,6 @@ def test_soniox_context_biasing_400():
     assert "_stt_terms = [d.name for d in doctor_contexts]" in SRC
     assert "_build_stt(lang_cfg, _stt_terms)" in SRC   # session pipeline
     assert "_build_stt(cfg2, _stt_terms)" in SRC       # switch_language handoff
+    # #401: a switch ask must survive cross-language transcription — the
+    # language names ride the bias terms in both scripts.
+    assert '"English", "ఇంగ్లీష్", "Hindi", "హిందీ"' in SRC
