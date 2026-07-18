@@ -36,3 +36,12 @@ def test_teardown_net_present_and_guarded():
 def test_prompt_forbids_promise_before_tool():
     assert "FORBIDDEN (real failure 2026-07-17)" in PROMPT_SRC
     assert "call take_message FIRST" in PROMPT_SRC
+
+
+def test_wrong_name_recovery_natural_398():
+    """#398 (real call 2026-07-18: greeted 'Hitesh gaaru?', caller said no,
+    agent asked 'first time maatladutunnara?' — interrogation). The known-
+    caller extra must carry the human recovery branch + the forbidden quiz."""
+    assert "IF THE CALLER SAYS THAT NAME IS WRONG" in AGENT_SRC
+    assert "అయ్యో సారీ అండి" in AGENT_SRC
+    assert "ఫస్ట్ టైమ్ మాట్లాడుతున్నారా" in AGENT_SRC  # named as FORBIDDEN
