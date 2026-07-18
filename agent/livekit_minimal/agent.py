@@ -189,31 +189,35 @@ async def cache_filler_clips(session, texts, voice_id: str, lang_code: str) -> N
         logger.warning("filler_cache_failed: %s", str(e)[:120])
 
 
+def _play_cached_filler(sess) -> None:
+    """Play one short filler on the session NOW: pre-cached PCM clip (instant,
+    zero synth) when available, else live-synth of the language's filler text.
+    Never in chat history; failure is invisible."""
+    ud = getattr(sess, "userdata", None)
+    ud = ud if isinstance(ud, dict) else {}
+    clips = ud.get("filler_clips") or []
+    if clips:
+        clip = random.choice(clips)
+        sess.say(
+            clip["text"],
+            audio=_pcm_frames(clip["pcm"], clip["sr"], clip["ch"]),
+            add_to_chat_ctx=False,
+        )
+        return
+    fillers = ud.get("fillers")
+    sess.say(
+        sanitize_for_tts(random.choice(fillers or _FALLBACK_FILLERS)),
+        add_to_chat_ctx=False,
+    )
+
+
 def _say_lookup_filler(context) -> None:
     """Speak a short 'let me check' filler over the dead air while a lookup tool
     runs. Plays a PRE-CACHED clip (instant, no synth) when available; otherwise
     live-synthesizes the clinic-language filler. Non-blocking and fully guarded —
     it must NEVER affect booking."""
     try:
-        sess = getattr(context, "session", None)
-        ud = getattr(sess, "userdata", None)
-        if ud is None:
-            ud = getattr(context, "userdata", None)
-        ud = ud if isinstance(ud, dict) else {}
-        clips = ud.get("filler_clips") or []
-        if clips:
-            clip = random.choice(clips)
-            context.session.say(
-                clip["text"],
-                audio=_pcm_frames(clip["pcm"], clip["sr"], clip["ch"]),
-                add_to_chat_ctx=False,
-            )
-            return
-        fillers = ud.get("fillers")
-        context.session.say(
-            sanitize_for_tts(random.choice(fillers or _FALLBACK_FILLERS)),
-            add_to_chat_ctx=False,
-        )
+        _play_cached_filler(getattr(context, "session", None) or context)
     except Exception as e:
         logger.debug("lookup_filler_skipped: %s", e)
 
@@ -1169,40 +1173,6 @@ class VachanamAgent(Agent):
                 raise
             # Any other error must NEVER swallow a real turn — let it through.
             logger.warning("echo_guard_error: %s", e)
-        # The turn is REAL (not an echo) — arm the thinking ack (#394).
-        try:
-            self._schedule_thinking_ack()
-        except Exception as e:  # noqa: BLE001 — masking must never touch the turn
-            logger.debug("thinking_ack_arm_failed: %s", e)
-
-    # #394 (clinics: the 2-3s gap after the caller stops speaking is THE
-    # purchase blocker): a real receptionist fills think-time with a soft
-    # "haan…". If nothing has started speaking _ACK_DELAY_S after the turn
-    # commits (LLM+TTS still working), play a pre-cached filler clip
-    # INSTANTLY (zero synth — reuses the tool-filler PCM cache in the call's
-    # language/voice). The reply then follows right behind it. Self-cancels
-    # when the reply beats the timer; never stacks on other speech; never
-    # enters chat history; any failure is invisible (RULE 8).
-    _ACK_DELAY_S = 0.9
-
-    def _schedule_thinking_ack(self) -> None:
-        prev = getattr(self, "_ack_task", None)
-        if prev is not None and not prev.done():
-            prev.cancel()
-
-        async def _ack() -> None:
-            try:
-                await asyncio.sleep(self._ACK_DELAY_S)
-                if getattr(self.session, "current_speech", None) is not None:
-                    return  # the real reply (or a tool filler) already speaks
-                _say_lookup_filler(self)
-                logger.info("thinking_ack_played")
-            except asyncio.CancelledError:
-                pass
-            except Exception as e:  # noqa: BLE001
-                logger.debug("thinking_ack_skipped: %s", e)
-
-        self._ack_task = asyncio.create_task(_ack())
 
     @staticmethod
     def _message_text(m) -> str:
@@ -3498,6 +3468,54 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             resume_false_interruption=False,
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
+
+        # THINKING ACK v2 (#395 — v1 armed at turn COMMIT and gated on
+        # current_speech, which preemptive generation sets the instant the
+        # turn commits, so the ack NEVER played — log-proven on the 05:47Z
+        # call: zero thinking_ack lines, caller still heard 3-4s silence).
+        # v2 is session-state driven: the timer arms the moment the CALLER
+        # stops speaking (so it also covers the 0.6-1.8s transcription wait),
+        # and is cancelled the instant the agent starts speaking (real reply,
+        # tool filler — anything) or the caller resumes. Fires → play one
+        # pre-cached filler clip instantly (call's language + voice, zero
+        # synth, never in history). Perceived reaction ≈1s on every slow turn.
+        _ack_ref: dict = {"task": None}
+
+        def _ack_cancel() -> None:
+            t = _ack_ref["task"]
+            if t is not None and not t.done():
+                t.cancel()
+
+        async def _ack_fire() -> None:
+            try:
+                await asyncio.sleep(1.0)
+                if getattr(session, "agent_state", None) == "speaking":
+                    return
+                _play_cached_filler(session)
+                logger.info("thinking_ack_played")
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:  # noqa: BLE001 — masking must never break a turn
+                logger.debug("thinking_ack_skipped: %s", e)
+
+        @session.on("user_state_changed")
+        def _ack_on_user_state(ev) -> None:
+            try:
+                if ev.new_state == "listening" and ev.old_state == "speaking":
+                    _ack_cancel()
+                    _ack_ref["task"] = asyncio.create_task(_ack_fire())
+                elif ev.new_state == "speaking":
+                    _ack_cancel()  # caller resumed — never talk over them
+            except Exception:  # noqa: BLE001
+                pass
+
+        @session.on("agent_state_changed")
+        def _ack_on_agent_state(ev) -> None:
+            try:
+                if ev.new_state == "speaking":
+                    _ack_cancel()  # the real reply made it — ack not needed
+            except Exception:  # noqa: BLE001
+                pass
 
         # Per-turn latency breakdown so the 7s "stop speaking -> agent speaks"
         # gap is attributable to a stage (STT finalize / LLM TTFT / TTS TTFB /

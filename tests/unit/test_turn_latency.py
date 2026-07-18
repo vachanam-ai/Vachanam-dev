@@ -1,13 +1,15 @@
-"""Turn-gap latency (#394 — clinics: "2-3s between the caller stopping and
-the agent speaking is the one thing stopping them buying"). Two structural
-fixes, source-guarded so refactors can't silently revert them:
+"""Turn-gap latency (#394/#395 — clinics: "2-3s between the caller stopping
+and the agent speaking is the one thing stopping them buying"). Source guards
+so refactors can't silently revert:
 
 1. Soniox endpointing tuned FROM measured evidence (transcription_delay
    0.74-0.97s at the plugin's default max_endpoint_delay_ms=2000): 800ms cap
    + endpoint_sensitivity 0.3. Turn COMMIT stays LiveKit's VAD/turn detector.
-2. Thinking ack: 0.9s after a real user turn commits with nothing speaking,
-   a pre-cached filler clip plays instantly (perceived gap ~0.9s instead of
-   2-3s of dead air) — cancelled when the reply beats the timer.
+2. Thinking ack v2 (#395): v1 armed at turn commit and gated on
+   current_speech — preemptive generation sets that instantly, so the ack
+   NEVER played (log-proven 05:47Z). v2 is session-state driven: arms when
+   the CALLER stops speaking, cancelled when anyone speaks; fires a
+   pre-cached clip after 1.0s of silence.
 """
 from pathlib import Path
 
@@ -15,25 +17,34 @@ SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 
 
 def test_soniox_endpointing_tuned_from_evidence():
-    stt = SRC.split("def _build_stt")[1][:3000]
+    stt = SRC.split("def _build_stt")[1][:3500]
     assert "max_endpoint_delay_ms=800" in stt
     assert "endpoint_sensitivity=0.3" in stt
     # the tuning rationale must stay documented next to the numbers
     assert "transcription_delay" in stt
 
 
-def test_thinking_ack_armed_on_real_turns_only():
-    # armed AFTER the echo guard (an echo turn must never get an ack)
-    hook = SRC.split("async def on_user_turn_completed")[1]
-    assert hook.index("echo_turn_discarded") < hook.index("_schedule_thinking_ack()")
+def test_thinking_ack_v2_session_state_driven():
+    # armed on caller speech END (covers the transcription wait) — NOT on
+    # turn commit, and NOT gated on current_speech (the v1 bug).
+    ack = SRC.split("THINKING ACK v2")[1][:4000]
+    assert '"listening" and ev.old_state == "speaking"' in ack
+    assert '"current_speech"' not in ack  # no code gate on it (comment mention ok)
+    # cancelled when the agent speaks or the caller resumes
+    assert ack.count("_ack_cancel()") >= 3
+    assert '"speaking":' in ack
+    # fires a cached clip, invisible on failure, self-cancelling
+    assert "_play_cached_filler(session)" in ack
+    assert "asyncio.CancelledError" in ack
+    assert "asyncio.sleep(1.0)" in ack
 
 
-def test_thinking_ack_guards():
-    fn = SRC.split("def _schedule_thinking_ack")[1][:2000]
-    # never stacks on speech already playing; cached clip (zero synth);
-    # self-cancelling; failures invisible
-    assert 'getattr(self.session, "current_speech", None) is not None' in fn
-    assert "_say_lookup_filler(self)" in fn
-    assert "prev.cancel()" in fn
-    assert "asyncio.CancelledError" in fn
-    assert "_ACK_DELAY_S = 0.9" in SRC
+def test_ack_only_when_agent_not_already_speaking():
+    ack = SRC.split("async def _ack_fire")[1][:800]
+    assert 'agent_state", None) == "speaking"' in ack
+
+
+def test_cached_filler_helper_shared_with_tool_fillers():
+    # one clip mechanism — tool fillers and the thinking ack must not drift
+    assert "def _play_cached_filler(sess)" in SRC
+    assert "_play_cached_filler(getattr(context" in SRC
