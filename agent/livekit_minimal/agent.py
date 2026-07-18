@@ -870,8 +870,16 @@ def _build_stt(lang_cfg):
     strict-language rule as Sarvam's fixed `language=` (Vinay 2026-06-17:
     auto-detect degrades on shared Indian-language words). Language change
     happens ONLY via the switch_language agent handoff, which builds a new
-    STT through this same factory. Endpointing params stay at plugin defaults:
-    tune only from real-call lat_* evidence, never blind.
+    STT through this same factory.
+
+    ENDPOINTING (#394, tuned FROM real-call lat_* evidence — clinics called
+    the 2-3s reply gap the single purchase blocker): measured
+    transcription_delay was 0.74-0.97s per turn = Soniox waiting to declare
+    the endpoint (plugin default max_endpoint_delay_ms=2000, sensitivity
+    unset). 800ms cap + mildly eager sensitivity finalize the transcript
+    ~0.3-0.5s sooner; the turn COMMIT is still LiveKit's VAD/turn-detector
+    (min 0.2/max 0.6s), so slow speakers are not cut off — only the
+    transcript wait shrinks.
     """
     if settings.soniox_api_key:
         return soniox.STT(
@@ -880,6 +888,8 @@ def _build_stt(lang_cfg):
                 model="stt-rt-v5",
                 language_hints=[lang_cfg.code],
                 language_hints_strict=True,
+                max_endpoint_delay_ms=800,
+                endpoint_sensitivity=0.3,
             ),
         )
     return sarvam.STT(
@@ -1159,6 +1169,40 @@ class VachanamAgent(Agent):
                 raise
             # Any other error must NEVER swallow a real turn — let it through.
             logger.warning("echo_guard_error: %s", e)
+        # The turn is REAL (not an echo) — arm the thinking ack (#394).
+        try:
+            self._schedule_thinking_ack()
+        except Exception as e:  # noqa: BLE001 — masking must never touch the turn
+            logger.debug("thinking_ack_arm_failed: %s", e)
+
+    # #394 (clinics: the 2-3s gap after the caller stops speaking is THE
+    # purchase blocker): a real receptionist fills think-time with a soft
+    # "haan…". If nothing has started speaking _ACK_DELAY_S after the turn
+    # commits (LLM+TTS still working), play a pre-cached filler clip
+    # INSTANTLY (zero synth — reuses the tool-filler PCM cache in the call's
+    # language/voice). The reply then follows right behind it. Self-cancels
+    # when the reply beats the timer; never stacks on other speech; never
+    # enters chat history; any failure is invisible (RULE 8).
+    _ACK_DELAY_S = 0.9
+
+    def _schedule_thinking_ack(self) -> None:
+        prev = getattr(self, "_ack_task", None)
+        if prev is not None and not prev.done():
+            prev.cancel()
+
+        async def _ack() -> None:
+            try:
+                await asyncio.sleep(self._ACK_DELAY_S)
+                if getattr(self.session, "current_speech", None) is not None:
+                    return  # the real reply (or a tool filler) already speaks
+                _say_lookup_filler(self)
+                logger.info("thinking_ack_played")
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:  # noqa: BLE001
+                logger.debug("thinking_ack_skipped: %s", e)
+
+        self._ack_task = asyncio.create_task(_ack())
 
     @staticmethod
     def _message_text(m) -> str:
