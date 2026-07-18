@@ -39,9 +39,14 @@ def test_thinking_ack_v2_session_state_driven():
     assert "asyncio.sleep(1.0)" in ack
 
 
-def test_ack_only_when_agent_not_already_speaking():
-    ack = SRC.split("async def _ack_fire")[1][:800]
-    assert 'agent_state", None) == "speaking"' in ack
+def test_ack_fires_only_while_agent_is_thinking():
+    # #397 (real call: "సరే" after the agent's own sentences — echo-driven
+    # user_state flaps armed the timer with no reply pending): the ack fires
+    # ONLY in the "thinking" state, never while idle-listening or speaking.
+    ack = SRC.split("async def _ack_fire")[1]
+    ack = ack.split("def _ack_on_user_state")[0]  # _ack_fire body only
+    assert 'agent_state", None) != "thinking"' in ack
+    assert '== "speaking"' not in ack
 
 
 def test_cached_filler_helper_shared_with_tool_fillers():
@@ -64,3 +69,11 @@ def test_soniox_finalize_on_vad_end_396():
     assert handler.index("_soniox_finalize_all()") < handler.index("_ack_fire()")
     # weak registry: dead streams never accumulate
     assert "_weakref.WeakSet()" in SRC
+
+
+def test_llm_thinking_minimal_397():
+    """#397: 'low' still thinks on ~half the turns (bimodal ttft 1.2/3.2s
+    measured in one call). Primary flash-lite must run thinking_level=minimal
+    everywhere (turn LLM + routing)."""
+    assert SRC.count('thinking_level="minimal"') >= 2
+    assert 'thinking_level="low"' not in SRC

@@ -962,7 +962,10 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
             google.LLM(
                 api_key=settings.gemini_api_key,
                 model="gemini-3.1-flash-lite",
-                thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
+                # #397: "low" still THINKS on ~half the turns — measured
+                # bimodal ttft 1.2s vs 3.2s in the same call (06:05Z).
+                # "minimal" suppresses the bursts; probed live OK 2026-07-18.
+                thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
             ),
             google.LLM(
                 api_key=settings.gemini_api_key,
@@ -1000,7 +1003,7 @@ async def _routing_llm_call(messages: list) -> str:
         model="gemini-3.1-flash-lite",
         contents="\n".join(m["content"] for m in messages),
         config=genai_types.GenerateContentConfig(
-            thinking_config=genai_types.ThinkingConfig(thinking_level="low"),
+            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
             response_mime_type="application/json",
         ),
     )
@@ -3531,7 +3534,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         async def _ack_fire() -> None:
             try:
                 await asyncio.sleep(1.0)
-                if getattr(session, "agent_state", None) == "speaking":
+                # #397 (real call 06:05Z: "సరే" after the agent's own
+                # sentences): phone-line echo makes VAD see "user speech"
+                # during agent audio; when the agent then went idle the timer
+                # fired with NO reply pending. Fire ONLY while the agent is
+                # genuinely working on a reply ("thinking") — idle listening
+                # or already speaking must stay silent.
+                if getattr(session, "agent_state", None) != "thinking":
                     return
                 _play_cached_filler(session)
                 logger.info("thinking_ack_played")
