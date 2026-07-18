@@ -26,3 +26,18 @@ def test_nothing_due_at_night():
 
 def test_future_scheduled_not_due():
     assert _is_due(_task("next_visit_book", date(2026, 6, 25)), datetime(2026, 6, 23, 10, 0, tzinfo=IST)) is False
+
+
+def test_doctor_advice_wider_window_393():
+    """#393 (real miss 2026-07-17 21:10 IST: doctor replied, patient got no
+    call until next morning): doctor_advice = doctor-initiated service
+    callback -> 8-22 IST. Booking nudges keep 9-20."""
+    evening = datetime(2026, 6, 23, 21, 10, tzinfo=IST)
+    assert _is_due(_task("doctor_advice", date(2026, 6, 23)), evening) is True
+    assert _is_due(_task("next_visit_book", date(2026, 6, 23)), evening) is False
+    early = datetime(2026, 6, 23, 8, 30, tzinfo=IST)
+    assert _is_due(_task("doctor_advice", date(2026, 6, 23)), early) is True
+    assert _is_due(_task("next_visit_book", date(2026, 6, 23)), early) is False
+    # hard night curfew stands for everything
+    night = datetime(2026, 6, 23, 22, 30, tzinfo=IST)
+    assert _is_due(_task("doctor_advice", date(2026, 6, 23)), night) is False

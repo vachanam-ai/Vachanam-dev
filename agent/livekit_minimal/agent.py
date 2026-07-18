@@ -2712,6 +2712,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         await _end_call_with_notice(ctx, "did_resolution_failed", _t_answer)
         return
     branch = branches[0]
+    _t_branch = _perf.monotonic()  # #393: stage timing (branch resolve = first Neon wake)
 
     # Per-clinic voice language (Branch.language → Sarvam STT/TTS codes + the
     # spoken lines + system-prompt directive). Resolved ONCE here so both the
@@ -2843,6 +2844,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         _service_gate_check(branch),
         _read_caller(),
     )
+    _t_reads = _perf.monotonic()  # #393: stage timing (concurrent pre-call reads)
     if _pref_res and _pref_res in LANGUAGES:
         lang_code = _pref_res
         state.preferred_language = _pref_res
@@ -3310,7 +3312,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             agent_factory=_agent_for_lang,
         )
 
-        logger.info("lat_pre_session_build answer_to_build=%.2fs", _perf.monotonic() - _t_answer)
+        # #393: per-stage breakdown so a slow build names its culprit —
+        # branch_resolve = DID lookup incl any Neon wake; reads = the
+        # concurrent gate/pref-lang/caller gather; rest = greeting prep +
+        # prompt + agent build.
+        _t_done = _perf.monotonic()
+        logger.info(
+            "lat_pre_session_build answer_to_build=%.2fs branch_resolve=%.2fs "
+            "reads=%.2fs rest=%.2fs",
+            _t_done - _t_answer,
+            _t_branch - _t_answer,
+            _t_reads - _t_branch,
+            _t_done - _t_reads,
+        )
 
         _t_build = _perf.monotonic()
         # Session TTS captured in a var so we can PRIME its connection during the
@@ -3340,8 +3354,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # greeting cover window makes the first real turn hit a warm path.
             # Best-effort — any failure is invisible to the call (RULE 8).
             try:
+                # #393: prewarm with the REAL system prompt, not an empty
+                # context — measured 17:10Z call: empty-prompt prewarm left the
+                # first real turn at ttft 3.47s (vs ~1.3s warm turns) because
+                # Gemini's implicit prefix cache never saw the actual prompt.
                 _cc = ChatContext.empty()
-                _cc.add_message(role="user", content="Reply with just: Ok")
+                _cc.add_message(role="system", content=instructions)
+                _cc.add_message(role="user", content="Ok")
                 async with asyncio.timeout(8):
                     _stream = _session_llm.chat(chat_ctx=_cc)
                     try:

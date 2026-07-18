@@ -18,11 +18,22 @@ from backend.services.telephony import branch_outbound_trunk_id
 logger = structlog.get_logger()
 IST = ZoneInfo("Asia/Kolkata")
 CALL_START_H, CALL_END_H = 9, 20
+# #393 (Vinay 2026-07-17: doctor replied at 21:10 IST, patient got no call —
+# task parked until 09:00): doctor_advice is a doctor-INITIATED service
+# callback the patient is waiting for, not a marketing nudge — it gets a wider
+# window. Booking nudges (next_visit_book) keep the courtesy 9-20 window.
+DA_START_H, DA_END_H = 8, 22
 AGENT_NAME = "vachanam-agent"
 
 
+def _window(task_type: str) -> tuple[int, int]:
+    return (DA_START_H, DA_END_H) if task_type == "doctor_advice" else (
+        CALL_START_H, CALL_END_H)
+
+
 def _is_due(task, now_ist: datetime) -> bool:
-    if not (CALL_START_H <= now_ist.hour < CALL_END_H):
+    lo, hi = _window(task.task_type)
+    if not (lo <= now_ist.hour < hi):
         return False
     sched = task.scheduled_date or now_ist.date()
     if sched > now_ist.date():
@@ -91,7 +102,9 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
     from backend.jobs import wake_gate
 
     now_ist = (now or datetime.now(IST)).astimezone(IST)
-    if not (CALL_START_H <= now_ist.hour < CALL_END_H):
+    # Widest window across task types (#393) — per-task windows enforced in
+    # _is_due; outside 8-22 nothing at all is dialable.
+    if not (DA_START_H <= now_ist.hour < DA_END_H):
         return 0
     # #299: the next task isn't dialable yet ⇒ answer from Redis and leave
     # Postgres asleep. Schedule-driven (not producer-driven), so a task created

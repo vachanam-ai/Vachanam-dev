@@ -45,5 +45,16 @@ def test_blocked_org_still_decided_before_greeting():
 def test_llm_prewarm_fires_at_session_build():
     assert "async def _prewarm_llm" in SRC
     assert "asyncio.create_task(_prewarm_llm())" in SRC
-    fn = SRC.split("async def _prewarm_llm")[1][:1500]
+    fn = SRC.split("async def _prewarm_llm")[1][:2500]
     assert "aclose()" in fn  # stream always closed, even on break
+    # #393: prewarm must carry the REAL system prompt — an empty-context
+    # prewarm leaves the first real turn at ttft ~3.5s (measured 17:10Z call)
+    # because Gemini's implicit prefix cache never sees the actual prompt.
+    assert 'role="system", content=instructions' in fn
+
+
+def test_build_breakdown_instrumented():
+    # #393: a slow build must name its stage (branch_resolve / reads / rest).
+    assert "branch_resolve=%.2fs" in SRC
+    assert "_t_branch - _t_answer" in SRC
+    assert "_t_reads - _t_branch" in SRC
