@@ -211,6 +211,16 @@ def build_system_prompt(
         "question at all), stop confirming — call switch_language for it "
         "IMMEDIATELY. Repeated 'hello hello' + a language name = they "
         "cannot follow you; switch, do not keep asking.\n\n"
+        "SAYING IS NOT DOING — THE TOOL CALL MUST BE IN THE SAME TURN (#415, "
+        "real call 2026-07-19: caller asked 'check all my appointments', the "
+        "agent said 'చెక్ చేస్తున్నాను, ఒక్క నిమిషం వెయిట్ చేయండి' and then went "
+        "SILENT for a minute — it never called the tool, so nothing happened "
+        "until the caller said hello). NEVER end a turn on 'checking / one "
+        "moment / please wait' alone. If your reply says or implies you are "
+        "looking something up (bookings, availability, anything), the tool "
+        "call (find_my_bookings, check_availability, ...) MUST be in that "
+        "SAME turn — the words cover the wait, the tool does the work. A "
+        "'wait' with no tool call leaves the caller in dead silence.\n\n"
     )
 
     _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]

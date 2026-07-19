@@ -351,7 +351,12 @@ def _phone_override_error(
 
 # Carry trailing digits AND colons so both a split phone ("96664"+"44428")
 # and a split clock ("10:"+"00") are stitched before the rewrites run.
-_TRAILING_DIGITS = re.compile(r"[\d:]+$")
+# #415: also carry a trailing day-part word (with any digits after it) —
+# "సాయంత్రం " + "6:30" must reach the converter TOGETHER or the am/pm
+# meridiem (which the day-part word proves) is lost to the earlier chunk.
+_TRAILING_DIGITS = re.compile(
+    r"(?:(?:ఉదయం|పొద్దున్నే|పొద్దున|మధ్యాహ్నం|సాయంత్రం|రాత్రి|सुबह|दोपहर|शाम|रात)\s*)?[\d:]*$"
+)
 
 
 async def _space_digits_stream(text):

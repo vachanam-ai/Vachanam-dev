@@ -35,9 +35,24 @@ _TIME = re.compile(r"\b(\d{1,2}):([0-5]\d)\b")
 _LONG_RUN = re.compile(r"\d{5,}")
 _SHORT_NUM = re.compile(r"\d{1,4}")
 
+# ── #415 (Vinay 2026-07-19): times speak WITH am/pm — "5pm", "3:30pm", "10am"
+# — instead of "5 గంటలకి" / bare "five thirty". Deterministic, meridiem taken
+# from what the text itself proves: the native day-part word next to the time
+# (సాయంత్రం 6:30 → pm) or a 24-hour clock (18:30 → pm). The model's writing
+# style is untouched (still digits + native day-part per #408); the day-part
+# word and the "గంటలకి/बजे" o'clock-word are consumed because am/pm now
+# carries that meaning.
+_AM_WORDS = ("ఉదయం", "పొద్దున్నే", "పొద్దున", "सुबह", "morning")
+_PM_WORDS = ("మధ్యాహ్నం", "సాయంత్రం", "రాత్రి", "दोपहर", "शाम", "रात",
+             "afternoon", "evening", "night")
+_DAYPART_RE = "|".join(_AM_WORDS + _PM_WORDS)
+_HOUR_WORD = r"(?:గంటలకి|గంటలకు|గంటలక|గంటకి|గంటలు|గంటల|बजे)"
+_DP_TIME = re.compile(
+    rf"(?:({_DAYPART_RE})\s*)(\d{{1,2}})(?::([0-5]\d))?(?:\s*{_HOUR_WORD})?"
+)
 
-def _time_words(m: re.Match) -> str:
-    h, mi = int(m.group(1)), int(m.group(2))
+
+def _time_words(h: int, mi: int) -> str:
     h = h % 12 or 12          # 18:30 → six thirty; 0:xx → twelve xx
     if mi == 0:
         return _cardinal(h)
@@ -46,11 +61,34 @@ def _time_words(m: re.Match) -> str:
     return f"{_cardinal(h)} {_cardinal(mi)}"
 
 
+def _dp_time_sub(m: re.Match) -> str:
+    daypart, h = m.group(1), int(m.group(2))
+    mi = int(m.group(3) or 0)
+    if h > 23 or (daypart in _AM_WORDS and h > 12):
+        return m.group(0)  # not a plausible clock reading — leave untouched
+    mer = "am" if daypart in _AM_WORDS else "pm"
+    if h >= 13:
+        mer = "pm"
+    return f"{_time_words(h, mi)} {mer}"
+
+
+def _bare_time_sub(m: re.Match) -> str:
+    h, mi = int(m.group(1)), int(m.group(2))
+    # 24h clock proves the meridiem; 12:xx is noon in clinic reality (#415).
+    if h >= 13 or h == 0:
+        return f"{_time_words(h, mi)} {'am' if h == 0 else 'pm'}"
+    if h == 12:
+        return f"{_time_words(h, mi)} pm"
+    return _time_words(h, mi)  # 1-11 with no context: no meridiem to prove
+
+
 def spoken_english_numbers(text: str) -> str:
-    """Digits → spoken English words. Order matters: times (colon) first, then
-    long runs (phones — one digit at a time), then any leftover short number
-    (age, token, day) as a cardinal."""
-    text = _TIME.sub(_time_words, text)
+    """Digits → spoken English words. Order matters: day-part times first
+    (they own their digits + meridiem), then bare colon-times, then long runs
+    (phones — one digit at a time), then any leftover short number (age,
+    token, day) as a cardinal."""
+    text = _DP_TIME.sub(_dp_time_sub, text)
+    text = _TIME.sub(_bare_time_sub, text)
     text = _LONG_RUN.sub(lambda m: " ".join(_ONES[int(c)] for c in m.group()), text)
     text = _SHORT_NUM.sub(lambda m: _cardinal(int(m.group())), text)
     # #408 also: Hindi TTS clips "डॉक्टर" to "doc" — the phonetic spelling

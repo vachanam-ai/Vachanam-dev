@@ -8,6 +8,15 @@ word (సాయంత్రం…) carries meridiem."""
 from agent.prompts.system_prompt import build_system_prompt
 
 
+def test_prompt_fences_say_without_do():
+    # #415 real call: "చెక్ చేస్తున్నాను… వెయిట్ చేయండి" then a minute of silence —
+    # the lookup tool was never called. The fence orders the tool call in the
+    # SAME turn as any "checking/wait" phrasing.
+    p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
+    assert "SAYING IS NOT DOING" in p
+    assert "SAME turn" in p and "find_my_bookings" in p
+
+
 def test_prompt_requires_digit_times_english_speech():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     # AM/PM still banned
