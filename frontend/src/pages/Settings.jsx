@@ -41,6 +41,8 @@ import { useAuth } from "../hooks/useAuth.jsx";
 import { startRecording } from "../lib/recorder.js";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
+// Flip to true when the Meta/WhatsApp platform setup is complete (2026-07-19).
+const WHATSAPP_LIVE = false;
 
 // Static fallback for the language dropdown — the set is fixed metadata
 // (mirrors agent/i18n/languages.py). Used when the API response omits
@@ -639,7 +641,11 @@ export default function Settings() {
         </InfoBox>
       </Section>
 
-      {/* WhatsApp (WA T9) — read-only status; linking is done with our team */}
+      {/* WhatsApp (WA T9) — HIDDEN until Meta platform setup completes (Vinay
+          2026-07-19: "remove whatsapp from clinic pages, lets add it once we
+          have everything in place"). Flip WHATSAPP_LIVE in this file to bring
+          the status card back — backend stays no-op without Meta env either way. */}
+      {WHATSAPP_LIVE && (
       <Section id="whatsapp" title="WhatsApp"
         sub="Booking confirmations, reminders and post-visit rating asks on your clinic's own WhatsApp number.">
         {data?.whatsapp_linked ? (
@@ -659,6 +665,7 @@ export default function Settings() {
           </p>
         )}
       </Section>
+      )}
 
       {/* 5 — Language */}
       <Section id="language" title="Agent language"
