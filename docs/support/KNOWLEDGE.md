@@ -170,22 +170,61 @@ of the Clinic plan to evaluate.
 - Refunds and cancellation terms are published at the website's Refunds page;
   subscription can be cancelled anytime and stays active till the period ends.
 
-## Data safety and privacy (common questions)
+## Data safety, security and DPDP compliance (clinics' due-diligence questions — answer these confidently)
 
+All of this is published at vachanam.in/privacy, vachanam.in/data-handling,
+and the signable Data Processing Agreement at vachanam.in/dpa.
+
+- DPDP: Vachanam operates as a Data Processor under India's Digital Personal
+  Data Protection (DPDP) Act 2023; the clinic is the Data Fiduciary. Patient
+  data is processed only to book and manage appointments on the clinic's
+  instructions. A signable DPA is at vachanam.in/dpa. Grievance/privacy
+  contact: privacy@vachanam.in.
+- Isolation: every record carries the clinic's branch ID and every query is
+  scoped to it — one clinic can never see another clinic's patients, calls,
+  or bookings. Automated cross-clinic access tests run on every code change.
+- Who can see data: role-based within the clinic (receptionist, doctor,
+  owner each see only what their role needs). Even Vachanam's platform
+  administrator is locked out of patient-data screens; production access is
+  limited to the founder (acting Data Protection Officer) and every such
+  access is audit-logged.
+- What is collected: first name, phone, age/gender if given, plus token,
+  doctor, date, time. The spoken health concern is used during the call only
+  to route to the right doctor — it is not saved on the booking record.
+- NOT a medical records system: no fields exist for diagnoses,
+  prescriptions, test results, scans, or documents. Optional treatment
+  follow-up notes are appointment-continuity text visible only to the
+  patient's own clinic.
 - Calls are NOT recorded. Voice is processed in real time and discarded;
-  only a text transcript is kept, phone-masked, for up to 90 days, visible
-  only to the patient's own clinic.
-- Vachanam is NOT a medical records system: no diagnoses, prescriptions, or
-  test results are stored. Visit notes are operational text the clinic enters.
-- Logs and calendar events never contain full phone numbers or health details.
-- Every record is isolated per clinic; cross-clinic access is technically
-  impossible and tested on every code change.
-- Patient personal data is erased automatically after 2 years of inactivity,
-  and clinics can erase a patient on demand (Patients page → Delete, with
-  confirmation; erased patients disappear from all lists).
-- Vachanam complies with India's DPDP Act 2023. Privacy policy, terms, and a
-  plain-language "how we handle your data" page are on the website. Data
-  requests: privacy@vachanam.in.
+  only a text transcript is kept, phone-masked before saving, for up to 90
+  days, visible only to the patient's own clinic, then auto-deleted.
+- Storage & encryption: the database runs on SOC 2-audited infrastructure in
+  Singapore, encrypted at rest with AES-256; every connection uses TLS.
+  Voice-call infrastructure and the temporary token cache (counters that
+  expire the same day) run in Mumbai, India.
+- Never sold, never used to train AI: no ads, no data sales, no training AI
+  models on patient data — AI providers are used only via paid enterprise
+  APIs whose terms prohibit training on submitted data.
+- Payments: Razorpay (RBI-authorised aggregator) processes clinic
+  subscription payments; it never sees patient data and Vachanam never
+  stores card details.
+- Calendar & notifications: the doctor's calendar event carries only first
+  name + last-4 of phone + token number; no notification ever contains
+  health details.
+- AI disclosure: the agent says at the start of every call that it is the
+  clinic's AI assistant; it never gives medical advice; emergencies surface
+  the clinic's own emergency contact.
+- Retention: booking identity data 2 years after last activity, then
+  anonymized (anonymous statistics remain for the clinic); masked
+  transcripts 90 days; audit log (IDs only, no names) 7 years. Clinics can
+  erase a patient on demand (Patients page → Delete), and a clinic owner can
+  delete the whole clinic and all its data from Settings — permanent.
+- Breach response: a written, rehearsed runbook — affected clinics notified
+  within 24 hours, the Data Protection Board within 72 hours (committed in
+  the DPA).
+- Account security: login tokens expire after 8 hours and are revoked on
+  logout; sensitive endpoints are rate-limited; every significant action is
+  written to an append-only audit log.
 
 ## What Vachanam does NOT do
 
