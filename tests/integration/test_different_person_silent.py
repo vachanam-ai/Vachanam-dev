@@ -57,9 +57,12 @@ async def setup(db):
     return br, doc
 
 
-async def test_already_booked_instruction_says_retry_silently(setup, db, redis):
-    """Booking a DIFFERENT person on the same phone/doctor/day → already_booked,
-    and the instruction must tell the LLM to retry silently, never voice it."""
+async def test_different_name_without_flag_stops_before_wrong_attach(setup, db, redis):
+    """#421 (real booking 2026-07-19: 'Sudarshan' silently stored under the
+    caller 'Vinay'): a clearly different name with different_person=false is
+    now caught at patient resolution — BEFORE it can attach to the primary
+    record — and the instruction directs a SILENT different_person=true retry
+    (#295: never voice the mechanics)."""
     br, doc = setup
     res = await confirm_booking(
         doctor_id=doc.id, branch_id=br.id, patient_name="Prasanna",
@@ -68,11 +71,12 @@ async def test_already_booked_instruction_says_retry_silently(setup, db, redis):
         source='voice', calendar_service=_Cal(), meta_service=_Meta(),
         db=db, patient_age=25, different_person=False,
     )
-    assert res["success"] is False and res["reason"] == "already_booked"
-    ins = res["instruction"].lower()
+    assert res["success"] is False
+    assert res["reason"] == "name_differs_from_phone_owner"
+    ins = res["instruction"]
     assert "different_person=true" in ins
-    assert "silently" in ins
-    assert "never" in ins and "different person" in ins  # do not voice it
+    assert "SILENTLY" in ins
+    assert "NEVER voice" in ins
 
 
 async def test_different_person_true_books_through(setup, db, redis):
@@ -86,3 +90,51 @@ async def test_different_person_true_books_through(setup, db, redis):
         db=db, patient_age=25, different_person=True,
     )
     assert res["success"] is True
+
+
+async def test_421_friend_booking_gets_own_patient_record(setup, db, redis):
+    """The full #421 repro: 'Sudarshan' booked on Vinay-owned phone must end
+    up on a SUDARSHAN patient row, never on the owner's record."""
+    from sqlalchemy import select
+
+    br, doc = setup
+    res = await confirm_booking(
+        doctor_id=doc.id, branch_id=br.id, patient_name="Sudarshan",
+        patient_phone=PHONE, complaint="skin",
+        booking_date=BOOK_DATE + timedelta(days=1),
+        token_number=1, followup_consent=False, appointment_time=time(10, 15),
+        source='voice', calendar_service=_Cal(), meta_service=_Meta(),
+        db=db, patient_age=30, different_person=False,
+    )
+    # no-flag call is refused before it can pollute the owner's record...
+    assert res["success"] is False and res["reason"] == "name_differs_from_phone_owner"
+    res = await confirm_booking(
+        doctor_id=doc.id, branch_id=br.id, patient_name="Sudarshan",
+        patient_phone=PHONE, complaint="skin",
+        booking_date=BOOK_DATE + timedelta(days=1),
+        token_number=1, followup_consent=False, appointment_time=time(10, 15),
+        source='voice', calendar_service=_Cal(), meta_service=_Meta(),
+        db=db, patient_age=30, different_person=True,
+    )
+    assert res["success"] is True
+    # ...and the retry stored it under Sudarshan's OWN row.
+    tok = (await db.execute(
+        select(Token, Patient).join(Patient, Patient.id == Token.patient_id)
+        .where(Token.branch_id == br.id, Token.date == BOOK_DATE + timedelta(days=1))
+    )).first()
+    assert tok is not None and tok[1].name == "Sudarshan"
+    assert tok[1].is_primary is False
+
+
+def test_names_match_heuristic():
+    from agent.tools.booking_tools import _names_match
+
+    # same person, spelling/script variance → match (no question, no split)
+    assert _names_match("Vinay", "vinay ")
+    assert _names_match("Vinay", "Vinai")          # STT variance, lev 1
+    assert _names_match("Vinay Kumar", "Vinay")    # containment
+    assert _names_match("Vinay", "వినయ్")           # cross-script → fail-open
+    assert _names_match("", "Sudarshan")           # nothing stored → fail-open
+    # genuinely different people → mismatch (the #421 corruption)
+    assert not _names_match("Vinay", "Sudarshan")
+    assert not _names_match("Raju", "Ravi")        # short names stay distinct

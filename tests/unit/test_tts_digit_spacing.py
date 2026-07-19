@@ -40,19 +40,19 @@ def test_time_english_words():
     assert eng("6:30") == "six thirty"       # no context → no meridiem to prove
     assert eng("10:00") == "ten"
     assert eng("9:05") == "nine oh five"
-    assert eng("18:30") == "six thirty pm"   # 24h clock proves pm (#415)
-    assert eng("12:15") == "twelve fifteen pm"  # 12 = clinic noon (#415)
+    assert eng("18:30") == "six thirty P.M."   # 24h clock proves pm (#415)
+    assert eng("12:15") == "twelve fifteen P.M."  # 12 = clinic noon (#415)
 
 
 def test_daypart_becomes_am_pm():
     # #415 (Vinay): "instead of 5 gantalaki it should say 5pm / 12pm / 3:30pm / 10am"
-    assert eng("సాయంత్రం 5 గంటలకి") == "five pm"
-    assert eng("మధ్యాహ్నం 12 గంటలకి") == "twelve pm"
-    assert eng("సాయంత్రం 3:30 కి రండి") == "three thirty pm కి రండి"
-    assert eng("ఉదయం 10 గంటలకి") == "ten am"
-    assert eng("రేపు ఉదయం 9:30 కి వస్తారా?") == "రేపు nine thirty am కి వస్తారా?"
+    assert eng("సాయంత్రం 5 గంటలకి") == "five P.M."
+    assert eng("మధ్యాహ్నం 12 గంటలకి") == "twelve P.M."
+    assert eng("సాయంత్రం 3:30 కి రండి") == "three thirty P.M. కి రండి"
+    assert eng("ఉదయం 10 గంటలకి") == "ten A.M."
+    assert eng("రేపు ఉదయం 9:30 కి వస్తారా?") == "రేపు nine thirty A.M. కి వస్తారా?"
     # Hindi day-parts too
-    assert eng("शाम 6 बजे") == "six pm"
+    assert eng("शाम 6 बजे") == "six P.M."
     # implausible clock reading stays untouched (converted only as a cardinal)
     assert eng("ఉదయం 48") == "ఉదయం forty eight"
 
@@ -61,7 +61,24 @@ def test_age_and_small_numbers_english():
     assert eng("వయసు 48") == "వయసు forty eight"
     assert eng("టోకెన్ 23") == "టోకెన్ twenty three"
     assert eng("జులై 13 కి రండి") == "జులై thirteen కి రండి"
-    assert eng("3 గంటలకి") == "three గంటలకి"
+
+
+def test_bare_hour_word_consumed():
+    # Real call 2026-07-19 line: "10:00 గంటలకు డాక్టర్ లక్ష్మితో" (no day-part)
+    # spoke "ten gantalaku". The o'clock-word is consumed even without a
+    # day-part; meridiem only when the number proves it.
+    assert eng("10:00 గంటలకు డాక్టర్ లక్ష్మితో") == "ten డాక్టర్ లక్ష్మితో"
+    assert eng("3 గంటలకి") == "three"
+    assert eng("17:00 గంటలకు") == "five P.M."
+    assert eng("12:15 గంటలకు") == "twelve fifteen P.M."
+    assert eng("शाम 6 बजे") == "six P.M."  # hindi hour-word with day-part
+
+
+def test_meridiem_letter_rendering():
+    # TTS read lowercase "am" as the word "amm" — dotted capitals spell it.
+    assert "A.M." in eng("ఉదయం 10 గంటలకి")
+    assert "am" not in eng("ఉదయం 10 గంటలకి").split()
+    assert "P.M." in eng("సాయంత్రం 5 గంటలకి")
 
 
 def test_year_cardinal():
@@ -103,10 +120,10 @@ def test_chunk_split_phone_still_english():
 
 def test_chunk_split_time_still_english():
     # #415: the day-part word is carried WITH its digits across the chunk cut,
-    # so the meridiem survives streaming ("సాయంత్రం 6:30" → "six thirty pm").
-    assert _stream(["సాయంత్రం 10:", "00 కి"]) == "ten pm కి"
-    assert _stream(["సాయంత్రం 6:", "30 కి"]) == "six thirty pm కి"
-    assert _stream(["రేపు సాయంత్రం ", "5 గంటలకి రండి"]) == "రేపు five pm రండి"
+    # so the meridiem survives streaming ("సాయంత్రం 6:30" → "six thirty P.M.").
+    assert _stream(["సాయంత్రం 10:", "00 కి"]) == "ten P.M. కి"
+    assert _stream(["సాయంత్రం 6:", "30 కి"]) == "six thirty P.M. కి"
+    assert _stream(["రేపు సాయంత్రం ", "5 గంటలకి రండి"]) == "రేపు five P.M. రండి"
 
 
 def test_trailing_digits_flushed_at_stream_end():

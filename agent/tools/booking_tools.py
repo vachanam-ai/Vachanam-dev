@@ -776,6 +776,32 @@ async def assign_token(
         }
 
 
+def _names_match(stored: str, spoken: str) -> bool:
+    """#421: is `spoken` plausibly the SAME person as the `stored` record, just
+    spelled/transcribed differently — or a genuinely different name?
+
+    Fail-open (returns True) when comparison is unreliable: empty strings or
+    mixed scripts (Telugu vs Latin can't be compared without a network
+    transliteration). Latin-vs-Latin uses containment ("Vinay" in "Vinay
+    Kumar") plus a small edit-distance allowance for STT spelling variance
+    (vinay/vinai) that shrinks for short names so raju/ravi still differ."""
+    a, b = stored.strip().lower(), spoken.strip().lower()
+    if not a or not b:
+        return True
+    if a == b or a in b or b in a:
+        return True
+    if not (a.isascii() and b.isascii()):
+        return True  # cross-script — keep the old attach-to-primary behavior
+    # tiny Levenshtein (names are short; O(len^2) is nothing)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] <= (1 if min(len(a), len(b)) <= 5 else 2)
+
+
 # NOTE: deliberately NO function-level @retry here. The old
 # @retry(stop_after_attempt(3)) re-ran the WHOLE function on a transient
 # calendar failure, and because the session still held attempt #1's pending
@@ -857,6 +883,7 @@ async def confirm_booking(
     # 1. Find or create patient. Match on phone AND name: a caller books for
     # family members too, so several patients legitimately share one phone —
     # matching on phone alone attached the booking to whoever called first.
+    # (#421 helper lives just above confirm_booking: _names_match.)
     result = await db.execute(
         select(Patient).where(
             and_(Patient.branch_id == branch_id, Patient.phone == patient_phone)
@@ -874,6 +901,33 @@ async def confirm_booking(
         patient = next((p for p in same_phone if p.is_primary), None)
         if patient is None:
             patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
+        elif not _names_match(patient.name, patient_name):
+            # #421 (real booking 2026-07-19): caller booked "Sudarshan" on his
+            # own number, the LLM never set different_person, and this branch
+            # silently attached the booking to the primary record "Vinay" —
+            # the DB then said BOTH bookings were Vinay's. A clearly-DIFFERENT
+            # name is not a spelling variant: attach to the matching family
+            # record if one exists, otherwise make the LLM resolve WHO this is.
+            exact = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
+            if exact is not None:
+                patient = exact
+            else:
+                return {
+                    "success": False,
+                    "reason": "name_differs_from_phone_owner",
+                    "instruction": (
+                        f"This phone number is registered to '{patient.name}', "
+                        f"but the booking name is '{patient_name}' — a "
+                        "different person (family/friend) on the same number. "
+                        "SILENTLY retry this SAME confirm_booking with "
+                        "different_person=true (include patient_age — ask for "
+                        "it first if you don't have it). NEVER voice these "
+                        "mechanics or say 'different person' to the caller. "
+                        "Only if the caller earlier said this booking is for "
+                        f"THEMSELVES, retry with patient_name='{patient.name}' "
+                        "instead."
+                    ),
+                }
     else:
         # Someone else on the shared phone (family) — keep them a distinct,
         # name-matched record so real family members don't collapse together.

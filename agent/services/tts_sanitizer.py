@@ -50,6 +50,13 @@ _HOUR_WORD = r"(?:గంటలకి|గంటలకు|గంటలక|గం�
 _DP_TIME = re.compile(
     rf"(?:({_DAYPART_RE})\s*)(\d{{1,2}})(?::([0-5]\d))?(?:\s*{_HOUR_WORD})?"
 )
+# #421-call follow-up: "10:00 గంటలకు" WITHOUT a day-part word slipped through
+# and spoke "ten gantalaku". Bare time + o'clock-word: consume the hour word
+# too; meridiem only when the number proves it (24h / 12 = clinic noon).
+_HW_TIME = re.compile(rf"\b(\d{{1,2}})(?::([0-5]\d))?\s*{_HOUR_WORD}")
+# TTS read lowercase "am" as the word "amm" (Vinay, real call 2026-07-19).
+# Dotted capitals are the letter-by-letter rendering every TTS agrees on.
+_MER = {"am": "A.M.", "pm": "P.M."}
 
 
 def _time_words(h: int, mi: int) -> str:
@@ -66,19 +73,31 @@ def _dp_time_sub(m: re.Match) -> str:
     mi = int(m.group(3) or 0)
     if h > 23 or (daypart in _AM_WORDS and h > 12):
         return m.group(0)  # not a plausible clock reading — leave untouched
-    mer = "am" if daypart in _AM_WORDS else "pm"
+    mer = _MER["am"] if daypart in _AM_WORDS else _MER["pm"]
     if h >= 13:
-        mer = "pm"
+        mer = _MER["pm"]
     return f"{_time_words(h, mi)} {mer}"
+
+
+def _hw_time_sub(m: re.Match) -> str:
+    h = int(m.group(1))
+    mi = int(m.group(2) or 0)
+    if h > 23:
+        return m.group(0)
+    if h >= 13 or h == 12:
+        return f"{_time_words(h, mi)} {_MER['pm']}"
+    if h == 0:
+        return f"{_time_words(h, mi)} {_MER['am']}"
+    return _time_words(h, mi)  # 1-11, no day-part: no meridiem to prove
 
 
 def _bare_time_sub(m: re.Match) -> str:
     h, mi = int(m.group(1)), int(m.group(2))
     # 24h clock proves the meridiem; 12:xx is noon in clinic reality (#415).
     if h >= 13 or h == 0:
-        return f"{_time_words(h, mi)} {'am' if h == 0 else 'pm'}"
+        return f"{_time_words(h, mi)} {_MER['am'] if h == 0 else _MER['pm']}"
     if h == 12:
-        return f"{_time_words(h, mi)} pm"
+        return f"{_time_words(h, mi)} {_MER['pm']}"
     return _time_words(h, mi)  # 1-11 with no context: no meridiem to prove
 
 
@@ -101,6 +120,7 @@ def spoken_english_numbers(text: str) -> str:
     text = _RUPEE_PREFIX.sub(lambda m: f"{m.group(1).replace(',', '')} rupees", text)
     text = _RUPEE_WORDS.sub("rupees", text)
     text = _DP_TIME.sub(_dp_time_sub, text)
+    text = _HW_TIME.sub(_hw_time_sub, text)
     text = _TIME.sub(_bare_time_sub, text)
     text = _LONG_RUN.sub(lambda m: " ".join(_ONES[int(c)] for c in m.group()), text)
     text = _SHORT_NUM.sub(lambda m: _cardinal(int(m.group())), text)
