@@ -343,31 +343,11 @@ def _phone_override_error(
     return None
 
 
-_DIGIT_RUN = re.compile(r"\d{5,}")
-
-
-def _space_digit_runs(s: str) -> str:
-    """Insert spaces between the digits of any 5+-digit run (phone numbers,
-    OTP-like sequences) so TTS speaks them one by one ("9 6 6 6") instead of
-    as a cardinal ("ninety-six crore"). Runs of 1-4 digits are left joined:
-    dates, token numbers, times and years must be read as normal number words
-    — spacing "13" made the agent say "ఒకటి మూడు" instead of "పదమూడు"
-    (live 2026-07-12, FIXLOG #333)."""
-    return _DIGIT_RUN.sub(lambda m: " ".join(m.group()), s)
-
-
-_TIME_RE = re.compile(r"\b(\d{1,2}):([0-5]\d)\b")
-
-
-def _normalize_times(s: str) -> str:
-    """Clock forms → speakable numbers: '10:00' → '10' (TTS read the colon
-    form digit-by-digit — "one zero zero zero am", live 2026-07-12 #333),
-    '10:30' → '10 30' ("ten thirty"). Phones are never colon-separated, so
-    this cannot touch the digit-by-digit phone path."""
-    return _TIME_RE.sub(
-        lambda m: m.group(1) if m.group(2) == "00" else f"{m.group(1)} {m.group(2)}", s
-    )
-
+# #408 (supersedes the #296/#333 spacing rewrites): digits leave for TTS as
+# ENGLISH WORDS, deterministically — spaced digits still came out in the
+# session language ("ఎనిమిది సున్నా…", real call 2026-07-19). Conversion lives
+# in tts_sanitizer.spoken_english_numbers; this wrapper only handles stream
+# chunk-stitching.
 
 # Carry trailing digits AND colons so both a split phone ("96664"+"44428")
 # and a split clock ("10:"+"00") are stitched before the rewrites run.
@@ -375,14 +355,13 @@ _TRAILING_DIGITS = re.compile(r"[\d:]+$")
 
 
 async def _space_digits_stream(text):
-    """Chunk-stitching wrapper around the TTS text rewrites (_normalize_times,
-    then _space_digit_runs).
+    """Chunk-stitching wrapper around the TTS digit rewrite
+    (spoken_english_numbers). A phone number cut across stream chunks
+    ("96664" + "44428") would be seen as two short runs and mis-convert;
+    holding each chunk's trailing digits until the next chunk arrives lets
+    the full run be converted as one."""
+    from agent.services.tts_sanitizer import spoken_english_numbers
 
-    With the 5+ threshold, per-chunk spacing alone is no longer split-safe: a
-    phone number cut across stream chunks ("96664" + "44428") would show up
-    as two short runs and slip through as cardinals. Holding each chunk's
-    trailing digits until the next chunk arrives lets the full run be seen
-    (and spaced) as one."""
     pend = ""
     async for chunk in text:
         buf = pend + chunk
@@ -392,9 +371,9 @@ async def _space_digits_stream(text):
             pend = m.group()
             buf = buf[: m.start()]
         if buf:
-            yield _space_digit_runs(_normalize_times(buf))
+            yield spoken_english_numbers(buf)
     if pend:
-        yield _space_digit_runs(_normalize_times(pend))
+        yield spoken_english_numbers(pend)
 
 
 async def _end_call_with_notice(ctx, reason: str, t_answer: float | None = None) -> None:

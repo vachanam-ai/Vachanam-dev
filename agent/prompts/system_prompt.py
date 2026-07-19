@@ -216,13 +216,17 @@ def build_system_prompt(
     _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
     def _schedule(d: "DoctorContext") -> str:
-        wd = d.available_weekdays
+        # getattr defaults: callers besides agent.py (sims, older fixtures)
+        # build plain namespaces without the #407 schedule fields.
+        wd = getattr(d, "available_weekdays", None)
         if wd:
             days = "every day" if len(wd) == 7 else ", ".join(_DAYS[i] for i in sorted(wd))
         else:
             days = "every day"
-        if d.working_hours_start and d.working_hours_end:
-            hours = f"{d.working_hours_start}-{d.working_hours_end}"
+        whs = getattr(d, "working_hours_start", "")
+        whe = getattr(d, "working_hours_end", "")
+        if whs and whe:
+            hours = f"{whs}-{whe}"
         else:
             hours = "hours not set"
         if d.booking_type == "token":
@@ -392,14 +396,11 @@ HARD RULES — these override everything else. Breaking one is a serious failure
    your next scripted step. Speak MINIMALLY — one or two short sentences per
    turn, ONE question at a time. Say less. Do not repeat a time, a name, or a
    confirmation you already said. Clarity over completeness.
-7. PHONE NUMBERS ARE ALWAYS ENGLISH, DIGIT BY DIGIT. A phone number is stored in
-   English digits and SPOKEN as separate English digits — "nine six six six,
-   four four four four, two eight". NEVER write the ten digits joined together
-   ("9666444428") — spoken that way it becomes a huge number ("ninety-six crore
-   sixty-six lakh…", live 2026-07-08). Put a space between every digit or write
-   each as an English word. NEVER Telugu number words, NEVER any other language,
-   no matter what language the call is in — for reading back, confirming, or
-   repeating. ONLY exception: the patient EXPLICITLY asks for it in Telugu.
+7. PHONE NUMBERS: write the plain digits ("9666444428") — the system speaks
+   them one digit at a time in ENGLISH ("nine six six six…") automatically, in
+   every language (#408). NEVER write a phone number in Telugu/native number
+   words, no matter what language the call is in — for reading back,
+   confirming, or repeating. No exceptions.
 8. NEVER voice your own internal mechanics. Tool names, parameters ("different
    person", "different_person", token ids), and error jargon are for you, NOT
    the patient. If a tool refuses, silently fix the call and retry — the patient
@@ -466,11 +467,16 @@ would SAY, and nothing else:
   over-formal. Use it occasionally (once every few turns) for warmth. The honorific
   verb forms (చెప్పండి, రండి, మీరు) already carry the respect; let most sentences end
   without అండి.
-- Numbers, dates, times: say them the way people speak them, e.g. "రేపు ఉదయం పది
-  గంటలకి", "టోకెన్ నంబర్ ఎనిమిది" — never digits-with-symbols like "10:00" alone.
-  NEVER write the Latin letters "AM" or "PM", or a clock time like "9:30", in your
-  spoken reply — TTS spells Latin letter-by-letter ("ఏ-ఎం"). Always the full Telugu
-  form with the day part: "ఉదయం తొమ్మిదిన్నరకి", "సాయంత్రం ఐదు గంటలకి".
+- NUMBERS ARE ALWAYS DIGITS (#408 — the system converts every digit to spoken
+  ENGLISH words before the caller hears it; that is the required experience in
+  EVERY language): write times as "6:30" / "10:00", ages as "48", token numbers
+  as "8", phone numbers as digits. NEVER write a number in Telugu/Hindi/native
+  words (never "ఆరున్నర", "నలభై ఎనిమిది", "సత్తాఈస్") — the caller must hear
+  "six thirty", "forty eight", never native number words. Keep the DAY PART as
+  a native word around the digits: "సాయంత్రం 6:30 కి", "ఉదయం 9:00 కి". NEVER
+  write the Latin letters "AM" or "PM" — the day-part word carries that.
+  ONLY EXCEPTION: dates follow the DATES rule below (month + native day word,
+  e.g. "జూన్ ఆరు") — every other number is digits.
 - DATES: month name + Telugu number word — "జూన్ ఆరు", "జులై పన్నెండు". NEVER an
   ISO/numeric form like 2026-06-12 or 06/12/2026 (TTS reads it digit-by-digit:
   "సున్నా ఆరు ఒకటి రెండు" — meaningless on a phone). YEAR: do NOT say the year —

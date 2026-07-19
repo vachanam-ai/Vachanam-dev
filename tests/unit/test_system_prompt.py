@@ -465,10 +465,12 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     HARD RULES must be pinned: phones are always English digits (Telugu only on
     explicit request), and internal tool params are never voiced."""
     prompt = _make_prompt()
-    # HARD RULE 7 — phones English-only
-    assert "PHONE NUMBERS ARE ALWAYS ENGLISH" in prompt
-    assert "NEVER Telugu number words" in prompt
-    assert "EXPLICITLY" in prompt and "asks for it in Telugu" in prompt
+    # HARD RULE 7 — phones written as digits; #408 converter speaks them in
+    # English one-by-one (the old "Telugu on explicit request" escape is GONE:
+    # Vinay 2026-07-19 — "never in any language", no exceptions).
+    assert "PHONE NUMBERS: write the plain digits" in prompt
+    assert "one digit at a time in ENGLISH" in prompt
+    assert "No exceptions" in prompt
     # HARD RULE 8 — never voice mechanics; different_person handled silently
     assert "NEVER voice your own internal mechanics" in prompt
     assert "different person" in prompt.lower()
@@ -481,9 +483,8 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     # #296: friend booking must pass booking_for_other + never surface caller's own
     assert "pass booking_for_other=true to check_availability" in prompt
     assert "that is the caller's" in prompt.lower() or "it is the caller" in prompt.lower()
-    # phone digit-by-digit hard rule (never joined)
-    assert "PHONE NUMBERS ARE ALWAYS ENGLISH, DIGIT BY DIGIT" in prompt
-    assert "NEVER write the ten digits joined" in prompt
+    # phone native-number-words ban stays pinned (#408)
+    assert "NEVER write a phone number in Telugu/native number" in prompt
 
 
 def test_system_prompt_lead_in_rule():

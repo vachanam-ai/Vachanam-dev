@@ -49,8 +49,8 @@ def test_build_live_agent_prompt_wraps_real_prompt_with_facts():
     # sim wrapper forbids tools + injects the facts
     assert "NO tools" in p and "KNOWN FACTS" in p
     assert "four hundred rupees" in p
-    # the REAL receptionist prompt is included (its RULE-6 AM/PM ban is present)
-    assert '"AM"' in p and "TTS spells Latin" in p
+    # the REAL receptionist prompt is included (its AM/PM ban + #408 digit rule)
+    assert '"AM"' in p and "NUMBERS ARE ALWAYS DIGITS" in p
 
 
 def test_agent_first_inbound_order():
