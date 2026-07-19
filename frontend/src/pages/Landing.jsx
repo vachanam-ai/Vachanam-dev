@@ -1,6 +1,8 @@
 import ThemeToggle from "../components/ThemeToggle.jsx";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { submitContact } from "../api/support";
+import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import gsap from "gsap";
 import VoicePicker from "../components/VoicePicker.jsx";
 import { API_BASE } from "../api/client.js";
@@ -78,6 +80,32 @@ export default function Landing() {
     return () => ctx.revert();
   }, []);
 
+  // Book-a-demo lead (same /support/contact pipeline + category as Help's form)
+  const [demo, setDemo] = useState({ clinic: "", name: "", phone: "", body: "" });
+  const [demoSent, setDemoSent] = useState(false);
+  const [demoBusy, setDemoBusy] = useState(false);
+  const [demoTouched, setDemoTouched] = useState(false);
+  const [dErr, setDErr] = useState("");
+  const submitDemo = async (e) => {
+    e.preventDefault();
+    setDErr("");
+    setDemoBusy(true);
+    try {
+      await submitContact({
+        name: demo.name,
+        phone: demo.phone,
+        subject: `Demo request — ${demo.clinic}`.slice(0, 200),
+        body: demo.body.trim() || "Please call me to arrange a demo.",
+        category: "sales_demo",
+      });
+      setDemoSent(true);
+    } catch (x) {
+      setDErr(x.response?.data?.detail === "captcha_failed"
+        ? "Please tick the verification box below, then send again."
+        : x.response?.data?.detail || "Could not send — email hello@vachanam.in");
+    } finally { setDemoBusy(false); }
+  };
+
   return (
     <div ref={rootRef} className="overflow-x-clip">
       {/* Nav */}
@@ -88,6 +116,7 @@ export default function Landing() {
             <a href="#how" className="text-ink-soft hover:text-teal">How it works</a>
             <a href="#voices" className="text-ink-soft hover:text-teal">Voices</a>
             <a href="#pricing" className="text-ink-soft hover:text-teal">Pricing</a>
+            <a href="#demo" className="text-ink-soft hover:text-teal">Book a demo</a>
             <Link to="/help" className="text-ink-soft hover:text-teal">Help</Link>
           </nav>
           <div className="flex items-center gap-3">
@@ -127,6 +156,7 @@ export default function Landing() {
             </p>
             <div data-hero className="mt-8 flex flex-wrap items-center gap-4">
               <a href="#pricing" className="btn-primary px-6 py-3">Get started</a>
+              <a href="#demo" className="btn-gold px-6 py-3">Book a demo</a>
               <a href="#voices" className="btn-ghost px-6 py-3">Hear the voices</a>
             </div>
             <p data-hero className="mt-4 font-ui text-xs text-slate">
@@ -307,6 +337,51 @@ export default function Landing() {
           <br />
           Launch offer: pay the offer price for your first 3 months — no GST added, nothing extra.
         </p>
+      </section>
+
+      {/* Book a demo — phone-first lead, same pipeline as Help's demo form
+          (Vinay 2026-07-19: "add book demo thing in this home page"). */}
+      <section id="demo" className="border-t border-hairline bg-teal-mint/40 py-16">
+        <div className="mx-auto max-w-xl px-4">
+          <p className="eyebrow text-center">See it answer a real call</p>
+          <h2 className="mt-2 text-center font-display text-3xl font-semibold tracking-tight">
+            Book a free demo
+          </h2>
+          <p className="mt-3 text-center font-ui text-sm text-ink-soft">
+            Leave your number — we call you, show Vachanam booking a live appointment
+            in your language, and answer everything. 15 minutes, no commitment.
+          </p>
+          {demoSent ? (
+            <div className="card mt-8 px-6 py-8 text-center">
+              <p className="font-display text-xl font-semibold text-teal-deep">Thank you! 🙏</p>
+              <p className="mt-2 font-ui text-sm text-ink-soft">
+                We got your request — expect a call within one working day.
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={submitDemo} className="card mt-8 space-y-3 px-6 py-6"
+              onFocus={() => setDemoTouched(true)}>
+              <input className="input w-full" placeholder="Clinic name" required
+                value={demo.clinic} onChange={(e) => setDemo({ ...demo, clinic: e.target.value })} />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <input className="input w-full" placeholder="Your name" required
+                  value={demo.name} onChange={(e) => setDemo({ ...demo, name: e.target.value })} />
+                <input className="input w-full" type="tel" placeholder="Phone number" required
+                  value={demo.phone} onChange={(e) => setDemo({ ...demo, phone: e.target.value })} />
+              </div>
+              <textarea className="input w-full" rows="2"
+                placeholder="Anything specific to show? (optional)"
+                value={demo.body} onChange={(e) => setDemo({ ...demo, body: e.target.value })} />
+              {/* Turnstile mounts on first interaction — keeps it from fighting the
+                  chat widget's instance over the shared token/reset slot. */}
+              {TURNSTILE_ON && demoTouched && <Turnstile />}
+              {dErr && <p className="font-ui text-sm text-danger">{dErr}</p>}
+              <button className="btn-primary w-full py-3" disabled={demoBusy}>
+                {demoBusy ? "Sending…" : "Book my demo"}
+              </button>
+            </form>
+          )}
+        </div>
       </section>
 
       {/* Closing CTA */}

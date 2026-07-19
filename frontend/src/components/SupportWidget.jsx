@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { getToken } from "../api/client";
 import { sendChat } from "../api/support";
 import { chatErrorMessage, TypedText, TypingDots } from "./ChatBits.jsx";
+import Turnstile, { TURNSTILE_ON } from "./Turnstile.jsx";
 
 /** Floating support chatbot — a launcher bubble (bottom-right) that opens a
  *  small chat window. Grounded assistant; every chat auto-logs a ticket the
@@ -14,6 +16,9 @@ export default function SupportWidget() {
   const [msgs, setMsgs] = useState([]);
   const [ticketId, setTicketId] = useState(null);
   const [busy, setBusy] = useState(false);
+  // "" until the anonymous visitor's Turnstile solves; signed-in users never need it
+  const [captcha, setCaptcha] = useState("");
+  const needCaptcha = TURNSTILE_ON && !getToken();
   const listRef = useRef(null);
 
   // Scroll ONLY the message list. scrollIntoView walked every scrollable
@@ -85,12 +90,21 @@ export default function SupportWidget() {
             {busy && <TypingDots />}
           </div>
 
+          {/* Anonymous visitors (landing page, mobile) must solve Turnstile —
+              /support/chat 403s "captcha_failed" without a token (#413). The
+              interceptor consumes one token per send and resets the widget;
+              authed users skip it server-side, so no widget when signed in. */}
+          {needCaptcha && (
+            <div className="border-t border-hairline px-2.5 pt-2">
+              <Turnstile onToken={setCaptcha} />
+            </div>
+          )}
           <form onSubmit={ask} className="flex items-center gap-2 border-t border-hairline p-2.5">
             <input className="input flex-1" placeholder="Type your question…" value={q}
               onChange={(e) => setQ(e.target.value)} />
             <button
               className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal text-white transition hover:brightness-110 disabled:opacity-40"
-              disabled={busy || !q.trim()} aria-label="Send"
+              disabled={busy || !q.trim() || (needCaptcha && !captcha)} aria-label="Send"
             >
               {busy ? (
                 <span className="text-xs">…</span>
