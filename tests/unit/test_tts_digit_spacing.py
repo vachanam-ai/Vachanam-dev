@@ -68,6 +68,16 @@ def test_year_cardinal():
     assert eng("2026") == "two thousand twenty six"
 
 
+def test_rupees_english_every_language():
+    # #419 (Vinay): "instead of 500 rupayalu it should say 500 rupees. for all
+    # languages same."
+    assert eng("ఫీజు 500 రూపాయలు అండి") == "ఫీజు five hundred rupees అండి"
+    assert eng("ఫీజు ₹500 అండి") == "ఫీజు five hundred rupees అండి"
+    assert eng("फीस 500 रुपये है") == "फीस five hundred rupees है"
+    assert eng("Rs. 1,500") == "one thousand five hundred rupees"
+    assert eng("రూ. 250") == "two hundred fifty rupees"
+
+
 def test_word_digits_untouched():
     assert eng("nine six six six") == "nine six six six"
 

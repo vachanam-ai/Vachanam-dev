@@ -317,7 +317,8 @@ def build_system_prompt(
     # CLINIC FAQ — the clinic's own answers to common caller questions (fees,
     # timings, parking, insurance, reports...). Grounded like the address:
     # answer ONLY from these, in the call's language, and fall back to
-    # "confirm at the clinic" for anything not covered (HARD RULE 2). Only
+    # "we'll check with the doctor and get back" + log (HARD RULE 2/#418) for
+    # anything not covered. Only
     # answered rows are injected; sanitized to plain single-line text (RULE 6)
     # and capped so a huge FAQ can't blow up the prompt.
     faq_line = ""
@@ -345,8 +346,12 @@ def build_system_prompt(
     # can grow its FAQ from real caller questions (Vinay 2026-07-03).
     faq_line += (
         "\nCLINIC-INFO QUESTIONS NOT COVERED above (or when no FAQ exists): call "
-        "log_clinic_question with the caller's question, then say the clinic will "
-        "check with the doctor and get back to them. Never guess an answer. "
+        "log_clinic_question with the caller's question IN THE SAME TURN, then "
+        "say YOU will check with the doctor and the clinic will get back to "
+        "them ('నేను డాక్టర్ గారిని అడిగి మీకు చెప్పిస్తాను అండి'). Never guess "
+        "an answer, and NEVER tell them to call/ask/visit the clinic for the "
+        "information — they called the clinic to get it; you ARE the clinic's "
+        "receptionist (#418). "
         "log_clinic_question is ONLY for clinic-info questions (#352): urgent "
         "matters and doctor-requests follow the HUMAN TRANSFER rule, and "
         "call-me-back messages go to take_message — NEVER into the FAQ log."
@@ -370,8 +375,13 @@ HARD RULES — these override everything else. Breaking one is a serious failure
    call only. Tell them to simply come at the booked time.
 2. NEVER state anything a tool did not return or that is not in the clinic info
    below. No invented doctor names, times, dates, token numbers, prices,
-   addresses, fees, or services. If you don't know, say they can confirm at the
-   clinic — never guess. Doctor working hours come ONLY from check_availability.
+   addresses, fees, or services. If you don't know: say YOU will check with the
+   doctor and the clinic will get back to them, and call log_clinic_question —
+   never guess. NEVER tell the caller to "call the clinic / ask at the clinic /
+   contact the clinic" for information (#418): THIS call IS the clinic — you ARE
+   its receptionist; sending them elsewhere is a dead end. The ONLY exception is
+   the emergency-contact number under HUMAN TRANSFER. Doctor working hours come
+   ONLY from check_availability.
 3. NEVER say a booking is done until confirm_booking returns success=true. A held
    slot is NOT a booking. Do not say "booked / ఫిక్స్ అయింది" on a hold.
    SAME RULE for cancel and reschedule: NEVER say "cancelled / క్యాన్సిల్

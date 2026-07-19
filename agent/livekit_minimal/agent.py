@@ -1086,6 +1086,103 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     return lk_llm.FallbackAdapter(llm=llms, attempt_timeout=10.0)
 
 
+# ── #417 explicit Vertex prompt caching ─────────────────────────────────────
+# Measured 2026-07-19 (asia-south1, real 14.2k-token prompt): plain warm ttft
+# 0.71-0.74s → 0.53-0.55s with CachedContent (cached_tokens=14179/14188), i.e.
+# ~0.2s off EVERY LLM turn + 75% cheaper cached input. Implicit caching never
+# reported a hit on this prompt (cached_tokens=None), so the explicit resource
+# is the only lever. Vertex REJECTS requests that carry tools/system alongside
+# cached_content (400) — the livekit google plugin suppresses both when a
+# cache is attached, so the TOOLS AND SYSTEM PROMPT ARE BAKED INTO THE CACHE.
+# Safety model: a session uses the cache ONLY when its composed instructions
+# are byte-identical to what was baked (no caller extras, no outbound tail) —
+# the model sees the exact same content either way, only the transport
+# differs. Anything else (miss, mismatch, create failure, no creds) rides the
+# plain path unchanged (RULE 8). One cache per (branch, lang, IST-day); the
+# day key retires yesterday's date table naturally; TTL 26h; storage cost
+# ~half a cent per branch-day.
+_PROMPT_CACHE: dict[tuple[str, str, str], tuple[str, str]] = {}  # key -> (name, baked_text)
+_PROMPT_CACHE_PENDING: set[tuple[str, str, str]] = set()
+
+
+def _prompt_cache_key(branch_id, lang_code: str) -> tuple[str, str, str]:
+    from zoneinfo import ZoneInfo as _Z
+
+    return (str(branch_id), lang_code,
+            datetime_cls.now(_Z("Asia/Kolkata")).date().isoformat())
+
+
+async def _create_prompt_cache(key, instructions: str, tools) -> None:
+    """Background: bake instructions + tool declarations into a CachedContent
+    for FUTURE calls of this branch+lang today. Best-effort — failure only
+    means calls keep the plain path."""
+    try:
+        vertex = _vertex_credentials()
+        if vertex is None:
+            return
+        _, project = vertex
+        from google import genai
+        from google.genai import types as gt
+        from livekit.agents.llm import ToolContext
+        from livekit.plugins.google.utils import create_tools_config
+
+        tools_cfg = create_tools_config(ToolContext(list(tools)))
+        client = genai.Client(vertexai=True, project=project, location="asia-south1")
+        cache = await client.aio.caches.create(
+            model="gemini-2.5-flash",
+            config=gt.CreateCachedContentConfig(
+                system_instruction=instructions,
+                tools=tools_cfg,
+                ttl="93600s",  # 26h — outlives the IST day key that retires it
+                display_name=f"vachanam-{key[0][:8]}-{key[1]}-{key[2]}",
+            ),
+        )
+        _PROMPT_CACHE[key] = (cache.name, instructions)
+        logger.info("prompt_cache_created key=%s tokens=%s", key,
+                    cache.usage_metadata.total_token_count)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("prompt_cache_create_failed: %s", str(e)[:160])
+    finally:
+        _PROMPT_CACHE_PENDING.discard(key)
+
+
+def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None:
+    """FallbackAdapter whose Vertex primary rides today's CachedContent, or
+    None when the cache isn't ready / doesn't byte-match (plain path). The
+    global-API fallbacks are the same as _build_fallback_llm — they receive
+    the full system prompt + tools per request as always."""
+    entry = _PROMPT_CACHE.get(key)
+    if entry is None or entry[1] != instructions:
+        return None
+    vertex = _vertex_credentials()
+    if vertex is None:
+        return None
+    from google.genai import types as genai_types
+
+    _, project = vertex
+    llms: list[lk_llm.LLM] = [
+        google.LLM(
+            vertexai=True,
+            project=project,
+            location="asia-south1",
+            model="gemini-2.5-flash",
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            cached_content=entry[0],
+        ),
+        google.LLM(
+            api_key=settings.gemini_api_key,
+            model="gemini-3.1-flash-lite",
+            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+        ),
+        google.LLM(
+            api_key=settings.gemini_api_key,
+            model="gemini-2.5-flash",
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+        ),
+    ]
+    return lk_llm.FallbackAdapter(llm=llms, attempt_timeout=10.0)
+
+
 async def update_call_duration(call_log_id, seconds: int) -> None:
     """Set a CallLog row's duration in its own short-lived session (metering
     heartbeat). Separate session because the call's main `db` is busy with the
@@ -1190,6 +1287,7 @@ class VachanamAgent(Agent):
         stt=None,             # per-agent STT override (language switch handoff)
         tts=None,             # per-agent TTS override (language switch handoff)
         chat_ctx=None,        # conversation history carried across the handoff
+        llm=None,             # #417 per-agent LLM (prompt-cache-backed primary)
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
         # None would DISABLE the session-level pipeline, not inherit it.
@@ -1200,6 +1298,12 @@ class VachanamAgent(Agent):
             overrides["tts"] = tts
         if chat_ctx is not None:
             overrides["chat_ctx"] = chat_ctx
+        # #417: the cached LLM rides on the AGENT, not the session, so a
+        # language-switch handoff (new agent, new instructions, no llm
+        # override) automatically falls back to the session's plain LLM —
+        # a stale-language cache can never be applied to a switched call.
+        if llm is not None:
+            overrides["llm"] = llm
         super().__init__(instructions=instructions, **overrides)
         self._state = state
         self._db = db
@@ -3484,6 +3588,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         if _greet_texts and _welcome_task is not None:
             _seed_ctx = ChatContext.empty()
             _seed_ctx.add_message(role="assistant", content=" ".join(_greet_texts))
+        # #417: cache-eligible = the composed instructions carry NO per-call
+        # extras — then they byte-match what the day's CachedContent baked and
+        # the Vertex primary can ride it (~0.2s off every LLM turn, measured).
+        _cache_eligible = not caller_prompt_extra and not extra_tail
+        _cache_key = _prompt_cache_key(branch.id, lang_code)
+        _cached_llm = _cached_primary_llm(_cache_key, instructions) if _cache_eligible else None
         vachanam_agent = VachanamAgent(
             instructions=instructions,
             chat_ctx=_seed_ctx,
@@ -3495,7 +3605,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             transfer_to=emergency_contact,
             lang_code=lang_code,
             agent_factory=_agent_for_lang,
+            llm=_cached_llm,
         )
+        if _cached_llm is not None:
+            logger.info("llm_prompt_cache_hit key=%s", _cache_key)
+        elif _cache_eligible and _cache_key not in _PROMPT_CACHE_PENDING:
+            # Miss: bake today's cache in the background for the NEXT call.
+            _PROMPT_CACHE_PENDING.add(_cache_key)
+            asyncio.create_task(_create_prompt_cache(
+                _cache_key, instructions, vachanam_agent.tools))
 
         # #393: per-stage breakdown so a slow build names its culprit —
         # branch_resolve = DID lookup incl any Neon wake; reads = the

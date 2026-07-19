@@ -82,11 +82,24 @@ def _bare_time_sub(m: re.Match) -> str:
     return _time_words(h, mi)  # 1-11 with no context: no meridiem to prove
 
 
+# ── #419 (Vinay 2026-07-19): currency speaks as ENGLISH "rupees" in every
+# language — "500 rupees", never "500 రూపాయలు" / "रुपये". Deterministic like
+# the digits: native rupee words → "rupees"; a leading ₹/Rs swaps behind the
+# amount ("₹500" → "500 rupees") so the cardinal pass then makes it
+# "five hundred rupees".
+_RUPEE_WORDS = re.compile(
+    r"రూపాయల[ుో]?|రూపాయలు|రూపాయిలు|రూపాయి|రూపాయ|रुपये|रुपए|रुपया|rupaye"
+)
+_RUPEE_PREFIX = re.compile(r"(?:₹|Rs\.?|రూ\.?)\s*(\d[\d,]*)")
+
+
 def spoken_english_numbers(text: str) -> str:
-    """Digits → spoken English words. Order matters: day-part times first
-    (they own their digits + meridiem), then bare colon-times, then long runs
-    (phones — one digit at a time), then any leftover short number (age,
-    token, day) as a cardinal."""
+    """Digits → spoken English words. Order matters: currency prefix swap and
+    rupee words first, then day-part times (they own their digits + meridiem),
+    then bare colon-times, then long runs (phones — one digit at a time), then
+    any leftover short number (age, token, day) as a cardinal."""
+    text = _RUPEE_PREFIX.sub(lambda m: f"{m.group(1).replace(',', '')} rupees", text)
+    text = _RUPEE_WORDS.sub("rupees", text)
     text = _DP_TIME.sub(_dp_time_sub, text)
     text = _TIME.sub(_bare_time_sub, text)
     text = _LONG_RUN.sub(lambda m: " ".join(_ONES[int(c)] for c in m.group()), text)

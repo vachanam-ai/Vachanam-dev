@@ -17,6 +17,17 @@ def test_prompt_fences_say_without_do():
     assert "SAME turn" in p and "find_my_bookings" in p
 
 
+def test_prompt_never_sends_caller_back_to_clinic():
+    # #418 real call: caller ASKED the clinic's own AI line for info and was told
+    # "confirm at the clinic". Unknown info = log_clinic_question + "we'll check
+    # with the doctor and get back" — never a pointer back to the clinic.
+    p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
+    assert "say they can confirm at the clinic" not in p
+    assert "THIS call IS the clinic" in p
+    assert "log_clinic_question with the caller's question IN THE SAME TURN" in p
+    assert "నేను డాక్టర్ గారిని అడిగి మీకు చెప్పిస్తాను" in p
+
+
 def test_prompt_requires_digit_times_english_speech():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     # AM/PM still banned
