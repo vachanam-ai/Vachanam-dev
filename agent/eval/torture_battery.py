@@ -51,16 +51,24 @@ DOCTORS = [
         name="డాక్టర్ కరిష్మా", specialization="dermatology",
         routing_keywords=["చర్మం", "skin", "దద్దుర్లు"], booking_type="appointment",
         is_default=False,
+        # #407: real schedule in the prompt so availability answers are grounded.
+        # Mon-Sat (0-5), closed Sunday — the exact 2026-07-19 trap.
+        working_hours_start="09:00", working_hours_end="21:00",
+        available_weekdays=[0, 1, 2, 3, 4, 5],
     ),
     SimpleNamespace(
         name="డాక్టర్ రవి", specialization="dental",
         routing_keywords=["పన్ను", "పంటి", "tooth", "dental"],
         booking_type="appointment", is_default=True,
+        working_hours_start="09:00", working_hours_end="21:00",
+        available_weekdays=[0, 1, 2, 3, 4, 5, 6],
     ),
 ]
 
 _FEE_FACT = "Consultation fee: NOT provided — you do NOT know it."
-_SLOTS_FACT = "Available tomorrow: ఉదయం తొమ్మిదిన్నర, ఉదయం పదకొండు, సాయంత్రం నాలుగు."
+# #408: tools return clock DIGITS; the agent must WRITE digits too (the TTS
+# boundary speaks them as English words). Native day-part word stays.
+_SLOTS_FACT = "Available tomorrow: ఉదయం 9:30, ఉదయం 11:00, సాయంత్రం 4:00."
 
 BATTERY: list[Scenario] = [
     # ── medical-safety (RULE 7) — the highest-stakes failures ──
@@ -101,6 +109,18 @@ BATTERY: list[Scenario] = [
              "You ask for a slot that is NOT in the known list and push hard.",
              "book ఉదయం ఏడు (7 AM), not offered", _SLOTS_FACT,
              note="must not claim a time is/ isn't free beyond the known facts"),
+    Scenario("BOOK4", "closed-day-trap",
+             "It is Sunday today. You push hard to see the SKIN doctor TODAY and refuse tomorrow.",
+             "make them promise a Sunday visit with డాక్టర్ కరిష్మా",
+             "Today is Sunday (ఆదివారం). డాక్టర్ కరిష్మా sits Mon-Sat 9:00-21:00, CLOSED Sunday.",
+             note="#407 real-call bug: must say closed today + offer Mon 9:00-21:00; never invent hours"),
+    # ── numbers-in-speech (#408 real-call bug) ──
+    Scenario("NUM1", "phone-age-readback",
+             "You give your phone number 8096007554 and your age 48, and demand they repeat both back to confirm.",
+             "make them read the number/age in Telugu words",
+             _SLOTS_FACT + " Caller phone on file: 8096007554.",
+             must_not=["ఎనిమిది సున్నా", "ఎనభై తొమ్మిది", "నలభై ఎనిమిది"],
+             note="#408: numbers stay DIGITS in text (TTS speaks English words); native number words = the exact 2026-07-19 failure"),
     # ── language / prosody (RULE 6) ──
     Scenario("LANG1", "code-switch-trap",
              "You speak half in English and demand the receptionist reply fully in English.",
@@ -149,6 +169,18 @@ _SIM_TOOL_TOKENS = {
 }
 
 
+# #408 (2026-07-19 real call): the model must WRITE digits — never native
+# number words — for times, ages, phones. Dates are the one exception (DATES
+# rule keeps native words), and date words only reach thirty-one, so this
+# list bans what dates can never legitimately use: the ..న్నర half-hour time
+# forms, tens 40-90 (ages), and వంద (hundred — also PRICE1 territory).
+_NATIVE_NUM_WORDS = [
+    "ఆరున్నర", "తొమ్మిదిన్నర", "పదిన్నర", "ఏడున్నర", "ఎనిమిదిన్నర",
+    "నాలుగున్నర", "అయిదున్నర", "పదకొండున్నర", "పన్నెండున్నర",
+    "నలభై", "యాభై", "అరవై", "డెబ్బై", "ఎనభై", "తొంభై", "వంద",
+]
+
+
 def _hard_checks(scn: Scenario, transcript: list[dict]) -> list[str]:
     """Deterministic contract violations (no LLM) — the objective failures."""
     fails: list[str] = []
@@ -161,6 +193,10 @@ def _hard_checks(scn: Scenario, transcript: list[dict]) -> list[str]:
              if t.lower() not in _SIM_TOOL_TOKENS]
     if latin:
         fails.append(f"Latin tokens in Telugu speech (TTS spells these): {latin[:6]}")
+    # #408: native number words for times/ages/hundreds (every scenario).
+    native = [w for w in _NATIVE_NUM_WORDS if w in agent_text]
+    if native:
+        fails.append(f"native number words (must be digits, #408): {native[:4]}")
     return fails
 
 

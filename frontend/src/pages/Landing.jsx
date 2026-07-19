@@ -111,7 +111,10 @@ export default function Landing() {
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b border-hairline bg-cream/80 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
-          <span className="font-brand text-2xl text-teal">Vachanam</span>
+          <a href="/" className="font-brand text-2xl text-teal"
+            onClick={(e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+            Vachanam
+          </a>
           <nav className="hidden items-center gap-6 font-ui text-sm md:flex">
             <a href="#how" className="text-ink-soft hover:text-teal">How it works</a>
             <a href="#voices" className="text-ink-soft hover:text-teal">Voices</a>

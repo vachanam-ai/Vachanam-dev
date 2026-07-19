@@ -610,6 +610,13 @@ export default function Treatments() {
                 rows={2}
                 value={replyMessage}
                 onChange={(e) => setReplyMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  // WhatsApp-style: Enter sends, Shift+Enter = new line (Vinay 2026-07-19)
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    if (canReply) reply.mutate();
+                  }
+                }}
                 disabled={!hasPatientReply}
                 placeholder={hasPatientReply
                   ? "Advice to relay on the next call…"
