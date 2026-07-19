@@ -12,6 +12,13 @@ class DoctorContext:
     routing_keywords: list[str]
     booking_type: str  # token | appointment
     is_default: bool
+    # #407: the real schedule, so the model has GROUND TRUTH for "is the doctor
+    # available today / at 7pm?" instead of inventing hours. Root cause of the
+    # 2026-07-19 hallucination: the doctor list carried no hours/days, so when
+    # asked "today?" the agent invented "6:30-9" for a 9:00-23:00 Mon-Sat doctor.
+    working_hours_start: str = ""   # "HH:MM" (24h) or "" if unset
+    working_hours_end: str = ""
+    available_weekdays: list[int] | None = None  # 0=Mon..6=Sun; None/[] = all days
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -206,10 +213,58 @@ def build_system_prompt(
         "cannot follow you; switch, do not keep asking.\n\n"
     )
 
+    _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    def _schedule(d: "DoctorContext") -> str:
+        wd = d.available_weekdays
+        if wd:
+            days = "every day" if len(wd) == 7 else ", ".join(_DAYS[i] for i in sorted(wd))
+        else:
+            days = "every day"
+        if d.working_hours_start and d.working_hours_end:
+            hours = f"{d.working_hours_start}-{d.working_hours_end}"
+        else:
+            hours = "hours not set"
+        if d.booking_type == "token":
+            # Token doctors have NO clock slots — a walk-in queue. The 2026-07-19
+            # bug also surfaced a token doctor being offered "time windows".
+            return f"sits {days} {hours} (WALK-IN QUEUE — token numbers, NOT time slots)"
+        return f"sits {days} {hours} (appointment times)"
+
     doctor_list = "\n".join(
         f"  - {d.name} ({d.specialization}), keywords: {', '.join(d.routing_keywords)}, "
-        f"booking: {d.booking_type}, default: {d.is_default}"
+        f"booking: {d.booking_type}, default: {d.is_default}; {_schedule(d)}"
         for d in doctors
+    )
+
+    # #407 grounding wall — the recurring availability hallucination (real call
+    # 2026-07-19: agent claimed a 9:00-23:00 Mon-Sat doctor was free "today
+    # 6:30-9" on a SUNDAY, before any tool call). Defense in depth: the schedule
+    # above is the model's floor; the tool is the live truth.
+    availability_rule = (
+        "\n\nAVAILABILITY — NEVER GUESS, NEVER INVENT HOURS OR DAYS:\n"
+        "- The doctor list above gives each doctor's REAL sitting days and hours. "
+        "Those are the ONLY hours that exist. NEVER state any other time window. "
+        "If a doctor sits 9:00-23:00, you must NEVER say '6:30 to 9' or any made-up "
+        "range.\n"
+        "- A doctor does NOT work on a day outside their sitting days. Check today's "
+        "weekday against the list BEFORE saying they are available today. If today "
+        "is not in their days, they are NOT available today — say so and offer their "
+        "next sitting day.\n"
+        "- For a SPECIFIC date's live availability (is a slot free? is the doctor on "
+        "leave? is the queue full?), you MUST call check_availability for that date "
+        "FIRST and speak ONLY what it returns. Do NOT answer 'available today' from "
+        "memory — call the tool, then answer.\n"
+        "- WALK-IN QUEUE (token) doctors have NO appointment times. NEVER offer a "
+        "clock time or time range for them — only a queue token. Time windows exist "
+        "ONLY for appointment doctors.\n"
+        "- If you already told the caller a time/day and a tool later shows it was "
+        "wrong, correct it plainly and apologise once — but the goal is to never say "
+        "it in the first place: call the tool before you speak availability.\n"
+        "- NEVER invent a doctor. The CLINIC DOCTORS list above is the COMPLETE, "
+        "only roster. If the caller's need matches no doctor there, it is out of "
+        "scope — say so and name what the clinic DOES treat. NEVER make up a doctor "
+        "name or a specialist (e.g. a 'diabetic specialist') who is not in the list.\n"
     )
 
     rebook_instruction = ""
@@ -550,7 +605,7 @@ list above is complete and never changes during the call. So:
   the doctor's name EXACTLY as written in the list above (Latin letters) — NEVER
   a Telugu/native-script rendering of the name. You SPEAK the name in Telugu,
   but tools only match the listed spelling.
-
+{availability_rule}
 EMERGENCY CONTACT: {emergency_contact}
 If the patient mentions a medical concern that needs attention, acknowledge it and continue
 with booking the appointment at the clinic — UNLESS it sounds URGENT NOW (see HUMAN

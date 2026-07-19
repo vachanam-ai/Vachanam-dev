@@ -164,6 +164,47 @@ def test_system_prompt_has_availability_grounding_and_name_readback():
     assert "DETAILS CONFIRM" in prompt
 
 
+def test_system_prompt_407_schedule_and_grounding():
+    """#407 (real call 2026-07-19, Sunday): agent claimed a 9:00-23:00 Mon-Sat
+    doctor was free 'today 6:30-9' on a Sunday, before any tool call — because
+    the doctor list carried NO hours/days. Defense in depth: real schedule in
+    the list + a hard availability-grounding wall + no-invented-doctor rule."""
+    appt = DoctorContext(
+        id="d2", name="Dr. Srinivas", specialization="dental",
+        routing_keywords=["tooth"], booking_type="appointment", is_default=True,
+        working_hours_start="09:00", working_hours_end="23:00",
+        available_weekdays=[0, 1, 2, 3, 4, 5],
+    )
+    tok = DoctorContext(
+        id="d1", name="Karishma", specialization="skin",
+        routing_keywords=["skin"], booking_type="token", is_default=False,
+        working_hours_start="09:00", working_hours_end="12:00",
+        available_weekdays=[0, 1, 2, 3, 4, 5],
+    )
+    prompt = _make_prompt(doctors=[appt, tok])
+    # real schedule is now in the doctor list (ground truth, not guessed)
+    assert "sits Mon, Tue, Wed, Thu, Fri, Sat 09:00-23:00" in prompt
+    # token doctor flagged as walk-in queue, never time slots
+    assert "WALK-IN QUEUE" in prompt
+    # the grounding wall
+    assert "NEVER GUESS, NEVER INVENT HOURS OR DAYS" in prompt
+    assert "call check_availability for that date" in prompt
+    assert "NEVER offer a clock time or time range for them" in prompt  # token
+    # no-invented-doctor (torture BOOK3: agent invented a diabetic specialist)
+    assert "NEVER invent a doctor" in prompt
+
+
+def test_system_prompt_407_full_weekdays_render_every_day():
+    """A doctor sitting all 7 days renders 'every day', not a 7-item list."""
+    d = DoctorContext(
+        id="d", name="Dr. All", specialization="general", routing_keywords=["x"],
+        booking_type="appointment", is_default=True,
+        working_hours_start="08:00", working_hours_end="20:00",
+        available_weekdays=[0, 1, 2, 3, 4, 5, 6],
+    )
+    assert "sits every day 08:00-20:00" in _make_prompt(doctors=[d])
+
+
 def test_system_prompt_bans_mid_flow_reconfirmation():
     """Live call 2026-07-06: agent asked 'shall I book at X?' at the availability
     step AND again at the end. The prompt must ban the mid-flow mini-confirm on

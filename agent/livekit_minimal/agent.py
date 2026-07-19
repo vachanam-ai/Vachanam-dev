@@ -3349,6 +3349,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 routing_keywords=list(d.routing_keywords or []),
                 booking_type=d.booking_type or "token",
                 is_default=bool(d.is_default_doctor),
+                # #407: real schedule → the model's ground truth for availability
+                # (was absent, so it invented hours/days — 2026-07-19 hallucination).
+                working_hours_start=(
+                    d.working_hours_start.strftime("%H:%M") if d.working_hours_start else ""
+                ),
+                working_hours_end=(
+                    d.working_hours_end.strftime("%H:%M") if d.working_hours_end else ""
+                ),
+                available_weekdays=list(d.available_weekdays or []),
             )
             for d in doctors
         ]
