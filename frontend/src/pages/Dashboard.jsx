@@ -313,7 +313,7 @@ function RatingsCard({ branchId }) {
 export default function Dashboard() {
   const { branchId } = useAuth();
   const pageRef = useRef(null);
-  const [days, setDays] = useState(14);
+  const [days, setDays] = useState(30);
 
   const { data: queue, isLoading } = useQuery({
     queryKey: ["queue", branchId],
@@ -401,7 +401,7 @@ export default function Dashboard() {
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-teal-mint/60 px-5 py-3">
           <h2 className="font-display text-lg font-semibold">Bookings &amp; show rate</h2>
           <div className="flex gap-1">
-            {[7, 14, 30].map((d) => (
+            {[7, 30, 90].map((d) => (
               <button key={d} onClick={() => setDays(d)}
                 className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
                   days === d ? "bg-teal text-white" : "bg-surface text-slate hover:bg-teal-pale"

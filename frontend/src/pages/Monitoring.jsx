@@ -97,7 +97,7 @@ function Stat({ label, value, sub }) {
    for a near-realtime view. AGGREGATES ONLY — no clinic patient data, no
    transcripts ever cross this boundary (enforced server-side, RULE 1). */
 export default function Monitoring() {
-  const [days, setDays] = useState(14);
+  const [days, setDays] = useState(30);
   const { data: m, isLoading } = useQuery({
     queryKey: ["admin-monitoring", days],
     queryFn: () => fetchAdminMonitoring(days),
@@ -120,7 +120,7 @@ export default function Monitoring() {
           </p>
         </div>
         <div className="flex gap-1">
-          {[7, 14, 30].map((d) => (
+          {[7, 30, 90].map((d) => (
             <button key={d} onClick={() => setDays(d)}
               className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
                 days === d ? "bg-teal text-white" : "bg-surface text-slate hover:bg-teal-pale"
