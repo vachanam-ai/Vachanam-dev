@@ -53,9 +53,22 @@ def test_list_voices_filters_by_language(fake_waves):
     assert "padmaja" in ids and "niharika" not in ids and "avery" not in ids
 
 
+def test_list_voices_injects_pro_sravani_405(fake_waves):
+    """#405: sravani lives in the PRO catalog (not the standard list the API
+    returns) — the picker must still offer her for Telugu, FIRST (she's the te
+    default), and never for other languages."""
+    te = sv.list_voices("te")
+    assert te[0]["voice_id"] == "sravani"
+    assert te[0]["display_name"] == "Sravani"
+    hi = sv.list_voices("hi")
+    assert "sravani" not in [v["voice_id"] for v in hi]
+
+
 def test_list_voices_no_filter_returns_all(fake_waves):
+    # _select_top keeps 3 female + 2 male; with sravani injected the 4-female
+    # pool trims to the first three (avery drops — catalog order, no default).
     allv = sv.list_voices(None)
-    assert {v["voice_id"] for v in allv} == {"padmaja", "niharika", "avery"}
+    assert {v["voice_id"] for v in allv} == {"sravani", "padmaja", "niharika"}
     assert allv[0]["display_name"] and "languages" in allv[0]
 
 

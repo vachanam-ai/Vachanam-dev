@@ -79,6 +79,23 @@ def list_voices(language: str | None = None) -> list[dict]:
         target = lang.name.lower()
         default_id = lang.default_voice
     out: list[dict] = []
+    # #405: blessed PRO-catalog voices (sravani) live outside the standard
+    # lightning-v3.1 catalog — inject the ones matching this language so the
+    # Settings picker can offer them. The agent maps them to the pro model
+    # via welcome_synth.model_for_voice.
+    from backend.services.welcome_synth import PRO_VOICE_INFO
+
+    for vid, info in PRO_VOICE_INFO.items():
+        if target and info["language"] != target:
+            continue
+        out.append(
+            {
+                "voice_id": vid,
+                "display_name": info["display_name"],
+                "gender": info["gender"],
+                "languages": [info["language"]],
+            }
+        )
     for v in getattr(resp, "voices", None) or []:
         tags = getattr(v, "tags", None)
         langs = [str(x).lower() for x in (getattr(tags, "language", None) or [])]
