@@ -321,7 +321,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    # PUT was missing until #410 — the browser preflight 400'd and the FAQ
+    # save (the app's only PUT) died client-side while tests (no Origin
+    # header → CORS not enforced) stayed green.
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Turnstile-Token"],
 )
 

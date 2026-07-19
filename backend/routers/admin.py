@@ -230,7 +230,9 @@ from sqlalchemy import func as _func
 from backend.models.schema import BillingCycle, CallLog
 from backend.services.billing_math import (
     DID_COST_PER_MONTH,
+    PILOT_DAYS,
     PLANS,
+    TRIAL_MINUTES,
     VARIABLE_COST_PER_MIN,
     call_blocked,
     included_minutes_for,
@@ -605,6 +607,35 @@ async def set_org_status(
         request.state.audit_resource_id = org_id
         logger.info("org_status_changed", org_id=org_id, status=body.status, by=current_user.email)
         return {"org_id": org_id, "status": body.status}
+
+
+@router.post("/orgs/{org_id}/pilot")
+@audit("admin.org_pilot_started", resource_type="organization")
+async def start_org_pilot(
+    org_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> dict:
+    """Start the 14-day founding-clinic pilot (Vinay 2026-07-19): flips a
+    hand-picked (paused) clinic to status='trial' with trial_ends_at set, so
+    the existing trial machinery enforces the TRIAL_MINUTES hard cap and the
+    trial_pause job re-pauses it at day 14. A dedicated endpoint (not the
+    status route) because a 'trial' with trial_ends_at=None would never
+    expire. Blocked for active orgs — never comp a paying clinic by accident."""
+    async with AsyncSessionLocal() as db:
+        org = await _load_org(db, org_id)
+        if org.status == "active":
+            raise HTTPException(status_code=409, detail="Org is active (paying) — pause first if you really mean it")
+        ends = datetime.now(timezone.utc) + timedelta(days=PILOT_DAYS)
+        org.status = "trial"
+        org.trial_ends_at = ends
+        await db.commit()
+        request.state.audit_resource_id = org_id
+        logger.info("org_pilot_started", org_id=org_id, ends=ends.isoformat(),
+                    minutes=TRIAL_MINUTES, by=current_user.email)
+        return {"org_id": org_id, "status": "trial",
+                "trial_ends_at": ends.isoformat(), "pilot_minutes": TRIAL_MINUTES}
 
 
 @router.post("/orgs/{org_id}/plan")

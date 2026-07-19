@@ -162,12 +162,35 @@ async def test_preflight_allows_required_methods(client):
     acam = r.headers.get("access-control-allow-methods", "")
     # Parse comma-separated methods, normalize to uppercase
     allowed_methods = {m.strip().upper() for m in acam.split(",") if m.strip()}
-    required = {"GET", "POST", "PATCH", "DELETE"}
+    # PUT added by #410: it was missing, so the browser preflight for the FAQ
+    # save (PUT /branches/{id}/faq — the app's only PUT) returned 400 and the
+    # save died client-side while every server-side test stayed green.
+    required = {"GET", "POST", "PUT", "PATCH", "DELETE"}
     missing = required - allowed_methods
     assert not missing, (
         f"Access-Control-Allow-Methods missing required methods: {missing}. "
-        f"Got: {acam!r}. Spec section 10.6 requires GET, POST, PATCH, DELETE, OPTIONS."
+        f"Got: {acam!r}. Spec section 10.6 requires GET, POST, PUT, PATCH, DELETE, OPTIONS."
     )
+
+
+async def test_preflight_for_faq_put_succeeds(client):
+    """#410 regression: the EXACT preflight the browser sends before the FAQ
+    save. With PUT missing from allow_methods this returned 400 'Disallowed
+    CORS method' and branches.faq stayed NULL in prod forever."""
+    r = await client.options(
+        "/branches/00000000-0000-0000-0000-000000000000/faq",
+        headers={
+            "Origin": settings.frontend_url,
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert r.status_code == 200, (
+        f"FAQ-save preflight rejected ({r.status_code}): {r.text!r} — "
+        "PUT missing from CORSMiddleware allow_methods?"
+    )
+    acam = {m.strip().upper() for m in r.headers.get("access-control-allow-methods", "").split(",")}
+    assert "PUT" in acam
 
 
 # ======================================================================

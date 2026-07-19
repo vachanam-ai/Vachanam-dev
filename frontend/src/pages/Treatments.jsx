@@ -17,6 +17,22 @@ import { revealStagger } from "../lib/motion.js";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+// WhatsApp-style bubble time (Vinay 2026-07-19): today → "9:08 PM";
+// this year → "19 Jul, 9:08 PM"; older → "19 Jul 2025, 9:08 PM".
+function waTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const time = d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
+  if (d.toDateString() === now.toDateString()) return time;
+  const day = d.toLocaleDateString("en-IN", {
+    day: "numeric", month: "short",
+    ...(d.getFullYear() !== now.getFullYear() && { year: "numeric" })
+  });
+  return `${day}, ${time}`;
+}
+
 // One step in the treatment timeline. `isLatest` = the newest visit: only it shows
 // the pending "Next" + next-date — once a later visit records what was done, the
 // prior "Next" has been performed and is no longer pending (Vinay 2026-06-24).
@@ -79,6 +95,7 @@ function ThreadRow({ item }) {
         <span className="flex items-center gap-2 pr-1 font-ui text-[11px] uppercase tracking-wide text-amber-700">
           message from patient
           {item.urgent && <span className="chip-token bg-red-100 text-red-800">urgent</span>}
+          <span className="normal-case tracking-normal text-slate">{waTime(item.created_at)}</span>
         </span>
       </div>
     );
@@ -98,6 +115,7 @@ function ThreadRow({ item }) {
           {item.status && !unreachable && (
             <span className="chip-muted text-[11px]">{item.status}</span>
           )}
+          <span className="font-ui text-[11px] text-slate">{waTime(item.created_at)}</span>
         </div>
       </div>
 
@@ -107,8 +125,9 @@ function ThreadRow({ item }) {
           <div className="max-w-[85%] rounded-2xl rounded-tr-sm border border-amber-300 bg-amber-50 px-4 py-2">
             <p className="font-ui text-sm text-amber-900">{item.response}</p>
           </div>
-          <span className="pr-1 font-ui text-[11px] uppercase tracking-wide text-amber-700">
+          <span className="flex items-center gap-2 pr-1 font-ui text-[11px] uppercase tracking-wide text-amber-700">
             patient reply
+            <span className="normal-case tracking-normal text-slate">{waTime(item.updated_at)}</span>
           </span>
         </div>
       )}

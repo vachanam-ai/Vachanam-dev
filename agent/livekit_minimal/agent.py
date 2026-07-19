@@ -4212,20 +4212,50 @@ def _start_render_keepalive() -> None:
 
 _heartbeat_started = False
 
+# #411: the beacon must mean "this worker can take calls", not "this process
+# is running". On 2026-07-19 the 12:06Z boot started, prewarmed, heartbeated —
+# and NEVER registered with LiveKit Cloud. 4 hours of dead line (inbound
+# unanswerable, a doctor_advice follow-up dispatched into an empty room and
+# was marked done) while the watchdog saw a fresh beacon and did nothing.
+# The SDK doesn't expose registration state, so we watch its own log lines:
+# "registered worker" sets the flag, drain/shutdown clears it. Unregistered ⇒
+# no beacon ⇒ the existing 180s-stale watchdog restart kicks in on its own.
+_lk_registered = None  # threading.Event, created in _start_watchdog_heartbeat
+
+
+class _LkRegistrationWatch:
+    """logging.Filter duck-type on the 'livekit.agents' logger."""
+
+    def filter(self, record) -> bool:
+        try:
+            msg = record.getMessage()
+            if "registered worker" in msg:
+                _lk_registered.set()
+            elif "draining worker" in msg or "shutting down worker" in msg:
+                _lk_registered.clear()
+        except Exception:  # noqa: BLE001 — never break SDK logging
+            pass
+        return True
+
 
 def _start_watchdog_heartbeat() -> None:
     """Liveness beacon for the backend watchdog (#306): write a Redis timestamp
-    every 60s. If it goes >180s stale, the watchdog declares the voice plane
+    every 60s — but ONLY while this worker is registered with LiveKit (#411).
+    If the beacon goes >180s stale, the watchdog declares the voice plane
     down, emails Vinay, and auto-restarts this machine via the Fly API. Redis
     only — never touches Neon (#299). Best-effort daemon thread, same pattern
     as render_keepalive: a heartbeat failure must never affect a call."""
-    global _heartbeat_started
+    global _heartbeat_started, _lk_registered
     if _heartbeat_started:
         return
     _heartbeat_started = True
 
+    import logging as _logging
     import threading
     import time as _time
+
+    _lk_registered = threading.Event()
+    _logging.getLogger("livekit.agents").addFilter(_LkRegistrationWatch())
 
     def _loop() -> None:
         import redis as _redis_sync
@@ -4233,16 +4263,17 @@ def _start_watchdog_heartbeat() -> None:
         client = None
         while True:
             try:
-                if client is None:
-                    client = _redis_sync.from_url(settings.redis_url)
-                client.set("watchdog:hb:agent", _time.time(), ex=300)
+                if _lk_registered.is_set():
+                    if client is None:
+                        client = _redis_sync.from_url(settings.redis_url)
+                    client.set("watchdog:hb:agent", _time.time(), ex=300)
             except Exception as e:  # noqa: BLE001
                 client = None  # rebuild next round — never reuse a dead socket
                 logger.warning("watchdog_heartbeat_failed: %s", str(e)[:120])
             _time.sleep(60)
 
     threading.Thread(target=_loop, name="watchdog-heartbeat", daemon=True).start()
-    logger.info("watchdog_heartbeat_started interval=60s")
+    logger.info("watchdog_heartbeat_started interval=60s gated_on_lk_registration=true")
 
 
 

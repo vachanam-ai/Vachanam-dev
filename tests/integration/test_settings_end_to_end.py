@@ -268,10 +268,14 @@ async def test_voice_cloning_included_on_every_plan(client, db):
     """SUPERSEDED policy guard (repricing 2026-07-11, replaces Vinay 2026-06-20
     'every plan'): cloning is Clinic/Multi only. A solo/Starter clinic sees
     voice_cloning_allowed False and gets 403 on register; after an upgrade to
-    the clinic plan the same call succeeds."""
+    the clinic plan the same call succeeds. 2026-07-17 launch offer: the first
+    3 PAID months unlock cloning on EVERY plan (billing_math.cloning_allowed),
+    so this org is placed OUTSIDE the window (started 120 days ago) to keep
+    exercising the standard gate."""
     org = Organization(
         name="Solo Org", owner_phone="+919000777002",
         owner_email=f"solo-{uuid.uuid4().hex[:6]}@test.com", plan="solo", status="active",
+        subscription_started_at=datetime.now(timezone.utc) - timedelta(days=120),
     )
     db.add(org)
     await db.flush()

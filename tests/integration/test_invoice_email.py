@@ -22,18 +22,35 @@ pytestmark = pytest.mark.asyncio
 
 
 def _bd_clinic_50_over():
-    return subscription_order_breakdown("clinic", cycle_minutes_used=1550)
+    # Passing a subscription_started_at far outside the 2026-07-17 launch-offer
+    # window pins base to the standard clinic price, so these receipt tests
+    # don't silently re-break when the offer window logic changes. Amounts are
+    # DERIVED from the breakdown (not hardcoded) so a GST_WAIVED flip — the
+    # 07-17 change that broke the old "12,093.82 with GST" literals — only
+    # changes the numbers, not the contract.
+    from datetime import datetime, timedelta, timezone
+
+    return subscription_order_breakdown(
+        "clinic", cycle_minutes_used=1550,
+        subscription_started_at=datetime.now(timezone.utc) - timedelta(days=365),
+    )
+
+
+def _inr(v: float) -> str:
+    return f"{v:,.2f}"
 
 
 def test_text_receipt_numbers_and_no_gstin():
+    bd = _bd_clinic_50_over()
     subject, text = build_invoice_text(
         org_name="Sunrise Dental", plan="clinic",
         cycle_start=date(2026, 7, 12), cycle_end=date(2026, 8, 11),
-        bd=_bd_clinic_50_over(), payment_id="pay_ABC123xyz",
+        bd=bd, payment_id="pay_ABC123xyz",
     )
     assert "receipt" in subject.lower()
-    assert "12,093.82" in text      # amount paid (with GST)
-    assert "1,844.82" in text       # GST line
+    assert _inr(bd["total"]) in text          # amount paid
+    if bd["gst"]:
+        assert _inr(bd["gst"]) in text        # GST line (only when charged)
     assert "Extra usage" in text and "50 min" in text
     assert "pay_ABC123xyz" in text
     assert "GSTIN" not in text      # #358: removed everywhere
@@ -41,14 +58,16 @@ def test_text_receipt_numbers_and_no_gstin():
 
 
 def test_html_receipt_card():
+    bd = _bd_clinic_50_over()
     html = build_invoice_html(
         org_name="Sunrise Dental", plan="clinic",
         cycle_start=date(2026, 7, 12), cycle_end=date(2026, 8, 11),
-        bd=_bd_clinic_50_over(), payment_id="pay_ABC123xyz",
+        bd=bd, payment_id="pay_ABC123xyz",
     )
     assert "Receipt from Vachanam" in html
-    assert "12,093.82" in html
-    assert "GST &middot; India (18%)" in html
+    assert _inr(bd["total"]) in html
+    if bd["gst"]:
+        assert "GST &middot; India (18%)" in html
     assert "Amount paid" in html
     assert "VAC-20260712-123XYZ" in html
     assert "GSTIN" not in html
@@ -139,7 +158,11 @@ async def test_activation_sends_invoice(db, monkeypatch):
     res = await activate_subscription(db, str(org.id), "solo", f"pay_{uuid.uuid4().hex[:10]}")
     assert res == "activated"
     assert sent["to_email"] == org.owner_email
-    assert sent["bd"]["base"] == 5999
+    # First activation = inside the launch-offer window (subscription_started_at
+    # None until now) → offer price, not the 5,999 standard (#391 / 2026-07-17).
+    from backend.services.billing_math import effective_price
+
+    assert sent["bd"]["base"] == effective_price("solo", None)[0]
 
 
 async def test_gstin_endpoint_validates_and_saves(db):

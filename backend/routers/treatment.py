@@ -456,6 +456,9 @@ async def list_followups(
             "status": t.status,
             "scheduled_date": t.scheduled_date.isoformat() if t.scheduled_date else None,
             "created_at": t.created_at.isoformat(),
+            # reply lands at call-end = the row's last update; the UI shows it
+            # as the patient-reply bubble time (WhatsApp-style, #412)
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
             "_sort": t.created_at,
         }
         for t in rows

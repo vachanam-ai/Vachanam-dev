@@ -145,8 +145,16 @@ async def test_renewal_charges_overage_and_gst(db, monkeypatch):
                        org_id=str(org.id), branch_ids=[], is_admin=False, jti="j")
     resp = await create_order(None, CreateOrderRequest(plan="clinic"), user, db)
 
-    # 9,999 + 50×5 = 10,249 → +18% GST = 12,093.82 → 1,209,382 paise
-    assert resp.amount == 1209382
+    # Derived, not hardcoded (the old "1209382 paise incl. GST" literal broke
+    # on the 2026-07-17 GST waiver + launch offer): base honors the org's
+    # offer-window state, overage 50×5 = 250, GST per current GST_WAIVED.
+    from backend.services.billing_math import subscription_order_breakdown
+
+    expected = subscription_order_breakdown(
+        "clinic", cycle_minutes_used=1550,
+        subscription_started_at=org.subscription_started_at,
+    )["amount_paise"]
+    assert resp.amount == expected
     assert captured["notes"]["overage_minutes"] == "50"
     assert captured["notes"]["overage_amount"] == "250.0"
 

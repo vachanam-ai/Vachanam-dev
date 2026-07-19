@@ -193,6 +193,8 @@ export const fetchHealthBoard = () =>
   api.get("/admin/health-board").then((r) => r.data);
 export const setOrgStatus = (orgId, status) =>
   api.post(`/admin/orgs/${orgId}/status`, { status }).then((r) => r.data);
+export const startOrgPilot = (orgId) =>
+  api.post(`/admin/orgs/${orgId}/pilot`).then((r) => r.data);
 export const setOrgPlan = (orgId, plan) =>
   api.post(`/admin/orgs/${orgId}/plan`, { plan }).then((r) => r.data);
 export const setOrgHardBlock = (orgId, enabled) =>

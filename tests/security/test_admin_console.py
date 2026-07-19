@@ -202,9 +202,39 @@ async def test_org_controls_require_admin(client, biz_org):
         (f"/admin/orgs/{org_id}/status", {"status": "paused"}),
         (f"/admin/orgs/{org_id}/plan", {"plan": "solo"}),
         (f"/admin/orgs/{org_id}/hard-block", {"enabled": True}),
+        (f"/admin/orgs/{org_id}/pilot", None),
     ]:
         r = await client.post(path, json=body, headers=headers)
         assert r.status_code == 403, f"{path} not gated"
+
+
+@pytest.mark.asyncio
+async def test_pilot_start_sets_trial_with_expiry(client, db, biz_org):
+    """#409 founding-clinic pilot: paused org → 14-day trial with a real
+    trial_ends_at (a trial without one would never expire); active org → 409
+    (never comp a paying clinic by accident)."""
+    org_id = str(biz_org["org"].id)
+
+    # active org must be refused
+    r = await client.post(f"/admin/orgs/{org_id}/pilot", headers=_admin_headers())
+    assert r.status_code == 409
+
+    # pause, then pilot
+    r = await client.post(
+        f"/admin/orgs/{org_id}/status", json={"status": "paused"}, headers=_admin_headers()
+    )
+    assert r.status_code == 200
+    r = await client.post(f"/admin/orgs/{org_id}/pilot", headers=_admin_headers())
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "trial"
+    assert body["pilot_minutes"] == 300  # TRIAL_MINUTES hard cap applies
+
+    org = await _fresh_org(uuid.UUID(org_id))
+    assert org.status == "trial"
+    assert org.trial_ends_at is not None
+    days = (org.trial_ends_at - datetime.now(timezone.utc)).days
+    assert 13 <= days <= 14
 
 
 @pytest.mark.asyncio

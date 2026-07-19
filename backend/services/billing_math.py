@@ -133,6 +133,16 @@ WHATSAPP_PLANS = frozenset({"clinic", "multi"})
 # (trial minutes are Vachanam's own cash — Rs3/min worst case).
 TRIAL_MINUTES = 300
 
+# FOUNDING-CLINIC PILOT (Vinay 2026-07-19). Self-serve free trial stays
+# REMOVED (signups start paused, 2026-07-17); instead Vinay hand-picks
+# clinics and starts a 14-day pilot from the super-admin console. Reuses the
+# trial machinery end-to-end: status='trial', TRIAL_MINUTES cap (hard-block),
+# trial_ends_at expiry defense in call_blocked, and the 6-hourly trial_pause
+# job flips it back to paused — from there the first payment (at launch-offer
+# price) activates as usual. Pilot terms (success criteria, auto-convert)
+# live on paper, not in code.
+PILOT_DAYS = 14
+
 # CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
 # charge) adds GST on top; B2B clinics reclaim it via input credit.
 GST_RATE = 0.18

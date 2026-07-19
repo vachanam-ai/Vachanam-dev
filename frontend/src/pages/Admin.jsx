@@ -11,7 +11,8 @@ import {
   setOrgHardBlock,
   setOrgMinutes,
   setOrgPlan,
-  setOrgStatus
+  setOrgStatus,
+  startOrgPilot
 } from "../api/client.js";
 import { pulseRow, revealStagger } from "../lib/motion.js";
 
@@ -193,10 +194,19 @@ function ClinicRow({ row, onAction }) {
       </div>
       <div className="flex flex-col gap-1.5">
         {row.status === "paused" ? (
-          <button className="btn-primary !px-3 !py-1 text-xs"
-            onClick={() => act(() => setOrgStatus(row.org_id, "active"), `${row.name} resumed`)}>
-            Resume
-          </button>
+          <>
+            <button className="btn-primary !px-3 !py-1 text-xs"
+              onClick={() => act(() => setOrgStatus(row.org_id, "active"), `${row.name} resumed`)}>
+              Resume
+            </button>
+            <button className="rounded border border-hairline px-3 py-1 font-ui text-xs transition-transform active:scale-[0.97]"
+              onClick={() => {
+                if (!window.confirm(`Start 14-day founding pilot for ${row.name}? Free AI service (300-min hard cap) at Vachanam's cost — only for hand-picked clinics with a signed pilot agreement.`)) return;
+                act(() => startOrgPilot(row.org_id), `${row.name} pilot started`);
+              }}>
+              Start 14-day pilot
+            </button>
+          </>
         ) : (
           <button className="rounded border border-danger px-3 py-1 font-ui text-xs font-semibold text-danger transition-transform active:scale-[0.97]"
             onClick={() => act(() => setOrgStatus(row.org_id, "paused"), `${row.name} paused`)}>
