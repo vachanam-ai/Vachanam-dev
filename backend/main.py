@@ -216,6 +216,33 @@ async def lifespan(app: FastAPI):
             run_watchdog_tick, IntervalTrigger(seconds=60),
             id="watchdog_tick", replace_existing=True,
         )
+        # #435 (Vinay 2026-07-20: "very very serious about latency, fix it at
+        # any cost"). The 14s call-start was Neon's scale-to-zero cold wake on
+        # the agent's branch-resolve (#299 let it sleep after 5 idle min to save
+        # cost; a sporadically-ringing clinic paid the wake on almost every
+        # call). A trivial SELECT 1 every 4 min (< the 5-min sleep threshold)
+        # keeps the SAME Neon compute warm, so branch-resolve is fast. This
+        # DELIBERATELY reverses the #299 cost saving — Vinay authorized the
+        # 24/7 compute cost for the latency. Leader-locked (one warmer). To undo:
+        # remove this job and Neon resumes sleeping.
+        async def _keep_neon_warm() -> None:
+            from sqlalchemy import text as _text
+
+            from backend.database import AsyncSessionLocal as _SL
+
+            try:
+                async with _SL() as _s:
+                    await _s.execute(_text("SELECT 1"))
+            except Exception as e:  # noqa: BLE001 — a warm-ping failure is harmless
+                logger.warning("neon_warm_ping_failed", error=str(e)[:120])
+
+        from datetime import datetime as _dt, timezone as _tz
+
+        scheduler.add_job(
+            _keep_neon_warm, IntervalTrigger(seconds=240),
+            id="keep_neon_warm", replace_existing=True,
+            next_run_time=_dt.now(_tz.utc),  # warm immediately on boot
+        )
         scheduler.start()
         return scheduler
 
