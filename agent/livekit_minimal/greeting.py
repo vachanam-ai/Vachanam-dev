@@ -243,13 +243,75 @@ async def play_wavs(room: rtc.Room, wav_items, t_answer: float | None = None) ->
     return ok
 
 
+def _greeting_cache_key(branch_id: str, lang_code: str, voice_id: str, texts: list[str]) -> str:
+    """#439: key the cached welcome audio by branch+lang+voice AND a hash of the
+    exact text, so a clinic rename / template change auto-misses (never serves
+    a stale greeting)."""
+    import hashlib
+
+    h = hashlib.sha1(("||".join(texts)).encode("utf-8")).hexdigest()[:12]
+    return f"greet:v1:{branch_id}:{lang_code}:{voice_id}:{h}"
+
+
+async def _greeting_cache_get(key: str) -> list[bytes] | None:
+    try:
+        import base64
+        import json as _json
+
+        from backend.redis_client import get_redis
+
+        r = await get_redis()
+        raw = await r.get(key)
+        if not raw:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        return [base64.b64decode(b) for b in _json.loads(raw)]
+    except Exception as e:  # noqa: BLE001 — cache never breaks the call
+        logger.warning("greeting_cache_read_failed", error=str(e)[:120])
+        return None
+
+
+async def _greeting_cache_set(key: str, wavs: list[bytes]) -> None:
+    try:
+        import base64
+        import json as _json
+
+        from backend.redis_client import get_redis
+
+        r = await get_redis()
+        await r.set(
+            key, _json.dumps([base64.b64encode(w).decode("ascii") for w in wavs]),
+            ex=7 * 24 * 3600,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("greeting_cache_write_failed", error=str(e)[:120])
+
+
 async def synth_and_play(
     room: rtc.Room, texts: list[str], voice_id: str, lang_code: str,
-    t_answer: float | None = None,
+    t_answer: float | None = None, cache_key: str | None = None,
 ) -> bool:
     """Inbound path: pipeline synth + playback — segment 1 starts playing while
-    later segments are still synthesizing, so first audio ≈ one REST round-trip."""
+    later segments are still synthesizing, so first audio ≈ one REST round-trip.
+
+    #439: when cache_key is given (STATIC unknown-caller welcome), the audio is
+    served from Redis (instant, ~0 synth) instead of a ~10s live smallest.ai
+    synth on every call — the call-start latency that made callers hang up. The
+    first call for a (branch, lang, voice, text) synths and stores; every call
+    after plays the cached bytes. Dynamic greetings (caller's name) pass
+    cache_key=None and always synth live."""
     try:
+        if cache_key:
+            cached = await _greeting_cache_get(cache_key)
+            if cached is not None:
+                logger.info("greeting_cache_hit", key=cache_key)
+                return await play_wavs(room, cached, t_answer=t_answer)
+            # Miss: synth everything, play, and store for next time.
+            wavs = await synth_wavs(texts, voice_id, lang_code)
+            asyncio.create_task(_greeting_cache_set(cache_key, wavs))
+            return await play_wavs(room, wavs, t_answer=t_answer)
+        # No cache (dynamic greeting): the original pipelined synth+play.
         async with httpx.AsyncClient(timeout=10.0) as client:
             tasks = [
                 asyncio.ensure_future(_synth_one(client, t, voice_id, lang_code))

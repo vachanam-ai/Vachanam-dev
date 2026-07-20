@@ -95,6 +95,7 @@ from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
 from agent.services.telugu_dates import telugu_date  # noqa: E402
 from agent.livekit_minimal.greeting import (  # noqa: E402
+    _greeting_cache_key,
     inbound_greeting_texts,
     normalize_pcm,
     outbound_greeting_texts,
@@ -3501,15 +3502,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     play_wavs(ctx.room, _out_greet["wavs"], t_answer=_t_answer)
                 )
         elif branch_name:
+            _fu_msg = (inbound_followup or {}).get("message") or None
             _greet_texts = inbound_greeting_texts(
                 lang_code,
                 _spk_clinic,
                 spk_caller=_spk_caller,
-                followup_message=(inbound_followup or {}).get("message") or None,
+                followup_message=_fu_msg,
+            )
+            # #439: cache the STATIC welcome (no caller name, no follow-up
+            # message) so it plays instantly instead of a ~10s live synth every
+            # call. Dynamic greetings (name / follow-up) stay live (cache_key=None).
+            _greet_cache_key = (
+                _greeting_cache_key(str(branch.id), lang_code, tts_voice, _greet_texts)
+                if not _spk_caller and not _fu_msg else None
             )
             _welcome_task = asyncio.create_task(
                 synth_and_play(
-                    ctx.room, _greet_texts, tts_voice, lang_code, t_answer=_t_answer
+                    ctx.room, _greet_texts, tts_voice, lang_code,
+                    t_answer=_t_answer, cache_key=_greet_cache_key,
                 )
             )
         state.emergency_contact = emergency_contact
