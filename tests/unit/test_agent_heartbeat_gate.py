@@ -105,3 +105,30 @@ def test_reregistration_resets_pool_error_streak_lk8():
     watch.filter(_record("registered worker"))
     assert m._lk_registered.is_set()
     assert m._proc_init_errs == []
+
+
+def test_slow_drip_pool_failures_clear_beacon_lk8():
+    """LK-8 slow-drip (2026-07-20 SECOND outage): the pool limped at ~1 error/
+    min — never 3-in-120s, so the burst rule missed it and the line stayed dead
+    until Vinay noticed. A sustained drip (>= drip threshold in the drip window)
+    must also clear the beacon."""
+    import agent.livekit_minimal.agent as m
+
+    m._lk_registered = threading.Event()
+    m._lk_registered.set()
+    m._proc_init_errs.clear()
+    watch = _LkRegistrationWatch()
+
+    import time as _t
+    base = _t.monotonic()
+    # Errors spaced ~90s apart — never 3 inside 120s (no burst trip), but they
+    # accumulate to the drip threshold inside the 10-min drip window.
+    stamps = [base + i * 90 for i in range(m._PROC_INIT_DRIP_THRESHOLD)]
+    orig = _t.monotonic
+    try:
+        for s in stamps:
+            _t.monotonic = lambda s=s: s
+            watch.filter(_record("error initializing process"))
+    finally:
+        _t.monotonic = orig
+    assert not m._lk_registered.is_set()

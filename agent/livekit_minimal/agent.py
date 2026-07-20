@@ -4617,8 +4617,15 @@ _lk_registered = None  # threading.Event, created in _start_watchdog_heartbeat
 # the line was dead for ~an hour before Vinay noticed. Now: N pool-init errors
 # inside a window clear the SAME beacon so the existing 180s auto-restart heals
 # it. A registered worker that cannot spawn a job process is NOT healthy.
+# A registered worker produces ZERO pool-init errors in normal operation, so
+# any sustained stream is abnormal. Two triggers catch both shapes seen live
+# (2026-07-20): a BURST (deploy/1.6.5 hang → many fast) and a SLOW DRIP (the
+# pool limps, ~1 error/min — this is what slipped past the burst-only #433 rule
+# and left the line dead until Vinay noticed). Either clears the beacon.
 _PROC_INIT_ERR_THRESHOLD = 3
 _PROC_INIT_ERR_WINDOW_S = 120.0
+_PROC_INIT_DRIP_THRESHOLD = 5
+_PROC_INIT_DRIP_WINDOW_S = 600.0
 _proc_init_errs: list[float] = []
 
 
@@ -4639,16 +4646,19 @@ class _LkRegistrationWatch:
                   or "failed to connect to livekit" in msg):
                 _lk_registered.clear()
             elif "error initializing process" in msg:
-                # LK-8: dead job-process pool → treat as line-down after a few
-                # in a short window (one transient init timeout is not fatal).
+                # LK-8: dead job-process pool → treat as line-down. One transient
+                # init timeout is not fatal, but a burst OR a sustained drip is.
                 import time as _t
 
                 now = _t.monotonic()
                 _proc_init_errs.append(now)
-                cutoff = now - _PROC_INIT_ERR_WINDOW_S
+                # Keep the longest window we care about; drop older stamps.
+                cutoff = now - max(_PROC_INIT_ERR_WINDOW_S, _PROC_INIT_DRIP_WINDOW_S)
                 while _proc_init_errs and _proc_init_errs[0] < cutoff:
                     _proc_init_errs.pop(0)
-                if len(_proc_init_errs) >= _PROC_INIT_ERR_THRESHOLD:
+                burst = sum(1 for t in _proc_init_errs if t >= now - _PROC_INIT_ERR_WINDOW_S)
+                drip = len(_proc_init_errs)  # already trimmed to the drip window+
+                if burst >= _PROC_INIT_ERR_THRESHOLD or drip >= _PROC_INIT_DRIP_THRESHOLD:
                     _lk_registered.clear()  # stop the beacon → watchdog restarts
         except Exception:  # noqa: BLE001 — never break SDK logging
             pass
