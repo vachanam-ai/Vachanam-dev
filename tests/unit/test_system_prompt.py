@@ -518,3 +518,27 @@ def test_hello_never_interrupts_403():
     prompt = _make_prompt()
     assert "HELLO IS NEVER A REQUEST" in prompt
     assert "CHECKING THE LINE" in prompt
+
+
+def test_offer_more_help_before_closing_428():
+    """Vinay 2026-07-20 real call: after booking, the agent must ask
+    "inkemaina sahayam cheyyala? / do you need any other help?" before ending —
+    this beat was missing. end_call is blocked until the caller declines."""
+    prompt = _make_prompt()
+    assert "OFFER MORE HELP BEFORE CLOSING" in prompt
+    assert "ఇంకేమైనా సహాయం కావాలా" in prompt          # Vinay's dictated line
+    assert "Do you need any other help?" in prompt     # English gloss
+    assert "may NOT call end_call until the caller has declined" in prompt
+
+
+def test_say_it_once_no_reprompting_428():
+    """Vinay 2026-07-20: "prompting multiple times about appointment / the
+    rescheduling ... repetition should not be happening. enforce it." The
+    prompt must carry an explicit no-re-prompt / no-re-confirm rule that names
+    the reschedule loop."""
+    prompt = _make_prompt()
+    assert "SAY IT ONCE" in prompt
+    assert "NO RE-PROMPTING" in prompt
+    # Names the reschedule case specifically and the capture-once principle.
+    assert "RESCHEDULE" in prompt and "ask for the new" in prompt
+    assert "it is CAPTURED" in prompt

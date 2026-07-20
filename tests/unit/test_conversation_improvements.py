@@ -49,7 +49,9 @@ def test_receptionist_playbook_block_present():
     (noise / silent caller / wrong number), and message-taking discipline."""
     p = _prompt()
     assert "RECEPTIONIST PLAYBOOK" in p
-    assert "CLOSE WITH WHAT-NEXT" in p
+    # Renamed + strengthened #427: the booking close now REQUIRES an
+    # offer-of-more-help beat before end_call, not just a what-next line.
+    assert "OFFER MORE HELP BEFORE CLOSING" in p
     assert "SILENT CALLER" in p
     assert "BACKGROUND NOISE" in p
     assert "WRONG NUMBER" in p
