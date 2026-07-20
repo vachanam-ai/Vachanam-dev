@@ -79,3 +79,13 @@ def test_ui_surfaces_show_offer_prices_and_label():
     assert "line-through" in landing and "line-through" in static
     assert "exclude 18% GST" not in landing
     assert "exclude 18% GST" not in static
+
+
+def test_no_free_trial_claims_on_landing():
+    """#425: trial was removed 2026-07-17 but the hero still promised
+    '300 free minutes' — contradicting the pricing footnote on the same page.
+    No marketing surface may claim free minutes or a free trial."""
+    for path in ("frontend/src/pages/Landing.jsx", "backend/static/index.html"):
+        text = Path(path).read_text(encoding="utf-8")
+        assert "free minutes" not in text.lower(), path
+        assert "free trial" not in text.lower() or "No open trial" in text, path

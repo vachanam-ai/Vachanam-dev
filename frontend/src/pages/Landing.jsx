@@ -44,7 +44,7 @@ const PLANS = [
 const STEPS = [
   ["Patient calls", "Your existing number forwards to your Vachanam AI line."],
   ["AI answers in your language", "Understands the problem, matches the right doctor."],
-  ["Token assigned", "Atomic numbering — two callers can never get the same token."],
+  ["Token assigned", "Atomic numbering. Two callers can never get the same token."],
   ["Everyone notified", "Calendar event created. Your front desk sees it instantly."]
 ];
 
@@ -53,6 +53,8 @@ export default function Landing() {
   const rootRef = useRef(null);
 
   useEffect(() => {
+    // Respect prefers-reduced-motion: content is visible without gsap.
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const ctx = gsap.context(() => {
       gsap.fromTo(
         "[data-hero]",
@@ -154,16 +156,17 @@ export default function Landing() {
             </h1>
             <p data-hero className="mt-6 max-w-xl font-ui text-lg text-ink-soft">
               Vachanam picks up your clinic&rsquo;s calls in natural Telugu and 7 more Indian
-              languages, books the right doctor, assigns the token, updates your calendar —
-              in under four minutes, around the clock.
+              languages, books the right doctor, assigns the token, updates your calendar,
+              all in under four minutes, around the clock.
             </p>
             <div data-hero className="mt-8 flex flex-wrap items-center gap-4">
               <a href="#pricing" className="btn-primary px-6 py-3">Get started</a>
               <a href="#demo" className="btn-gold px-6 py-3">Book a demo</a>
               <a href="#voices" className="btn-ghost px-6 py-3">Hear the voices</a>
             </div>
+            {/* Trial removed 2026-07-17 — guarded by test_no_free_trial_claims_on_landing. */}
             <p data-hero className="mt-4 font-ui text-xs text-slate">
-              No credit card · 300 free minutes (≈100 calls) · cancel anytime
+              Keep your existing number · live the same day · cancel anytime
             </p>
           </div>
 
@@ -231,10 +234,10 @@ export default function Landing() {
       </section>
 
       {/* Stats strip */}
-      <section className="border-y border-hairline bg-[#0e4a49] text-white">
+      <section data-section className="border-y border-hairline bg-[#0e4a49] text-white">
         <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-4 py-10 text-center md:grid-cols-4">
-          {[["20–30%", "calls missed by busy clinics"], ["₹3,000+", "lost revenue every day"], ["< 4 min", "average booking call"], ["24×7", "your line never sleeps"]].map(([n, l]) => (
-            <div key={l}>
+          {[["20-30%", "calls missed by busy clinics"], ["₹3,000+", "lost revenue every day"], ["< 4 min", "average booking call"], ["24×7", "your line never sleeps"]].map(([n, l]) => (
+            <div key={l} data-item>
               <p className="numeral text-3xl text-gold sm:text-4xl">{n}</p>
               <p className="mt-1 font-ui text-xs text-[#cfe8e5]/80">{l}</p>
             </div>
@@ -261,6 +264,59 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* Feature bento — the product beyond "answer the phone" */}
+      <section id="features" data-section className="mx-auto max-w-6xl px-4 pb-20">
+        <h2 data-item className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+          Beyond answering the phone
+        </h2>
+        <div className="mt-10 grid gap-5 md:grid-cols-6">
+          <div data-item className="card p-7 md:col-span-4 border-teal/30 bg-teal-mint/60">
+            <h3 className="font-display text-xl font-semibold text-teal-deep">Treatment follow-up calls</h3>
+            <p className="mt-2 max-w-lg font-ui text-sm text-ink-soft">
+              After a visit, your doctor writes one line of advice. Vachanam calls the
+              patient, delivers it in their language, asks how recovery is going, and
+              brings the answer back to the doctor. Patients feel cared for; you never
+              dial a number.
+            </p>
+            <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-teal/30 bg-surface/70 px-4 py-2 font-ui text-xs text-teal-deep">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal/60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-teal" />
+              </span>
+              &ldquo;Doctor asked me to check: how is the swelling today?&rdquo;
+            </div>
+          </div>
+          <div data-item className="card p-7 md:col-span-2">
+            <h3 className="font-display text-lg font-semibold">Your own voice</h3>
+            <p className="mt-2 font-ui text-sm text-slate">
+              Record 15 seconds. The AI answers in your clinic&rsquo;s own voice,
+              in every language your patients speak.
+            </p>
+          </div>
+          <div data-item className="card p-7 md:col-span-2">
+            <h3 className="font-display text-lg font-semibold">Reminder calls</h3>
+            <p className="mt-2 font-ui text-sm text-slate">
+              Every booking gets a call before the visit. No-shows drop; your day
+              stays predictable.
+            </p>
+          </div>
+          <div data-item className="card p-7 md:col-span-2">
+            <h3 className="font-display text-lg font-semibold">Receptionist app</h3>
+            <p className="mt-2 font-ui text-sm text-slate">
+              Your front desk sees the day&rsquo;s tokens and marks arrivals on any
+              phone. No new hardware, nothing to install.
+            </p>
+          </div>
+          <div data-item className="card p-7 md:col-span-2 border-gold/40 bg-gold-soft/50">
+            <h3 className="font-display text-lg font-semibold text-gold-ink">Owner dashboard</h3>
+            <p className="mt-2 font-ui text-sm text-ink-soft">
+              Calls answered, bookings made, minutes used, busiest hours. The whole
+              clinic at a glance.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Languages */}
       <section id="voices" data-section className="border-y border-hairline bg-teal-mint/50 py-20">
         <div className="mx-auto max-w-6xl px-4">
@@ -269,7 +325,7 @@ export default function Landing() {
             Eight languages. One warm AI agent.
           </h2>
           <p data-item className="mt-3 max-w-2xl font-ui text-ink-soft">
-            Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali, Odia — natural pace,
+            Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali, Odia. Natural pace,
             warm tone. Tap any to hear exactly what your patients will hear. Want your own
             voice? Clinics can clone it.
           </p>
@@ -279,8 +335,34 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* Trust — claims mirror docs/support/KNOWLEDGE.md (#420); don't overclaim */}
+      <section id="trust" data-section className="mx-auto max-w-6xl px-4 py-20">
+        <h2 data-item className="max-w-2xl font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+          Patient data is sacred. We treat it that way.
+        </h2>
+        <div className="mt-10 grid gap-x-10 gap-y-8 border-t border-hairline pt-8 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            ["DPDP Act 2023", "Built as a Data Processor under India's data protection law, with a signed processing agreement for every clinic."],
+            ["Isolated by clinic", "Your patients exist only inside your clinic's account. Never shared, never sold, never used to train AI."],
+            ["No call recordings", "Calls are not recorded. Only masked transcripts are kept, and they are deleted after 90 days."],
+            ["Encrypted throughout", "TLS on every call and page, AES-256 at rest. Payments run through Razorpay; card numbers never touch us."],
+          ].map(([t, d]) => (
+            <div key={t} data-item>
+              <h3 className="font-display text-lg font-semibold text-teal-deep">{t}</h3>
+              <p className="mt-2 font-ui text-sm text-slate">{d}</p>
+            </div>
+          ))}
+        </div>
+        <p data-item className="mt-8 font-ui text-sm text-ink-soft">
+          The full picture, in plain words:{" "}
+          <a href={`${API_BASE}/data-handling`} className="font-semibold text-teal underline-offset-4 hover:underline">
+            How we handle your data
+          </a>
+        </p>
+      </section>
+
       {/* Pricing */}
-      <section id="pricing" data-section className="mx-auto max-w-6xl px-4 py-20">
+      <section id="pricing" data-section className="border-t border-hairline mx-auto max-w-6xl px-4 py-20">
         <p data-item className="eyebrow">Pricing</p>
         <h2 data-item className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
           Pays for itself with two saved patients a day
@@ -293,7 +375,7 @@ export default function Landing() {
               <span className="text-slate"> + ₹5/min after</span>
             </p>
             <p className="font-ui text-xs text-slate">
-              Low-volume clinics — ≈55 calls (150 min), 3 doctors, all 8 languages, your cloned voice, reminder + treatment follow-up calls.
+              For low-volume clinics: ≈55 calls (150 min), 3 doctors, all 8 languages, your cloned voice, reminder + treatment follow-up calls.
             </p>
           </div>
           <Link to="/register?plan=lite" className="btn-ghost shrink-0 px-5 py-2 text-sm">
@@ -336,10 +418,41 @@ export default function Landing() {
           ))}
         </div>
         <p data-item className="mt-6 text-center font-ui text-xs text-slate">
-          No trial period — activate with the offer price and go live the same day · cancel anytime
+          No trial period · activate with the offer price and go live the same day · cancel anytime
           <br />
-          Launch offer: pay the offer price for your first 3 months — no GST added, nothing extra.
+          Launch offer: pay the offer price for your first 3 months. No GST added, nothing extra.
         </p>
+      </section>
+
+      {/* FAQ — native <details>, answers match product truth (no-trial, #418 unknown-info, pilot) */}
+      <section id="faq" data-section className="mx-auto max-w-3xl px-4 pb-20">
+        <h2 data-item className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
+          Questions clinics ask us
+        </h2>
+        <div data-item className="mt-8 divide-y divide-hairline border-y border-hairline">
+          {[
+            ["Do I need a new phone number?",
+             "No. Your existing clinic number forwards to your Vachanam AI line. Patients dial the number they already know; the only change is that someone always answers."],
+            ["Is there a free trial?",
+             "No open trial. Instead, launch-offer pricing runs for your first 3 months, and a small number of invited clinics join a 14-day founding pilot. Ask about it on your demo call."],
+            ["What if the AI doesn't know an answer?",
+             "It never guesses. It tells the patient the clinic will check and get back, logs the question for your staff, and moves on. You see every logged question on your dashboard."],
+            ["Does it give medical advice?",
+             "Never. Vachanam books appointments, sends reminders and relays your doctor's own follow-up instructions. Diagnosis and advice stay with your doctors."],
+            ["How fast can we go live?",
+             "The same day. Choose a plan, forward your number, add your doctors and timings. We walk you through it on a call."],
+            ["What happens after my included minutes?",
+             "Every extra minute is ₹5, on every plan. Your dashboard always shows remaining minutes, so there are no surprises on the invoice."],
+          ].map(([q, a]) => (
+            <details key={q} className="group py-4">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-display text-lg font-semibold [&::-webkit-details-marker]:hidden">
+                {q}
+                <span className="shrink-0 text-teal transition-transform group-open:rotate-45" aria-hidden="true">+</span>
+              </summary>
+              <p className="mt-3 max-w-2xl font-ui text-sm leading-relaxed text-ink-soft">{a}</p>
+            </details>
+          ))}
+        </div>
       </section>
 
       {/* Book a demo — phone-first lead, same pipeline as Help's demo form
