@@ -41,7 +41,14 @@ async def agent_joined(lkapi, room: str) -> bool:
 
 
 async def verify_or_cleanup(lkapi, room: str, context: str) -> bool:
-    """agent_joined + best-effort empty-room cleanup + loud log on loss."""
+    """agent_joined + best-effort empty-room cleanup + loud log on loss.
+
+    LK-3 (Vinay 2026-07-20 "keep track of it and resolve"): an unclaimed
+    dispatch IS the definitive probe that the voice line is dead — no worker
+    registered, no false positives. So it triggers the watchdog's Fly restart
+    DIRECTLY (cooldown + FLY_API_TOKEN checks live inside _restart_fly_agent),
+    instead of waiting for the 180s-stale-beacon path. The retrying job's next
+    tick then lands on a fresh worker."""
     from livekit import api as lk_api
 
     if await agent_joined(lkapi, room):
@@ -52,4 +59,11 @@ async def verify_or_cleanup(lkapi, room: str, context: str) -> bool:
         await lkapi.room.delete_room(lk_api.DeleteRoomRequest(room=room))
     except Exception:  # noqa: BLE001
         pass
+    try:
+        from backend.watchdog import _restart_fly_agent
+
+        action = await _restart_fly_agent()
+        logger.error("dispatch_unclaimed_autoheal", room=room, action=action)
+    except Exception as e:  # noqa: BLE001 — auto-heal is best-effort
+        logger.warning("dispatch_unclaimed_autoheal_failed", error=str(e)[:120])
     return False

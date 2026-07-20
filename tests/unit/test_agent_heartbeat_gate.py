@@ -35,10 +35,24 @@ def test_plugin_registered_does_not_set_flag():
 
 def test_drain_and_shutdown_clear_flag():
     watch = _LkRegistrationWatch()
-    for closer in ("draining worker", "shutting down worker"):
+    # LK-5: the SDK's reconnect warning = silent WebSocket drop — without
+    # clearing, a stale flag kept the beacon alive while the line was dead.
+    for closer in ("draining worker", "shutting down worker",
+                   "failed to connect to livekit, retrying in 2s"):
         agent_mod._lk_registered.set()
         watch.filter(_record(closer))
         assert not agent_mod._lk_registered.is_set(), closer
+
+
+def test_heartbeat_mirrors_registration_truth_to_redis():
+    # LK-4: state key written EVERY tick (registered or not) — the health
+    # board's lossless truth, independent of Fly logs; the beacon stays gated.
+    import inspect
+
+    src = inspect.getsource(agent_mod._start_watchdog_heartbeat)
+    assert "watchdog:lk:agent_state" in src
+    assert src.index("watchdog:lk:agent_state") < src.index("watchdog:hb:agent")
+    assert "if registered:" in src  # beacon still conditional
 
 
 def test_filter_never_raises_on_weird_record():

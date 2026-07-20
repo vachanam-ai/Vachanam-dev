@@ -4360,7 +4360,12 @@ class _LkRegistrationWatch:
             msg = record.getMessage()
             if "registered worker" in msg:
                 _lk_registered.set()
-            elif "draining worker" in msg or "shutting down worker" in msg:
+            elif ("draining worker" in msg or "shutting down worker" in msg
+                  # LK-5 (2026-07-20): a silently dropped worker WebSocket
+                  # surfaces as the SDK's reconnect warning — without clearing
+                  # here, a stale flag kept the beacon flowing while the line
+                  # was dead. Re-registration re-sets the flag.
+                  or "failed to connect to livekit" in msg):
                 _lk_registered.clear()
         except Exception:  # noqa: BLE001 — never break SDK logging
             pass
@@ -4392,9 +4397,17 @@ def _start_watchdog_heartbeat() -> None:
         client = None
         while True:
             try:
-                if _lk_registered.is_set():
-                    if client is None:
-                        client = _redis_sync.from_url(settings.redis_url)
+                if client is None:
+                    client = _redis_sync.from_url(settings.redis_url)
+                # LK-4 (2026-07-20): registration TRUTH mirrored to Redis every
+                # tick — Fly's log stream is lossy (a registration line
+                # vanished on 2026-07-19), so the health board / debugging
+                # never depends on logs again.
+                registered = _lk_registered.is_set()
+                client.set("watchdog:lk:agent_state",
+                           f"{'registered' if registered else 'unregistered'}:{int(_time.time())}",
+                           ex=300)
+                if registered:
                     client.set("watchdog:hb:agent", _time.time(), ex=300)
             except Exception as e:  # noqa: BLE001
                 client = None  # rebuild next round — never reuse a dead socket

@@ -87,10 +87,22 @@ def test_agent_joins_marks_success():
     assert fake.deleted_rooms == []
 
 
-def test_unclaimed_dispatch_returns_false_and_cleans_room():
+def test_unclaimed_dispatch_returns_false_and_cleans_room(monkeypatch):
+    # LK-3: an unclaimed dispatch is the definitive dead-line probe — it must
+    # also trigger the watchdog's Fly restart (cooldown lives inside it).
+    import backend.watchdog as wd
+
+    restarts = []
+
+    async def fake_restart():
+        restarts.append(1)
+        return "fly restart issued (test)"
+
+    monkeypatch.setattr(wd, "_restart_fly_agent", fake_restart)
     fake = _FakeLk(joined_after_polls=None)
     assert _run(fake) is False           # → task stays pending, next tick retries
     assert fake.deleted_rooms == fake.dispatches  # empty room removed
+    assert restarts == [1]               # auto-heal fired
 
 
 def test_late_join_within_timeout_still_success():

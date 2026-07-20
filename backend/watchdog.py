@@ -297,6 +297,15 @@ async def board_state() -> dict:
         hb = await r.get(_AGENT_HB_KEY)
         if hb:
             out["agent_heartbeat_age_s"] = int(time.time() - float(hb))
+        # LK-4: the agent mirrors its LiveKit registration TRUTH every 60s
+        # (independent of Fly's lossy logs). "unregistered" here with a live
+        # process = the exact 2026-07-19/20 dead-line mode.
+        lk_state = await r.get("watchdog:lk:agent_state")
+        if lk_state:
+            val = lk_state.decode() if isinstance(lk_state, bytes) else lk_state
+            state, _, ts = val.partition(":")
+            out["lk_registration"] = {"state": state,
+                                      "age_s": int(time.time() - float(ts or 0))}
         # A healthy Redis never writes its own state key (only recovery does) —
         # but answering these reads IS the health proof. Synthesize the card.
         if "redis" not in out["components"]:
