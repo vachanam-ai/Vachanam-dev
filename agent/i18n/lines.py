@@ -540,27 +540,28 @@ RECONNECT: dict[str, str] = {
 }
 
 
-# ── "One minute, I'm checking" (Vinay 2026-07-20): spoken ONLY while a
-# genuinely slow tool runs (availability / book / reschedule / cancel), never
-# for quick ones. This deliberately restores a wait-conveying phrase that the
-# 2026-06-25 filler trim had cut back to a bare "ఓకే," — that ack does not tell
-# the caller anything is being looked up. Kept SHORT (the point is to cover ~1-2s
-# of dead air, not to narrate). Two variants each so repeats don't sound robotic.
+# ── Slow-tool filler (Vinay 2026-07-20): spoken ONLY while a genuinely slow
+# tool runs (availability / book / reschedule / cancel), never for quick ones.
+# WORDING (Vinay, same day, after hearing it live): "okka nimisham andi feels
+# really bad. change it to okay andi. okay(english). similarly hindi version
+# also" — so this is a plain short "okay", NOT a narrated "one minute, I'm
+# checking". The *timing* (slow tools only + 12s cooldown) is what conveys the
+# wait; the words stay out of the way.
 WAIT_FILLERS: dict[str, tuple[str, ...]] = {
-    "te": ("ఒక్క నిమిషం అండి, చూస్తున్నాను.", "ఒక్క సెకను అండి, చెక్ చేస్తున్నాను."),
-    "en": ("One moment, I'm checking.", "Just a second, let me check."),
-    "hi": ("एक मिनट, मैं देख रही हूँ।", "एक सेकंड रुकिए, चेक कर रही हूँ।"),
-    "ta": ("ஒரு நிமிடம், பார்க்கிறேன்.", "ஒரு வினாடி, செக் பண்றேன்."),
-    "kn": ("ಒಂದು ನಿಮಿಷ, ನೋಡುತ್ತಿದ್ದೇನೆ.", "ಒಂದು ಸೆಕೆಂಡ್, ಚೆಕ್ ಮಾಡುತ್ತಿದ್ದೇನೆ."),
-    "ml": ("ഒരു നിമിഷം, ഞാൻ നോക്കുന്നു.", "ഒരു സെക്കൻഡ്, ചെക്ക് ചെയ്യുന്നു."),
-    "mr": ("एक मिनिट, मी बघते.", "एक सेकंद थांबा, चेक करते."),
-    "bn": ("এক মিনিট, আমি দেখছি।", "এক সেকেন্ড, চেক করছি।"),
-    "or": ("ଏକ ମିନିଟ୍, ମୁଁ ଦେଖୁଛି।", "ଏକ ସେକେଣ୍ଡ, ଚେକ୍ କରୁଛି।"),
+    "te": ("ఓకే అండి.", "ఓకే."),
+    "en": ("Okay.", "Sure."),
+    "hi": ("ठीक है।", "ओके।"),
+    "ta": ("சரி.", "ஓகே."),
+    "kn": ("ಸರಿ.", "ಓಕೆ."),
+    "ml": ("ശരി.", "ഓകെ."),
+    "mr": ("ठीक आहे.", "ओके."),
+    "bn": ("ঠিক আছে।", "ওকে।"),
+    "or": ("ଠିକ୍ ଅଛି।", "ଓକେ।"),
 }
 
 
 def get_wait_fillers(code: str | None) -> tuple[str, ...]:
-    """'One minute, checking' fillers for a language (falls back to Telugu)."""
+    """Short "okay" filler for slow tools, per language (falls back to Telugu)."""
     return WAIT_FILLERS.get((code or "").lower().strip(), WAIT_FILLERS[DEFAULT_LANG])
 
 
