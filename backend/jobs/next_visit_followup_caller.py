@@ -5,6 +5,7 @@ next_visit_book fires at/after 09:00 on its scheduled day; doctor_advice fires
 ASAP. RULE 9: metadata carries ONLY operational fields + the doctor's message
 (what_to_ask) — never steps_performed/next_steps. Reuses the reminder dispatch."""
 from __future__ import annotations
+import asyncio
 import json
 import uuid
 from datetime import datetime, time as dtime
@@ -42,10 +43,16 @@ def _is_due(task, now_ist: datetime) -> bool:
 
 
 async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
-    """Create the outbound agent dispatch. Returns True ONLY when create_dispatch
-    succeeded; False on any exception (logged, never raised). The caller marks the
-    task done on True and retries/keeps pending on False — dispatch-then-mutate so a
-    failure can never strand a task as a dead row (FIXLOG #160, mirrors #151)."""
+    """Create the outbound agent dispatch AND verify a worker took it.
+
+    Returns True ONLY when an agent participant actually JOINED the room —
+    #423 (2026-07-19/20, three lost calls): create_dispatch succeeds even when
+    NO worker is registered (deploy left the agent unconnected to LiveKit),
+    so 'dispatch created' marked tasks done while the room sat empty and the
+    patient never got the call. Now a dispatch nobody picks up within
+    _JOIN_TIMEOUT_S is deleted and the task stays pending — the next 15-min
+    tick retries, and by then the watchdog (#411 gate) has restarted a dead
+    worker. Dispatch-then-mutate preserved (FIXLOG #160)."""
     try:
         from livekit import api as lk_api
         lkapi = lk_api.LiveKitAPI()
@@ -60,11 +67,16 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
             if target_date and task.task_type == "next_visit_book":
                 meta["target_date"] = target_date
                 meta["window"] = 2
+            room = f"followup-{uuid.uuid4().hex[:10]}"
             await lkapi.agent_dispatch.create_dispatch(lk_api.CreateAgentDispatchRequest(
-                agent_name=AGENT_NAME, room=f"followup-{uuid.uuid4().hex[:10]}",
-                metadata=json.dumps(meta)))
+                agent_name=AGENT_NAME, room=room, metadata=json.dumps(meta)))
+            from backend.services.dispatch_verify import verify_or_cleanup
+
+            if not await verify_or_cleanup(lkapi, room, f"followup:{task.id}"):
+                return False
             logger.info("followup_call_dispatched", task_id=str(task.id),
-                        call_type=task.task_type, phone_last4=(patient.phone or "")[-4:])
+                        call_type=task.task_type, room=room,
+                        phone_last4=(patient.phone or "")[-4:])
             return True
         finally:
             await lkapi.aclose()

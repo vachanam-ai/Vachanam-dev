@@ -232,6 +232,12 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                     ),
                 )
             )
+            # #423: a dispatch nobody claims (worker not registered) is a lost
+            # call, not a sent reminder — verify the agent joined.
+            from backend.services.dispatch_verify import verify_or_cleanup
+
+            if not await verify_or_cleanup(lkapi, room, f"reminder:{token.id}"):
+                return False
             logger.info(
                 "reminder_call_dispatched",
                 branch_id=str(branch.id),

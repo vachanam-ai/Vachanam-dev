@@ -139,6 +139,12 @@ async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
                     ),
                 )
             )
+            # #423: verify a worker claimed it (loud log + empty-room cleanup on
+            # loss). Flow needs no change — cascade already retries on backoff
+            # via attempt_count regardless of this dispatch's fate.
+            from backend.services.dispatch_verify import verify_or_cleanup
+
+            await verify_or_cleanup(lkapi, room, f"cascade:{task.id}")
             logger.info(
                 "cascade_rebook_call_dispatched",
                 branch_id=str(task.branch_id),
