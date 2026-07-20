@@ -73,7 +73,8 @@ from agent.i18n import (  # noqa: E402
     get_switch_ack,
 )
 from agent.i18n.languages import DEFAULT_LANG  # noqa: E402
-from agent.i18n.backchannels import suppress_backchannel  # noqa: E402
+from agent.i18n.lines import get_line_check, get_reconnect  # noqa: E402
+from agent.i18n.backchannels import is_lone_hello, suppress_backchannel  # noqa: E402
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
@@ -316,6 +317,31 @@ def _cancel_on_shutdown(task):
     async def _cb() -> None:
         task.cancel()
     return _cb
+
+
+# SILENCE WATCHDOG (Vinay 2026-07-20): if the caller says nothing for
+# SILENCE_PROMPT_EVERY_S while it's their turn, the agent speaks a line-check;
+# it repeats every SILENCE_PROMPT_EVERY_S and ends the call at SILENCE_END_S.
+# Module-level so a test can shrink them. 10/30 → prompts at 10s and 20s, end
+# at 30s.
+SILENCE_PROMPT_EVERY_S = 10.0
+SILENCE_END_S = 30.0
+SILENCE_POLL_S = 0.5
+# Consecutive lone-"hello" turns that mean the caller cannot hear us (#lost).
+LOST_HELLO_COUNT = 3
+
+
+def _silence_action(elapsed: float, prompts_sent: int) -> str | None:
+    """Pure decision for the silence watchdog. Returns 'end', 'prompt', or None.
+
+    Prompts fall on each SILENCE_PROMPT_EVERY_S boundary strictly BEFORE
+    SILENCE_END_S; at/after SILENCE_END_S the call ends. Split out so the timing
+    is unit-tested without a live session."""
+    if elapsed >= SILENCE_END_S:
+        return "end"
+    max_prompts = int(SILENCE_END_S // SILENCE_PROMPT_EVERY_S) - 1
+    due = min(int(elapsed // SILENCE_PROMPT_EVERY_S), max_prompts)
+    return "prompt" if prompts_sent < due else None
 
 
 def _phone_override_error(
@@ -1323,6 +1349,9 @@ class VachanamAgent(Agent):
         # Kept so switch_language can PRIME the new agent's TTS before handoff
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
+        # #lost (Vinay 2026-07-20): count consecutive lone-"hello" user turns —
+        # 3 in a row means the caller can't hear us (one-way audio / dropped line).
+        self._consecutive_hellos = 0
 
     async def tts_node(self, text, model_settings):
         """Space out LONG digit runs (5+) before they reach TTS. A joined
@@ -1406,6 +1435,30 @@ class VachanamAgent(Agent):
         Thresholds are deliberately strict (long text, ~85% match) so a REAL
         patient turn is never discarded — a false negative (occasional echo slips
         through) is far safer than a false positive (ignoring the patient)."""
+        # #lost: a caller repeating "hello" hears nothing back → likely one-way
+        # audio. Count consecutive lone-hello turns; on the 3rd, speak the
+        # reconnect notice and hang up (a dead line only burns minutes). Any
+        # non-hello turn resets the counter. Runs BEFORE the echo guard because a
+        # lone "hello" is too short for that guard anyway.
+        try:
+            from livekit.agents import StopResponse
+
+            if is_lone_hello(self._message_text(new_message)):
+                self._consecutive_hellos += 1
+                if self._consecutive_hellos >= LOST_HELLO_COUNT:
+                    self._consecutive_hellos = 0
+                    logger.warning(
+                        "lost_connection_hellos branch_id=%s", str(self._state.branch_id)
+                    )
+                    asyncio.create_task(self._handle_lost_connection())
+                    raise StopResponse()  # don't let the LLM re-greet; handler ends
+            else:
+                self._consecutive_hellos = 0
+        except StopResponse:
+            raise
+        except Exception as e:  # noqa: BLE001 — never swallow a real turn
+            logger.warning("hello_counter_error: %s", e)
+
         try:
             import difflib
 
@@ -1437,6 +1490,28 @@ class VachanamAgent(Agent):
                 raise
             # Any other error must NEVER swallow a real turn — let it through.
             logger.warning("echo_guard_error: %s", e)
+
+    async def _handle_lost_connection(self) -> None:
+        """#lost: the caller said "hello" 3 times running — they almost
+        certainly can't hear us. Speak the reconnect notice (in the call's
+        language) and hang up so a one-way line stops burning minutes. All
+        best-effort — a failure here must never crash the call (RULE 8)."""
+        try:
+            line = get_reconnect(self._state.language or self._lang_code)
+            await self.session.say(sanitize_for_tts(line), allow_interruptions=True)
+            try:
+                await self.session.current_speech.wait_for_playout()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("lost_connection_notice_failed: %s", e)
+        try:
+            lkapi = api.LiveKitAPI()
+            await lkapi.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+            await lkapi.aclose()
+            logger.info("call_ended_lost_connection room=%s", self._room.name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("lost_connection_hangup_failed: %s", e)
 
     @staticmethod
     def _message_text(m) -> str:
@@ -4284,6 +4359,82 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
             _cap_task = asyncio.create_task(_solo_cap_watchdog())
             ctx.add_shutdown_callback(_cancel_on_shutdown(_cap_task))
+
+        # SILENCE WATCHDOG (Vinay 2026-07-20): while it's the caller's turn and
+        # they stay silent, prompt "hello, are you there?" every
+        # SILENCE_PROMPT_EVERY_S and hang up at SILENCE_END_S. The clock only
+        # runs when the agent is idle (listening) and the caller isn't speaking —
+        # the agent's own replies and thinking never count as caller silence. Our
+        # OWN line-check is exempted (via _linecheck_active) so the escalation
+        # keeps climbing 10→20→30 instead of the prompt resetting its own clock.
+        _sil = {"last_user": _perf.monotonic(), "prompts": 0, "linecheck": False}
+
+        @session.on("user_state_changed")
+        def _on_user_state(ev) -> None:
+            # Caller started talking → reset the silence clock + escalation.
+            if getattr(ev, "new_state", None) == "speaking":
+                _sil["last_user"] = _perf.monotonic()
+                _sil["prompts"] = 0
+
+        async def _silence_watchdog() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(SILENCE_POLL_S)
+                    now = _perf.monotonic()
+                    try:
+                        a_state = session.agent_state
+                        u_state = session.user_state
+                    except Exception:  # noqa: BLE001 — no state yet
+                        a_state = u_state = None
+                    # Not the caller's turn (agent producing output, or caller
+                    # mid-speech) → hold the clock. "listening"/"idle" both mean
+                    # it IS the caller's turn. Exempt our own line-check so it
+                    # doesn't reset the very silence it is measuring.
+                    if not _sil["linecheck"] and (
+                        a_state in ("thinking", "speaking", "initializing")
+                        or u_state == "speaking"
+                    ):
+                        _sil["last_user"] = now
+                        _sil["prompts"] = 0
+                        continue
+                    action = _silence_action(now - _sil["last_user"], _sil["prompts"])
+                    if action == "end":
+                        cur = get_lines(state.language or lang_code)
+                        try:
+                            await session.say(sanitize_for_tts(cur.cap_goodbye))
+                            await session.current_speech.wait_for_playout()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        lkapi = api.LiveKitAPI()
+                        await lkapi.room.delete_room(
+                            api.DeleteRoomRequest(room=ctx.room.name)
+                        )
+                        await lkapi.aclose()
+                        logger.info(
+                            "call_ended_silence room=%s after=%ds",
+                            ctx.room.name, int(SILENCE_END_S),
+                        )
+                        return
+                    if action == "prompt":
+                        _sil["prompts"] += 1
+                        _sil["linecheck"] = True
+                        try:
+                            line = get_line_check(state.language or lang_code)
+                            await session.say(
+                                sanitize_for_tts(line), allow_interruptions=True
+                            )
+                            logger.info("silence_line_check n=%d", _sil["prompts"])
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("silence_line_check_failed: %s", e)
+                        finally:
+                            _sil["linecheck"] = False
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — watchdog must never crash the call
+                logger.warning("silence_watchdog_failed: %s", e)
+
+        _sil_task = asyncio.create_task(_silence_watchdog())
+        ctx.add_shutdown_callback(_cancel_on_shutdown(_sil_task))
 
 
 _TERMINAL_ORG_STATES = frozenset({"paused", "cancelled", "suspended"})

@@ -506,6 +506,50 @@ def get_welcome(code: str | None) -> str:
     return WELCOME.get((code or "").lower().strip(), WELCOME[DEFAULT_LANG])
 
 
+# ── Silence line-check (Vinay 2026-07-20): "if user doesn't speak for 10 secs
+# straight, say 'hello, are you there? hello, line lo unnara?' every 10 secs
+# until 30 and end the call." te is Vinay's dictated wording in script; the
+# rest are first-pass (same status as WELCOME) — humanizer can refine later.
+# No {placeholders} — spoken as-is.
+LINE_CHECK: dict[str, str] = {
+    "te": "హలో, మీరు ఉన్నారా? హలో, లైన్‌లో ఉన్నారా?",
+    "en": "Hello, are you there? Hello, are you still on the line?",
+    "hi": "हैलो, आप हैं क्या? हैलो, आप लाइन पर हैं?",
+    "ta": "ஹலோ, நீங்கள் இருக்கிறீர்களா? ஹலோ, லைனில் இருக்கிறீர்களா?",
+    "kn": "ಹಲೋ, ನೀವು ಇದ್ದೀರಾ? ಹಲೋ, ಲೈನ್‌ನಲ್ಲಿ ಇದ್ದೀರಾ?",
+    "ml": "ഹലോ, നിങ്ങൾ ഉണ്ടോ? ഹലോ, ലൈനിൽ ഉണ്ടോ?",
+    "mr": "हॅलो, तुम्ही आहात का? हॅलो, तुम्ही लाईनवर आहात का?",
+    "bn": "হ্যালো, আপনি আছেন? হ্যালো, আপনি কি লাইনে আছেন?",
+    "or": "ହେଲୋ, ଆପଣ ଅଛନ୍ତି କି? ହେଲୋ, ଆପଣ ଲାଇନ୍‌ରେ ଅଛନ୍ତି କି?",
+}
+
+# Lost-connection notice (Vinay 2026-07-20): spoken when the caller repeats
+# "hello" 3 times in a row — they likely cannot hear us (one-way audio) or the
+# line dropped. Acknowledge, tell them to call back, then the agent hangs up
+# so a dead line doesn't burn minutes.
+RECONNECT: dict[str, str] = {
+    "te": "నేను మీ మాట వినగలుగుతున్నాను, కానీ మీకు నా మాట సరిగ్గా వినిపించడం లేదేమో. దయచేసి ఫోన్ పెట్టేసి మళ్ళీ కాల్ చేయండి. థాంక్యూ అండి.",
+    "en": "I can hear you, but it seems you may not be able to hear me clearly. Please hang up and call again. Thank you.",
+    "hi": "मैं आपकी आवाज़ सुन पा रही हूँ, लेकिन शायद आपको मेरी आवाज़ ठीक से नहीं सुनाई दे रही। कृपया फ़ोन रखकर दोबारा कॉल करें। धन्यवाद।",
+    "ta": "உங்கள் குரல் எனக்குக் கேட்கிறது, ஆனால் என் குரல் உங்களுக்குச் சரியாகக் கேட்கவில்லை போலும். தயவுசெய்து துண்டித்து மீண்டும் அழைக்கவும். நன்றி.",
+    "kn": "ನಿಮ್ಮ ಧ್ವನಿ ನನಗೆ ಕೇಳಿಸುತ್ತಿದೆ, ಆದರೆ ನನ್ನ ಧ್ವನಿ ನಿಮಗೆ ಸರಿಯಾಗಿ ಕೇಳಿಸುತ್ತಿಲ್ಲವೇನೋ. ದಯವಿಟ್ಟು ಫೋನ್ ಇಟ್ಟು ಮತ್ತೆ ಕರೆ ಮಾಡಿ. ಧನ್ಯವಾದ.",
+    "ml": "എനിക്ക് നിങ്ങളുടെ ശബ്ദം കേൾക്കാം, പക്ഷേ എന്റെ ശബ്ദം നിങ്ങൾക്ക് ശരിയായി കേൾക്കുന്നില്ലായിരിക്കാം. ദയവായി ഫോൺ വെച്ച് വീണ്ടും വിളിക്കൂ. നന്ദി.",
+    "mr": "मला तुमचा आवाज ऐकू येतोय, पण कदाचित तुम्हाला माझा आवाज नीट ऐकू येत नसेल. कृपया फोन ठेवून पुन्हा कॉल करा. धन्यवाद.",
+    "bn": "আমি আপনার কথা শুনতে পাচ্ছি, কিন্তু হয়তো আপনি আমার কথা ঠিকমতো শুনতে পাচ্ছেন না। অনুগ্রহ করে ফোন রেখে আবার কল করুন। ধন্যবাদ।",
+    "or": "ମୁଁ ଆପଣଙ୍କ କଥା ଶୁଣିପାରୁଛି, କିନ୍ତୁ ହୁଏତ ଆପଣ ମୋ କଥା ଠିକ୍‌ଭାବେ ଶୁଣିପାରୁନାହାନ୍ତି। ଦୟାକରି ଫୋନ୍ ରଖି ପୁଣି କଲ୍ କରନ୍ତୁ। ଧନ୍ୟବାଦ।",
+}
+
+
+def get_line_check(code: str | None) -> str:
+    """Silence line-check line for a language code (falls back to Telugu)."""
+    return LINE_CHECK.get((code or "").lower().strip(), LINE_CHECK[DEFAULT_LANG])
+
+
+def get_reconnect(code: str | None) -> str:
+    """Lost-connection notice for a language code (falls back to Telugu)."""
+    return RECONNECT.get((code or "").lower().strip(), RECONNECT[DEFAULT_LANG])
+
+
 # ── Mid-call language-switch acknowledgement (spoken deterministically by the
 # NEW agent's on_enter right after the caller explicitly asks to switch, so
 # there is never dead air while the STT/TTS pipelines are swapped). Short,

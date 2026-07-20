@@ -46,6 +46,14 @@ _TOKENS: frozenset[str] = frozenset({
     "ହଁ", "ଆଚ୍ଛା", "ଓକେ",
 })
 
+# Just the "hello" renderings from _TOKENS (line-check word across scripts) —
+# used to detect a caller repeating hello because they cannot hear us
+# (Vinay 2026-07-20: "if user repeats hello.. hello.. continuously").
+_HELLO_TOKENS: frozenset[str] = frozenset({
+    "hello", "helo", "hallo", "hullo", "hey", "hai",
+    "హలో", "హెలో", "हैलो", "हेलो", "ஹலோ", "ಹಲೋ", "ഹലോ", "হ্যালো", "ହେଲୋ",
+})
+
 _STRIP = re.compile(r"[\s\.,!?;:'\"()\-–—]+")
 
 
@@ -58,6 +66,16 @@ def is_backchannel(text: str | None) -> bool:
     if not tokens or len(tokens) > 3:
         return False
     return all(t in _TOKENS for t in tokens)
+
+
+def is_lone_hello(text: str | None) -> bool:
+    """True when the utterance is NOTHING BUT hello(s): "hello" / "hello hello"
+    / "హలో హలో" → True; "hello doctor" / "okay" → False. Used to count a caller
+    who keeps saying hello (lost/one-way audio)."""
+    tokens = [t for t in _STRIP.split((text or "").lower()) if t]
+    if not tokens or len(tokens) > 3:
+        return False
+    return all(t in _HELLO_TOKENS for t in tokens)
 
 
 def suppress_backchannel(text: str | None, agent_speaking: bool) -> bool:
