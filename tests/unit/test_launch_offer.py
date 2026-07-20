@@ -82,10 +82,20 @@ def test_ui_surfaces_show_offer_prices_and_label():
 
 
 def test_no_free_trial_claims_on_landing():
-    """#425: trial was removed 2026-07-17 but the hero still promised
-    '300 free minutes' — contradicting the pricing footnote on the same page.
-    No marketing surface may claim free minutes or a free trial."""
-    for path in ("frontend/src/pages/Landing.jsx", "backend/static/index.html"):
-        text = Path(path).read_text(encoding="utf-8")
-        assert "free minutes" not in text.lower(), path
-        assert "free trial" not in text.lower() or "No open trial" in text, path
+    """#425/#426: the stale '300 free minutes' hero claim may never return.
+    Landing free-trial copy must be gated on the LIVE founding-slot count
+    (fetch of /auth/founding-slots), so an exhausted offer hides itself; the
+    static SEO mirror can't react, so it never claims a trial at all."""
+    landing = Path("frontend/src/pages/Landing.jsx").read_text(encoding="utf-8")
+    static = Path("backend/static/index.html").read_text(encoding="utf-8")
+    assert "300 free minutes" not in landing and "300 free minutes" not in static
+    assert "free trial" not in static.lower() and "free minutes" not in static.lower()
+    from backend.services.billing_math import FOUNDING_TRIAL_SLOTS
+    if FOUNDING_TRIAL_SLOTS > 0:
+        # Offer on: copy present AND runtime-gated on the live count.
+        assert "14-day free trial" in landing
+        assert "founding-slots" in landing          # live fetch wired
+        assert "trialOn" in landing                 # every claim behind the gate
+    else:
+        # Offer flipped off: pull the trial branches out of the page too.
+        assert "free trial" not in landing.lower()

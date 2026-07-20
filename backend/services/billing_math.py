@@ -7,7 +7,7 @@ no I/O — unit-tested in tests/unit/test_billing_math.py.
 All amounts in WHOLE RUPEES (floats only where overage rates demand it).
 """
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -142,6 +142,18 @@ TRIAL_MINUTES = 300
 # price) activates as usual. Pilot terms (success criteria, auto-convert)
 # live on paper, not in code.
 PILOT_DAYS = 14
+
+# FOUNDING FREE TRIAL (Vinay 2026-07-20: "add free trail for 14 days for
+# first 10 customers. then we can remove."). Self-serve signups get the
+# classic 14-day / TRIAL_MINUTES trial back — but only while fewer than
+# FOUNDING_TRIAL_SLOTS orgs created on/after FOUNDING_TRIAL_START have ever
+# held a trial (trial_ends_at set — admin-granted pilots consume slots too).
+# Reuses the whole trial machinery: minute cap in call_blocked, expiry via
+# the trial_pause job, first payment activates.
+# TO REMOVE THE OFFER: set FOUNDING_TRIAL_SLOTS = 0. Tests then force the
+# landing/static free-trial copy to come down too (test_launch_offer).
+FOUNDING_TRIAL_SLOTS = 10
+FOUNDING_TRIAL_START = datetime(2026, 7, 20, tzinfo=timezone.utc)
 
 # CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
 # charge) adds GST on top; B2B clinics reclaim it via input credit.

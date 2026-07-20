@@ -332,6 +332,44 @@ def _verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
+async def _founding_slots_left(db) -> int:
+    """#426: remaining founding free-trial slots (0 when the offer is off).
+
+    A slot is consumed by any org created on/after FOUNDING_TRIAL_START that
+    ever held a trial (trial_ends_at set) — self-serve grants and admin
+    pilots alike. Flip billing_math.FOUNDING_TRIAL_SLOTS to 0 to end it.
+    """
+    from sqlalchemy import func as _func
+
+    from backend.models.schema import Organization
+    from backend.services import billing_math as _bm
+
+    if _bm.FOUNDING_TRIAL_SLOTS <= 0:
+        return 0
+    used = (
+        await db.execute(
+            select(_func.count())
+            .select_from(Organization)
+            .where(
+                Organization.trial_ends_at.is_not(None),
+                Organization.created_at >= _bm.FOUNDING_TRIAL_START,
+            )
+        )
+    ).scalar_one()
+    return max(0, _bm.FOUNDING_TRIAL_SLOTS - used)
+
+
+@router.get("/founding-slots", dependencies=[Depends(default_limit)])
+async def founding_slots():
+    """Public (#426): live count for the landing page. When slots_left is 0
+    the landing hides every free-trial claim automatically."""
+    from backend.services import billing_math as _bm
+
+    async with AsyncSessionLocal() as db:
+        left = await _founding_slots_left(db)
+    return {"slots_total": _bm.FOUNDING_TRIAL_SLOTS, "slots_left": left}
+
+
 @router.post(
     "/register",
     response_model=TokenResponse,
@@ -346,6 +384,8 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
     """
     import uuid as _uuid
     from datetime import datetime, timedelta, timezone as _tz
+
+    from backend.services.billing_math import PILOT_DAYS
 
     from backend.models.schema import Branch, Organization
 
@@ -426,6 +466,12 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
                 status_code=409, detail="Account already exists — sign in instead"
             )
 
+        # #426 founding trial (Vinay 2026-07-20): the first
+        # FOUNDING_TRIAL_SLOTS signups get the 14-day trial back; everyone
+        # after starts paused as per #392 (first payment activates).
+        # ponytail: count-then-insert — two simultaneous signups could
+        # over-grant one slot; acceptable for a capped goodwill offer.
+        founding = (await _founding_slots_left(db)) > 0
         org = Organization(
             name=body.clinic_name.strip(),
             # Mobile is no longer collected at signup (email-only, Vinay
@@ -434,16 +480,18 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             owner_phone="",
             owner_email=email,
             plan=body.plan,
-            # #392 (Vinay 2026-07-17: "remove 14-day trial"): no free window.
-            # New orgs start PAUSED — dashboard/Settings fully usable, the AI
-            # line answers with the polite blocked line until the first payment
-            # activates (Settings "Activate — pay" → webhook flips to active).
-            # Existing trial orgs keep their trial logic (call_blocked et al).
-            status="paused",
-            trial_ends_at=None,
+            # #392 (Vinay 2026-07-17: "remove 14-day trial"): no free window
+            # outside the founding slots. Paused orgs get the dashboard but
+            # the AI line answers with the polite blocked line until the
+            # first payment activates. Trial orgs ride the existing trial
+            # machinery (TRIAL_MINUTES cap, trial_pause expiry job).
+            status="trial" if founding else "paused",
+            trial_ends_at=(datetime.now(_tz.utc) + timedelta(days=PILOT_DAYS)) if founding else None,
         )
         db.add(org)
         await db.flush()
+        if founding:
+            logger.info("founding_trial_granted", org_id=str(org.id))
 
         branch = Branch(
             org_id=org.id,

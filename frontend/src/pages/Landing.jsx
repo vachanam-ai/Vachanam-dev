@@ -52,6 +52,18 @@ export default function Landing() {
   const heroRef = useRef(null);
   const rootRef = useRef(null);
 
+  // #426 founding trial: live slot count gates every free-trial claim on the
+  // page. null / fetch-failure / 0 → no claim shown (never advertise what we
+  // can't grant). Backend: GET /auth/founding-slots.
+  const [slotsLeft, setSlotsLeft] = useState(null);
+  useEffect(() => {
+    fetch(`${API_BASE}/auth/founding-slots`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setSlotsLeft(d.slots_left))
+      .catch(() => {});
+  }, []);
+  const trialOn = slotsLeft > 0;
+
   useEffect(() => {
     // Respect prefers-reduced-motion: content is visible without gsap.
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
@@ -160,13 +172,28 @@ export default function Landing() {
               all in under four minutes, around the clock.
             </p>
             <div data-hero className="mt-8 flex flex-wrap items-center gap-4">
-              <a href="#pricing" className="btn-primary px-6 py-3">Get started</a>
+              {trialOn ? (
+                <Link to="/register" className="btn-primary px-6 py-3">Start free trial</Link>
+              ) : (
+                <a href="#pricing" className="btn-primary px-6 py-3">Get started</a>
+              )}
               <a href="#demo" className="btn-gold px-6 py-3">Book a demo</a>
               <a href="#voices" className="btn-ghost px-6 py-3">Hear the voices</a>
             </div>
-            {/* Trial removed 2026-07-17 — guarded by test_no_free_trial_claims_on_landing. */}
+            {/* Trial claims gated on live slots (#426) — guarded by
+                test_no_free_trial_claims_on_landing. */}
             <p data-hero className="mt-4 font-ui text-xs text-slate">
-              Keep your existing number · live the same day · cancel anytime
+              {trialOn ? (
+                <>
+                  <span className="font-semibold text-gold-ink">
+                    Founding offer: 14-day free trial for the first 10 clinics
+                  </span>
+                  {" · "}
+                  <span className="numeral">{slotsLeft}</span> {slotsLeft === 1 ? "slot" : "slots"} left · no credit card
+                </>
+              ) : (
+                <>Keep your existing number · live the same day · cancel anytime</>
+              )}
             </p>
           </div>
 
@@ -418,7 +445,9 @@ export default function Landing() {
           ))}
         </div>
         <p data-item className="mt-6 text-center font-ui text-xs text-slate">
-          No trial period · activate with the offer price and go live the same day · cancel anytime
+          {trialOn
+            ? <>Founding offer: the first 10 clinics start with a 14-day free trial ({slotsLeft} left) · cancel anytime</>
+            : <>No trial period · activate with the offer price and go live the same day · cancel anytime</>}
           <br />
           Launch offer: pay the offer price for your first 3 months. No GST added, nothing extra.
         </p>
@@ -434,7 +463,9 @@ export default function Landing() {
             ["Do I need a new phone number?",
              "No. Your existing clinic number forwards to your Vachanam AI line. Patients dial the number they already know; the only change is that someone always answers."],
             ["Is there a free trial?",
-             "No open trial. Instead, launch-offer pricing runs for your first 3 months, and a small number of invited clinics join a 14-day founding pilot. Ask about it on your demo call."],
+             trialOn
+               ? `Yes, right now: the first 10 clinics get a 14-day free trial with ≈100 call minutes included, no credit card needed. ${slotsLeft} of 10 slots are still open. After the trial, launch-offer pricing runs for your first 3 months.`
+               : "The founding free-trial slots are taken. Launch-offer pricing still runs for your first 3 months, and you can see everything live on a free demo call before paying."],
             ["What if the AI doesn't know an answer?",
              "It never guesses. It tells the patient the clinic will check and get back, logs the question for your staff, and moves on. You see every logged question on your dashboard."],
             ["Does it give medical advice?",
