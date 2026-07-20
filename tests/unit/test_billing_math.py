@@ -19,13 +19,14 @@ from backend.services.billing_math import (
 )
 
 
-def test_subscription_order_first_activation_offer_no_gst():
-    # #391 (Vinay 2026-07-17): first activation = launch-offer base, GST waived.
+def test_subscription_order_first_activation_standard_no_gst():
+    # #433 (Vinay 2026-07-20): offer pricing removed — first activation is the
+    # STANDARD base (is_offer False), GST still waived.
     bd = subscription_order_breakdown("solo")
-    assert bd["base"] == 3999 and bd["is_offer"] is True
+    assert bd["base"] == 5999 and bd["is_offer"] is False
     assert bd["overage_minutes"] == 0
     assert bd["gst"] == 0.0
-    assert bd["amount_paise"] == 399900
+    assert bd["amount_paise"] == 599900
 
 
 def test_subscription_order_after_offer_window_standard_base(monkeypatch):
@@ -52,7 +53,7 @@ def test_subscription_order_honors_minute_adjustment():
     # +100 goodwill minutes → bucket 1600, so 1550 used = no overage.
     bd = subscription_order_breakdown("clinic", cycle_minutes_used=1550, adjustment=100)
     assert bd["overage_minutes"] == 0
-    assert bd["amount_paise"] == 699900  # offer base, no GST
+    assert bd["amount_paise"] == 999900  # standard base (#433), no GST
 
 
 def test_overage_breakdown_solo_1000_minutes():

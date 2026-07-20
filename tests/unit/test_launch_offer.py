@@ -19,39 +19,24 @@ _NOW = datetime.now(timezone.utc)
 _OLD = _NOW - timedelta(days=31 * OFFER_MONTHS + 30)  # well past the window
 
 
-def test_offer_margins_hold_10_to_15_percent_worst_case():
-    """Vinay's brief: "10-15% profit for us" at the pricing table's own
-    worst-case cost discipline (Rs3/min x full bucket + Rs1,500 infra)."""
-    for key in ("solo", "clinic", "multi"):
-        cost = PLANS[key].included_minutes * 3.0 + 1500.0
-        offer = OFFER_PRICES[key]
-        margin = (offer - cost) / offer
-        # 0.095 floor: prices land on the Indian ₹x,999 point (solo 3,999 =
-        # 9.98%, i.e. 10% nominal) — the brief's 10-15% band, retail-rounded.
-        assert 0.095 <= margin <= 0.15, f"{key}: {margin:.1%} outside 10-15%"
-
-
-def test_lite_has_no_offer_price_but_keeps_window_perks():
-    # Vinay 2026-07-17 follow-up: "keep lite 1999" — Lite already sits below
-    # the margin invariant; no discount. Window perks (cloning) still apply.
-    assert "lite" not in OFFER_PRICES
+def test_offer_pricing_removed():
+    """#433 (Vinay 2026-07-20: "remove offer pricings"). OFFER_PRICES is now
+    empty — every plan is sold at its standard base, is_offer always False."""
+    assert OFFER_PRICES == {}
+    assert effective_price("solo", _NOW) == (5_999, False)
+    assert effective_price("clinic", _NOW) == (9_999, False)
+    assert effective_price("multi", _NOW) == (17_999, False)
     assert effective_price("lite", _NOW) == (1_999, False)
-    assert cloning_allowed("lite", _NOW) is True
-
-
-def test_offer_window_boundaries():
-    assert in_offer_window(None) is True  # trial / pre-signup display
-    assert in_offer_window(_NOW) is True
-    assert in_offer_window(_NOW - timedelta(days=60)) is True
-    assert in_offer_window(_OLD) is False
-    # naive datetime never crashes (DB rows may be naive UTC)
-    assert in_offer_window(_OLD.replace(tzinfo=None)) is False
-
-
-def test_effective_price_offer_then_standard():
-    assert effective_price("clinic", _NOW) == (6_999, True)
-    assert effective_price("clinic", _OLD) == (9_999, False)
     assert effective_price("nope", _NOW) == (0, False)
+
+
+def test_offer_window_machinery_kept_for_cloning():
+    # The date window itself is retained (cloning still keys off it); only the
+    # PRICE discount is gone. So a future offer is a one-line OFFER_PRICES re-add.
+    assert in_offer_window(None) is True
+    assert in_offer_window(_NOW) is True
+    assert in_offer_window(_OLD) is False
+    assert in_offer_window(_OLD.replace(tzinfo=None)) is False  # naive-safe
 
 
 def test_cloning_every_plan_during_window_standard_gates_after():
@@ -63,22 +48,21 @@ def test_cloning_every_plan_during_window_standard_gates_after():
     assert cloning_allowed("multi", _OLD) is True
 
 
-def test_ui_surfaces_show_offer_prices_and_label():
-    """The hardcoded price surfaces must match OFFER_PRICES and carry the
-    'first 3 months' label + struck-through actual price."""
+def test_ui_surfaces_show_standard_prices_no_offer():
+    """#433: the price surfaces show the STANDARD prices only — no
+    struck-through 'actual', no 'Offer price — first 3 months' label."""
     landing = Path("frontend/src/pages/Landing.jsx").read_text(encoding="utf-8")
     static = Path("backend/static/index.html").read_text(encoding="utf-8")
-    for text, offers in ((landing, ("₹3,999", "₹6,999", "₹11,999")),
-                         (static, ("&#8377;3,999", "&#8377;6,999",
-                                   "&#8377;11,999"))):
-        for price in offers:
-            assert price in text, f"offer price {price} missing"
-    # Lite keeps its standard price — no discount shown anywhere.
-    assert "₹1,799" not in landing and "&#8377;1,799" not in static
-    assert "Offer price — first 3 months" in landing
-    assert "line-through" in landing and "line-through" in static
-    assert "exclude 18% GST" not in landing
-    assert "exclude 18% GST" not in static
+    for text, prices in ((landing, ("₹5,999", "₹9,999", "₹17,999")),
+                         (static, ("&#8377;5,999", "&#8377;9,999",
+                                   "&#8377;17,999"))):
+        for price in prices:
+            assert price in text, f"standard price {price} missing"
+    # The discount and its scaffolding are gone.
+    for text in (landing, static):
+        assert "Offer price — first 3 months" not in text
+        assert "line-through" not in text
+        assert "₹3,999" not in text and "&#8377;3,999" not in text
 
 
 def test_no_free_trial_claims_on_landing():
@@ -88,14 +72,21 @@ def test_no_free_trial_claims_on_landing():
     static SEO mirror can't react, so it never claims a trial at all."""
     landing = Path("frontend/src/pages/Landing.jsx").read_text(encoding="utf-8")
     static = Path("backend/static/index.html").read_text(encoding="utf-8")
+    # The stale "300 free minutes" claim may never return anywhere.
     assert "300 free minutes" not in landing and "300 free minutes" not in static
-    assert "free trial" not in static.lower() and "free minutes" not in static.lower()
-    from backend.services.billing_math import FOUNDING_TRIAL_SLOTS
-    if FOUNDING_TRIAL_SLOTS > 0:
-        # Offer on: copy present AND runtime-gated on the live count.
+    from backend.services import billing_math as _bm
+    if getattr(_bm, "TRIAL_FOR_ALL", False):
+        # #433: trial is universal, so BOTH surfaces advertise it (the static
+        # mirror can safely claim it — every clinic qualifies, no counter).
         assert "14-day free trial" in landing
-        assert "founding-slots" in landing          # live fetch wired
-        assert "trialOn" in landing                 # every claim behind the gate
+        assert "14-day free trial" in static
+        assert "trialOn" in landing                 # Landing still guards on live state
+    elif _bm.FOUNDING_TRIAL_SLOTS > 0:
+        # Capped founding offer: Landing gates on the live count; static stays
+        # claim-free because it can't react.
+        assert "14-day free trial" in landing
+        assert "founding-slots" in landing
+        assert "trialOn" in landing
+        assert "free trial" not in static.lower()
     else:
-        # Offer flipped off: pull the trial branches out of the page too.
         assert "free trial" not in landing.lower()

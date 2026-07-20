@@ -55,14 +55,17 @@ PLANS: dict[str, Plan] = {
 # After the window: standard price, standard gates. UI shows the actual price
 # struck through + the offer price, labeled "Offer price — first 3 months".
 OFFER_MONTHS = 3
-# Lite has NO offer price (Vinay 2026-07-17 follow-up: "keep lite 1999" — it
-# already sits below the margin invariant; a discount would be a loss). Lite
-# still gets the window's cloning unlock + 3 doctors.
-OFFER_PRICES: dict[str, int] = {
-    "solo": 3_999,
-    "clinic": 6_999,
-    "multi": 11_999,
-}
+# OFFER PRICING REMOVED (Vinay 2026-07-20: "remove offer pricings and make
+# 14days free trail common across"). The 3-month launch discount is gone —
+# every plan is sold at its standard price, and the go-to-market lever is now
+# a 14-day free trial for EVERY new clinic (TRIAL_FOR_ALL below) instead of a
+# discounted price. Emptying OFFER_PRICES makes effective_price always return
+# the standard base and is_offer always False; the machinery is kept (not
+# ripped out) so a future offer is a one-line re-add. Cloning stays unlocked
+# for everyone during a signup's first-window via cloning_allowed → in_offer_
+# window (date-based, price-independent), so removing the discount does not
+# quietly revoke a clinic's cloned voice.
+OFFER_PRICES: dict[str, int] = {}
 
 
 def in_offer_window(subscription_started_at, now=None) -> bool:
@@ -154,6 +157,14 @@ PILOT_DAYS = 14
 # landing/static free-trial copy to come down too (test_launch_offer).
 FOUNDING_TRIAL_SLOTS = 10
 FOUNDING_TRIAL_START = datetime(2026, 7, 20, tzinfo=timezone.utc)
+
+# TRIAL FOR ALL (Vinay 2026-07-20: "make 14days free trail common across").
+# The founding trial was capped at the first FOUNDING_TRIAL_SLOTS signups;
+# now EVERY new clinic gets the 14-day / TRIAL_MINUTES trial. When True, the
+# slot count is irrelevant (register grants unconditionally) and the landing
+# page advertises the trial to everyone with no scarcity counter. Flip to
+# False to fall back to the capped founding-slots behaviour.
+TRIAL_FOR_ALL = True
 
 # CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
 # charge) adds GST on top; B2B clinics reclaim it via input credit.

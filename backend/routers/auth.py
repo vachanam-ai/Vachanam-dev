@@ -344,6 +344,10 @@ async def _founding_slots_left(db) -> int:
     from backend.models.schema import Organization
     from backend.services import billing_math as _bm
 
+    # Trial-for-all (#433 pricing change): the trial is unlimited, so there is
+    # always a slot. -1 signals "unlimited" to the public endpoint.
+    if getattr(_bm, "TRIAL_FOR_ALL", False):
+        return -1
     if _bm.FOUNDING_TRIAL_SLOTS <= 0:
         return 0
     used = (
@@ -361,13 +365,17 @@ async def _founding_slots_left(db) -> int:
 
 @router.get("/founding-slots", dependencies=[Depends(default_limit)])
 async def founding_slots():
-    """Public (#426): live count for the landing page. When slots_left is 0
-    the landing hides every free-trial claim automatically."""
+    """Public: landing-page trial state. trial_for_all=true → every clinic gets
+    the 14-day trial (no scarcity counter); else slots_left is the remaining
+    founding-slot count and 0 hides the trial claim."""
     from backend.services import billing_math as _bm
 
+    if getattr(_bm, "TRIAL_FOR_ALL", False):
+        return {"trial_for_all": True, "slots_total": -1, "slots_left": -1}
     async with AsyncSessionLocal() as db:
         left = await _founding_slots_left(db)
-    return {"slots_total": _bm.FOUNDING_TRIAL_SLOTS, "slots_left": left}
+    return {"trial_for_all": False, "slots_total": _bm.FOUNDING_TRIAL_SLOTS,
+            "slots_left": left}
 
 
 @router.post(
@@ -471,7 +479,9 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         # after starts paused as per #392 (first payment activates).
         # ponytail: count-then-insert — two simultaneous signups could
         # over-grant one slot; acceptable for a capped goodwill offer.
-        founding = (await _founding_slots_left(db)) > 0
+        # -1 = unlimited (TRIAL_FOR_ALL), >0 = slots remain — both grant it.
+        _slots = await _founding_slots_left(db)
+        founding = _slots != 0
         org = Organization(
             name=body.clinic_name.strip(),
             # Mobile is no longer collected at signup (email-only, Vinay

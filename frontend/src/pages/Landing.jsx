@@ -10,12 +10,14 @@ import { API_BASE } from "../api/client.js";
 // #391 launch offer (Vinay 2026-07-17): actual price struck through, offer
 // price for the first 3 months shown big. Source of truth: billing_math
 // OFFER_PRICES — keep in sync (guarded by tests/unit/test_launch_offer.py).
+// 2026-07-20 (Vinay: "remove offer pricings"): standard prices only, no more
+// struck-through launch-offer discount. The go-to-market lever is now the
+// 14-day free trial every clinic gets.
 const PLANS = [
   {
     name: "Starter",
     key: "solo",
-    price: "₹3,999",
-    actual: "₹5,999",
+    price: "₹5,999",
     per: "/month + ₹5/min after",
     tagline: "Small clinics, up to 3 doctors",
     points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "Token booking + calendar", "Reminder calls + receptionist app"]
@@ -23,8 +25,7 @@ const PLANS = [
   {
     name: "Clinic",
     key: "clinic",
-    price: "₹6,999",
-    actual: "₹9,999",
+    price: "₹9,999",
     per: "/month + ₹5/min after",
     tagline: "Growing clinics, up to 5 doctors",
     popular: true,
@@ -33,8 +34,7 @@ const PLANS = [
   {
     name: "Multi",
     key: "multi",
-    price: "₹11,999",
-    actual: "₹17,999",
+    price: "₹17,999",
     per: "/month + ₹5/min after",
     tagline: "Multi-specialty, unlimited doctors",
     points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "Multi-doctor routing", "CSV exports"]
@@ -55,14 +55,20 @@ export default function Landing() {
   // #426 founding trial: live slot count gates every free-trial claim on the
   // page. null / fetch-failure / 0 → no claim shown (never advertise what we
   // can't grant). Backend: GET /auth/founding-slots.
+  // trial_for_all → every clinic gets it (no counter); else slots_left>0.
   const [slotsLeft, setSlotsLeft] = useState(null);
+  const [trialForAll, setTrialForAll] = useState(false);
   useEffect(() => {
     fetch(`${API_BASE}/auth/founding-slots`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && setSlotsLeft(d.slots_left))
+      .then((d) => {
+        if (!d) return;
+        setSlotsLeft(d.slots_left);
+        setTrialForAll(Boolean(d.trial_for_all));
+      })
       .catch(() => {});
   }, []);
-  const trialOn = slotsLeft > 0;
+  const trialOn = trialForAll || slotsLeft > 0;
 
   useEffect(() => {
     // Respect prefers-reduced-motion: content is visible without gsap.
@@ -186,10 +192,12 @@ export default function Landing() {
               {trialOn ? (
                 <>
                   <span className="font-semibold text-gold-ink">
-                    Founding offer: 14-day free trial for the first 10 clinics
+                    14-day free trial
                   </span>
-                  {" · "}
-                  <span className="numeral">{slotsLeft}</span> {slotsLeft === 1 ? "slot" : "slots"} left · no credit card
+                  {" · "}no credit card{" · "}cancel anytime
+                  {!trialForAll && slotsLeft != null && (
+                    <> · <span className="numeral">{slotsLeft}</span> {slotsLeft === 1 ? "slot" : "slots"} left</>
+                  )}
                 </>
               ) : (
                 <>Keep your existing number · live the same day · cancel anytime</>
@@ -424,13 +432,14 @@ export default function Landing() {
               <h3 className="font-display text-xl font-semibold">{p.name}</h3>
               <p className="font-ui text-sm text-slate">{p.tagline}</p>
               <p className="mt-4">
-                <span className="numeral text-lg text-slate line-through">{p.actual}</span>{" "}
                 <span className="numeral text-4xl text-teal-deep">{p.price}</span>
                 <span className="font-ui text-sm text-slate"> {p.per}</span>
               </p>
-              <p className="mt-1 font-ui text-xs font-semibold text-amber-800">
-                Offer price — first 3 months, then {p.actual}/month
-              </p>
+              {trialOn && (
+                <p className="mt-1 font-ui text-xs font-semibold text-teal">
+                  Start with a 14-day free trial
+                </p>
+              )}
               <ul className="mt-5 flex-1 space-y-2.5">
                 {p.points.map((pt) => (
                   <li key={pt} className="flex items-start gap-2 font-ui text-sm">
@@ -446,10 +455,10 @@ export default function Landing() {
         </div>
         <p data-item className="mt-6 text-center font-ui text-xs text-slate">
           {trialOn
-            ? <>Founding offer: the first 10 clinics start with a 14-day free trial ({slotsLeft} left) · cancel anytime</>
-            : <>No trial period · activate with the offer price and go live the same day · cancel anytime</>}
+            ? <>Every new clinic starts with a 14-day free trial · no credit card · cancel anytime</>
+            : <>Go live the same day · cancel anytime</>}
           <br />
-          Launch offer: pay the offer price for your first 3 months. No GST added, nothing extra.
+          Prices exclude ₹5/min usage beyond the included minutes. No hidden fees.
         </p>
       </section>
 
@@ -464,8 +473,8 @@ export default function Landing() {
              "No. Your existing clinic number forwards to your Vachanam AI line. Patients dial the number they already know; the only change is that someone always answers."],
             ["Is there a free trial?",
              trialOn
-               ? `Yes, right now: the first 10 clinics get a 14-day free trial with ≈100 call minutes included, no credit card needed. ${slotsLeft} of 10 slots are still open. After the trial, launch-offer pricing runs for your first 3 months.`
-               : "The founding free-trial slots are taken. Launch-offer pricing still runs for your first 3 months, and you can see everything live on a free demo call before paying."],
+               ? "Yes. Every new clinic gets a 14-day free trial with ≈100 call minutes included — no credit card needed. After the trial, you continue on your chosen plan; cancel anytime."
+               : "You can see everything live on a free demo call before paying, and cancel anytime after you start."],
             ["What if the AI doesn't know an answer?",
              "It never guesses. It tells the patient the clinic will check and get back, logs the question for your staff, and moves on. You see every logged question on your dashboard."],
             ["Does it give medical advice?",

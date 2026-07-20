@@ -59,6 +59,7 @@ async def _register(client, email):
 
 @pytest.mark.asyncio
 async def test_slot_available_grants_14_day_trial(client, db, monkeypatch):
+    monkeypatch.setattr(billing_math, "TRIAL_FOR_ALL", False)
     monkeypatch.setattr(billing_math, "FOUNDING_TRIAL_SLOTS", 10**9)
     email = _unique_email()
     r = await _register(client, email)
@@ -77,6 +78,7 @@ async def test_slot_available_grants_14_day_trial(client, db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_offer_off_starts_paused(client, db, monkeypatch):
+    monkeypatch.setattr(billing_math, "TRIAL_FOR_ALL", False)
     monkeypatch.setattr(billing_math, "FOUNDING_TRIAL_SLOTS", 0)
     email = _unique_email()
     r = await _register(client, email)
@@ -91,6 +93,7 @@ async def test_offer_off_starts_paused(client, db, monkeypatch):
 @pytest.mark.asyncio
 async def test_slots_exhausted_starts_paused(client, db, monkeypatch):
     # Cap = 1, burn the slot, next signup must be paused.
+    monkeypatch.setattr(billing_math, "TRIAL_FOR_ALL", False)
     monkeypatch.setattr(billing_math, "FOUNDING_TRIAL_SLOTS", 1)
     first, second = _unique_email(), _unique_email()
     assert (await _register(client, first)).status_code == 201
@@ -109,13 +112,33 @@ async def test_slots_exhausted_starts_paused(client, db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_public_slots_endpoint(client, db, monkeypatch):  # db: creates schema
+    # Capped mode (TRIAL_FOR_ALL off): counter is exposed.
+    monkeypatch.setattr(billing_math, "TRIAL_FOR_ALL", False)
     monkeypatch.setattr(billing_math, "FOUNDING_TRIAL_SLOTS", 10)
-    r = await client.get("/auth/founding-slots")
-    assert r.status_code == 200
-    body = r.json()
+    body = (await client.get("/auth/founding-slots")).json()
+    assert body["trial_for_all"] is False
     assert body["slots_total"] == 10
     assert 0 <= body["slots_left"] <= 10
 
     monkeypatch.setattr(billing_math, "FOUNDING_TRIAL_SLOTS", 0)
-    r = await client.get("/auth/founding-slots")
-    assert r.json() == {"slots_total": 0, "slots_left": 0}
+    body = (await client.get("/auth/founding-slots")).json()
+    assert body == {"trial_for_all": False, "slots_total": 0, "slots_left": 0}
+
+
+@pytest.mark.asyncio
+async def test_trial_for_all_grants_every_signup(client, db, monkeypatch):
+    """#433 (Vinay: "make 14days free trail common across"): with TRIAL_FOR_ALL,
+    every new clinic gets the 14-day trial regardless of the slot count, and
+    the public endpoint advertises it with no scarcity counter."""
+    monkeypatch.setattr(billing_math, "TRIAL_FOR_ALL", True)
+    monkeypatch.setattr(billing_math, "FOUNDING_TRIAL_SLOTS", 0)  # irrelevant now
+    body = (await client.get("/auth/founding-slots")).json()
+    assert body == {"trial_for_all": True, "slots_total": -1, "slots_left": -1}
+
+    email = _unique_email()
+    assert (await _register(client, email)).status_code == 201
+    org = (
+        await db.execute(select(Organization).where(Organization.owner_email == email))
+    ).scalar_one()
+    assert org.status == "trial"
+    assert org.trial_ends_at is not None
