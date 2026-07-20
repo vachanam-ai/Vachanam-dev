@@ -4609,6 +4609,18 @@ _heartbeat_started = False
 # no beacon ⇒ the existing 180s-stale watchdog restart kicks in on its own.
 _lk_registered = None  # threading.Event, created in _start_watchdog_heartbeat
 
+# LK-8 (2026-07-20 outage: "AI not picking calls"): the worker stayed
+# REGISTERED while its job-process pool died — every subprocess spawn hit
+# "error initializing process → TimeoutError" in a respawn loop, so calls were
+# dispatched to a worker that could never handle them, and because the beacon
+# was gated only on registration it kept flowing → the watchdog never fired and
+# the line was dead for ~an hour before Vinay noticed. Now: N pool-init errors
+# inside a window clear the SAME beacon so the existing 180s auto-restart heals
+# it. A registered worker that cannot spawn a job process is NOT healthy.
+_PROC_INIT_ERR_THRESHOLD = 3
+_PROC_INIT_ERR_WINDOW_S = 120.0
+_proc_init_errs: list[float] = []
+
 
 class _LkRegistrationWatch:
     """logging.Filter duck-type on the 'livekit.agents' logger."""
@@ -4618,6 +4630,7 @@ class _LkRegistrationWatch:
             msg = record.getMessage()
             if "registered worker" in msg:
                 _lk_registered.set()
+                _proc_init_errs.clear()  # a fresh registration = healthy again
             elif ("draining worker" in msg or "shutting down worker" in msg
                   # LK-5 (2026-07-20): a silently dropped worker WebSocket
                   # surfaces as the SDK's reconnect warning — without clearing
@@ -4625,6 +4638,18 @@ class _LkRegistrationWatch:
                   # was dead. Re-registration re-sets the flag.
                   or "failed to connect to livekit" in msg):
                 _lk_registered.clear()
+            elif "error initializing process" in msg:
+                # LK-8: dead job-process pool → treat as line-down after a few
+                # in a short window (one transient init timeout is not fatal).
+                import time as _t
+
+                now = _t.monotonic()
+                _proc_init_errs.append(now)
+                cutoff = now - _PROC_INIT_ERR_WINDOW_S
+                while _proc_init_errs and _proc_init_errs[0] < cutoff:
+                    _proc_init_errs.pop(0)
+                if len(_proc_init_errs) >= _PROC_INIT_ERR_THRESHOLD:
+                    _lk_registered.clear()  # stop the beacon → watchdog restarts
         except Exception:  # noqa: BLE001 — never break SDK logging
             pass
         return True

@@ -67,3 +67,41 @@ def test_heartbeat_source_gated_on_registration():
     src = inspect.getsource(agent_mod._start_watchdog_heartbeat)
     assert "_lk_registered.is_set()" in src
     assert src.index("_lk_registered.is_set()") < src.index("watchdog:hb:agent")
+
+
+def test_pool_init_failures_clear_beacon_lk8():
+    """LK-8 (2026-07-20 outage): a REGISTERED worker whose job-process pool is
+    dead ('error initializing process' in a respawn loop) kept the beacon alive
+    because the beacon was gated only on registration — the watchdog never
+    restarted it and the line was dead for ~an hour. Now N pool-init errors in
+    the window clear the same flag so the 180s auto-restart heals it."""
+    import agent.livekit_minimal.agent as m
+
+    m._lk_registered = threading.Event()
+    m._lk_registered.set()          # worker is registered...
+    m._proc_init_errs.clear()
+    watch = _LkRegistrationWatch()
+
+    # One transient init failure must NOT take the line down.
+    watch.filter(_record("error initializing process"))
+    assert m._lk_registered.is_set()
+
+    # Reaching the threshold in-window clears the beacon.
+    for _ in range(m._PROC_INIT_ERR_THRESHOLD):
+        watch.filter(_record("error initializing process"))
+    assert not m._lk_registered.is_set()
+
+
+def test_reregistration_resets_pool_error_streak_lk8():
+    import agent.livekit_minimal.agent as m
+
+    m._lk_registered = threading.Event()
+    m._proc_init_errs.clear()
+    watch = _LkRegistrationWatch()
+
+    for _ in range(m._PROC_INIT_ERR_THRESHOLD - 1):
+        watch.filter(_record("error initializing process"))
+    # A successful (re)registration wipes the streak → back to healthy.
+    watch.filter(_record("registered worker"))
+    assert m._lk_registered.is_set()
+    assert m._proc_init_errs == []
