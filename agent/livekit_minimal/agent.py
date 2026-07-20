@@ -73,7 +73,11 @@ from agent.i18n import (  # noqa: E402
     get_switch_ack,
 )
 from agent.i18n.languages import DEFAULT_LANG  # noqa: E402
-from agent.i18n.lines import get_line_check, get_reconnect  # noqa: E402
+from agent.i18n.lines import (  # noqa: E402
+    get_line_check,
+    get_reconnect,
+    get_wait_fillers,
+)
 from agent.i18n.backchannels import is_lone_hello, suppress_backchannel  # noqa: E402
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
@@ -171,12 +175,17 @@ async def _pcm_frames(pcm: bytes, sr: int, ch: int):
         )
 
 
-async def cache_filler_clips(session, texts, voice_id: str, lang_code: str) -> None:
+async def cache_filler_clips(
+    session, texts, voice_id: str, lang_code: str, key: str = "filler_clips"
+) -> None:
     """Pre-render the lookup fillers ONCE at session start and stash the decoded
-    PCM on session.userdata['filler_clips'] (Vinay 2026-07-06: "cache a response
+    PCM on session.userdata[key] (Vinay 2026-07-06: "cache a response
     and speak it instantly while checking"). _say_lookup_filler then replays the
     cached audio with no live synth. Best-effort — on any failure the filler
-    falls back to live session.say(text). Never blocks or breaks the call."""
+    falls back to live session.say(text). Never blocks or breaks the call.
+
+    `key` selects the bucket: "filler_clips" = short acks ("ఓకే,"),
+    "wait_clips" = the "ఒక్క నిమిషం అండి" waits used only for slow tools."""
     try:
         wavs = await synth_wavs(list(texts), voice_id, lang_code)
         clips = []
@@ -185,19 +194,19 @@ async def cache_filler_clips(session, texts, voice_id: str, lang_code: str) -> N
             clips.append({"text": text, "pcm": pcm, "sr": sr, "ch": ch})
         ud = getattr(session, "userdata", None)
         if isinstance(ud, dict):
-            ud["filler_clips"] = clips
-        logger.info("filler_clips_cached=%d", len(clips))
+            ud[key] = clips
+        logger.info("filler_clips_cached=%d key=%s", len(clips), key)
     except Exception as e:  # noqa: BLE001 — a filler must never affect booking
         logger.warning("filler_cache_failed: %s", str(e)[:120])
 
 
-def _play_cached_filler(sess) -> None:
+def _play_cached_filler(sess, key: str = "filler_clips", texts_key: str = "fillers") -> None:
     """Play one short filler on the session NOW: pre-cached PCM clip (instant,
     zero synth) when available, else live-synth of the language's filler text.
     Never in chat history; failure is invisible."""
     ud = getattr(sess, "userdata", None)
     ud = ud if isinstance(ud, dict) else {}
-    clips = ud.get("filler_clips") or []
+    clips = ud.get(key) or []
     if clips:
         clip = random.choice(clips)
         sess.say(
@@ -206,7 +215,7 @@ def _play_cached_filler(sess) -> None:
             add_to_chat_ctx=False,
         )
         return
-    fillers = ud.get("fillers")
+    fillers = ud.get(texts_key)
     sess.say(
         sanitize_for_tts(random.choice(fillers or _FALLBACK_FILLERS)),
         add_to_chat_ctx=False,
@@ -222,6 +231,38 @@ def _say_lookup_filler(context) -> None:
         _play_cached_filler(getattr(context, "session", None) or context)
     except Exception as e:
         logger.debug("lookup_filler_skipped: %s", e)
+
+
+# A wait phrase may not repeat inside this window — one booking flow fires
+# several slow tools back to back (availability → confirm), and hearing
+# "ఒక్క నిమిషం" on each one is exactly the repetition Vinay banned (#428).
+WAIT_FILLER_COOLDOWN_S = 12.0
+
+
+def _say_wait_filler(context) -> None:
+    """Speak "ఒక్క నిమిషం అండి, చూస్తున్నాను" while a GENUINELY SLOW tool runs
+    (availability / book / reschedule / cancel — each does DB + Google Calendar
+    I/O). Vinay 2026-07-20: "for tasks that take time, say okka nimisham andi …
+    it should not be replying with this phrase for every task."
+
+    Quick tools keep the bare ack (or nothing), and a cooldown stops a
+    multi-tool flow from saying it twice. Non-blocking, fully guarded — a filler
+    must NEVER affect booking."""
+    try:
+        import time as _t
+
+        sess = getattr(context, "session", None) or context
+        ud = getattr(sess, "userdata", None)
+        ud = ud if isinstance(ud, dict) else {}
+        now = _t.monotonic()
+        last = ud.get("_wait_filler_at") or 0.0
+        if now - last < WAIT_FILLER_COOLDOWN_S:
+            logger.debug("wait_filler_throttled")
+            return
+        ud["_wait_filler_at"] = now
+        _play_cached_filler(sess, key="wait_clips", texts_key="wait_fillers")
+    except Exception as e:  # noqa: BLE001
+        logger.debug("wait_filler_skipped: %s", e)
 
 
 def _protect_mutation(context) -> None:
@@ -1654,7 +1695,7 @@ class VachanamAgent(Agent):
         from being surfaced as a blocker."""
         if booking_for_other:
             self._state.booking_for_other = True
-        _say_lookup_filler(context)  # cover the DB lookup beat (no dead air)
+        _say_wait_filler(context)  # slow: DB + calendar availability scan
         resolved = await self._resolve_doctor_id(doctor_id)
         availability = await check_availability(
             doctor_id=resolved,
@@ -1678,7 +1719,7 @@ class VachanamAgent(Agent):
         """Atomically reserve the next token for doctor+date. Call only after
         check_availability confirms capacity AND the patient agrees to the date.
         appointment_time (HH:MM) only for slot-type doctors."""
-        _say_lookup_filler(context)  # cover the atomic-assign beat (no dead air)
+        # assign_token is a Redis INCR — fast; a filler here is just noise (#429).
         result = await assign_token(
             doctor_id=await self._resolve_doctor_id(doctor_id),
             branch_id=self._state.branch_id,
@@ -1750,7 +1791,7 @@ class VachanamAgent(Agent):
         # Handle pinned: a "hello?" over the write must not discard the booked
         # result and make the LLM re-book or claim failure (FIXLOG #361).
         _protect_mutation(context)
-        _say_lookup_filler(context)
+        _say_wait_filler(context)  # slow: DB write + Google Calendar create
         if self._calendar is None:
             logger.error("confirm_booking_no_calendar_service")
             return {"success": False, "error": "booking_system_unavailable"}
@@ -1997,7 +2038,7 @@ class VachanamAgent(Agent):
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
         # the #279 upfront existing-booking surface so it doesn't flag the very
         # booking being moved (FIXLOG #281).
-        _say_lookup_filler(context)  # cover the lookup beat (no dead air, #361)
+        _say_wait_filler(context)  # slow: booking lookup (#361 dead air; silent-minute 07-20)
         self._state.existing_booking_intent = True
         phone = phone_number or self._state.patient_phone
         if not phone:
@@ -2225,6 +2266,9 @@ class VachanamAgent(Agent):
                 ud["fillers"] = get_lines(code).fillers
                 ud["language"] = code
                 ud["filler_clips"] = []
+                # #429: same staleness rule for the "one minute" waits.
+                ud["wait_fillers"] = get_wait_fillers(code)
+                ud["wait_clips"] = []
         except Exception:  # noqa: BLE001
             pass
         logger.info(
@@ -2274,6 +2318,12 @@ class VachanamAgent(Agent):
                         self.session, get_lines(code).fillers, _voice, code
                     )
                 )
+                asyncio.create_task(
+                    cache_filler_clips(
+                        self.session, get_wait_fillers(code), _voice, code,
+                        key="wait_clips",
+                    )
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning("switch_filler_recache_skipped: %s", e)
         # Cut the OLD voice's in-flight sentence ("Okay, I can speak in
@@ -2310,7 +2360,7 @@ class VachanamAgent(Agent):
         # Cover the beat with a filler and pin the handle so a mid-write
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
         _protect_mutation(context)
-        _say_lookup_filler(context)
+        _say_wait_filler(context)  # slow: DB + calendar move
         return await self._do_reschedule(old_token_id, new_date, new_time)
 
     async def _do_reschedule(
@@ -2544,7 +2594,7 @@ class VachanamAgent(Agent):
         # Booking write (DB + calendar delete): filler over the beat, handle
         # pinned so barge-in can't discard the completed cancel (FIXLOG #361).
         _protect_mutation(context)
-        _say_lookup_filler(context)
+        _say_wait_filler(context)  # slow: DB + calendar delete
         return await self._do_cancel(token_id)
 
     def _clear_hold(self) -> None:
@@ -3752,8 +3802,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
             # speaks the clinic's language (falls back to Telugu). filler_clips is
             # filled by cache_filler_clips at session start = instant playback.
+            # wait_fillers/wait_clips (#429) are the "ఒక్క నిమిషం అండి" waits
+            # played ONLY by slow tools; fillers/filler_clips stay the short ack.
             userdata={"fillers": lines.fillers, "language": lang_code,
-                      "filler_clips": []},
+                      "filler_clips": [],
+                      "wait_fillers": get_wait_fillers(lang_code),
+                      "wait_clips": []},
             # ONE language at a time (Vinay 2026-06-17): auto-detect was tried
             # and rejected — shared words across Indian languages ("amma",
             # numbers) mis-infer the language and degrade transcription. The
@@ -4198,6 +4252,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # 2026-07-06), no per-call TTS latency. Best-effort, never blocks.
         _filler_cache_task = asyncio.create_task(
             cache_filler_clips(session, lines.fillers, tts_voice, lang_code)
+        )
+        # #429: the slow-tool "ఒక్క నిమిషం అండి" waits, cached the same way so
+        # they start instantly the moment a slow tool fires.
+        _wait_cache_task = asyncio.create_task(
+            cache_filler_clips(
+                session, get_wait_fillers(lang_code), tts_voice, lang_code,
+                key="wait_clips",
+            )
         )
         _pre_greeted = False
         if _welcome_task is not None:

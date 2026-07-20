@@ -37,14 +37,17 @@ def test_protect_mutation_survives_already_interrupted_handle():
 
 def test_all_booking_mutations_are_pinned_and_covered():
     # Contract: the three tools that WRITE bookings pin the handle and speak
-    # a filler before touching the DB/calendar.
+    # a filler before touching the DB/calendar. #429: these are the genuinely
+    # slow ones (DB + Google Calendar), so the filler is now the "ఒక్క నిమిషం
+    # అండి" WAIT phrase rather than the bare ack.
     for tool in ("confirm_booking", "reschedule_booking", "cancel_booking"):
         src = inspect.getsource(getattr(VachanamAgent, tool))
         assert "_protect_mutation(context)" in src, tool
-        assert "_say_lookup_filler(context)" in src, tool
+        assert "_say_wait_filler(context)" in src, tool
 
 
 def test_reschedule_lookup_has_filler():
     # find_my_bookings precedes every reschedule/cancel — no dead air there.
+    # #429: slow enough (it once sat silent for ~a minute) to get the wait phrase.
     src = inspect.getsource(VachanamAgent.find_my_bookings)
-    assert "_say_lookup_filler(context)" in src
+    assert "_say_wait_filler(context)" in src

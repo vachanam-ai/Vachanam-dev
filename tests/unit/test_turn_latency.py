@@ -42,9 +42,13 @@ def test_llm_side_latency_work_stays():
 
 
 def test_tool_lookup_fillers_untouched():
-    # the PROVEN filler (inside tool calls) survives the ack removal
-    assert "def _play_cached_filler(sess)" in SRC
+    # the PROVEN filler (inside tool calls) survives the ack removal.
+    # #429 gave _play_cached_filler a bucket arg and split the wait phrase out;
+    # both helpers must still exist and still be driven from tool calls only
+    # (never a state-gated ack — that is the banned #399 pattern).
+    assert "def _play_cached_filler(sess, key" in SRC
     assert "_say_lookup_filler(context)" in SRC
+    assert "_say_wait_filler(context)" in SRC
 
 
 def test_soniox_context_biasing_400():
