@@ -4688,6 +4688,7 @@ def _start_watchdog_heartbeat() -> None:
         import redis as _redis_sync
 
         client = None
+        _neon_tick = 0
         while True:
             try:
                 if client is None:
@@ -4705,6 +4706,33 @@ def _start_watchdog_heartbeat() -> None:
             except Exception as e:  # noqa: BLE001
                 client = None  # rebuild next round — never reuse a dead socket
                 logger.warning("watchdog_heartbeat_failed: %s", str(e)[:120])
+            # #437: keep Neon warm FROM THE AGENT — the always-on process. The
+            # #435 Render job failed because Render (free tier) sleeps, so it
+            # could not hold Neon awake. The agent (Fly) never sleeps. A trivial
+            # SELECT 1 every 4th tick (~240s, under Neon's 300s scale-to-zero)
+            # holds the compute warm so branch-resolve on the NEXT call is fast.
+            _neon_tick += 1
+            if _neon_tick % 4 == 0:
+                try:
+                    import asyncio as _aio
+
+                    import asyncpg as _apg
+
+                    # SQLAlchemy URL → plain asyncpg DSN: drop the +asyncpg
+                    # driver tag and the query string (sslmode/channel_binding
+                    # that asyncpg rejects — Neon needs SSL, forced via ssl=True).
+                    _dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
+
+                    async def _ping():
+                        _c = await _apg.connect(dsn=_dsn, timeout=10, ssl=True)
+                        try:
+                            await _c.fetchval("SELECT 1")
+                        finally:
+                            await _c.close()
+
+                    _aio.run(_ping())
+                except Exception as e:  # noqa: BLE001 — warm ping is best-effort
+                    logger.warning("neon_warm_ping_failed: %s", str(e)[:120])
             _time.sleep(60)
 
     threading.Thread(target=_loop, name="watchdog-heartbeat", daemon=True).start()
