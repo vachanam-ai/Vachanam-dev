@@ -453,10 +453,13 @@ def test_system_prompt_performance_prosody_rules():
     prompt = _make_prompt()
     assert "WRITE THE PERFORMANCE, NOT A TRANSCRIPT" in prompt
     assert "thinking pause" in prompt
-    assert "REACT LIKE A HUMAN FIRST" in prompt
+    # #438 (Vinay 2026-07-21: "why ok endi/avunu/alagey/ayyo unnecessarily"):
+    # reaction words are gated to REAL feeling, and replies answer directly
+    # instead of opening every turn with a filler ack.
+    assert "REACT ONLY WHEN THERE IS REAL FEELING" in prompt
+    assert "ANSWER DIRECTLY" in prompt
+    assert "must NOT appear on every turn" in prompt
     assert "MELODY" in prompt
-    # reaction word REPLACES the plain ok — guards against filler stacking
-    assert "IN PLACE of a plain" in prompt
 
 
 def test_phone_english_hard_rule_and_no_mechanics_leak():
@@ -488,15 +491,14 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
 
 
 def test_system_prompt_lead_in_rule():
-    """Vinay 2026-07-17: cut perceived turn latency — every reply opens with a
-    tiny spoken lead-in ("ఓకే,"/"సరే,") so the first TTS chunk is 1-2 words and
-    audio starts near-instantly; connectors keep mid-reply sentences flowing."""
+    """Vinay 2026-07-21: answers start with substance; acknowledgement words
+    are occasional warmth, never a repetitive opener on every turn."""
     prompt = _make_prompt()
-    assert "OPEN EVERY REPLY WITH A SHORT SPOKEN LEAD-IN" in prompt
-    assert "ONE lead-in only" in prompt
-    # lead-in must match the language being spoken — per-language examples present
-    assert "LANGUAGE YOU ARE CURRENTLY SPEAKING" in prompt
-    assert "ठीक है," in prompt and "Okay," in prompt
+    compact = " ".join(prompt.split())
+    assert "ANSWER DIRECTLY — DO NOT OPEN EVERY REPLY WITH A FILLER WORD" in compact
+    assert "roughly one reply in four" in compact
+    assert "NEVER two replies in a row" in compact
+    assert "Most replies must BEGIN WITH THE SUBSTANCE" in compact
     # verbose filler sentences stay banned — the cached checking-filler covers tools
     assert "ఒక్క నిమిషం" in prompt
 
