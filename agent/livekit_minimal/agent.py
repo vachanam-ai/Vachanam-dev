@@ -4648,12 +4648,18 @@ class _LkRegistrationWatch:
             if "registered worker" in msg:
                 _lk_registered.set()
                 _proc_init_errs.clear()  # a fresh registration = healthy again
-            elif ("draining worker" in msg or "shutting down worker" in msg
-                  # LK-5 (2026-07-20): a silently dropped worker WebSocket
-                  # surfaces as the SDK's reconnect warning — without clearing
-                  # here, a stale flag kept the beacon flowing while the line
-                  # was dead. Re-registration re-sets the flag.
-                  or "failed to connect to livekit" in msg):
+            elif "draining worker" in msg or "shutting down worker" in msg:
+                # Only TERMINAL states clear the beacon. LK-5's "failed to
+                # connect to livekit" clause was REVERTED (#440, 2026-07-21):
+                # that line is the SDK's TRANSIENT reconnect warning — the worker
+                # recovers on its own and (in 1.6.x) does NOT re-log "registered
+                # worker" after an internal reconnect, so clearing here left the
+                # beacon falsely down → the #306 watchdog kept restarting a
+                # HEALTHY worker (proven: calls connected while the beacon
+                # flapped), and those restarts caused the registration hangs /
+                # dropped calls. A truly dead worker is still caught by the
+                # #423 dispatch-verify (real job pickup) + the LK-8 pool-error
+                # gate below.
                 _lk_registered.clear()
             elif "error initializing process" in msg:
                 # LK-8: dead job-process pool → treat as line-down. One transient

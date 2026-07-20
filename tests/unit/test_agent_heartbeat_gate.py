@@ -33,15 +33,19 @@ def test_plugin_registered_does_not_set_flag():
     assert not agent_mod._lk_registered.is_set()
 
 
-def test_drain_and_shutdown_clear_flag():
+def test_only_terminal_states_clear_flag():
     watch = _LkRegistrationWatch()
-    # LK-5: the SDK's reconnect warning = silent WebSocket drop — without
-    # clearing, a stale flag kept the beacon alive while the line was dead.
-    for closer in ("draining worker", "shutting down worker",
-                   "failed to connect to livekit, retrying in 2s"):
+    # Terminal states clear the beacon.
+    for closer in ("draining worker", "shutting down worker"):
         agent_mod._lk_registered.set()
         watch.filter(_record(closer))
         assert not agent_mod._lk_registered.is_set(), closer
+    # #440 REVERT of LK-5: the SDK's TRANSIENT reconnect warning must NOT clear
+    # the beacon — the worker recovers on its own, and clearing here caused the
+    # #306 watchdog to restart a healthy worker (the flap that dropped calls).
+    agent_mod._lk_registered.set()
+    watch.filter(_record("failed to connect to livekit, retrying in 2s"))
+    assert agent_mod._lk_registered.is_set(), "transient reconnect must not clear"
 
 
 def test_heartbeat_mirrors_registration_truth_to_redis():
