@@ -41,6 +41,7 @@ from backend.middleware.branch_guard import assert_branch_access
 from backend.models.schema import Branch, Doctor
 from backend.services.audit_service import audit
 from backend.services.calendar_service import GoogleCalendarService
+from backend.services.clinic_cache import invalidate as invalidate_clinic_cache
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -417,6 +418,9 @@ async def create_doctor(
             .values(is_default_doctor=False)
         )
     await db.commit()
+    # #432: roster/timings changed → drop the cached copy so the NEXT
+    # call quotes the new hours, never a stale one.
+    await invalidate_clinic_cache(branch_uuid)
 
     logger.info(
         "doctor_created",
@@ -513,6 +517,9 @@ async def update_doctor(
         )
 
     await db.commit()
+    # #432: roster/timings changed → drop the cached copy so the NEXT
+    # call quotes the new hours, never a stale one.
+    await invalidate_clinic_cache(branch_uuid)
 
     logger.info(
         "doctor_updated",
@@ -574,6 +581,9 @@ async def soft_delete_doctor(
 
     doc.status = "inactive"
     await db.commit()
+    # #432: roster/timings changed → drop the cached copy so the NEXT
+    # call quotes the new hours, never a stale one.
+    await invalidate_clinic_cache(branch_uuid)
 
     logger.info(
         "doctor_soft_deleted",
@@ -628,6 +638,9 @@ async def stop_walkins_today(
     today = await _branch_today(branch_uuid, db)  # branch tz, not server UTC
     doc.walkins_closed_today_date = today
     await db.commit()
+    # #432: roster/timings changed → drop the cached copy so the NEXT
+    # call quotes the new hours, never a stale one.
+    await invalidate_clinic_cache(branch_uuid)
 
     logger.info(
         "walkins_closed_today",

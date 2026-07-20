@@ -79,6 +79,10 @@ from agent.i18n.lines import (  # noqa: E402
     get_wait_fillers,
 )
 from agent.i18n.backchannels import is_lone_hello, suppress_backchannel  # noqa: E402
+from backend.services.clinic_cache import (  # noqa: E402
+    get_doctors,
+    load_doctors,
+)
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
@@ -3242,6 +3246,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             logger.warning("caller_lookup_failed: %s", e)
             return None
 
+    # #432: start the roster fetch HERE (cache-first) so it overlaps the other
+    # pre-call reads instead of blocking the prompt build later. Its own DB
+    # session — the shared `db` is busy inside this gather.
+    async def _read_doctors() -> list[dict]:
+        try:
+            cached = await get_doctors(branch.id)
+            if cached is not None:
+                return cached
+            async with AsyncSessionLocal() as _s:
+                return await load_doctors(branch.id, _s)
+        except Exception as e:  # noqa: BLE001 — never block answering (RULE 8)
+            logger.warning("doctor_prefetch_failed: %s", e)
+            return []
+
+    _doctors_task = asyncio.create_task(_read_doctors())
+
     _pref_res, _gate_res, _caller_res = await asyncio.gather(
         _read_pref_lang(),
         _service_gate_check(branch),
@@ -3554,29 +3574,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _hb_task = asyncio.create_task(_meter_heartbeat())
                 ctx.add_shutdown_callback(_cancel_on_shutdown(_hb_task))
 
-        result = await db.execute(
-            select(Doctor).where(
-                and_(Doctor.branch_id == branch_id, Doctor.status == "active")
-            )
-        )
-        doctors = result.scalars().all()
+        # #432: roster + timings come from the per-clinic Redis cache (~1-5ms)
+        # instead of a Neon round-trip that, after scale-to-zero (#299), often
+        # paid a multi-second cold wake on the call's critical path. Falls back
+        # to the DB on any miss/failure, and every doctor/settings write
+        # invalidates the key, so the hours quoted are always current.
+        doctors = await _doctors_task
+        if not doctors:
+            # Prefetch failed (or genuinely empty): never build a prompt with an
+            # empty roster off a transient error — re-read authoritatively.
+            doctors = await load_doctors(branch_id, db)
         doctor_contexts = [
             DoctorContext(
-                id=str(d.id),
-                name=d.name,
-                specialization=d.specialization or "",
-                routing_keywords=list(d.routing_keywords or []),
-                booking_type=d.booking_type or "token",
-                is_default=bool(d.is_default_doctor),
+                id=d["id"],
+                name=d["name"],
+                specialization=d["specialization"],
+                routing_keywords=d["routing_keywords"],
+                booking_type=d["booking_type"],
+                is_default=d["is_default"],
                 # #407: real schedule → the model's ground truth for availability
                 # (was absent, so it invented hours/days — 2026-07-19 hallucination).
-                working_hours_start=(
-                    d.working_hours_start.strftime("%H:%M") if d.working_hours_start else ""
-                ),
-                working_hours_end=(
-                    d.working_hours_end.strftime("%H:%M") if d.working_hours_end else ""
-                ),
-                available_weekdays=list(d.available_weekdays or []),
+                working_hours_start=d["working_hours_start"],
+                working_hours_end=d["working_hours_end"],
+                available_weekdays=d["available_weekdays"],
             )
             for d in doctors
         ]
@@ -3759,6 +3779,31 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             _t_reads - _t_branch,
             _t_done - _t_reads,
         )
+
+        # #432: Fly's log buffer is lossy and rotates fast, so the stage split
+        # for a call Vinay complains about is usually already gone. Mirror it to
+        # Redis (24h) — durable evidence for the next latency question.
+        async def _stash_lat() -> None:
+            try:
+                from backend.redis_client import get_redis
+
+                _r = await get_redis()
+                await _r.set(
+                    "lat:last_call",
+                    json.dumps({
+                        "answer_to_build": round(_t_done - _t_answer, 2),
+                        "branch_resolve": round(_t_branch - _t_answer, 2),
+                        "reads": round(_t_reads - _t_branch, 2),
+                        "rest": round(_t_done - _t_reads, 2),
+                        "branch_id": str(branch.id),
+                        "at": datetime_cls.now(timezone_utc).isoformat(),
+                    }),
+                    ex=86400,
+                )
+            except Exception:  # noqa: BLE001 — telemetry must never touch the call
+                pass
+
+        asyncio.create_task(_stash_lat())
 
         _t_build = _perf.monotonic()
         # Session TTS captured in a var so we can PRIME its connection during the
