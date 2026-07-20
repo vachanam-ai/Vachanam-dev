@@ -359,8 +359,21 @@ async def check_availability(
     # so RULE 2 (no double-book) is unaffected; the real guard still lives in
     # confirm_booking. Informational, not a hard stop: a caller booking for a
     # DIFFERENT family member may continue.
+    # Branch-local now: needed both to ignore already-PAST bookings below and to
+    # drop past slots from same-day availability further down.
+    now = await _branch_now(branch_id, db)
+
+    # #430: this used to RETURN here, so the requested time's availability was
+    # never computed and the model was told "do not run the booking flow" — on a
+    # FREE slot it reported "doctor is not available at that time" (Vinay real
+    # call 2026-07-20, Srinivas free at 7pm, refused 3/3 times). Three earlier
+    # fixes (#281 reschedule, #284 same-call change, #296 friend booking) each
+    # worked around this short-circuit by suppressing caller_phone; the
+    # short-circuit itself was the bug. Now it is an informational NOTE carried
+    # alongside real availability — never a dead end.
+    note = ""
     if caller_phone:
-        existing = (await db.execute(
+        rows = (await db.execute(
             select(Token).where(and_(
                 Token.branch_id == branch_id,
                 Token.doctor_id == doctor_id,
@@ -373,25 +386,46 @@ async def check_availability(
                     ))
                 ),
             )).order_by(Token.appointment_time.is_(None), Token.appointment_time)
-        )).scalars().first()
+        )).scalars().all()
+        # An appointment that has ALREADY HAPPENED today cannot block a new one
+        # (the 12:30 booking was surfaced at 6pm as the reason 7pm "wasn't
+        # available"). Same-day: keep only what is still ahead.
+        existing = next(
+            (
+                t for t in rows
+                if not (
+                    booking_date == now.date()
+                    and t.appointment_time is not None
+                    and t.appointment_time <= now.time()
+                )
+            ),
+            None,
+        )
         if existing is not None:
             when = (
                 existing.appointment_time.strftime("%I:%M %p").lstrip("0")
                 if existing.appointment_time else None
             )
             detail = f"at {when}" if when else f"token number {existing.token_number}"
-            return (
+            note = (
                 f"ALREADY_BOOKED: this caller's number already has a confirmed "
                 f"appointment with {doctor.name} on "
                 f"{booking_date.strftime('%d %B')} {detail}. Tell the caller this "
-                f"FIRST, before anything else, and do not run the booking flow. "
-                f"Only continue booking if they say this new appointment is for a "
-                f"DIFFERENT person."
+                f"FIRST. If they want a DIFFERENT time, do NOT say that time is "
+                f"unavailable and do NOT create a second booking — offer to MOVE "
+                f"this appointment with reschedule_booking. Only make a second "
+                f"booking if they say it is for a DIFFERENT person. "
+                f"The live availability for the time they asked about follows — "
+                f"use it, never contradict it. "
             )
+
+    def _ret(msg: str) -> str:
+        """Existing-booking note rides ALONG WITH the real answer (#430)."""
+        return f"{note}{msg}" if note else msg
 
     blocked = await doctor_bookable(doctor, branch_id, booking_date, db)
     if blocked:
-        return blocked
+        return _ret(blocked)
 
     if doctor.booking_type == "token":
         redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
@@ -422,18 +456,18 @@ async def check_availability(
         # showed "fully booked" while seats were actually free.
         if db_confirmed >= limit:
             next_day = booking_date + timedelta(days=1)
-            return f"Doctor is fully booked on {booking_date.strftime('%d %B')}. Next available date is {next_day.strftime('%d %B')}."
+            return _ret(f"Doctor is fully booked on {booking_date.strftime('%d %B')}. Next available date is {next_day.strftime('%d %B')}.")
         # The NEXT queue number is the monotonic counter+1 (unique, never reused);
         # it can sit above the seat count after cancellations — that is correct.
         next_number = max(redis_current, db_confirmed) + 1
-        return (
+        return _ret(
             f"Doctor has {db_confirmed} patients booked on {booking_date.strftime('%d %B')}. "
             f"You will be token number {next_number}."
         )
 
     # Appointment type — compute available ranges
     if not doctor.working_hours_start or not doctor.working_hours_end or not doctor.slot_duration_minutes:
-        return "Doctor's schedule is not configured. Please call the clinic directly."
+        return _ret("Doctor's schedule is not configured. Please call the clinic directly.")
 
     all_slots = _generate_slots(
         doctor.working_hours_start,
@@ -441,7 +475,7 @@ async def check_availability(
         doctor.slot_duration_minutes,
     )
     # Same-day booking: never offer a slot that has already passed.
-    now = await _branch_now(branch_id, db)
+    # (`now` was resolved above, before the existing-booking note.)
     if booking_date == now.date():
         all_slots = [s for s in all_slots if s > now.time()]
 
@@ -472,7 +506,7 @@ async def check_availability(
                 available.append(slot)
 
     if not available:
-        return f"{doctor.name} is fully booked on {booking_date.strftime('%d %B')}."
+        return _ret(f"{doctor.name} is fully booked on {booking_date.strftime('%d %B')}.")
 
     def _ranges_str(slot_list: list) -> str:
         ranges = _merge_to_ranges(slot_list, doctor.slot_duration_minutes)
@@ -491,7 +525,7 @@ async def check_availability(
             query_end = (qs_dt + timedelta(minutes=slot_min)).time()
         in_window = [s for s in available if query_start <= s < query_end]
         if in_window:
-            return (
+            return _ret(
                 f"{doctor.name} is available {_ranges_str(in_window)} "
                 f"on {booking_date.strftime('%d %B')}."
             )
@@ -505,7 +539,7 @@ async def check_availability(
         nearest_str = " or ".join(
             s.strftime("%I:%M %p").lstrip("0") for s in nearest_free
         )
-        return (
+        return _ret(
             f"{doctor.name} is NOT free between "
             f"{query_start.strftime('%I:%M %p').lstrip('0')} and "
             f"{query_end.strftime('%I:%M %p').lstrip('0')}. "
@@ -514,7 +548,7 @@ async def check_availability(
             f"{booking_date.strftime('%d %B')}. Offer the nearest time FIRST."
         )
 
-    return (
+    return _ret(
         f"{doctor.name} is available {_ranges_str(available)} "
         f"on {booking_date.strftime('%d %B')}."
     )

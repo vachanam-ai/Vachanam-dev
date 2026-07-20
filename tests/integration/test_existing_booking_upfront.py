@@ -26,6 +26,29 @@ pytestmark = pytest.mark.asyncio
 CALLER = "+919666012345"
 
 
+def _freeze_now(monkeypatch, hh, mm=0, on=None):
+    """Pin the branch clock so same-day tests are deterministic at any hour.
+
+    #430 made check_availability ignore appointments that have ALREADY happened
+    today, so a suite that seeds "today at 11:00" silently changed meaning
+    depending on when it ran (and after 17:00 the test doctor is closed too).
+    """
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+
+    import agent.tools.booking_tools as bt
+
+    fixed = _dt.combine(on or date.today(), time(hh, mm)).replace(
+        tzinfo=_ZI("Asia/Kolkata")
+    )
+
+    async def _fake_now(branch_id, db):
+        return fixed
+
+    monkeypatch.setattr(bt, "_branch_now", _fake_now)
+    return fixed
+
+
 async def _org_branch(db, tag):
     org = Organization(name=f"C {tag}", owner_phone="+919000000000",
                        owner_email=f"eb-{tag}-{uuid.uuid4().hex[:6]}@t.in",
@@ -73,7 +96,8 @@ async def _seed_confirmed(db, branch, doctor, phone, *, appt_time=None,
 
 # --------------------------------------------------------------- positives
 
-async def test_slot_doctor_existing_booking_surfaced_with_time(db, redis):
+async def test_slot_doctor_existing_booking_surfaced_with_time(db, redis, monkeypatch):
+    _freeze_now(monkeypatch, 9, 30)          # before the seeded 11:00 (#430)
     _, br = await _org_branch(db, "S1")
     doc = await _slot_doctor(db, br)
     await _seed_confirmed(db, br, doc, CALLER, appt_time=time(11, 0))
@@ -158,8 +182,9 @@ async def test_rule1_other_branch_booking_never_leaks(db, redis):
 
 # --------------------------------------------------------------- robustness
 
-async def test_repeated_calls_stay_consistent(db, redis):
+async def test_repeated_calls_stay_consistent(db, redis, monkeypatch):
     """Roast: hammering check_availability must return the same verdict."""
+    _freeze_now(monkeypatch, 9, 30)          # before the seeded 14:30 (#430)
     _, br = await _org_branch(db, "R1")
     doc = await _slot_doctor(db, br)
     await _seed_confirmed(db, br, doc, CALLER, appt_time=time(14, 30))
@@ -172,9 +197,10 @@ async def test_repeated_calls_stay_consistent(db, redis):
     assert all(o.startswith("ALREADY_BOOKED") and "2:30" in o for o in outs)
 
 
-async def test_directive_allows_different_person_continue(db, redis):
+async def test_directive_allows_different_person_continue(db, redis, monkeypatch):
     """Family booking: caller's number flags, but the directive permits a
     different-person continue (RULE 2 real guard stays in confirm_booking)."""
+    _freeze_now(monkeypatch, 9, 0)           # before the seeded 9:30 (#430)
     _, br = await _org_branch(db, "R2")
     doc = await _slot_doctor(db, br)
     await _seed_confirmed(db, br, doc, CALLER, appt_time=time(9, 30))
@@ -213,3 +239,68 @@ async def test_booking_for_other_suppresses_caller_already_booked(db, redis):
         caller_phone=_availability_caller_phone(st),
     )
     assert "ALREADY_BOOKED" not in str(res)
+
+
+# ------------------------------------------------- #430 false-unavailable bug
+
+async def test_existing_booking_still_reports_live_availability(db, redis, monkeypatch):
+    """#430 (Vinay real call 2026-07-20): Dr.Srinivas sat 09:00-23:00 and 7 PM
+    was genuinely FREE, but the caller already had a booking that day — the
+    upfront surface RETURNED before computing availability and told the model
+    'do not run the booking flow', so the agent said "he is not available at
+    that time", identically 3/3 times. The note must now ride ALONG WITH the
+    real availability, never replace it."""
+    _freeze_now(monkeypatch, 9, 30)   # 10:00 booking upcoming, 15:00 bookable
+    _, br = await _org_branch(db, "N1")
+    doc = await _slot_doctor(db, br)                      # sits 09:00-17:00
+    await _seed_confirmed(db, br, doc, CALLER, appt_time=time(10, 0))
+    await db.commit()
+
+    out = await check_availability(
+        doc.id, br.id, date.today(), db,
+        query_start=time(15, 0), query_end=None, caller_phone=CALLER,
+    )
+    # existing booking still surfaced FIRST (#279 intent preserved)
+    assert out.startswith("ALREADY_BOOKED")
+    assert "10:00" in out
+    # ...but the requested free time is reported as AVAILABLE, not withheld
+    assert "3:00 PM" in out
+    assert "is available" in out
+    # ...and the model is told to move it rather than deny the time
+    assert "reschedule_booking" in out
+    assert "do NOT say that time is unavailable" in out
+
+
+async def test_past_same_day_booking_does_not_block(db, redis, monkeypatch):
+    """#430 second defect: at 6 PM the tool surfaced a 12:30 PM booking (already
+    over) as the reason a later time 'was not available'. An appointment that has
+    already happened today cannot block a new one."""
+    _freeze_now(monkeypatch, 13, 0)   # 12:30-style "already happened" case
+    _, br = await _org_branch(db, "N2")
+    doc = await _slot_doctor(db, br)
+    # Seeded before the frozen 13:00 -> already happened.
+    await _seed_confirmed(db, br, doc, CALLER, appt_time=time(0, 1))
+    await db.commit()
+
+    out = await check_availability(doc.id, br.id, date.today(), db, caller_phone=CALLER)
+    assert not out.startswith("ALREADY_BOOKED"), out
+
+
+async def test_upcoming_booking_preferred_over_past_one(db, redis, monkeypatch):
+    """When the caller has both a finished and an upcoming appointment today,
+    the note must name the UPCOMING one (the 12:30-vs-18:30 mix-up)."""
+    _freeze_now(monkeypatch, 13, 0)   # exactly Vinay's 12:30-past / 18:30-next case
+    _, br = await _org_branch(db, "N3")
+    doc = await _slot_doctor(db, br)
+    # ONE patient with TWO tokens (the dedup index forbids a second Patient row
+    # for the same branch+phone+name).
+    pat, _past = await _seed_confirmed(db, br, doc, CALLER, appt_time=time(0, 1))
+    db.add(Token(branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
+                 date=date.today(), status="confirmed", source="voice",
+                 appointment_time=time(16, 30)))
+    await db.commit()
+
+    out = await check_availability(doc.id, br.id, date.today(), db, caller_phone=CALLER)
+    assert out.startswith("ALREADY_BOOKED")
+    assert "4:30 PM" in out
+    assert "12:01 AM" not in out
