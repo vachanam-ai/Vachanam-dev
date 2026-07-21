@@ -101,7 +101,7 @@ class Branch(Base):
     vobiz_sip_domain: Mapped[str | None] = mapped_column(String(255))
     outbound_trunk_id: Mapped[str | None] = mapped_column(String(255))  # per-clinic LiveKit outbound trunk
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
-    google_calendar_id: Mapped[str | None] = mapped_column(String(255))
+    google_calendar_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     # Meta Cloud API phone_number_id of the clinic's own WhatsApp number
     # (Coexistence-linked into Vachanam's WABA — spec 2026-07-13). Presence =
     # WhatsApp active for this branch. RULE 5 for inbound: webhook events are
@@ -721,7 +721,7 @@ class BillingCycle(Base):
         default="open",
         nullable=False,
     )
-    razorpay_payment_id: Mapped[str | None] = mapped_column(String(255))
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     invoice_number: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -787,6 +787,11 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     # password_hash: bcrypt hash for email+password login (None for Google-only users)
     password_hash: Mapped[str | None] = mapped_column(String(255))
+    # Incremented for password/session invalidation. JWTs issued by the app carry
+    # this value and protected requests compare it with the live user row.
+    token_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     organization: Mapped["Organization | None"] = relationship(back_populates="users")
@@ -948,6 +953,9 @@ class SupportTicket(Base):
     # Demo leads are phone-first (a clinic owner books a callback, not an
     # email thread). Empty for ordinary tickets.
     phone: Mapped[str | None] = mapped_column(String(20))
+    # Opaque browser-session owner for unauthenticated chat tickets. A public
+    # ticket UUID is not an authorization secret; this value is.
+    anonymous_session_id: Mapped[str | None] = mapped_column(String(64), index=True)
     subject: Mapped[str] = mapped_column(String(200), nullable=False)
     category: Mapped[str] = mapped_column(
         Enum("billing", "technical", "onboarding", "feature_request", "sales_demo",

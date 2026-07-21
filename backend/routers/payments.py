@@ -17,7 +17,7 @@ import razorpay
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import backend.services.audit_service as _audit_svc
@@ -532,6 +532,12 @@ async def activate_subscription(
         org_uuid = _uuid.UUID(str(org_id_raw))
     except (ValueError, TypeError):
         return "bad_org_id"
+
+    # Serialize deliveries for one provider payment before read/write.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"razorpay:{payment_id}"},
+    )
 
     # Idempotency: already processed this exact payment?
     seen = (

@@ -14,8 +14,9 @@ import {
 } from "../api/treatment.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
+import { localDateInputValue } from "../utils/date.js";
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = localDateInputValue;
 
 // WhatsApp-style bubble time (Vinay 2026-07-19): today → "9:08 PM";
 // this year → "19 Jul, 9:08 PM"; older → "19 Jul 2025, 9:08 PM".

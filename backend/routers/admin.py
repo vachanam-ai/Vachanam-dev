@@ -45,7 +45,7 @@ async def admin_ping(
 # ── Platform owner management (Vinay + delegates) ───────────────────────────
 
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
 from backend.database import AsyncSessionLocal
@@ -60,9 +60,19 @@ class OwnerOut(BaseModel):
 
 
 class OwnerCreate(BaseModel):
-    email: str
-    name: str
+    email: str = Field(..., min_length=3, max_length=255)
+    name: str = Field(..., min_length=1, max_length=255)
     password: str | None = None  # optional — Google sign-in works with email match
+
+
+    @field_validator("email")
+    @classmethod
+    def _normalise_email(cls, value):
+        from backend.services.validators import normalize_email
+        try:
+            return normalize_email(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 @router.get("/owners", response_model=list[OwnerOut])
@@ -723,6 +733,8 @@ async def _hard_delete_org(db, org) -> None:
         Patient as _Pat,
         Token as _Tok,
         TreatmentNote as _TN,
+        SupportMessage as _SM,
+        SupportTicket as _ST,
         WhatsAppSession as _WA,
     )
 
@@ -734,6 +746,13 @@ async def _hard_delete_org(db, org) -> None:
         # Children that reference tokens/treatment_notes/doctors/patients first.
         for model in (_FT, _TN, _CWT, _CQ, _CL, _Call, _Cons, _Tok, _DU, _Pat, _Doc, _WA):
             await db.execute(_delete(model).where(model.branch_id.in_(branch_ids)))
+
+    # Support threads can contain owner contact details and clinic context.
+    # Self-service deletion promises erasure, so remove the thread before the
+    # org FK can SET NULL and turn it into an orphaned public-looking ticket.
+    ticket_ids = select(_ST.id).where(_ST.org_id == org.id)
+    await db.execute(_delete(_SM).where(_SM.ticket_id.in_(ticket_ids)))
+    await db.execute(_delete(_ST).where(_ST.org_id == org.id))
 
     await db.execute(_delete(_BC).where(_BC.org_id == org.id))
     await db.execute(_delete(User).where(User.org_id == org.id))

@@ -37,7 +37,7 @@ const PLANS = [
     price: "₹17,999",
     per: "/month + ₹5/min after",
     tagline: "Multi-specialty, unlimited doctors",
-    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "Multi-doctor routing", "CSV exports"]
+    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "Multi-doctor routing", "Branch-level analytics"]
   }
 ];
 
@@ -105,6 +105,7 @@ export default function Landing() {
   const [demoSent, setDemoSent] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoTouched, setDemoTouched] = useState(false);
+  const [demoCaptcha, setDemoCaptcha] = useState("");
   const [dErr, setDErr] = useState("");
   const submitDemo = async (e) => {
     e.preventDefault();
@@ -117,7 +118,7 @@ export default function Landing() {
         subject: `Demo request — ${demo.clinic}`.slice(0, 200),
         body: demo.body.trim() || "Please call me to arrange a demo.",
         category: "sales_demo",
-      });
+      }, demoCaptcha);
       setDemoSent(true);
     } catch (x) {
       setDErr(x.response?.data?.detail === "captcha_failed"
@@ -473,7 +474,7 @@ export default function Landing() {
              "No. Your existing clinic number forwards to your Vachanam AI line. Patients dial the number they already know; the only change is that someone always answers."],
             ["Is there a free trial?",
              trialOn
-               ? "Yes. Every new clinic gets a 14-day free trial with ≈100 call minutes included — no credit card needed. After the trial, you continue on your chosen plan; cancel anytime."
+               ? "Yes. Every new clinic gets a 14-day free trial with 300 minutes (≈100 calls) included — no credit card needed. After the trial, you continue on your chosen plan; cancel anytime."
                : "You can see everything live on a free demo call before paying, and cancel anytime after you start."],
             ["What if the AI doesn't know an answer?",
              "It never guesses. It tells the patient the clinic will check and get back, logs the question for your staff, and moves on. You see every logged question on your dashboard."],
@@ -528,11 +529,10 @@ export default function Landing() {
               <textarea className="input w-full" rows="2"
                 placeholder="Anything specific to show? (optional)"
                 value={demo.body} onChange={(e) => setDemo({ ...demo, body: e.target.value })} />
-              {/* Turnstile mounts on first interaction — keeps it from fighting the
-                  chat widget's instance over the shared token/reset slot. */}
-              {TURNSTILE_ON && demoTouched && <Turnstile />}
+              {TURNSTILE_ON && demoTouched && <Turnstile onToken={setDemoCaptcha} />}
               {dErr && <p className="font-ui text-sm text-danger">{dErr}</p>}
-              <button className="btn-primary w-full py-3" disabled={demoBusy}>
+              <button className="btn-primary w-full py-3"
+                disabled={demoBusy || (TURNSTILE_ON && !demoCaptcha)}>
                 {demoBusy ? "Sending…" : "Book my demo"}
               </button>
             </form>

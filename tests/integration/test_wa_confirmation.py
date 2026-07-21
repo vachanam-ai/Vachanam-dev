@@ -34,9 +34,10 @@ def wa_capture(monkeypatch):
     from backend.config import settings
 
     monkeypatch.setattr(settings, "meta_access_token", "tok", raising=False)
+    monkeypatch.setattr(wa_service.settings, "meta_access_token", "tok", raising=False)
     sent = []
 
-    async def _fake_send(branch, to, template, lang, params, buttons=None):
+    async def _fake_send(branch, to, template, lang, params, buttons=None, plan=None):
         sent.append({
             "branch": str(branch.id), "to": to, "template": template,
             "lang": lang, "params": params, "buttons": buttons,

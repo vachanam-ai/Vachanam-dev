@@ -82,13 +82,22 @@ async def _upcoming_token_id(db: AsyncSession, branch: Branch, sender: str) -> s
                 Token.date >= today,  # audit #7: never a stale past booking
                 Patient.phone.like(f"%{last10}"),
             )
-            .order_by(Token.date)
+            .order_by(
+                Token.date,
+                Token.appointment_time.asc().nullslast(),
+                Token.token_number.asc().nullslast(),
+                Token.id,
+            )
         )
     ).scalars().first()
     return str(token.id) if token else None
 
 
-async def handle_text(db: AsyncSession, branch: Branch, sender: str, text: str) -> None:
+async def handle_text(
+    db: AsyncSession, branch: Branch, plan: str, sender: str, text: str
+) -> None:
+    if not wa_service.wa_enabled(branch, plan):
+        return
     text = (text or "").strip()
     if not text:
         return
@@ -99,7 +108,7 @@ async def handle_text(db: AsyncSession, branch: Branch, sender: str, text: str) 
         intent = (data.get("intent") or "").strip()
     except Exception as e:  # noqa: BLE001 — RULE 8: static fallback, no dead end
         logger.warning("wa_chat_gemini_failed", error=str(e)[:150])
-        await wa_actions.reply_call_us(branch, sender)
+        await wa_actions.reply_call_us(branch, sender, plan)
         return
 
     logger.info("wa_chat_intent", intent=intent, branch_id=str(branch.id))
@@ -108,19 +117,21 @@ async def handle_text(db: AsyncSession, branch: Branch, sender: str, text: str) 
         token_id = await _upcoming_token_id(db, branch, sender)
         if token_id:
             await wa_actions.handle_change_request(
-                db, branch, sender, token_id, want_cancel=(intent == "cancel")
+                db, branch, plan, sender, token_id, want_cancel=(intent == "cancel")
             )
         else:
-            await wa_actions.reply_call_us(branch, sender)
+            await wa_actions.reply_call_us(branch, sender, plan)
     elif intent == "location":
         link = wa_templates.maps_link(branch.address)
         line = (
             f"{branch.name}: {branch.address}\n{link}"
             if branch.address else "Please call us for directions."
         )
-        await wa_service.send_text(branch, sender, line)
+        await wa_service.send_text(branch, sender, line, plan=plan)
     elif intent == "faq" and (data.get("answer") or "").strip():
-        await wa_service.send_text(branch, sender, data["answer"].strip()[:900])
+        await wa_service.send_text(
+            branch, sender, data["answer"].strip()[:900], plan=plan
+        )
     else:
         number = branch.clinic_phone or branch.did_number or ""
         line = (
@@ -128,4 +139,4 @@ async def handle_text(db: AsyncSession, branch: Branch, sender: str, text: str) 
             f"assistant can help right away: {number}"
             if number else "Please call the clinic — the phone assistant can help."
         )
-        await wa_service.send_text(branch, sender, line)
+        await wa_service.send_text(branch, sender, line, plan=plan)

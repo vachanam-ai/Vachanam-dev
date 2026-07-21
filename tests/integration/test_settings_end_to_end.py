@@ -34,6 +34,12 @@ pytestmark = pytest.mark.asyncio
 _ALGO = "HS256"
 
 
+@pytest.fixture(autouse=True)
+def _bypass_auth_rate_limit(monkeypatch):
+    """This onboarding proof is not a rate-limiter test."""
+    monkeypatch.setenv("RATE_LIMIT_BYPASS_IPS", "testclient")
+
+
 def _owner_jwt(org_id: str, branch_id: str) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(

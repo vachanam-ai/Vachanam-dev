@@ -12,38 +12,38 @@ export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 // https://api.vachanam.in) so calls go cross-origin to Render. CORS is allowed
 // there via the backend's FRONTEND_URL. Trailing slash trimmed to avoid “//path”.
 export const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
-export const api = axios.create({ baseURL: API_BASE, timeout: 15000 });
+export const api = axios.create({ baseURL: API_BASE, timeout: 15000, withCredentials: true });
 
-// Cloudflare Turnstile token (bot protection). Pages set it via the widget;
-// the interceptor attaches it only on the four protected auth endpoints.
-// Tokens are SINGLE-USE: once attached, the token is cleared and the widget
-// reset here — pages never manage token lifecycle themselves. (Reusing a
-// token gets Cloudflare's "timeout-or-duplicate" rejection → 403.)
-let turnstileToken = "";
-let turnstileReset = null;
-export const setTurnstileToken = (t) => { turnstileToken = t || ""; };
-export const setTurnstileResetter = (fn) => { turnstileReset = fn; };
-const TURNSTILE_PATHS = new Set([
-  "/auth/login", "/auth/register", "/auth/request-otp", "/auth/forgot-password",
-  // Public support surface: backend requires Turnstile for ANONYMOUS callers
-  // on these (authed callers skip it server-side; the header is ignored then).
-  "/support/chat", "/support/contact",
-]);
+// A Turnstile token belongs to one widget and one request. Keeping it in the
+// request config prevents simultaneous forms from consuming each other's
+// single-use tokens.
+export const captchaConfig = (token, extra = {}) => {
+  if (!token) return extra;
+  return {
+    ...extra,
+    headers: { ...(extra.headers || {}), "X-Turnstile-Token": token },
+    _turnstileTokenUsed: token
+  };
+};
+
+const notifyCaptchaConsumed = (config) => {
+  const token = config?._turnstileTokenUsed;
+  if (token) window.dispatchEvent(new CustomEvent("vachanam:captcha-consumed", { detail: token }));
+};
 
 api.interceptors.request.use((config) => {
   const token = getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
-  if (turnstileToken && TURNSTILE_PATHS.has(config.url)) {
-    config.headers["X-Turnstile-Token"] = turnstileToken;
-    turnstileToken = ""; // consumed — a second submit needs a fresh solve
-    try { turnstileReset?.(); } catch { /* widget unmounted */ }
-  }
   return config;
 });
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    notifyCaptchaConsumed(res.config);
+    return res;
+  },
   (err) => {
+    notifyCaptchaConsumed(err.config);
     if (err.response?.status === 401) {
       clearToken();
       if (!window.location.pathname.startsWith("/login")) {
@@ -57,17 +57,18 @@ api.interceptors.response.use(
 // ── Auth ──
 export const loginWithGoogle = (id_token) =>
   api.post("/auth/google", { id_token }).then((r) => r.data);
-export const loginWithPassword = (email, password) =>
-  api.post("/auth/login", { email, password }).then((r) => r.data);
-export const registerClinic = (payload) =>
-  api.post("/auth/register", payload).then((r) => r.data);
-export const requestOtp = (payload) =>
-  api.post("/auth/request-otp", payload).then((r) => r.data);
-export const forgotPassword = (email) =>
-  api.post("/auth/forgot-password", { email }).then((r) => r.data);
+export const loginWithPassword = (email, password, captchaToken) =>
+  api.post("/auth/login", { email, password }, captchaConfig(captchaToken)).then((r) => r.data);
+export const registerClinic = (payload, captchaToken) =>
+  api.post("/auth/register", payload, captchaConfig(captchaToken)).then((r) => r.data);
+export const requestOtp = (payload, captchaToken) =>
+  api.post("/auth/request-otp", payload, captchaConfig(captchaToken)).then((r) => r.data);
+export const forgotPassword = (email, captchaToken) =>
+  api.post("/auth/forgot-password", { email }, captchaConfig(captchaToken)).then((r) => r.data);
 export const resetPassword = (email, code, new_password) =>
   api.post("/auth/reset-password", { email, code, new_password }).then((r) => r.data);
 export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
+export const logoutSession = () => api.post("/auth/logout");
 
 // ── Plan / billing (clinic owner) ──
 export const fetchPlan = () => api.get("/api/plan").then((r) => r.data);

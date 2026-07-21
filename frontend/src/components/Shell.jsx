@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
+import { fetchBranchSettings } from "../api/client.js";
 import ThemeToggle from "./ThemeToggle.jsx";
 
 const NAV = {
@@ -49,15 +50,40 @@ const ROLE_LABEL = {
 
 
 export default function Shell() {
-  const { user, role, logout } = useAuth();
+  const { user, role, logout, branchId, branchIds, selectBranch } = useAuth();
   const links = NAV[role] ?? [];
   const [menuOpen, setMenuOpen] = useState(false);
+  const [branchNames, setBranchNames] = useState({});
   const location = useLocation();
 
   // Close the mobile drawer on navigation so it never stays open over content.
   useEffect(() => {
     setMenuOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (branchIds.length < 2) return;
+    let cancelled = false;
+    Promise.all(branchIds.map(async (id) => {
+      try {
+        const branch = await fetchBranchSettings(id);
+        return [id, branch.name];
+      } catch {
+        return [id, `Branch ${id.slice(0, 6)}`];
+      }
+    })).then((entries) => { if (!cancelled) setBranchNames(Object.fromEntries(entries)); });
+    return () => { cancelled = true; };
+  }, [branchIds]);
+
+  const branchChooser = branchIds.length > 1 && (
+    <label className="flex items-center gap-2 font-ui text-xs text-slate">
+      <span className="sr-only">Active branch</span>
+      <select className="input max-w-44 py-1.5 text-sm" value={branchId ?? ""}
+        onChange={(event) => selectBranch(event.target.value)} aria-label="Active branch">
+        {branchIds.map((id) => <option key={id} value={id}>{branchNames[id] ?? `Branch ${id.slice(0, 6)}`}</option>)}
+      </select>
+    </label>
+  );
 
   return (
     <div className="flex min-h-[100dvh] flex-col">
@@ -96,6 +122,7 @@ export default function Shell() {
           </nav>
 
           <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2.5">
+            <div className="hidden sm:block">{branchChooser}</div>
             <ThemeToggle />
             <div className="hidden min-w-0 max-w-[180px] text-right lg:block">
               <p className="truncate font-ui text-sm font-medium leading-tight">{user?.name ?? user?.email}</p>
@@ -142,6 +169,7 @@ export default function Shell() {
         {/* Mobile drawer */}
         {menuOpen && (
           <nav className="border-t border-hairline bg-cream/95 px-4 py-3 backdrop-blur-md lg:hidden">
+            <div className="mb-3 sm:hidden">{branchChooser}</div>
             <div className="mb-2 sm:hidden">
               <p className="font-ui text-sm font-medium leading-tight">{user?.name ?? user?.email}</p>
               <p className="font-ui text-[11px] uppercase tracking-[0.14em] text-slate">

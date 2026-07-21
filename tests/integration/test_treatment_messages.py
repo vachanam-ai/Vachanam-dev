@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from backend.config import settings
 from backend.models.schema import (
-    Branch, Doctor, Organization, Patient, PatientMessage, TreatmentNote, User,
+    Branch, Doctor, Organization, Patient, PatientMessage, TreatmentNote,
 )
 
 _ALGO = "HS256"

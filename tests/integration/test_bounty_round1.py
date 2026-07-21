@@ -24,7 +24,6 @@ from backend.models.schema import (
     Token,
 )
 
-pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture

@@ -2,7 +2,7 @@ name: ZAP Baseline Scan
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master, main]
   schedule:
     # Nightly 23:30 IST = 18:00 UTC
     - cron: "0 18 * * *"

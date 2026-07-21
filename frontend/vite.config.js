@@ -36,7 +36,11 @@ export default defineConfig({
       "/branches": toBackend,
       "/dashboard": toBackend,
       "/admin": toBackend,
-      "/analytics": toBackend
+      "/analytics": toBackend,
+      "/patients": toBackend,
+      "/treatment": toBackend,
+      "/support": toBackend,
+      "/webhooks": toBackend
     }
   }
 });

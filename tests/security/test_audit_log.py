@@ -858,7 +858,7 @@ def test_audit_decorator_is_exported():
 
 def test_write_audit_row_is_exported():
     """The `write_audit_row` async helper must be importable."""
-    import asyncio
+    import inspect
     try:
         from backend.services.audit_service import write_audit_row
     except ImportError:
@@ -866,6 +866,6 @@ def test_write_audit_row_is_exported():
             "backend/services/audit_service.write_audit_row not importable. "
             "Task 7 must export `async def write_audit_row(...)`."
         )
-    assert asyncio.iscoroutinefunction(write_audit_row), (
+    assert inspect.iscoroutinefunction(write_audit_row), (
         "write_audit_row must be async (coroutine function)"
     )

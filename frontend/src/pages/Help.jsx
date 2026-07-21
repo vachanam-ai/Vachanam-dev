@@ -21,6 +21,7 @@ export default function Help() {
   const [msgs, setMsgs] = useState([]); // {role:'user'|'bot', content, typed}
   const [ticketId, setTicketId] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [chatCaptcha, setChatCaptcha] = useState("");
   const endRef = useRef(null);
   const pageRef = useRef(null);
 
@@ -80,7 +81,7 @@ export default function Help() {
     setMsgs((m) => [...m, { role: "user", content: question }]);
     setQ("");
     try {
-      const res = await sendChat({ question, history, ticketId });
+      const res = await sendChat({ question, history, ticketId, captcha: chatCaptcha });
       setTicketId(res.ticket_id);
       setMsgs((m) => [...m, { role: "bot", content: res.answer, typed: false }]);
     } catch (err) {
@@ -94,6 +95,7 @@ export default function Help() {
   const [demo, setDemo] = useState({ clinic: "", name: "", phone: "", body: "" });
   const [demoSent, setDemoSent] = useState(false);
   const [dErr, setDErr] = useState("");
+  const [demoCaptcha, setDemoCaptcha] = useState("");
   const submitDemo = async (e) => {
     e.preventDefault();
     setDErr("");
@@ -104,7 +106,7 @@ export default function Help() {
         subject: `Demo request — ${demo.clinic}`.slice(0, 200),
         body: demo.body.trim() || "Please call me to arrange a demo.",
         category: "sales_demo",
-      });
+      }, demoCaptcha);
       setDemoSent(true);
     } catch (x) { setDErr(x.response?.data?.detail || "Could not send — call us at hello@vachanam.in"); }
   };
@@ -113,10 +115,11 @@ export default function Help() {
   const [contact, setContact] = useState({ name: "", email: "", subject: "", body: "", category: "other" });
   const [sent, setSent] = useState(false);
   const [cErr, setCErr] = useState("");
+  const [contactCaptcha, setContactCaptcha] = useState("");
   const submitC = async (e) => {
     e.preventDefault();
     setCErr("");
-    try { await submitContact(contact); setSent(true); }
+    try { await submitContact(contact, contactCaptcha); setSent(true); }
     catch (x) { setCErr(x.response?.data?.detail || "Could not send — email hello@vachanam.in"); }
   };
 
@@ -200,10 +203,13 @@ export default function Help() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
-              <button className="btn-primary" disabled={busy || !q.trim()}>{busy ? "…" : "Send"}</button>
+              <button className="btn-primary"
+                disabled={busy || !q.trim() || (TURNSTILE_ON && !chatCaptcha)}>
+                {busy ? "…" : "Send"}
+              </button>
             </form>
           </div>
-          {TURNSTILE_ON && <Turnstile />}
+          {TURNSTILE_ON && <Turnstile onToken={setChatCaptcha} />}
           <p className="text-xs text-ink-soft">
             Please don't share patient names, phone numbers, or health details here.
           </p>
@@ -233,7 +239,9 @@ export default function Help() {
               <textarea className="input sm:col-span-2" rows={2}
                 placeholder="Anything specific you'd like to see? (optional)"
                 value={demo.body} onChange={(e) => setDemo({ ...demo, body: e.target.value })} />
-              <button className="btn-primary sm:col-span-2 py-3">Book my demo — we'll call you</button>
+              <div className="sm:col-span-2"><Turnstile onToken={setDemoCaptcha} /></div>
+              <button className="btn-primary sm:col-span-2 py-3"
+                disabled={TURNSTILE_ON && !demoCaptcha}>Book my demo — we'll call you</button>
               {dErr && <p className="text-sm text-danger sm:col-span-2">{dErr}</p>}
             </form>
           )}
@@ -264,7 +272,9 @@ export default function Help() {
                 <option value="technical">Technical</option>
                 <option value="onboarding">Onboarding</option>
               </select>
-              <button className="btn-primary sm:col-span-1">Send</button>
+              <div className="sm:col-span-2"><Turnstile onToken={setContactCaptcha} /></div>
+              <button className="btn-primary sm:col-span-1"
+                disabled={TURNSTILE_ON && !contactCaptcha}>Send</button>
               {cErr && <p className="text-sm text-danger sm:col-span-2">{cErr}</p>}
             </form>
           )}

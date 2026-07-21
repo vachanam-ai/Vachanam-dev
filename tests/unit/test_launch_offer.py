@@ -9,7 +9,6 @@ from backend.services.billing_math import (
     DID_COST_PER_MONTH,  # noqa: F401 — documents the cost model source
     OFFER_MONTHS,
     OFFER_PRICES,
-    PLANS,
     cloning_allowed,
     effective_price,
     in_offer_window,

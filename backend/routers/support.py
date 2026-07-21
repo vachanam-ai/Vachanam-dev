@@ -5,16 +5,18 @@ and ticket reads are WHERE org_id scoped.
 RULE 8: bot failure returns a safe refusal, never a 500.
 RULE 9: log ticket/message IDs, never bodies.
 """
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.database import get_db
 from backend.middleware.auth_middleware import (
     CurrentUser,
@@ -43,6 +45,7 @@ async def _guard_anonymous(request: Request, user) -> None:
 
 logger = structlog.get_logger()
 router = APIRouter()
+_ANON_SESSION_COOKIE = "vachanam_support_session"
 
 # SLA target hours by priority — sla_due_at = created_at + hours[priority].
 _SLA_HOURS = {"urgent": 4, "high": 8, "normal": 24, "low": 72}
@@ -71,7 +74,12 @@ async def get_kb(request: Request):
 
 
 @router.post("/chat", dependencies=[Depends(default_limit)])
-async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def chat(
+    body: ChatRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     user = await optional_current_user(request)
     await _guard_anonymous(request, user)  # Turnstile for anonymous only
     audience = "clinic" if user and user.org_id else "public"
@@ -84,15 +92,28 @@ async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(g
     ticket = None
     is_new = False
     caller_org = str((user.org_id if user else None) or "")
+    anonymous_session_id = None if user else request.cookies.get(_ANON_SESSION_COOKIE)
     if body.ticket_id:
         ticket = (
             await db.execute(select(SupportTicket).where(SupportTicket.id == body.ticket_id))
         ).scalar_one_or_none()
-        if ticket and str(ticket.org_id or "") != caller_org:
+        if ticket and (
+            (user and str(ticket.org_id or "") != caller_org)
+            or (
+                not user
+                and (
+                    not anonymous_session_id
+                    or ticket.anonymous_session_id != anonymous_session_id
+                )
+            )
+        ):
             ticket = None  # not this caller's ticket → open a fresh one
     if ticket is None:
+        if not user and not anonymous_session_id:
+            anonymous_session_id = secrets.token_urlsafe(32)
         ticket = SupportTicket(
             org_id=(user.org_id if user else None),
+            anonymous_session_id=anonymous_session_id,
             email=(user.email if user else "anonymous@vachanam.in"),
             subject=body.question[:200],
             category="other",
@@ -112,6 +133,15 @@ async def chat(body: ChatRequest, request: Request, db: AsyncSession = Depends(g
         SupportMessage(ticket_id=ticket.id, sender="bot", body=result["answer"]),
     ])
     await db.commit()
+    if not user and anonymous_session_id:
+        response.set_cookie(
+            _ANON_SESSION_COOKIE,
+            anonymous_session_id,
+            max_age=30 * 24 * 3600,
+            httponly=True,
+            secure=settings.app_env == "production",
+            samesite="lax",
+        )
     logger.info(
         "support_chat", ticket_id=str(ticket.id), answered=result["answered"],
         org_id=str(ticket.org_id) if ticket.org_id else None,

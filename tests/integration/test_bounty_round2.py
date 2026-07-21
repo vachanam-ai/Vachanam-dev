@@ -15,7 +15,6 @@ from sqlalchemy import and_, func, select
 from agent.tools.booking_tools import assign_token, confirm_booking
 from backend.models.schema import Branch, Doctor, Organization, Token
 
-pytestmark = pytest.mark.asyncio
 
 
 class _Cal:

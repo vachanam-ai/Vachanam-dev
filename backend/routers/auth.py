@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 import backend.services.audit_service as _audit_svc
@@ -480,6 +480,9 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         # ponytail: count-then-insert — two simultaneous signups could
         # over-grant one slot; acceptable for a capped goodwill offer.
         # -1 = unlimited (TRIAL_FOR_ALL), >0 = slots remain — both grant it.
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext('vachanam_founding_trial'))")
+        )
         _slots = await _founding_slots_left(db)
         founding = _slots != 0
         org = Organization(
@@ -636,7 +639,9 @@ async def request_otp(request: Request, body: OtpRequest) -> OtpResponse:
             phone = normalize_indian_phone(body.phone)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        dev_phone_code = await otp_service.issue_code("sms", phone)
+        dev_phone_code, delivered = await otp_service.issue_code_result("sms", phone)
+        if not delivered:
+            raise HTTPException(status_code=503, detail="OTP delivery_failed; please retry")
         sent.append("sms")
 
     if body.email:
@@ -644,7 +649,9 @@ async def request_otp(request: Request, body: OtpRequest) -> OtpResponse:
             email = normalize_email(body.email)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        dev_email_code = await otp_service.issue_code("email", email)
+        dev_email_code, delivered = await otp_service.issue_code_result("email", email)
+        if not delivered:
+            raise HTTPException(status_code=503, detail="OTP delivery_failed; please retry")
         sent.append("email")
 
     if not sent:
@@ -755,6 +762,7 @@ async def reset_password(request: Request, body: ResetPasswordRequest) -> TokenR
             # Code verified but no user — should not happen; treat as failure.
             raise HTTPException(status_code=404, detail="Account not found")
         user.password_hash = _hash_password(body.new_password)
+        user.token_version = int(user.token_version or 0) + 1
         await db.commit()
         await db.refresh(user)
         user_id = user.id

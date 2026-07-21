@@ -327,5 +327,5 @@ async def _send_wa_leave_pings(
             lang=wa_templates.template_lang(patient.preferred_language),
         )
         await wa_service.send_template(
-            branch, patient.phone, template, lang, params, buttons
+            branch, patient.phone, template, lang, params, buttons, plan=plan
         )

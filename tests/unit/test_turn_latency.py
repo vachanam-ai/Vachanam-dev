@@ -89,7 +89,7 @@ def test_vertex_mumbai_primary_404(tmp_path, monkeypatch):
     )
 
     adapter = ag._build_fallback_llm()
-    opts = [l._opts for l in adapter._llm_instances]
+    opts = [llm._opts for llm in adapter._llm_instances]
     assert opts[0].model == "gemini-2.5-flash"
     assert opts[0].vertexai is True
     assert opts[0].project == "vachanam-498912"
@@ -201,6 +201,6 @@ def test_vertex_missing_creds_falls_back_404(tmp_path, monkeypatch):
     assert ag._vertex_credentials() is None
 
     adapter = ag._build_fallback_llm()
-    opts = [l._opts for l in adapter._llm_instances]
+    opts = [llm._opts for llm in adapter._llm_instances]
     assert [o.model for o in opts] == ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
     assert all(o.vertexai is False for o in opts)

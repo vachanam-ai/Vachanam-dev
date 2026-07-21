@@ -4,8 +4,9 @@ import { toast } from "sonner";
 import { fetchDoctors, markUnavailable, previewAffected, fetchUpcomingLeave } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
+import { localDateInputValue } from "../utils/date.js";
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = localDateInputValue;
 
 export default function Availability() {
   const { branchId } = useAuth();

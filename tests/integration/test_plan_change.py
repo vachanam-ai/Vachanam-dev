@@ -16,7 +16,6 @@ from backend.models.schema import BillingCycle, Organization
 from backend.routers.payments import PlanChangeRequest, change_plan
 from backend.services.billing_math import next_cycle_start
 
-pytestmark = pytest.mark.asyncio
 
 
 def test_next_cycle_start_rolls_to_first_of_next_month():

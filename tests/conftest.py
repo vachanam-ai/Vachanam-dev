@@ -10,6 +10,7 @@
 import pytest
 import pytest_asyncio
 import redis.asyncio as aioredis
+from sqlalchemy import text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
@@ -184,8 +185,15 @@ async def db():
     # 100-caller token race) gate their own concurrency with a semaphore so NullPool
     # never opens more connections at once than Postgres max_connections allows.
     engine = create_async_engine(settings.test_database_url, echo=False, poolclass=NullPool)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # A session-level advisory lock serializes schema DDL across pytest workers
+    # and interrupted prior runs. Rebuild first so orphaned PostgreSQL enum
+    # types cannot make create_all fail with DuplicateObject.
+    ddl_conn = await engine.connect()
+    await ddl_conn.execute(text("SELECT pg_advisory_lock(86722419)"))
+    await ddl_conn.commit()
+    async with ddl_conn.begin():
+        await ddl_conn.run_sync(Base.metadata.drop_all)
+        await ddl_conn.run_sync(Base.metadata.create_all)
 
     test_session_factory = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
@@ -219,14 +227,19 @@ async def db():
     for _mod, _attr, _original in _patched_modules:
         setattr(_mod, _attr, _original)
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    async with ddl_conn.begin():
+        await ddl_conn.run_sync(Base.metadata.drop_all)
+    await ddl_conn.execute(text("SELECT pg_advisory_unlock(86722419)"))
+    await ddl_conn.close()
     await engine.dispose()
     await _db_module.engine.dispose()
 
 
-@pytest_asyncio.fixture(scope="function")
+@pytest_asyncio.fixture(scope="function", autouse=True)
 async def redis():
+    from backend.middleware import rate_limit
+
+    await rate_limit.close_rate_limiter()
     # Use settings.redis_url — no hardcoded URLs (tester.md rule 5).
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
     # Pre-flush so a leaky previous test cannot pollute this one (tester.md rule 7).
@@ -234,3 +247,4 @@ async def redis():
     yield r
     await r.flushdb()
     await r.aclose()
+    await rate_limit.close_rate_limiter()

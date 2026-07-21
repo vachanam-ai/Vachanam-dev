@@ -198,7 +198,9 @@ async def _send_wa_reminder(db, branch: Branch, token: Token, doctor: Doctor, pa
         token_id=str(token.id),
         lang=wa_templates.template_lang(patient.preferred_language),
     )
-    await wa_service.send_template(branch, patient.phone, template, lang, params, buttons)
+    await wa_service.send_template(
+        branch, patient.phone, template, lang, params, buttons, plan=plan
+    )
 
 
 async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> bool:

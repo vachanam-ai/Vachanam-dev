@@ -8,14 +8,12 @@ import uuid
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
-import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
 
 from backend.models.schema import Branch, CallLog, Organization
 from backend.services.vobiz_cdr import parse_call_record
 
-pytestmark = pytest.mark.asyncio
 
 DID = "+918045678901"
 

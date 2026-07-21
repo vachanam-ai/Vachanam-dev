@@ -1,12 +1,16 @@
-import { api } from "./client";
+import { api, captchaConfig } from "./client";
 
 export const getKb = () => api.get("/support/kb").then((r) => r.data);
 
-export const sendChat = ({ question, history = [], ticketId = null }) =>
+export const sendChat = ({ question, history = [], ticketId = null, captcha = "" }) =>
   api
     // 30s: a Neon cold-wake + Gemini call can overrun the client's global 15s
     // and surface as a bogus "something went wrong" (2026-07-12).
-    .post("/support/chat", { question, history, ticket_id: ticketId }, { timeout: 30000 })
+    .post(
+      "/support/chat",
+      { question, history, ticket_id: ticketId },
+      captchaConfig(captcha, { timeout: 30000 })
+    )
     .then((r) => r.data);
 
 export const listTickets = () => api.get("/support/tickets").then((r) => r.data);
@@ -19,8 +23,8 @@ export const replyToTicket = (id, body) =>
   api.post(`/support/tickets/${id}/messages`, { body }).then((r) => r.data);
 export const rateTicket = (id, score, comment = null) =>
   api.post(`/support/tickets/${id}/csat`, { score, comment }).then((r) => r.data);
-export const submitContact = (payload) =>
-  api.post("/support/contact", payload).then((r) => r.data);
+export const submitContact = (payload, captcha = "") =>
+  api.post("/support/contact", payload, captchaConfig(captcha)).then((r) => r.data);
 
 // Support-staff dashboard
 export const adminListTickets = (params = {}) =>

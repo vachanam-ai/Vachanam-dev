@@ -34,6 +34,7 @@ review (Task 5 reviewer) MUST reject and re-dispatch.
 ────────────────────────────────────────────────────────────────────────
 """
 import asyncio
+import inspect
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -490,7 +491,7 @@ def test_user_or_ip_key_function_exists():
         "backend/middleware/rate_limit.py must export `async def user_or_ip_key(request)` "
         "per spec §6.2 — returns 'user:<sub>' if JWT present else 'ip:<host>'."
     )
-    assert asyncio.iscoroutinefunction(rl.user_or_ip_key), (
+    assert inspect.iscoroutinefunction(rl.user_or_ip_key), (
         "user_or_ip_key must be `async def` (fastapi-limiter identifier contract)."
     )
 

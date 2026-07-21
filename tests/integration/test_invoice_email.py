@@ -18,7 +18,6 @@ from backend.services.invoice_email import (
     invoice_number,
 )
 
-pytestmark = pytest.mark.asyncio
 
 
 def _bd_clinic_50_over():

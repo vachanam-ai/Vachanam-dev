@@ -72,7 +72,9 @@ class MetaService:
                 token_id=token_id or "",
                 lang=wa_templates.template_lang(patient_lang),
             )
-            await wa_service.send_template(branch, to, template, lang, params, buttons)
+            await wa_service.send_template(
+                branch, to, template, lang, params, buttons, plan=plan
+            )
         except Exception as e:  # noqa: BLE001 — RULE 4: never surfaces to booking
             logger.warning("wa_confirmation_failed", error=str(e)[:200])
 

@@ -66,6 +66,7 @@ async def test_template_payload_with_buttons(monkeypatch):
         ["Clinic", "Dr X", "14 July, 10:00", "5"],
         buttons=[{"id": "rs:t1", "title": "Reschedule"},
                  {"id": "cx:t1", "title": "Cancel"}],
+        plan="clinic",
     )
     assert ok is True
     assert len(sent) == 1
@@ -88,10 +89,10 @@ async def test_text_and_interactive_payloads(monkeypatch):
     sent = []
     monkeypatch.setattr(wa_service.httpx, "AsyncClient", _capture_post(sent))
     b = _branch()
-    assert await wa_service.send_text(b, "+919000000001", "hello") is True
+    assert await wa_service.send_text(b, "+919000000001", "hello", plan="clinic") is True
     assert sent[-1]["json"]["text"]["body"] == "hello"
     inter = {"type": "list", "body": {"text": "pick"}, "action": {}}
-    assert await wa_service.send_interactive(b, "+919000000001", inter) is True
+    assert await wa_service.send_interactive(b, "+919000000001", inter, plan="clinic") is True
     assert sent[-1]["json"]["interactive"]["type"] == "list"
 
 
@@ -115,5 +116,5 @@ async def test_network_failure_returns_false_never_raises(monkeypatch):
             raise httpx.ConnectError("down")
 
     monkeypatch.setattr(wa_service.httpx, "AsyncClient", _Boom)
-    ok = await wa_service.send_text(_branch(), "+919000000001", "hi")
+    ok = await wa_service.send_text(_branch(), "+919000000001", "hi", plan="clinic")
     assert ok is False

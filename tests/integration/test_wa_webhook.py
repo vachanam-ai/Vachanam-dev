@@ -41,9 +41,10 @@ def wa_env(monkeypatch):
     monkeypatch.setattr(settings, "meta_app_secret", SECRET, raising=False)
     monkeypatch.setattr(settings, "meta_webhook_verify_token", VERIFY, raising=False)
     monkeypatch.setattr(settings, "meta_access_token", "tok", raising=False)
+    monkeypatch.setattr(wa_service.settings, "meta_access_token", "tok", raising=False)
     sent = []
 
-    async def _fake_text(branch, to, text):
+    async def _fake_text(branch, to, text, plan=None):
         sent.append({"branch": str(branch.id), "to": to, "text": text})
         return True
 
@@ -195,7 +196,7 @@ async def test_chat_location_intent(db, wa_env, monkeypatch):
         return json.dumps({"intent": "location", "answer": ""})
 
     monkeypatch.setattr(wa_chat, "_call_gemini", _fake_gemini)
-    await wa_chat.handle_text(db, b, "919000000042", "where is the clinic?")
+    await wa_chat.handle_text(db, b, "clinic", "919000000042", "where is the clinic?")
     assert "maps.google.com" in wa_env[-1]["text"]
 
 
@@ -209,7 +210,7 @@ async def test_chat_medical_goes_to_call(db, wa_env, monkeypatch):
         return json.dumps({"intent": "out_of_scope", "answer": ""})
 
     monkeypatch.setattr(wa_chat, "_call_gemini", _fake_gemini)
-    await wa_chat.handle_text(db, b, "919000000042", "my tooth pains, which medicine?")
+    await wa_chat.handle_text(db, b, "clinic", "919000000042", "my tooth pains, which medicine?")
     assert "call" in wa_env[-1]["text"].lower()
 
 
@@ -221,5 +222,5 @@ async def test_chat_gemini_down_static_fallback(db, wa_env, monkeypatch):
         raise RuntimeError("gemini down")
 
     monkeypatch.setattr(wa_chat, "_call_gemini", _boom)
-    await wa_chat.handle_text(db, b, "919000000042", "hello")
+    await wa_chat.handle_text(db, b, "clinic", "919000000042", "hello")
     assert "call" in wa_env[-1]["text"].lower()  # RULE 8: no dead end

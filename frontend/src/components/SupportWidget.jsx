@@ -44,7 +44,7 @@ export default function SupportWidget() {
     setMsgs((m) => [...m, { role: "user", content: question }]);
     setQ("");
     try {
-      const res = await sendChat({ question, history, ticketId });
+      const res = await sendChat({ question, history, ticketId, captcha });
       setTicketId(res.ticket_id);
       setMsgs((m) => [...m, { role: "bot", content: res.answer, typed: false }]);
     } catch (err) {
@@ -90,10 +90,7 @@ export default function SupportWidget() {
             {busy && <TypingDots />}
           </div>
 
-          {/* Anonymous visitors (landing page, mobile) must solve Turnstile —
-              /support/chat 403s "captcha_failed" without a token (#413). The
-              interceptor consumes one token per send and resets the widget;
-              authed users skip it server-side, so no widget when signed in. */}
+          {/* Anonymous visitors must solve one widget-scoped challenge per send. */}
           {needCaptcha && (
             <div className="border-t border-hairline px-2.5 pt-2">
               <Turnstile onToken={setCaptcha} />

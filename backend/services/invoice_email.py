@@ -12,6 +12,7 @@ rolls back an activation.
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 import httpx
 import structlog
@@ -20,7 +21,7 @@ from backend.config import settings
 
 logger = structlog.get_logger()
 
-_PLAN_LABEL = {"solo": "Starter", "clinic": "Clinic", "multi": "Multi"}
+_PLAN_LABEL = {"lite": "Lite", "solo": "Starter", "clinic": "Clinic", "multi": "Multi"}
 
 
 def invoice_number(cycle_start: date, payment_id: str) -> str:
@@ -61,9 +62,10 @@ def build_invoice_text(
     ]
     for label, amount in _rows(plan, bd):
         lines.append(f"  {label:<40} Rs {amount:>12,.2f}")
+    lines.append(f"  {'Subtotal':<40} Rs {subtotal:>12,.2f}")
+    if bd["gst"]:
+        lines.append(f"  {'GST - India (18%)':<40} Rs {bd['gst']:>12,.2f}")
     lines += [
-        f"  {'Subtotal':<40} Rs {subtotal:>12,.2f}",
-        f"  {'GST - India (18%)':<40} Rs {bd['gst']:>12,.2f}",
         f"  {'Amount paid':<40} Rs {bd['total']:>12,.2f}",
         "",
         f"Payment ID: {payment_id} (Razorpay)",
@@ -87,6 +89,8 @@ def build_invoice_html(
     (email clients)."""
     no = invoice_number(cycle_start, payment_id)
     subtotal = bd["base"] + bd["overage_amount"]
+    safe_org_name = escape(org_name, quote=True)
+    safe_payment_id = escape(payment_id, quote=True)
 
     def money(v: float) -> str:
         return f"&#8377;{v:,.2f}"  # ₹ entity — HTML mail renders it fine
@@ -96,6 +100,12 @@ def build_invoice_html(
         f'<td style="padding:8px 0;text-align:right;color:#1a2024;">{money(amount)}</td></tr>'
         for label, amount in _rows(plan, bd)
     )
+    gst_row = ""
+    if bd["gst"]:
+        gst_row = (
+            '<tr><td style="padding:8px 0;color:#64747c;">GST &middot; India (18%)</td>'
+            f'<td style="padding:8px 0;text-align:right;color:#64747c;">{money(bd["gst"])}</td></tr>'
+        )
     return f"""\
 <div style="background:#f2f4f4;padding:32px 12px;font-family:Helvetica,Arial,sans-serif;">
   <div style="max-width:520px;margin:0 auto;">
@@ -108,9 +118,9 @@ def build_invoice_html(
         <tr><td style="padding:4px 0;color:#64747c;">Receipt number</td>
             <td style="padding:4px 0;text-align:right;color:#1a2024;">{no}</td></tr>
         <tr><td style="padding:4px 0;color:#64747c;">Payment ID</td>
-            <td style="padding:4px 0;text-align:right;color:#1a2024;">{payment_id}</td></tr>
+            <td style="padding:4px 0;text-align:right;color:#1a2024;">{safe_payment_id}</td></tr>
         <tr><td style="padding:4px 0;color:#64747c;">Billed to</td>
-            <td style="padding:4px 0;text-align:right;color:#1a2024;">{org_name}</td></tr>
+            <td style="padding:4px 0;text-align:right;color:#1a2024;">{safe_org_name}</td></tr>
       </table>
     </div>
     <div style="background:#ffffff;border-radius:12px;padding:24px 28px;margin-top:16px;box-shadow:0 1px 4px rgba(0,0,0,0.08);">
@@ -121,8 +131,7 @@ def build_invoice_html(
         <tr><td colspan="2" style="border-top:1px solid #e6eaea;padding:0;"></td></tr>
         <tr><td style="padding:8px 0;color:#64747c;">Subtotal</td>
             <td style="padding:8px 0;text-align:right;color:#1a2024;">{money(subtotal)}</td></tr>
-        <tr><td style="padding:8px 0;color:#64747c;">GST &middot; India (18%)</td>
-            <td style="padding:8px 0;text-align:right;color:#64747c;">{money(bd['gst'])}</td></tr>
+        {gst_row}
         <tr><td colspan="2" style="border-top:1px solid #e6eaea;padding:0;"></td></tr>
         <tr><td style="padding:10px 0;font-weight:bold;color:#1a2024;">Amount paid</td>
             <td style="padding:10px 0;text-align:right;font-weight:bold;color:#1a2024;">{money(bd['total'])}</td></tr>
@@ -209,7 +218,8 @@ def build_invoice_pdf(
     for label, amount in _rows(plan, bd):
         _row(label.replace("×", "x").replace("·", "-"), amount)
     _row("Subtotal", subtotal)
-    _row("GST - India (18%)", bd["gst"], muted=True)
+    if bd["gst"]:
+        _row("GST - India (18%)", bd["gst"], muted=True)
     _row("Amount paid", bd["total"], bold=True, fill=True)
 
     # Footer

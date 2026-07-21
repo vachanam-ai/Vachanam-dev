@@ -63,8 +63,10 @@ async def _post(phone_number_id: str, payload: dict) -> None:
         r.raise_for_status()
 
 
-async def _send(branch, to: str, payload: dict, kind: str, detail: str) -> bool:
+async def _send(branch, plan: str | None, to: str, payload: dict, kind: str, detail: str) -> bool:
     """Shared guarded send. RULE 4: catches everything terminal."""
+    if not wa_enabled(branch, plan):
+        return False
     try:
         await _post(branch.wa_phone_number_id, payload)
         logger.info(
@@ -88,6 +90,7 @@ async def send_template(
     lang: str,
     body_params: list[str],
     buttons: list[dict] | None = None,
+    plan: str | None = None,
 ) -> bool:
     """Business-initiated utility template. buttons = quick replies:
     [{"id": "rs:<token_id>", "title": "Reschedule"}, ...] — ids follow the
@@ -115,10 +118,10 @@ async def send_template(
             "components": components,
         },
     }
-    return await _send(branch, to, payload, "template", template)
+    return await _send(branch, plan, to, payload, "template", template)
 
 
-async def send_text(branch, to: str, text: str) -> bool:
+async def send_text(branch, to: str, text: str, plan: str | None = None) -> bool:
     """Free-form session reply — only valid inside Meta's 24h service window,
     which every caller of this function is by construction (we only reply)."""
     payload = {
@@ -127,10 +130,12 @@ async def send_text(branch, to: str, text: str) -> bool:
         "type": "text",
         "text": {"body": text},
     }
-    return await _send(branch, to, payload, "text", "session_reply")
+    return await _send(branch, plan, to, payload, "text", "session_reply")
 
 
-async def send_interactive(branch, to: str, interactive: dict) -> bool:
+async def send_interactive(
+    branch, to: str, interactive: dict, plan: str | None = None
+) -> bool:
     """Interactive session message (button/list picker) — same 24h-window
     contract as send_text."""
     payload = {
@@ -140,5 +145,5 @@ async def send_interactive(branch, to: str, interactive: dict) -> bool:
         "interactive": interactive,
     }
     return await _send(
-        branch, to, payload, "interactive", interactive.get("type", "?")
+        branch, plan, to, payload, "interactive", interactive.get("type", "?")
     )

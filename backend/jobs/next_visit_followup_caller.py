@@ -5,7 +5,6 @@ next_visit_book fires at/after 09:00 on its scheduled day; doctor_advice fires
 ASAP. RULE 9: metadata carries ONLY operational fields + the doctor's message
 (what_to_ask) — never steps_performed/next_steps. Reuses the reminder dispatch."""
 from __future__ import annotations
-import asyncio
 import json
 import uuid
 from datetime import datetime, time as dtime

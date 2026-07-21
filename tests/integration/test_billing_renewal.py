@@ -46,8 +46,8 @@ async def test_first_activation_starts_cycle_today(db):
     res = await activate_subscription(db, str(org.id), "solo", f"pay_{uuid.uuid4().hex[:10]}")
     assert res == "activated"
     (c,) = await _cycles(db, org)
-    assert c.cycle_start == date.today()
-    assert c.cycle_end == date.today() + timedelta(days=30)
+    assert c.cycle_start == datetime.now(timezone.utc).date()
+    assert c.cycle_end == datetime.now(timezone.utc).date() + timedelta(days=30)
     await db.refresh(org)
     assert org.status == "active"
 
@@ -65,7 +65,7 @@ async def test_early_renewal_is_contiguous(db):
 
 async def test_late_renewal_starts_today(db):
     org = await _org(db, status="paused")
-    old_end = date.today() - timedelta(days=10)
+    old_end = datetime.now(timezone.utc).date() - timedelta(days=10)
     db.add(BillingCycle(
         org_id=org.id, cycle_start=old_end - timedelta(days=30), cycle_end=old_end,
         plan="solo", base_amount=5999, included_minutes=700, minutes_used=700,
@@ -75,7 +75,7 @@ async def test_late_renewal_starts_today(db):
     await db.commit()
     await activate_subscription(db, str(org.id), "solo", f"pay_{uuid.uuid4().hex[:10]}")
     _, c2 = await _cycles(db, org)
-    assert c2.cycle_start == date.today()  # the gap wasn't served — no backdating
+    assert c2.cycle_start == datetime.now(timezone.utc).date()  # the gap wasn't served — no backdating
     await db.refresh(org)
     assert org.status == "active"
 
@@ -84,7 +84,7 @@ async def test_renewal_job_pauses_after_grace(db):
     import backend.jobs.trial_pause as job
 
     org = await _org(db, status="active")
-    end = date.today() - timedelta(days=4)  # 4 days past end > 3-day grace
+    end = datetime.now(timezone.utc).date() - timedelta(days=4)  # 4 days past end > 3-day grace
     db.add(BillingCycle(
         org_id=org.id, cycle_start=end - timedelta(days=30), cycle_end=end,
         plan="solo", base_amount=5999, included_minutes=700, minutes_used=0,
@@ -93,7 +93,7 @@ async def test_renewal_job_pauses_after_grace(db):
     ))
     await db.commit()
 
-    await job.run_billing_renewal(today=date.today())
+    await job.run_billing_renewal(today=datetime.now(timezone.utc).date())
 
     await db.refresh(org)
     assert org.status == "paused"
@@ -111,7 +111,7 @@ async def test_renewal_charges_overage_and_gst(db, monkeypatch):
     branch = Branch(org_id=org.id, name="Main", whatsapp_number="+911234500000")
     db.add(branch)
     await db.flush()
-    start = date.today() - timedelta(days=28)
+    start = datetime.now(timezone.utc).date() - timedelta(days=28)
     end = start + timedelta(days=30)
     db.add(BillingCycle(
         org_id=org.id, cycle_start=start, cycle_end=end,
@@ -179,7 +179,7 @@ async def test_pay_window_locked_mid_cycle(db):
     from backend.routers.payments import CreateOrderRequest, create_order
 
     org = await _org(db, status="active", plan="solo")
-    start = date.today() - timedelta(days=10)  # ends in 20 days
+    start = datetime.now(timezone.utc).date() - timedelta(days=10)  # ends in 20 days
     db.add(BillingCycle(
         org_id=org.id, cycle_start=start, cycle_end=start + timedelta(days=30),
         plan="solo", base_amount=5999, included_minutes=700, minutes_used=0,
@@ -226,7 +226,7 @@ async def test_plan_info_carries_last_payment_date(db):
     from backend.routers.payments import _latest_cycle, _plan_info
 
     org = await _org(db, status="active", plan="solo")
-    start = date.today() - timedelta(days=5)
+    start = datetime.now(timezone.utc).date() - timedelta(days=5)
     db.add(BillingCycle(
         org_id=org.id, cycle_start=start, cycle_end=start + timedelta(days=30),
         plan="solo", base_amount=5999, included_minutes=700, minutes_used=0,
@@ -237,7 +237,7 @@ async def test_plan_info_carries_last_payment_date(db):
 
     info = _plan_info(org, await _latest_cycle(db, org.id))
     assert info.cycle_end == (start + timedelta(days=30)).isoformat()
-    assert info.last_payment_date == date.today().isoformat()  # row created today
+    assert info.last_payment_date == datetime.now(timezone.utc).date().isoformat()  # row created today
 
 
 async def test_verify_payment_activates_without_webhook(db, monkeypatch):
@@ -283,7 +283,7 @@ async def test_verify_payment_activates_without_webhook(db, monkeypatch):
 
     (c,) = await _cycles(db, org)
     assert c.razorpay_payment_id == payment_id
-    assert c.cycle_start == date.today()
+    assert c.cycle_start == datetime.now(timezone.utc).date()
 
     # Webhook redelivery of the SAME payment must be a no-op (idempotent).
     res = await activate_subscription(db, str(org.id), "solo", payment_id)
@@ -295,7 +295,7 @@ async def test_renewal_job_respects_grace_and_cycleless_orgs(db):
     import backend.jobs.trial_pause as job
 
     in_grace = await _org(db, status="active")
-    end = date.today() - timedelta(days=2)  # inside 3-day grace
+    end = datetime.now(timezone.utc).date() - timedelta(days=2)  # inside 3-day grace
     db.add(BillingCycle(
         org_id=in_grace.id, cycle_start=end - timedelta(days=30), cycle_end=end,
         plan="solo", base_amount=5999, included_minutes=700, minutes_used=0,
@@ -305,7 +305,7 @@ async def test_renewal_job_respects_grace_and_cycleless_orgs(db):
     no_cycle = await _org(db, status="active")  # admin-activated, never billed
     await db.commit()
 
-    await job.run_billing_renewal(today=date.today())
+    await job.run_billing_renewal(today=datetime.now(timezone.utc).date())
 
     await db.refresh(in_grace)
     await db.refresh(no_cycle)

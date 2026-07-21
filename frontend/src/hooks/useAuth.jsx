@@ -5,7 +5,9 @@ import {
   getToken,
   loginWithGoogle,
   loginWithPassword,
+  logoutSession,
   registerClinic,
+  resetPassword,
   setToken
 } from "../api/client";
 
@@ -24,6 +26,7 @@ export const roleHome = (role) =>
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(Boolean(getToken()));
+  const [selectedBranchId, setSelectedBranchId] = useState(null);
 
   useEffect(() => {
     if (!getToken()) return;
@@ -45,19 +48,44 @@ export function AuthProvider({ children }) {
     [finishLogin]
   );
   const loginPassword = useCallback(
-    async (email, password) => finishLogin(await loginWithPassword(email, password)),
+    async (email, password, captchaToken) =>
+      finishLogin(await loginWithPassword(email, password, captchaToken)),
     [finishLogin]
   );
   const register = useCallback(
-    async (payload) => finishLogin(await registerClinic(payload)),
+    async (payload, captchaToken) => finishLogin(await registerClinic(payload, captchaToken)),
+    [finishLogin]
+  );
+  const completePasswordReset = useCallback(
+    async (email, code, password) => finishLogin(await resetPassword(email, code, password)),
     [finishLogin]
   );
 
-  const logout = useCallback(() => {
-    clearToken();
-    setUser(null);
-    window.location.assign("/login");
+  const logout = useCallback(async () => {
+    try { await logoutSession(); } catch { /* local logout must still finish */ }
+    finally {
+      clearToken();
+      setUser(null);
+      window.location.assign("/login");
+    }
   }, []);
+
+  useEffect(() => {
+    const ids = user?.branch_ids ?? [];
+    if (!ids.length) {
+      setSelectedBranchId(null);
+      return;
+    }
+    const key = `vachanam_branch_${user.user_id}`;
+    const saved = localStorage.getItem(key);
+    setSelectedBranchId(ids.includes(saved) ? saved : ids[0]);
+  }, [user]);
+
+  const selectBranch = useCallback((branchId) => {
+    if (!user?.branch_ids?.includes(branchId)) return;
+    localStorage.setItem(`vachanam_branch_${user.user_id}`, branchId);
+    setSelectedBranchId(branchId);
+  }, [user]);
 
   const value = useMemo(
     () => ({
@@ -66,12 +94,14 @@ export function AuthProvider({ children }) {
       login,
       loginPassword,
       register,
+      completePasswordReset,
       logout,
       role: user?.role ?? null,
-      branchId: user?.branch_ids?.[0] ?? null,
-      branchIds: user?.branch_ids ?? []
+      branchId: selectedBranchId,
+      branchIds: user?.branch_ids ?? [],
+      selectBranch
     }),
-    [user, loading, login, loginPassword, register, logout]
+    [user, loading, selectedBranchId, selectBranch, login, loginPassword, register, completePasswordReset, logout]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

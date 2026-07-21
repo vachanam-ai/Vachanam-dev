@@ -66,33 +66,37 @@ async def _owned_token(
     return token
 
 
-async def reply_call_us(branch: Branch, sender: str) -> None:
+async def reply_call_us(branch: Branch, sender: str, plan: str) -> None:
     """Static no-dead-end reply (RULE 8)."""
     number = branch.clinic_phone or branch.did_number or ""
     line = (
         f"Sorry, something went wrong. Please call us at {number}."
         if number else "Sorry, something went wrong. Please call the clinic."
     )
-    await wa_service.send_text(branch, sender, line)
+    await wa_service.send_text(branch, sender, line, plan=plan)
 
 
 async def dispatch_button(
     db: AsyncSession, branch: Branch, plan: str, sender: str, payload: str
 ) -> None:
     """Route a quick-reply payload by grammar prefix. Unknown → call-us."""
+    if not wa_service.wa_enabled(branch, plan):
+        return
     parts = (payload or "").split(":")
     kind = parts[0] if parts else ""
     if kind == "rate" and len(parts) == 3:
-        await handle_rating(db, branch, sender, parts[1], parts[2])
+        await handle_rating(db, branch, plan, sender, parts[1], parts[2])
     elif kind in ("rs", "cx") and len(parts) == 2:
-        await handle_change_request(db, branch, sender, parts[1], want_cancel=(kind == "cx"))
+        await handle_change_request(
+            db, branch, plan, sender, parts[1], want_cancel=(kind == "cx")
+        )
     else:
         logger.info("wa_unknown_button", payload=payload[:40])
-        await reply_call_us(branch, sender)
+        await reply_call_us(branch, sender, plan)
 
 
 async def handle_rating(
-    db: AsyncSession, branch: Branch, sender: str, token_id: str, score_s: str
+    db: AsyncSession, branch: Branch, plan: str, sender: str, token_id: str, score_s: str
 ) -> None:
     token = await _owned_token(db, branch, sender, token_id)
     try:
@@ -100,7 +104,7 @@ async def handle_rating(
     except ValueError:
         score = 0
     if token is None or not 1 <= score <= 5:
-        await reply_call_us(branch, sender)
+        await reply_call_us(branch, sender, plan)
         return
     existing = (
         await db.execute(select(Rating).where(Rating.token_id == token.id))
@@ -123,7 +127,7 @@ async def handle_rating(
             if score <= 2:
                 await _notify_low_score(branch, sender, score)
     await wa_service.send_text(
-        branch, sender, "Thank you for your feedback! 🙏"
+        branch, sender, "Thank you for your feedback! 🙏", plan=plan
     )
 
 
@@ -139,7 +143,7 @@ async def _notify_low_score(branch: Branch, sender: str, score: int) -> None:
 
 
 async def handle_change_request(
-    db: AsyncSession, branch: Branch, sender: str, token_id: str,
+    db: AsyncSession, branch: Branch, plan: str, sender: str, token_id: str,
     *, want_cancel: bool,
 ) -> None:
     """Day-1 reschedule/cancel: verified booking → PatientMessage on the
@@ -147,7 +151,7 @@ async def handle_change_request(
     claims the booking was changed (nothing was written)."""
     token = await _owned_token(db, branch, sender, token_id)
     if token is None or token.status != "confirmed":
-        await reply_call_us(branch, sender)
+        await reply_call_us(branch, sender, plan)
         return
     what = "cancel" if want_cancel else "reschedule"
     when = (
@@ -168,6 +172,7 @@ async def handle_change_request(
         branch, sender,
         f"Got it — the clinic will call you shortly to {what} your "
         f"appointment.{call_bit}",
+        plan=plan,
     )
     logger.info(
         "wa_change_request", what=what, branch_id=str(branch.id),

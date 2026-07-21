@@ -5,7 +5,8 @@ denied (forbid_admin). steps_performed/next_steps are operational notes —
 dashboard-only, never spoken or sent to calendar/SMS (RULE 9).
 """
 import uuid
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,7 +18,7 @@ from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user, forbid_admin
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import default_limit  # SEC #4
-from backend.models.schema import TreatmentNote, Patient, FollowupTask, Doctor, PatientMessage
+from backend.models.schema import Branch, TreatmentNote, Patient, FollowupTask, Doctor, PatientMessage
 from backend.services.treatment_logic import resolve_is_final
 
 logger = structlog.get_logger()
@@ -536,6 +537,9 @@ async def doctor_reply(
         raise HTTPException(status_code=403, detail="Doctors can only reply on their own treatment threads")
     await _load_patient(patient_id, body.branch_id, db)
     await _load_doctor(body.doctor_id, body.branch_id, db)
+    branch_timezone = (
+        await db.execute(select(Branch.timezone).where(Branch.id == body.branch_id))
+    ).scalar_one_or_none() or "Asia/Kolkata"
     task = FollowupTask(
         branch_id=body.branch_id,
         doctor_id=body.doctor_id,
@@ -544,7 +548,7 @@ async def doctor_reply(
         task_type="doctor_advice",
         channel="voice",
         what_to_ask=body.message,
-        scheduled_date=date.today(),
+        scheduled_date=datetime.now(ZoneInfo(branch_timezone)).date(),
         status="pending",
         created_by_user_id=uuid.UUID(user.user_id) if user.user_id else None,
     )

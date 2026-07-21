@@ -30,8 +30,8 @@ from typing import Optional
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import func, select, text
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,12 +76,12 @@ async def _require_org_admin(
 # Pydantic schemas
 # ---------------------------------------------------------------------------
 
-class DoctorIn(BaseModel):
-    """Request body for POST (create) and PATCH (update) doctor."""
+class DoctorUpdate(BaseModel):
+    """Fully optional PATCH body for a doctor."""
 
-    name: str = Field(..., min_length=1, max_length=255)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     specialization: Optional[str] = Field(default=None, max_length=100)
-    booking_type: str = Field(..., pattern="^(token|appointment)$")
+    booking_type: Optional[str] = Field(default=None, pattern="^(token|appointment)$")
     working_hours_start: Optional[str] = Field(
         default=None,
         description="HH:MM format e.g. '09:00'",
@@ -103,6 +103,52 @@ class DoctorIn(BaseModel):
     invited_email: Optional[str] = Field(default=None, max_length=255)
     google_calendar_id: Optional[str] = Field(default=None, max_length=255)
     is_default_doctor: Optional[bool] = None
+
+    @field_validator("available_weekdays")
+    @classmethod
+    def _valid_weekdays(cls, value):
+        if value is None:
+            return value
+        if any(not isinstance(day, int) or day < 0 or day > 6 for day in value):
+            raise ValueError("available_weekdays must contain only 0 through 6")
+        if len(value) != len(set(value)):
+            raise ValueError("available_weekdays cannot contain duplicates")
+        return value
+
+    @field_validator("invited_email")
+    @classmethod
+    def _normalise_invited_email(cls, value):
+        if value is None or not value.strip():
+            return None
+        from backend.services.validators import normalize_email
+        try:
+            return normalize_email(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+
+class DoctorIn(DoctorUpdate):
+    """POST body: identity and complete appointment configuration are required."""
+
+    name: str = Field(..., min_length=1, max_length=255)
+    booking_type: str = Field(..., pattern="^(token|appointment)$")
+
+    @model_validator(mode="after")
+    def _appointment_has_schedule(self):
+        if self.booking_type == "appointment" and any(
+            value is None
+            for value in (
+                self.working_hours_start,
+                self.working_hours_end,
+                self.slot_duration_minutes,
+                self.max_concurrent_per_slot,
+            )
+        ):
+            raise ValueError(
+                "appointment doctors require working hours, slot duration, and capacity"
+            )
+        return self
 
 
 class DoctorOut(BaseModel):
@@ -151,6 +197,42 @@ def _parse_time(value: Optional[str], field_name: str) -> Optional[time]:
             status_code=422,
             detail=f"Invalid {field_name} format — expected 'HH:MM' e.g. '09:00'",
         )
+
+
+async def _assert_calendar_available(
+    db: AsyncSession,
+    branch: Branch,
+    calendar_id: str | None,
+    *,
+    doctor_id: uuid.UUID | None = None,
+) -> str | None:
+    """Reserve a Calendar ID globally across branches and doctors."""
+    if calendar_id is None or not calendar_id.strip():
+        return None
+    cal_id = calendar_id.strip()
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"calendar:{cal_id}"},
+    )
+    branch_clash = (
+        await db.execute(
+            select(Branch).where(
+                Branch.google_calendar_id == cal_id,
+                Branch.id != branch.id,
+            )
+        )
+    ).scalar_one_or_none()
+    doctor_query = select(Doctor).where(Doctor.google_calendar_id == cal_id)
+    if doctor_id is not None:
+        doctor_query = doctor_query.where(Doctor.id != doctor_id)
+    doctor_clash = (await db.execute(doctor_query)).scalars().first()
+    if branch_clash is not None or doctor_clash is not None:
+        logger.warning("calendar_id_collision_blocked", branch_id=str(branch.id))
+        raise HTTPException(
+            status_code=409,
+            detail="This Google Calendar is already linked to another clinic or doctor.",
+        )
+    return cal_id
 
 
 def _doctor_to_out(doc: Doctor) -> DoctorOut:
@@ -331,6 +413,8 @@ async def create_doctor(
     Caller may override by setting either field explicitly in the body.
     """
     await assert_branch_access(current_user, branch_id, db)
+    if body.name is None or body.booking_type is None:
+        raise HTTPException(status_code=422, detail="name and booking_type are required")
 
     try:
         branch_uuid = uuid.UUID(branch_id)
@@ -344,6 +428,9 @@ async def create_doctor(
     branch = branch_result.scalar_one_or_none()
     if not branch:
         raise HTTPException(status_code=404, detail="Branch not found")
+    body.google_calendar_id = await _assert_calendar_available(
+        db, branch, body.google_calendar_id
+    )
 
     # Plan doctor cap (repricing 2026-07-11): Starter 1 / Clinic 5 / Multi
     # unlimited. Counted per ORG (all branches), active doctors only.
@@ -449,7 +536,7 @@ async def create_doctor(
 async def update_doctor(
     branch_id: str,
     doctor_id: str,
-    body: DoctorIn,
+    body: DoctorUpdate,
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     _admin: CurrentUser = Depends(_require_org_admin),
@@ -488,6 +575,10 @@ async def update_doctor(
         raise HTTPException(status_code=404, detail="Doctor not found")
 
     changed = body.model_dump(exclude_unset=True)
+    if "google_calendar_id" in changed:
+        changed["google_calendar_id"] = await _assert_calendar_available(
+            db, branch, changed["google_calendar_id"], doctor_id=doc.id
+        )
     hours_weekdays_changed = (
         "working_hours_start" in changed
         or "working_hours_end" in changed

@@ -31,7 +31,7 @@ async def sync_did_to_inbound_trunk(did_number: str) -> dict:
 
         lkapi = lk_api.LiveKitAPI()
         try:
-            trunks = await lkapi.sip.list_sip_inbound_trunk(
+            trunks = await lkapi.sip.list_inbound_trunk(
                 lk_api.ListSIPInboundTrunkRequest(trunk_ids=[trunk_id])
             )
             if not trunks.items:
@@ -42,7 +42,7 @@ async def sync_did_to_inbound_trunk(did_number: str) -> dict:
                 return {"ok": True, "detail": "already wired"}
 
             numbers.append(did_number)
-            await lkapi.sip.update_sip_inbound_trunk_fields(
+            await lkapi.sip.update_inbound_trunk_fields(
                 trunk_id=trunk_id,
                 numbers=numbers,
             )
@@ -75,7 +75,7 @@ async def remove_did_from_inbound_trunk(did_number: str) -> dict:
 
         lkapi = lk_api.LiveKitAPI()
         try:
-            trunks = await lkapi.sip.list_sip_inbound_trunk(
+            trunks = await lkapi.sip.list_inbound_trunk(
                 lk_api.ListSIPInboundTrunkRequest(trunk_ids=[trunk_id])
             )
             if not trunks.items:
@@ -84,7 +84,7 @@ async def remove_did_from_inbound_trunk(did_number: str) -> dict:
             if did_number not in numbers:
                 return {"ok": True, "detail": "already absent"}
             numbers = [n for n in numbers if n != did_number]
-            await lkapi.sip.update_sip_inbound_trunk_fields(
+            await lkapi.sip.update_inbound_trunk_fields(
                 trunk_id=trunk_id, numbers=numbers
             )
             logger.info("did_unwired_from_trunk", did=did_number[-4:], trunk_id=trunk_id)

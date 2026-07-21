@@ -41,8 +41,9 @@ import { useAuth } from "../hooks/useAuth.jsx";
 import { startRecording } from "../lib/recorder.js";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
-// Flip to true when the Meta/WhatsApp platform setup is complete (2026-07-19).
-const WHATSAPP_LIVE = false;
+// Runtime deployment flag: build with VITE_WHATSAPP_LIVE=true only after Meta
+// onboarding is available. The backend independently enforces credentials and plan.
+const WHATSAPP_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
 
 // Static fallback for the language dropdown — the set is fixed metadata
 // (mirrors agent/i18n/languages.py). Used when the API response omits
@@ -641,10 +642,7 @@ export default function Settings() {
         </InfoBox>
       </Section>
 
-      {/* WhatsApp (WA T9) — HIDDEN until Meta platform setup completes (Vinay
-          2026-07-19: "remove whatsapp from clinic pages, lets add it once we
-          have everything in place"). Flip WHATSAPP_LIVE in this file to bring
-          the status card back — backend stays no-op without Meta env either way. */}
+      {/* WhatsApp is exposed only by the deployment feature flag. */}
       {WHATSAPP_LIVE && (
       <Section id="whatsapp" title="WhatsApp"
         sub="Booking confirmations, reminders and post-visit rating asks on your clinic's own WhatsApp number.">

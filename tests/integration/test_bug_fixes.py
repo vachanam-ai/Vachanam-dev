@@ -29,7 +29,6 @@ from agent.session_state import SessionState
 from agent.tools.booking_tools import assign_token, confirm_booking
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 
-pytestmark = pytest.mark.asyncio
 
 
 class FlakyCalendar:

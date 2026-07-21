@@ -16,7 +16,6 @@ import pytest
 
 from backend.middleware import rate_limit as rl
 
-pytestmark = pytest.mark.asyncio
 
 
 class _Req:

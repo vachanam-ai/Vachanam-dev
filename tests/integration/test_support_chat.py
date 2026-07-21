@@ -90,7 +90,13 @@ async def test_authed_chat_works_without_turnstile_token(client, db, monkeypatch
     anonymous-only); an anonymous chat with no token must 403."""
     from backend.config import settings
     from backend.models.schema import Organization
+    from backend.routers import support
     monkeypatch.setattr(settings, "turnstile_secret_key", "enforced", raising=False)
+
+    async def token_required(token, _ip):
+        return bool(token)
+
+    monkeypatch.setattr(support, "verify_turnstile", token_required)
 
     org = Organization(name="C", owner_phone="", owner_email=f"{uuid.uuid4().hex}@t.com",
                        plan="clinic", status="active")

@@ -4,10 +4,10 @@ audience: public
 category: billing
 tags: price, plan, cost, gst, overage
 ---
-Vachanam has four plans, all prices excluding 18% GST, and every plan speaks
+Vachanam has four plans. GST is currently waived, and every plan speaks
 all eight Indian languages and includes treatment follow-up calls. Lite is
 ₹1,999 per month for low-volume clinics and includes 1 number and about 55
-calls (150 minutes) with 1 doctor. Starter is ₹5,999 per month and includes
+calls (150 minutes) with up to 3 doctors. Starter is ₹5,999 per month and includes
 1 number and about 250 calls (700 minutes) with up to three doctors. Clinic
 is ₹9,999 per month with about 540 calls (1,500 minutes), up to five doctors,
 plus your own cloned voice and WhatsApp. Multi is ₹17,999 per month with

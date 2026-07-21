@@ -12,7 +12,6 @@ from sqlalchemy import select
 from backend.models.schema import Branch, Doctor, Organization
 from agent.session_state import SessionState
 
-pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture

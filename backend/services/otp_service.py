@@ -43,7 +43,7 @@ def _verified_key(channel: str, dest: str) -> str:
     return f"otp_ok:{channel}:{dest}"
 
 
-async def issue_code(channel: str, dest: str) -> str | None:
+async def issue_code_result(channel: str, dest: str) -> tuple[str | None, bool]:
     """Generate + store a code, send it, and (dev) return it. channel: sms|email."""
     # G16: per-destination send cooldown — one real send per dest per window, so
     # a single attacker can't bomb a victim (and burn provider credits) by
@@ -62,7 +62,7 @@ async def issue_code(channel: str, dest: str) -> str | None:
             await r_cd.aclose()
         if not fresh:
             logger.info("otp_throttled", channel=channel, dest=_mask(dest))
-            return None
+            return None, True
 
     code = f"{secrets.randbelow(1_000_000):06d}"
     r = _redis()
@@ -87,8 +87,14 @@ async def issue_code(channel: str, dest: str) -> str | None:
     # real code, letting an attacker self-verify arbitrary phone/email. A
     # configured-but-failing provider must NOT leak the code — return None.
     if settings.otp_echo_enabled and not _provider_configured(channel):
-        return code
-    return None
+        return code, True
+    return None, sent
+
+
+async def issue_code(channel: str, dest: str) -> str | None:
+    """Compatibility wrapper returning only the optional development code."""
+    code, _delivered = await issue_code_result(channel, dest)
+    return code
 
 
 def _provider_configured(channel: str) -> bool:

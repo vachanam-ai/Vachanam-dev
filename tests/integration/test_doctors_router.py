@@ -247,6 +247,8 @@ async def test_create_appointment_doctor_auto_defaults_reminders_on(
             "booking_type": "appointment",
             "working_hours_start": "09:00",
             "working_hours_end": "17:00",
+            "slot_duration_minutes": 15,
+            "max_concurrent_per_slot": 1,
         },
         headers=_auth(org_admin_jwt),
     )
@@ -294,6 +296,10 @@ async def test_reminder_explicit_override_respected(
         json={
             "name": "Dr Override",
             "booking_type": "appointment",
+            "working_hours_start": "09:00",
+            "working_hours_end": "17:00",
+            "slot_duration_minutes": 15,
+            "max_concurrent_per_slot": 1,
             "pre_appointment_reminder": False,
             "post_treatment_followup": False,
         },
@@ -452,6 +458,8 @@ async def test_patch_appointment_doctor_does_not_trigger_recurring_event(
             "booking_type": "appointment",
             "working_hours_start": "09:00",
             "working_hours_end": "17:00",
+            "slot_duration_minutes": 15,
+            "max_concurrent_per_slot": 1,
         },
         headers=_auth(org_admin_jwt),
     )

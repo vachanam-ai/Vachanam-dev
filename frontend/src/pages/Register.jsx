@@ -49,6 +49,8 @@ export default function Register() {
   const [devCode, setDevCode] = useState(null);
   const [busy, setBusy] = useState(false);
   const [ts, setTs] = useState(""); // current Turnstile token ("" = not solved yet)
+  const tsRef = useRef("");
+  useEffect(() => { tsRef.current = ts; }, [ts]);
   // DPDP: clinic (Data Fiduciary) must accept Terms + DPA before signup.
   const [terms, setTerms] = useState(false);
   // Ref mirror: the Google callback is registered once in a useEffect whose
@@ -93,6 +95,10 @@ export default function Register() {
             toast.error("Please accept the Terms and Data Processing Agreement first");
             return;
           }
+          if (TURNSTILE_ON && !tsRef.current) {
+            toast.error("Complete the verification check first");
+            return;
+          }
           setBusy(true);
           try {
             const me = await register({
@@ -101,7 +107,7 @@ export default function Register() {
               plan: form.plan,
               id_token: resp.credential,
               accepted_terms: true
-            });
+            }, tsRef.current);
             toast.success("Clinic created — activate your plan in Settings to go live");
             navigate(roleHome(me.role), { replace: true });
           } catch (e) {
@@ -145,7 +151,7 @@ export default function Register() {
     }
     setBusy(true);
     try {
-      const r = await requestOtp({ email: form.email.trim() });
+      const r = await requestOtp({ email: form.email.trim() }, ts);
       setStep("otp");
       if (r.dev_email_code) {
         setDevCode(r.dev_email_code);
@@ -176,7 +182,7 @@ export default function Register() {
         plan: form.plan,
         email_otp: otp,
         accepted_terms: true
-      });
+      }, ts);
       toast.success("Clinic created — activate your plan in Settings to go live");
       navigate(roleHome(me.role), { replace: true });
     } catch (err) {

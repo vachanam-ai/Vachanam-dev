@@ -146,10 +146,10 @@ async def _handle_value(db: AsyncSession, value: dict) -> None:
                 )
             elif msg.get("type") == "text":
                 await wa_chat.handle_text(
-                    db, branch, sender, (msg.get("text") or {}).get("body") or ""
+                    db, branch, plan, sender, (msg.get("text") or {}).get("body") or ""
                 )
             else:
                 logger.info("wa_unsupported_type", mtype=msg.get("type"))
         except Exception as e:  # noqa: BLE001 — never dead-end the patient (RULE 8)
             logger.error("wa_message_error", error=str(e)[:300])
-            await wa_actions.reply_call_us(branch, sender)
+            await wa_actions.reply_call_us(branch, sender, plan)

@@ -8,7 +8,6 @@ tools (DB + Google Calendar I/O), quick tools stay quiet, and a cooldown stops
 one booking flow from saying it twice.
 """
 import inspect
-import re
 
 from types import SimpleNamespace
 

@@ -27,6 +27,7 @@ def _no_otp_provider(monkeypatch):
     monkeypatch.setattr(settings, "msg91_auth_key", "", raising=False)
     monkeypatch.setattr(settings, "otp_dev_echo", True, raising=False)
     monkeypatch.setattr(settings, "app_env", "development", raising=False)
+    monkeypatch.setenv("RATE_LIMIT_BYPASS_IPS", "testclient")
 
 
 @pytest_asyncio.fixture

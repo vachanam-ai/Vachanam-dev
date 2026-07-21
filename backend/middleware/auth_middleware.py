@@ -21,6 +21,7 @@ import jwt
 from jwt import PyJWTError as JWTError
 
 from backend.config import settings
+from backend.database import AsyncSessionLocal
 from backend.models.schema import User
 
 logger = structlog.get_logger()
@@ -52,6 +53,7 @@ def create_access_token(user: User) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=settings.jwt_expire_hours)).timestamp()),
         "jti": str(uuid.uuid4()),
+        "tv": int(getattr(user, "token_version", 0) or 0),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm=_ALGORITHM)
 
@@ -88,7 +90,12 @@ async def get_current_user(
     """Decode JWT, check revocation list, return CurrentUser. 401 on any failure."""
     token = credentials.credentials
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[_ALGORITHM],
+            options={"require": ["sub", "email", "role", "jti", "exp"]},
+        )
     except JWTError as e:
         logger.warning("jwt_invalid", error=str(e))
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -111,6 +118,20 @@ async def get_current_user(
     if revoked:
         logger.warning("jwt_revoked", jti=jti)
         raise HTTPException(status_code=401, detail="Token revoked")
+
+    # App-issued tokens carry a version tied to the live user row. This makes
+    # staff deletion and password recovery invalidate every older session.
+    # Tokens issued before this rollout have no `tv` and expire naturally
+    # within the existing short JWT lifetime.
+    if "tv" in payload:
+        try:
+            user_uuid = uuid.UUID(str(payload["sub"]))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=401, detail="Invalid token subject")
+        async with AsyncSessionLocal() as db:
+            live = await db.get(User, user_uuid)
+        if live is None or int(live.token_version or 0) != int(payload["tv"]):
+            raise HTTPException(status_code=401, detail="Session no longer valid")
 
     return CurrentUser(
         user_id=payload["sub"],
@@ -137,18 +158,11 @@ async def optional_current_user(request: Request) -> "CurrentUser | None":
     if not token:
         return None
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=[_ALGORITHM])
-    except JWTError:
+        return await get_current_user(
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        )
+    except HTTPException:
         return None
-    return CurrentUser(
-        user_id=payload.get("sub"),
-        email=payload.get("email"),
-        role=payload.get("role"),
-        org_id=payload.get("org_id"),
-        branch_ids=payload.get("branch_ids", []) or [],
-        is_admin=bool(payload.get("is_admin", False)),
-        jti=payload.get("jti"),
-    )
 
 
 async def require_admin(current_user: CurrentUser = Depends(get_current_user)) -> CurrentUser:

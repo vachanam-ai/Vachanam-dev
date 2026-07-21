@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
-import { forgotPassword, resetPassword } from "../api/client.js";
+import { API_BASE, forgotPassword } from "../api/client.js";
 import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import PasswordField from "../components/PasswordField.jsx";
 
@@ -18,7 +18,7 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 export default function Login() {
-  const { login, loginPassword } = useAuth();
+  const { login, loginPassword, completePasswordReset } = useAuth();
   const navigate = useNavigate();
   const gsiRef = useRef(null);
   const pageRef = useRef(null);
@@ -33,9 +33,17 @@ export default function Login() {
   const [ts, setTs] = useState(""); // current Turnstile token ("" = not solved yet)
   const [resendStep, setResendStep] = useState(0); // index into RESEND_STEPS
   const [resendLeft, setResendLeft] = useState(0); // seconds until resend allowed
+  const [trialAvailable, setTrialAvailable] = useState(false);
 
   useEffect(() => {
     revealStagger(pageRef.current);
+  }, []);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/auth/founding-slots`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => setTrialAvailable(Boolean(data?.trial_for_all || data?.slots_left > 0)))
+      .catch(() => setTrialAvailable(false));
   }, []);
 
   // Countdown tick for the resend cooldown.
@@ -94,7 +102,7 @@ export default function Login() {
     e.preventDefault();
     setBusy(true);
     try {
-      const me = await loginPassword(email.trim(), password);
+      const me = await loginPassword(email.trim(), password, ts);
       navigate(roleHome(me.role), { replace: true });
     } catch (err) {
       toast.error(err?.response?.data?.detail ?? "Invalid email or password");
@@ -108,7 +116,7 @@ export default function Login() {
     if (!email.trim()) return toast.error("Enter your email first");
     setFpBusy(true);
     try {
-      const r = await forgotPassword(email.trim());
+      const r = await forgotPassword(email.trim(), ts);
       // Dev (no email provider): the code is echoed so the flow is testable.
       if (r?.dev_email_code) toast.info(`Reset code: ${r.dev_email_code}`);
       setFpStage("reset");
@@ -126,7 +134,7 @@ export default function Login() {
     if (resendLeft > 0 || fpBusy) return;
     setFpBusy(true);
     try {
-      await forgotPassword(email.trim());
+      await forgotPassword(email.trim(), ts);
       const next = Math.min(resendStep + 1, RESEND_STEPS.length - 1);
       setResendStep(next);
       setResendLeft(RESEND_STEPS[next]); // 30s → 1min → 5min
@@ -142,7 +150,9 @@ export default function Login() {
     e.preventDefault();
     setFpBusy(true);
     try {
-      await resetPassword(email.trim(), fpCode.trim(), fpNew);
+      const me = await completePasswordReset(email.trim(), fpCode.trim(), fpNew);
+      toast.success("Password updated");
+      navigate(roleHome(me.role), { replace: true });
     } catch (err) {
       // Distinct messages so a real failure is never mislabeled as "wrong code".
       const st = err?.response?.status;
@@ -155,18 +165,7 @@ export default function Login() {
       setFpBusy(false);
       return;
     }
-    // Password is set. Sign in; if that hiccups, send them to the sign-in form.
-    try {
-      const me = await loginPassword(email.trim(), fpNew);
-      toast.success("Password updated");
-      navigate(roleHome(me.role), { replace: true });
-    } catch {
-      toast.success("Password updated — please sign in");
-      setForgotOpen(false);
-      setFpStage("request");
-    } finally {
-      setFpBusy(false);
-    }
+    setFpBusy(false);
   };
 
   return (
@@ -251,7 +250,8 @@ export default function Login() {
                       onChange={(e) => setFpCode(e.target.value)} placeholder="6-digit code" />
                     <div className="mt-1.5 flex items-center justify-between">
                       <span className="font-ui text-xs text-slate">Didn&rsquo;t get it? Check spam.</span>
-                      <button type="button" onClick={resendCode} disabled={resendLeft > 0 || fpBusy}
+                      <button type="button" onClick={resendCode}
+                        disabled={resendLeft > 0 || fpBusy || (TURNSTILE_ON && !ts)}
                         className="font-ui text-xs text-teal underline-offset-4 hover:underline disabled:text-slate disabled:no-underline">
                         {resendLeft > 0 ? `Resend in ${fmt(resendLeft)}` : "Resend code"}
                       </button>
@@ -264,7 +264,7 @@ export default function Login() {
                   </div>
                 </>
               )}
-              {fpStage === "request" && <Turnstile onToken={setTs} />}
+              <Turnstile onToken={setTs} />
               <button className="btn-primary w-full py-3"
                 disabled={fpBusy || (fpStage === "request" && TURNSTILE_ON && !ts)}>
                 {fpBusy
@@ -299,7 +299,7 @@ export default function Login() {
           <p data-reveal className="mt-8 text-center font-ui text-sm text-slate">
             New clinic?{" "}
             <Link to="/register" className="font-medium text-teal underline-offset-4 hover:underline">
-              Start your 14-day free trial
+              {trialAvailable ? "Start your 14-day free trial" : "Create your clinic"}
             </Link>
           </p>
         </div>

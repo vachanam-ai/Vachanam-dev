@@ -6,7 +6,6 @@ at the tool layer; the prompt HARD RULES are pinned in test_system_prompt.py."""
 import uuid
 from datetime import date, time, timedelta
 
-import pytest
 import pytest_asyncio
 
 from agent.tools.booking_tools import confirm_booking
@@ -24,7 +23,6 @@ class _Meta:
     async def send_booking_confirmation(self, **kw):
         return None
 
-pytestmark = pytest.mark.asyncio
 
 PHONE = "+919666012345"
 # Dynamic: a hardcoded date silently rotted into the past when the calendar

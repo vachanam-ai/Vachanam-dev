@@ -215,6 +215,6 @@ async def test_missing_and_garbage_tokens_rejected(two_clinics, client):
          "iat": int(datetime.now(timezone.utc).timestamp()),
          "exp": int((datetime.now(timezone.utc) + timedelta(hours=8)).timestamp()),
          "jti": str(uuid.uuid4())},
-        "not-the-real-secret", algorithm=_ALGO)
+        "not-the-real-secret-that-is-at-least-32-bytes", algorithm=_ALGO)
     r = await client.get(f"/queue/{A}/today", headers=_auth(forged))
     assert r.status_code in (401, 403), "forged-signature JWT accepted!"

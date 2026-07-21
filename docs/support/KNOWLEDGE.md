@@ -48,12 +48,12 @@ Marathi, Bengali, Odia — included on EVERY plan (2026-07-12). Each patient's
 language is remembered for their next call. A caller can ask mid-call to
 switch language and the agent continues in the new language.
 
-## Plans and pricing (all prices exclusive of 18% GST)
+## Plans and pricing (GST currently waived)
 
 | Plan | Price | Included calling | Doctors | Languages | Extras |
 |---|---|---|---|---|---|
-| Lite | ₹1,999/month | 150 minutes (≈55 calls) | 1 | all 8 | treatment follow-up calls; AI calls capped at 4 minutes |
-| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 | treatment follow-up calls; AI calls capped at 4 minutes |
+| Lite | ₹1,999/month | 150 minutes (≈55 calls) | up to 3 | all 8 | treatment follow-up calls; AI calls capped at 10 minutes |
+| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 | treatment follow-up calls; AI calls capped at 10 minutes |
 | Clinic (most popular) | ₹9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 8 | custom cloned voice, treatment follow-up calls |
 | Multi | ₹17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 8 | your own voice in every language |
 
@@ -62,7 +62,7 @@ switch language and the agent continues in the new language.
 - Extra phone number: ₹1,999/month. Extra branch: ₹7,999/month (a branch is a
   fully separate clinic setup — own number, doctors, staff; data never mixes).
 - Included minutes reset monthly and do not carry over.
-- B2B clinics reclaim the 18% GST via input credit.
+- GST is currently waived, so invoices do not add a GST charge.
 
 ## Free trial
 

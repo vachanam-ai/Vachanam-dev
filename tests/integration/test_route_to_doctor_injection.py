@@ -12,7 +12,6 @@ The spoken complaint is fully attacker-controlled. Guards proven here:
 import uuid
 from datetime import time
 
-import pytest
 import pytest_asyncio
 
 from agent.tools.booking_tools import (
@@ -21,7 +20,6 @@ from agent.tools.booking_tools import (
 )
 from backend.models.schema import Branch, Doctor, Organization
 
-pytestmark = pytest.mark.asyncio
 
 
 @pytest_asyncio.fixture

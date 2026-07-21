@@ -15,9 +15,10 @@ from backend.services import wa_service
 @pytest.fixture
 def wa_capture(monkeypatch):
     monkeypatch.setattr(settings, "meta_access_token", "tok", raising=False)
+    monkeypatch.setattr(wa_service.settings, "meta_access_token", "tok", raising=False)
     sent = []
 
-    async def _fake(branch, to, template, lang, params, buttons=None):
+    async def _fake(branch, to, template, lang, params, buttons=None, plan=None):
         sent.append({"template": template, "to": to, "params": params})
         return True
 

@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel
-from sqlalchemy import select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
@@ -839,13 +839,21 @@ async def update_branch_telephony(
 
 
 class BranchDetailsUpdate(BaseModel):
-    name: str | None = None
-    address: str | None = None
-    city: str | None = None
-    clinic_phone: str | None = None
-    emergency_contact: str | None = None
-    google_calendar_id: str | None = None
-    did_number: str | None = None  # owner enters the purchased/assigned number
+    name: str | None = Field(default=None, max_length=255)
+    address: str | None = Field(default=None, max_length=2000)
+    city: str | None = Field(default=None, max_length=100)
+    clinic_phone: str | None = Field(default=None, max_length=20)
+    emergency_contact: str | None = Field(default=None, max_length=20)
+    google_calendar_id: str | None = Field(default=None, max_length=255)
+    did_number: str | None = Field(default=None, max_length=20)
+
+    @field_validator("clinic_phone", "emergency_contact")
+    @classmethod
+    def _normalise_contact(cls, value):
+        if value is None or not value.strip():
+            return value
+        from backend.services.validators import normalize_indian_phone
+        return normalize_indian_phone(value)
 
 
 class StaffMember(BaseModel):
@@ -856,11 +864,20 @@ class StaffMember(BaseModel):
 
 
 class StaffCreate(BaseModel):
-    email: str
-    name: str
-    password: str
+    email: str = Field(..., min_length=3, max_length=255)
+    name: str = Field(..., min_length=1, max_length=255)
+    password: str = Field(..., min_length=8, max_length=256)
     role: str = "receptionist"
     doctor_id: str | None = None  # link a doctor-role login to its Doctor row (G5)
+
+    @field_validator("email")
+    @classmethod
+    def _normalise_email(cls, value):
+        from backend.services.validators import normalize_email
+        try:
+            return normalize_email(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
 
 
 def _require_org_admin(current_user: CurrentUser) -> None:
@@ -925,6 +942,10 @@ async def update_branch_settings(
     # a different branch (mirrors the DID guard above).
     if body.google_calendar_id is not None and body.google_calendar_id.strip():
         cal_id = body.google_calendar_id.strip()
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"calendar:{cal_id}"},
+        )
         cal_clash = (
             await db.execute(
                 select(Branch).where(
@@ -932,7 +953,13 @@ async def update_branch_settings(
                 )
             )
         ).scalar_one_or_none()
-        if cal_clash is not None:
+        from backend.models.schema import Doctor
+        doctor_clash = (
+            await db.execute(
+                select(Doctor).where(Doctor.google_calendar_id == cal_id)
+            )
+        ).scalars().first()
+        if cal_clash is not None or doctor_clash is not None:
             logger.warning("calendar_id_collision_blocked", branch_id=branch_id)
             raise HTTPException(
                 status_code=409,
@@ -1004,6 +1031,7 @@ async def test_calendar_connection(
     """Create + delete a probe event on the branch calendar. Proves the
     service account has writer access before any real booking depends on it."""
     await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
     result = await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
     branch = result.scalar_one_or_none()
     if branch is None or not branch.google_calendar_id:

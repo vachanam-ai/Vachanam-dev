@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import { setTurnstileResetter, setTurnstileToken } from "../api/client.js";
 
 export const TURNSTILE_ON = Boolean(import.meta.env.VITE_TURNSTILE_SITE_KEY);
 const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
@@ -24,15 +23,13 @@ function loadScript() {
  * Cloudflare Turnstile widget. Renders nothing when VITE_TURNSTILE_SITE_KEY
  * is unset (dev / feature off — backend skips verification too).
  *
- * Token lifecycle lives in api/client.js: this component feeds every fresh
- * token in via setTurnstileToken and registers a resetter; the axios
- * interceptor consumes the token on use and resets THIS widget (by id) so
- * the next submit always carries a fresh solve. `onToken` (optional) lets a
- * page disable its submit button until a token exists.
+ * Each widget owns its token. The API request carries that token explicitly,
+ * then emits a consumption event so only the matching widget resets.
  */
 export default function Turnstile({ onToken }) {
   const ref = useRef(null);
   const widgetId = useRef(null);
+  const currentToken = useRef("");
   const cb = useRef(onToken);
   cb.current = onToken;
 
@@ -40,9 +37,17 @@ export default function Turnstile({ onToken }) {
     if (!TURNSTILE_ON) return;
     let cancelled = false;
     const emit = (t) => {
-      setTurnstileToken(t);
+      currentToken.current = t || "";
       cb.current?.(t);
     };
+    const consumed = (event) => {
+      if (!event.detail || event.detail !== currentToken.current) return;
+      emit("");
+      if (widgetId.current !== null && window.turnstile) {
+        try { window.turnstile.reset(widgetId.current); } catch { /* widget gone */ }
+      }
+    };
+    window.addEventListener("vachanam:captcha-consumed", consumed);
     loadScript().then(() => {
       if (cancelled || !ref.current || widgetId.current !== null) return;
       widgetId.current = window.turnstile.render(ref.current, {
@@ -53,15 +58,10 @@ export default function Turnstile({ onToken }) {
         "expired-callback": () => emit(""),
         "error-callback": () => emit(""),
       });
-      // interceptor resets THIS widget after consuming its token
-      setTurnstileResetter(() => {
-        emit("");
-        window.turnstile.reset(widgetId.current);
-      });
     }).catch(() => {}); // script blocked → backend fail-open policy decides
     return () => {
       cancelled = true;
-      setTurnstileResetter(null);
+      window.removeEventListener("vachanam:captcha-consumed", consumed);
       emit("");
       if (widgetId.current !== null && window.turnstile) {
         try { window.turnstile.remove(widgetId.current); } catch { /* gone */ }
