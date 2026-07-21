@@ -9,8 +9,11 @@
 > VAD manual finalization, LiveKit 50–300ms post-final window. Offer pricing is
 > restored for the first 3 paid months after the universal 14-day trial;
 > WhatsApp remains Clinic/Multi. Release gate: 1,263 passed / 2 skipped plus
-> Python compile and production frontend build. Production deployment is in
-> progress; live worker proof will replace this sentence after registration.
+> Python compile and production frontend build. DEPLOYED: commit `18ce737`;
+> Render health build `18ce737`; public frontend bundle has trial + offer copy;
+> Fly v151 image `deployment-01KY1N6B05EBTWGDAHDA8P747G`; runtime profile
+> Agents/Soniox 1.6.6, level=1, cap=2000, sensitivity=None, manual_finalize=200;
+> fresh LiveKit India West registration 06:19:34Z.
 
 > **2026-07-21 — SONIOX TURN-LATENCY ROLLOUT DEPLOYED (FIXLOG #442, FLY v149).**
 > LiveKit/Soniox 1.6.6 endpoint tuning is wired with a one-variable rollout:

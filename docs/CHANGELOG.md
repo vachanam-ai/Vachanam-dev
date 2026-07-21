@@ -50,6 +50,14 @@ passed / 1 skipped; 154 security + concurrency tests passed / 1 skipped;
 prompt-focused subset 162 passed; Python compile checks and the Vite production
 build passed. Total: 1,263 passed / 2 skipped.
 
+Production: commit `18ce737` pushed to `master`; Render health reports build
+`18ce737`; the public Vachanam bundle serves the trial, offer-window copy, and
+₹6,999 Clinic offer. Fly voice release v151 runs image
+`deployment-01KY1N6B05EBTWGDAHDA8P747G`. Runtime logs prove LiveKit Agents
+1.6.6 / Soniox 1.6.6, endpoint level 1, 2000ms cap, default sensitivity, and
+manual finalize 200ms, followed by fresh LiveKit India West registration at
+06:19:34Z.
+
 
 ## 2026-07-21 — Measured Soniox turn-latency controls (FIXLOG #442)
 
