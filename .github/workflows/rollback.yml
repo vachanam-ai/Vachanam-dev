@@ -1,0 +1,38 @@
+name: Rollback
+
+# One-click revert. Actions tab → Rollback → Run workflow → enter a prior tag
+# (e.g. v1.2.3). Redeploys the Fly agent from that exact tag. Render + Cloudflare
+# have native one-click rollback in their own dashboards (a deploy hook can only
+# rebuild branch HEAD, which would NOT roll back) — see the printed instructions.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to redeploy (e.g. v1.2.3)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: redeploy from tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Redeploy agent from tag
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config infra/fly.agent.toml --remote-only
+
+      - name: Roll back Render + Cloudflare (manual)
+        run: |
+          echo "Fly agent rolled back to ${{ github.event.inputs.tag }}."
+          echo "Render backend:      Dashboard → vachanam-backend → Events → 'Rollback' on the prior deploy."
+          echo "Cloudflare frontend: Pages → project → Deployments → prior deploy → 'Rollback to this deployment'."

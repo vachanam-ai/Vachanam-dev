@@ -198,3 +198,69 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # ── Job 4: Release + Deploy (push to master only, AFTER every gate is green) ─
+  # Full auto-deploy: a green master push auto-bumps the semver tag, cuts a
+  # GitHub Release, and ships the Fly agent. Render (backend) + Cloudflare Pages
+  # (frontend) auto-deploy from the same push via their native GitHub hookup —
+  # this job only *adds* the deploy that was manual (Fly) + the version tag.
+  # Rollback: run the Rollback workflow with any prior tag (.github/workflows/
+  # rollback.yml). Required repo secret: FLY_API_TOKEN. See .github/DEPLOY.md.
+  release:
+    name: semver tag + deploy
+    runs-on: ubuntu-latest
+    needs: [lint, test, frontend, secret-scan]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next semver
+        id: ver
+        # Bump rule (Conventional Commits since last v-tag):
+        #   BREAKING CHANGE / `type!:` → major · `feat:` → minor · else → patch.
+        # No prior tag → seed v1.0.0 (prod is already live at 1.x).
+        run: |
+          set -euo pipefail
+          LAST=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1)
+          if [ -z "$LAST" ]; then
+            NEXT="v1.0.0"
+            echo "no prior semver tag -> $NEXT"
+          else
+            LOG=$(git log --format='%B' "${LAST}..HEAD")
+            V=${LAST#v}
+            MAJ=${V%%.*}; REST=${V#*.}; MIN=${REST%%.*}; PAT=${REST#*.}
+            if echo "$LOG" | grep -qE 'BREAKING CHANGE|^[a-z]+(\(.+\))?!:'; then
+              MAJ=$((MAJ+1)); MIN=0; PAT=0
+            elif echo "$LOG" | grep -qE '^feat(\(.+\))?:'; then
+              MIN=$((MIN+1)); PAT=0
+            else
+              PAT=$((PAT+1))
+            fi
+            NEXT="v${MAJ}.${MIN}.${PAT}"
+            echo "${LAST} -> ${NEXT}"
+          fi
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+
+      - name: Tag + GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.ver.outputs.tag }}'
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --generate-notes --title "$TAG"
+
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy agent to Fly
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        # Working tree == the just-pushed commit, so this ships the right ref
+        # (flyctl builds the tree, not a git ref — see project memory).
+        run: flyctl deploy --config infra/fly.agent.toml --remote-only
