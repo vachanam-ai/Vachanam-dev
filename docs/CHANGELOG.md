@@ -36,6 +36,14 @@ email fuse at the environment layer so config reload tests cannot restore a live
 credential. Full research and market comparison:
 docs/SONIOX_LATENCY_RESEARCH.md.
 
+Production: commit 9d4d7e5 pushed to master and deployed as Fly v149. Runtime
+logs prove LiveKit Agents 1.6.6 + Soniox 1.6.6, the exact conservative profile,
+healthy inference/job-process initialization, and fresh LiveKit India West
+registration at 04:44:57Z. The external watchdog restarted the first cold boot
+while its registration-gated heartbeat was still warming; its cooldown allowed
+the second boot to finish normally. The active machine then remained started
+with no process-initialization error.
+
 ---
 
 ## 2026-07-15 — Lite ₹1,999 entry plan + follow-up on every plan (FIXLOG #376)

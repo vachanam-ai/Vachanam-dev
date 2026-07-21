@@ -28,6 +28,10 @@ default.
 - Regression coverage includes the STT factory, config bounds, VAD resume and
   cancellation, cross-call isolation, language handoff, and source guards
   against reintroducing the failed immediate-finalize experiment.
+- Deployed as Fly release v149 from commit 9d4d7e5. Production startup evidence:
+  Agents 1.6.6, Soniox 1.6.6, level 1, cap 2000 ms, sensitivity unset, manual
+  finalize 0; inference and job processes initialized and the worker registered
+  with LiveKit India West at 2026-07-21 04:44:57 UTC.
 
 ## Decision in one page
 
