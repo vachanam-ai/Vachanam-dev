@@ -85,6 +85,10 @@ from backend.services.clinic_cache import (  # noqa: E402
     load_doctors,
 )
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
+from agent.livekit_minimal.turn_trace import (  # noqa: E402
+    TurnLatencyTrace,
+    format_summary_line,
+)
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -1565,7 +1569,24 @@ class VachanamAgent(Agent):
         Short runs stay joined: dates/tokens/times like "13" must be spoken
         as one number word, not digit-by-digit (#333). Chunk splits are
         handled by _space_digits_stream's trailing-digit carry."""
-        safe_text = _guard_internal_speech_stream(text)
+        # Phase 1 trace (Task 3.2 prerequisite): stamp first chunk INTO the
+        # guard and first safe chunk OUT — measures the 24-char carry cost
+        # (safety_buffer_ms). Trace is optional; absence changes nothing.
+        _trace = self.session.userdata.get("turn_trace")
+
+        async def _stamp_in(src):
+            async for chunk in src:
+                if _trace is not None:
+                    _trace.mark_guard_first_in()
+                yield chunk
+
+        async def _stamp_out(src):
+            async for chunk in src:
+                if _trace is not None:
+                    _trace.mark_guard_first_out()
+                yield chunk
+
+        safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
         async for frame in super().tts_node(_space_digits_stream(safe_text), model_settings):
             yield frame
 
@@ -2630,7 +2651,8 @@ class VachanamAgent(Agent):
                 "instruction": (
                     "The appointment is ALREADY at exactly this date/time — "
                     "nothing needed to change. Tell the caller it is confirmed "
-                    "for that time, in one short line. Do NOT say it failed."
+                    "for that time, then politely ask them to come on time in "
+                    "their selected language. Do NOT say it failed."
                 ),
             }
         # Release any hold THIS session already placed before re-assigning. The
@@ -2735,7 +2757,8 @@ class VachanamAgent(Agent):
             "instruction": (
                 "The reschedule SUCCEEDED — the appointment is now on the new "
                 "date/time above and the old one is cancelled. Tell the caller "
-                "it is done, in one breath. Do NOT say it failed."
+                "it is done, then politely ask them to come on time in their "
+                "selected language. Do NOT say it failed."
             ),
         }
 
@@ -4137,6 +4160,35 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
+        # Phase 1 (plan 2026-07-21, Task 1.1): ONE correlated summary line per
+        # caller turn ("voice_turn_latency ...") so the perceived gap is
+        # attributable instead of guessed. Pure logging — no behaviour change.
+        _turn_trace = TurnLatencyTrace(
+            ctx.room.name,
+            emit=lambda s: logger.info(format_summary_line(s)),
+        )
+        _turn_trace.set_context(
+            language=lang_code, cache_hit=_cached_llm is not None
+        )
+        session.userdata["turn_trace"] = _turn_trace
+
+        @session.on("user_input_transcribed")
+        def _trace_final_transcript(ev) -> None:
+            if getattr(ev, "is_final", False):
+                _turn_trace.mark_final_transcript()
+
+        @session.on("agent_state_changed")
+        def _trace_playout(ev) -> None:
+            if getattr(ev, "new_state", None) == "speaking":
+                _turn_trace.mark_playout_start()
+
+        @session.on("function_tools_executed")
+        def _trace_tools(ev) -> None:
+            calls = getattr(ev, "function_calls", None) or []
+            if calls:
+                # name only — never arguments (privacy allowlist).
+                _turn_trace.mark_tool(getattr(calls[0], "name", "unknown"))
+
         # THINKING ACK: REMOVED (#399). Two attempts (#395 turn-commit timer,
         # #397 thinking-state gate) both misfired on real calls — phone-line
         # echo flaps user_state, and agent_state passes through "thinking"
@@ -4155,12 +4207,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             if new_state == 'speaking':
                 _soniox_finalizer.cancel()
             elif old_state == 'speaking' and new_state == 'listening':
+                _turn_trace.mark_speech_end()
                 _soniox_finalizer.schedule(
                     lambda: getattr(session, 'user_state', None) != 'speaking'
                 )
 
         async def _cancel_soniox_finalize_on_shutdown() -> None:
             _soniox_finalizer.cancel()
+            _turn_trace.flush()  # last turn's summary must not die with the call
 
         ctx.add_shutdown_callback(_cancel_soniox_finalize_on_shutdown)
 
@@ -4184,10 +4238,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     getattr(m, "transcription_delay", 0.0),
                     getattr(m, "on_user_turn_completed_delay", 0.0),
                 )
+                _turn_trace.mark_turn_committed(
+                    eou_delay=getattr(m, "end_of_utterance_delay", None),
+                    transcription_delay=getattr(m, "transcription_delay", None),
+                )
             elif tn == "LLMMetrics":
                 logger.info("lat_llm ttft=%.2fs", getattr(m, "ttft", 0.0))
+                _turn_trace.mark_llm_run(
+                    getattr(m, "speech_id", "") or "",
+                    ttft=getattr(m, "ttft", 0.0),
+                )
             elif tn == "TTSMetrics":
                 logger.info("lat_tts ttfb=%.2fs", getattr(m, "ttfb", 0.0))
+                _turn_trace.mark_tts(
+                    getattr(m, "speech_id", "") or "",
+                    ttfb=getattr(m, "ttfb", 0.0),
+                )
             elif tn == "STTMetrics":
                 logger.info("lat_stt duration=%.2fs", getattr(m, "duration", 0.0))
 

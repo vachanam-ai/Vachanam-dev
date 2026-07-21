@@ -136,6 +136,7 @@ async def test_reschedule_to_own_current_time_is_graceful(clinic, db, redis):
 
     r = await agent._do_reschedule(booked["token_id"], day.isoformat(), "12:30")
     assert r["success"], r
+    assert "come on time" in r["instruction"]
 
     rows = await _confirmed_rows(db, doc, branch, day)
     assert len(rows) == 1

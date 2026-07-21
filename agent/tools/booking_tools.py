@@ -1324,7 +1324,8 @@ async def confirm_booking(
             if is_token
             else "Appointment doctor — confirm only the DATE and TIME. Do NOT "
             "say any token or queue number."
-        ),
+        )
+        + " Then politely ask the patient to come on time in their selected language.",
     }
 
 

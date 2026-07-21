@@ -1,5 +1,18 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-22 — CI/CD PIPELINE LIVE + TTFA REVIEW + PHASE-1 TRACE (#444).**
+> CI/CD: master push now auto-runs lint/pytest/frontend/gitleaks → semver tag →
+> GitHub Release → Fly agent deploy; one-click rollback workflow (any tag);
+> baseline tag `v1.0.0`; CI clock pinned IST (8 date tests failed on UTC
+> runners 18:30-24:00 UTC — proven + fixed in CI-identical Docker). TTFA deep
+> review: docs/superpowers/specs/2026-07-22-ttfa-deep-review.md — measured
+> stages sum 1.6-2.3s vs ~3s perceived; sub-1s judged unreachable for
+> conversational turns (Telugu endpoint physics) but reachable post-tool via
+> deterministic confirm lines (F5); prime suspect for the unattributed ~1s =
+> preemptive-generation cancels (F2). Phase 1 implemented (#444): per-turn
+> `voice_turn_latency` trace + scripts/analyze_voice_latency.py. NEXT: deploy,
+> collect ≥30 calls (plan Phase 2), fix the measured dominant stage ONLY.
+
 > **2026-07-21 — CLIENT-DEMO CALL RELEASE #443.** Production prompt replaced
 > by a compact priority/state machine; fresh symptoms invalidate old routing;
 > Soniox receives clinic specialties plus Telugu dental/ENT context; పని/పంటి
