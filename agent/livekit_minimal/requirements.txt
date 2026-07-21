@@ -1,19 +1,32 @@
-livekit-agents>=1.6.5
+# LiveKit family — PIN THE WHOLE TRAIN TO ONE VERSION (#441, 2026-07-21).
+# The recurring "AI not answering" pool-death (LK-7) was version SKEW: floors
+# were mixed (agents/soniox >=1.6.5 but the other plugins >=1.5.x), and pip's
+# resolver happily satisfied a set with 1.5.x plugins under a 1.6.x supervisor
+# (their `livekit-agents>=` constraints are loose enough to "accept" 1.6.x).
+# A 1.5.x plugin that runs an inference subprocess (esp. turn-detector, which
+# ran an EOU model, resolved as low as 1.5.9) then spoke the OLD proc-IPC
+# protocol to the 1.6.x job supervisor → duplex_unix recv timeout in
+# supervised_proc.initialize() → the "error initializing process" respawn loop.
+# This is livekit/agents#3785 ("new agents with old livekit-* versions"). Fix =
+# pin agents + EVERY plugin to the SAME release so a fresh build can't drift.
+# Bump the whole block together; test_requirements_no_livekit_skew guards it.
+livekit-agents==1.6.6
 livekit-api>=1.1.1
 # STT: Soniox stt-rt-v5 primary (Vinay 2026-07-10), Sarvam Saaras v3 fallback
 # when SONIOX_API_KEY is unset — see _build_stt in agent.py.
-livekit-plugins-soniox>=1.6.5
-livekit-plugins-sarvam>=1.5.17
+livekit-plugins-soniox==1.6.6
+livekit-plugins-sarvam==1.6.6
 # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
-livekit-plugins-smallestai>=1.5.18
-livekit-plugins-google>=1.5.17
-livekit-plugins-silero>=1.5.16
+livekit-plugins-smallestai==1.6.6
+livekit-plugins-google==1.6.6
+livekit-plugins-silero==1.6.6
 livekit-plugins-noise-cancellation>=0.2.5
 # Semantic end-of-turn detection (latency: commit the turn on a complete
 # utterance instead of waiting out VAD silence). Model weights are downloaded
-# at build time in Dockerfile.agent via `agents download-files`.
-livekit-plugins-turn-detector>=1.5.16
+# at build time in Dockerfile.agent via `agents download-files`. Runs an
+# inference subprocess — the plugin most sensitive to the skew above.
+livekit-plugins-turn-detector==1.6.6
 # GPT-4o-mini fallback LLM (imported in agent.py as livekit.plugins.openai) —
 # was missing here; would break the deployed image's import.
-livekit-plugins-openai>=1.5.16
+livekit-plugins-openai==1.6.6
 python-dotenv>=1.0.0
