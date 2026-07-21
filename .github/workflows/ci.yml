@@ -214,6 +214,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Fail FAST before any tag/release/deploy if the deploy secret is missing —
+      # a half-released state (tag pushed, deploy failed) is the messy case.
+      - name: Require FLY_API_TOKEN
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: test -n "$FLY_API_TOKEN" || { echo "::error::FLY_API_TOKEN secret not set — aborting before tag/deploy"; exit 1; }
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
