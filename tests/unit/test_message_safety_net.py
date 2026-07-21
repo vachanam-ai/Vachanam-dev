@@ -7,7 +7,7 @@ from pathlib import Path
 from agent.session_state import SessionState
 
 AGENT_SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
-PROMPT_SRC = Path("agent/prompts/system_prompt.py").read_text(encoding="utf-8")
+PROMPT_SRC = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
 
 
 def test_state_carries_recording_flags():
@@ -34,8 +34,9 @@ def test_teardown_net_present_and_guarded():
 
 
 def test_prompt_forbids_promise_before_tool():
-    assert "FORBIDDEN (real failure 2026-07-17)" in PROMPT_SRC
-    assert "call take_message FIRST" in PROMPT_SRC
+    assert "SAYING IS NOT DOING" in PROMPT_SRC
+    assert "NEVER promise a message" in PROMPT_SRC
+    assert "call take_message" in PROMPT_SRC
 
 
 def test_wrong_name_recovery_natural_398():

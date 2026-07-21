@@ -91,9 +91,9 @@ def test_config_rejects_invalid_latency_level(level):
         Settings(soniox_endpoint_latency_level=level)
 
 
-def test_config_defaults_to_one_isolated_change():
+def test_config_defaults_to_safe_200ms_manual_finalize():
     settings = Settings()
     assert settings.soniox_endpoint_latency_level == 1
     assert settings.soniox_max_endpoint_delay_ms == 2000
     assert settings.soniox_endpoint_sensitivity is None
-    assert settings.soniox_manual_finalize_delay_ms == 0
+    assert settings.soniox_manual_finalize_delay_ms == 200

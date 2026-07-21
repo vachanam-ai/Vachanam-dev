@@ -200,6 +200,24 @@ async def route_to_doctor(
     if len(doctors) == 1:
         return _hit(doctors[0], "high")
 
+    # Telugu STT can collapse dental "పంటి సమస్య" (tooth problem) into the
+    # near-homophone "పని సమస్య" (work problem). Ask instead of silently
+    # rewriting a possibly genuine out-of-scope request.
+    compact = " ".join((complaint or "").strip().lower().split())
+    if ("పని సమస్య" in compact or compact in {"పని", "పని సమస్యలు"}) and any(
+        "dental" in (d.specialization or "").lower()
+        or any(
+            k.lower() in {"tooth", "teeth", "dental", "పంటి", "పళ్ళు", "పళ్లు"}
+            for k in (d.routing_keywords or [])
+        )
+        for d in doctors
+    ):
+        return {
+            "needs_clarification": True,
+            "confidence": "low",
+            "clarification": "పంటి సమస్యా, పని సమస్యా?",
+        }
+
     # LATENCY FAST-PATH: direct keyword hit skips the extra LLM round-trip
     # (~1-2s on the call). Only when UNAMBIGUOUS — exactly one doctor's
     # keywords/specialization match; otherwise fall through to the LLM.

@@ -55,17 +55,16 @@ PLANS: dict[str, Plan] = {
 # After the window: standard price, standard gates. UI shows the actual price
 # struck through + the offer price, labeled "Offer price — first 3 months".
 OFFER_MONTHS = 3
-# OFFER PRICING REMOVED (Vinay 2026-07-20: "remove offer pricings and make
-# 14days free trail common across"). The 3-month launch discount is gone —
-# every plan is sold at its standard price, and the go-to-market lever is now
-# a 14-day free trial for EVERY new clinic (TRIAL_FOR_ALL below) instead of a
-# discounted price. Emptying OFFER_PRICES makes effective_price always return
-# the standard base and is_offer always False; the machinery is kept (not
-# ripped out) so a future offer is a one-line re-add. Cloning stays unlocked
-# for everyone during a signup's first-window via cloning_allowed → in_offer_
-# window (date-based, price-independent), so removing the discount does not
-# quietly revoke a clinic's cloned voice.
-OFFER_PRICES: dict[str, int] = {}
+# Restored 2026-07-21: after the 14-day trial, the first three paid months use
+# an acquisition price. Starter/Clinic/Multi retain 10–15% margin at the
+# conservative full-bucket cost model. Lite is the known exception because its
+# fixed DID cost makes a 10% worst-case margin impossible below its list price.
+OFFER_PRICES: dict[str, int] = {
+    "lite": 1_799,
+    "solo": 3_999,
+    "clinic": 6_999,
+    "multi": 11_999,
+}
 
 
 def in_offer_window(subscription_started_at, now=None) -> bool:

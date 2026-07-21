@@ -134,7 +134,7 @@ async def test_webhook_activates_subscription(client, db, org, monkeypatch):
     assert bc.status == "paid"
     # #391: a fresh activation is inside the first-3-months launch-offer
     # window — the cycle records the OFFER base actually charged, not list.
-    assert bc.base_amount == 9999
+    assert bc.base_amount == 6999
 
 
 async def test_webhook_idempotent_on_redelivery(client, db, org, monkeypatch):

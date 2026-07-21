@@ -18,14 +18,14 @@ _NOW = datetime.now(timezone.utc)
 _OLD = _NOW - timedelta(days=31 * OFFER_MONTHS + 30)  # well past the window
 
 
-def test_offer_pricing_removed():
-    """#433 (Vinay 2026-07-20: "remove offer pricings"). OFFER_PRICES is now
-    empty — every plan is sold at its standard base, is_offer always False."""
-    assert OFFER_PRICES == {}
-    assert effective_price("solo", _NOW) == (5_999, False)
-    assert effective_price("clinic", _NOW) == (9_999, False)
-    assert effective_price("multi", _NOW) == (17_999, False)
-    assert effective_price("lite", _NOW) == (1_999, False)
+def test_offer_pricing_first_three_paid_months_then_standard():
+    """2026-07-21: acquisition prices apply after trial for three paid months."""
+    assert OFFER_PRICES == {"lite": 1_799, "solo": 3_999, "clinic": 6_999, "multi": 11_999}
+    assert effective_price("solo", _NOW) == (3_999, True)
+    assert effective_price("clinic", _NOW) == (6_999, True)
+    assert effective_price("multi", _NOW) == (11_999, True)
+    assert effective_price("lite", _NOW) == (1_799, True)
+    assert effective_price("solo", _OLD) == (5_999, False)
     assert effective_price("nope", _NOW) == (0, False)
 
 
@@ -47,9 +47,8 @@ def test_cloning_every_plan_during_window_standard_gates_after():
     assert cloning_allowed("multi", _OLD) is True
 
 
-def test_ui_surfaces_show_standard_prices_no_offer():
-    """#433: the price surfaces show the STANDARD prices only — no
-    struck-through 'actual', no 'Offer price — first 3 months' label."""
+def test_ui_surfaces_show_offer_and_standard_prices():
+    """Both price surfaces show acquisition and struck-through list prices."""
     landing = Path("frontend/src/pages/Landing.jsx").read_text(encoding="utf-8")
     static = Path("backend/static/index.html").read_text(encoding="utf-8")
     for text, prices in ((landing, ("₹5,999", "₹9,999", "₹17,999")),
@@ -57,11 +56,10 @@ def test_ui_surfaces_show_standard_prices_no_offer():
                                    "&#8377;17,999"))):
         for price in prices:
             assert price in text, f"standard price {price} missing"
-    # The discount and its scaffolding are gone.
     for text in (landing, static):
-        assert "Offer price — first 3 months" not in text
-        assert "line-through" not in text
-        assert "₹3,999" not in text and "&#8377;3,999" not in text
+        assert "first 3 paid months" in text
+        assert "line-through" in text or "text-decoration:line-through" in text
+        assert "₹3,999" in text or "&#8377;3,999" in text
 
 
 def test_no_free_trial_claims_on_landing():

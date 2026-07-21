@@ -10,14 +10,14 @@ import { API_BASE } from "../api/client.js";
 // #391 launch offer (Vinay 2026-07-17): actual price struck through, offer
 // price for the first 3 months shown big. Source of truth: billing_math
 // OFFER_PRICES — keep in sync (guarded by tests/unit/test_launch_offer.py).
-// 2026-07-20 (Vinay: "remove offer pricings"): standard prices only, no more
-// struck-through launch-offer discount. The go-to-market lever is now the
-// 14-day free trial every clinic gets.
+// 2026-07-21: 14-day trial, then acquisition price for the first 3 paid months;
+// standard list price thereafter. Keep in sync with billing_math.OFFER_PRICES.
 const PLANS = [
   {
     name: "Starter",
     key: "solo",
-    price: "₹5,999",
+    price: "₹3,999",
+    actual: "₹5,999",
     per: "/month + ₹5/min after",
     tagline: "Small clinics, up to 3 doctors",
     points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "Token booking + calendar", "Reminder calls + receptionist app"]
@@ -25,19 +25,21 @@ const PLANS = [
   {
     name: "Clinic",
     key: "clinic",
-    price: "₹9,999",
+    price: "₹6,999",
+    actual: "₹9,999",
     per: "/month + ₹5/min after",
     tagline: "Growing clinics, up to 5 doctors",
     popular: true,
-    points: ["≈540 calls included (1,500 min)", "5 doctors", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "Treatment follow-up calls", "Owner analytics"]
+    points: ["≈540 calls included (1,500 min)", "5 doctors", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "WhatsApp confirmations + reminders", "Treatment follow-up calls", "Owner analytics"]
   },
   {
     name: "Multi",
     key: "multi",
-    price: "₹17,999",
+    price: "₹11,999",
+    actual: "₹17,999",
     per: "/month + ₹5/min after",
     tagline: "Multi-specialty, unlimited doctors",
-    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "Multi-doctor routing", "Branch-level analytics"]
+    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "WhatsApp confirmations + reminders", "Multi-doctor routing", "Branch-level analytics"]
   }
 ];
 
@@ -407,7 +409,7 @@ export default function Landing() {
         <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-mist/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-ui text-sm">
-              <span className="font-semibold">Lite · <span className="numeral text-teal-deep">₹1,999</span>/mo</span>
+              <span className="font-semibold">Lite · <span className="mr-1 text-slate line-through">₹1,999</span><span className="numeral text-teal-deep">₹1,799</span>/mo</span>
               <span className="text-slate"> + ₹5/min after</span>
             </p>
             <p className="font-ui text-xs text-slate">
@@ -433,9 +435,11 @@ export default function Landing() {
               <h3 className="font-display text-xl font-semibold">{p.name}</h3>
               <p className="font-ui text-sm text-slate">{p.tagline}</p>
               <p className="mt-4">
+                <span className="mr-2 font-ui text-lg text-slate line-through">{p.actual}</span>
                 <span className="numeral text-4xl text-teal-deep">{p.price}</span>
                 <span className="font-ui text-sm text-slate"> {p.per}</span>
               </p>
+              <p className="mt-1 font-ui text-xs font-semibold text-gold-ink">Offer price — first 3 paid months</p>
               {trialOn && (
                 <p className="mt-1 font-ui text-xs font-semibold text-teal">
                   Start with a 14-day free trial
@@ -459,7 +463,7 @@ export default function Landing() {
             ? <>Every new clinic starts with a 14-day free trial · no credit card · cancel anytime</>
             : <>Go live the same day · cancel anytime</>}
           <br />
-          Prices exclude ₹5/min usage beyond the included minutes. No hidden fees.
+          Offer starts after the trial. Standard price applies from month 4 · ₹5/min beyond included minutes.
         </p>
       </section>
 

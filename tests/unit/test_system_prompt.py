@@ -523,14 +523,12 @@ def test_hello_never_interrupts_403():
 
 
 def test_offer_more_help_before_closing_428():
-    """Vinay 2026-07-20 real call: after booking, the agent must ask
-    "inkemaina sahayam cheyyala? / do you need any other help?" before ending —
-    this beat was missing. end_call is blocked until the caller declines."""
+    """The help offer is available once, but never repeated after every answer."""
     prompt = _make_prompt()
     assert "OFFER MORE HELP BEFORE CLOSING" in prompt
     assert "ఇంకేమైనా సహాయం కావాలా" in prompt          # Vinay's dictated line
     assert "Do you need any other help?" in prompt     # English gloss
-    assert "may NOT call end_call until the caller has declined" in prompt
+    assert "optional once per call, never automatic or repetitive" in prompt
 
 
 def test_say_it_once_no_reprompting_428():

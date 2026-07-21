@@ -61,8 +61,9 @@ def test_soniox_context_biasing_400():
     names + clinic name ride Soniox context biasing on every live STT build
     (session + language-switch handoff). Accuracy lever — endpointing stays
     at plugin defaults."""
-    stt = SRC.split("def _build_stt")[1][:3500]
-    assert "soniox.ContextObject(terms=" in stt
+    stt = SRC.split("def _build_stt")[1][:6000]
+    assert "soniox.ContextObject(" in stt and "terms=terms[:120]" in stt
+    assert "ContextGeneralItem" in stt
     assert "_stt_terms = [d.name for d in doctor_contexts]" in SRC
     assert SRC.count("finalize_controller=_soniox_finalizer") == 2
     # #401: a switch ask must survive cross-language transcription — the
@@ -182,7 +183,7 @@ def test_soniox_region_configurable_406():
     so the flip is env-only. #442 changes endpoint controls independently."""
     from backend.config import settings as s
 
-    stt = SRC.split("def _build_stt")[1][:4000]
+    stt = SRC.split("def _build_stt")[1][:6000]
     assert "base_url=settings.soniox_ws_url" in stt
     assert s.soniox_ws_url.startswith("wss://stt-rt")
     assert "endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level" in stt

@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # finalize after that much continuing VAD silence. Soniox recommends about
     # 200ms; values 1..199 are rejected to prevent the inaccurate immediate-
     # finalize behavior reverted in #399.
-    soniox_manual_finalize_delay_ms: int = 0
+    soniox_manual_finalize_delay_ms: int = 200
     # auto = Soniox when keyed, otherwise Sarvam; sarvam gives operations a
     # reversible provider A/B without deleting/rotating the Soniox credential.
     stt_provider: str = 'auto'

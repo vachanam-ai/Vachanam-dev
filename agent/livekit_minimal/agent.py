@@ -104,7 +104,10 @@ from agent.livekit_minimal.greeting import (  # noqa: E402
     synth_and_play,
     synth_wavs,
 )
-from agent.services.tts_sanitizer import sanitize_for_tts  # noqa: E402
+from agent.services.tts_sanitizer import (  # noqa: E402
+    internal_trace_match,
+    sanitize_for_tts,
+)
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
     assign_token,
@@ -454,6 +457,46 @@ async def _space_digits_stream(text):
         yield spoken_english_numbers(pend)
 
 
+_SPEECH_GUARD_CARRY = 24
+_SPEECH_BOUNDARY = re.compile(r"[.!?।\n]")
+
+
+async def _guard_internal_speech_stream(text):
+    """Streaming, chunk-split-safe firewall for private tool narration.
+
+    A short carry prevents a marker split across LLM chunks (``new_`` +
+    ``date``) from leaking. After a marker, discard through the next sentence
+    boundary. Normal speech keeps streaming; this does not wait for a full reply.
+    """
+    pending = ""
+    dropping = False
+    async for chunk in text:
+        pending += chunk
+        while pending:
+            if dropping:
+                boundary = _SPEECH_BOUNDARY.search(pending)
+                if boundary is None:
+                    pending = ""
+                    break
+                pending = pending[boundary.end():]
+                dropping = False
+                continue
+            marker = internal_trace_match(pending)
+            if marker:
+                safe = pending[:marker.start()]
+                if safe:
+                    yield safe
+                pending = pending[marker.start():]
+                dropping = True
+                continue
+            if len(pending) <= _SPEECH_GUARD_CARRY:
+                break
+            yield pending[:-_SPEECH_GUARD_CARRY]
+            pending = pending[-_SPEECH_GUARD_CARRY:]
+    if pending and not dropping and not internal_trace_match(pending):
+        yield pending
+
+
 async def _end_call_with_notice(ctx, reason: str, t_answer: float | None = None) -> None:
     """RULE 8: never leave a caller with dead ringing. When the database is
     unreachable we cannot resolve the branch, its language, or anything else —
@@ -612,24 +655,19 @@ REBOOK_PROMPT_EXTRA = (
 )
 
 REMINDER_PROMPT_EXTRA = (
-    "\n\nTHIS IS A REMINDER CALL (not a new booking call). The patient has an "
-    "appointment today: token_id={token_id}, doctor={doctor}, time={time}. "
-    "The greeting already asked if they are coming.\n"
-    "YOU ALREADY KNOW THIS PATIENT — never ask who they are or their health "
-    "problem, never restart the new-patient flow (overrides the booking flow "
-    "steps above). Unclear/mumbled reply -> repeat the same question once.\n"
-    "- If they confirm: say 'సరే, ఎదురుచూస్తుంటాము. ధన్యవాదాలు!' and nothing more.\n"
-    "- If they CANNOT come: this patient matters — rebook them, do not lose them. "
-    "Ask which day and time suits them, then call reschedule_booking("
-    "old_token_id=token_id above, new_date, new_time) — one atomic call. If it "
-    "returns success=true, confirm the new time in one breath and close warmly; "
-    "if false, offer another slot.\n"
-    "- If they want to CANCEL outright (not move it): call cancel_booking("
-    "token_id above). Say it is cancelled ONLY after the tool returns "
-    "success=true — NEVER claim a cancellation you did not perform; an "
-    "unperformed 'cancel' becomes a no-show against the patient.\n"
-    "- If they want a different doctor or time, follow the normal availability "
-    "negotiation rules. Keep every reply to two short sentences."
+    "\n<reminder_call>\n"
+    "This is a reminder, not a new booking. The opening already asked whether "
+    "the known patient will attend today's appointment. Never restart intake.\n"
+    "<private_context appointment_reference='{token_id}' doctor='{doctor}' "
+    "time='{time}' />\n"
+    "The private_context is for execution only and MUST NEVER be spoken, quoted, "
+    "paraphrased as fields, or read character by character.\n"
+    "If attending: one warm acknowledgement, then stop. If unable to attend: ask "
+    "the preferred new day/time and atomically move this appointment. If they "
+    "explicitly want cancellation, cancel this appointment. Announce an outcome "
+    "only after the action succeeded. If unclear, repeat the attendance question "
+    "once. Speak at most two short natural sentences.\n"
+    "</reminder_call>"
 )
 
 NEXT_VISIT_PROMPT_EXTRA = (
@@ -1034,8 +1072,9 @@ def _build_session_tts(voice_id: str, tts_lang: str) -> lk_tts.FallbackAdapter:
 
 # #442 replaces the unsafe combined #394/#396 experiment with isolated,
 # reversible controls. Production starts at semantic latency level 1 only;
-# sensitivity stays unset and the 200ms manual-finalize path stays disabled
-# until a separate canary. This preserves the lesson from the #399 revert:
+# sensitivity stays unset; the 200ms silence-gated manual-finalize path is the
+# only additional endpoint control enabled for this release. This preserves
+# the lesson from the #399 revert:
 # DEGRADED Telugu recognition — "కరిష్మా" transcribed as "హరీష్ కుమార్", caller
 # utterances chopped into fragments mid-sentence. Latency won, accuracy lost —
 # unacceptable trade. Never combine endpoint knobs without isolated evidence.
@@ -1147,7 +1186,18 @@ def _build_stt(
         ctx = None
         terms = [t for t in (context_terms or []) if t and t.strip()]
         if terms:
-            ctx = soniox.ContextObject(terms=terms[:50])
+            ctx = soniox.ContextObject(
+                general=[
+                    soniox.ContextGeneralItem(key="domain", value="Healthcare clinic"),
+                    soniox.ContextGeneralItem(
+                        key="setting", value="Patient appointment phone call"
+                    ),
+                    soniox.ContextGeneralItem(
+                        key="topic", value="Symptoms, doctors, appointments, and reminders"
+                    ),
+                ],
+                terms=terms[:120],
+            )
         stt_type = (
             _FinalizingSonioxSTT
             if finalize_controller is not None and finalize_controller.enabled
@@ -1515,7 +1565,8 @@ class VachanamAgent(Agent):
         Short runs stay joined: dates/tokens/times like "13" must be spoken
         as one number word, not digit-by-digit (#333). Chunk splits are
         handled by _space_digits_stream's trailing-digit carry."""
-        async for frame in super().tts_node(_space_digits_stream(text), model_settings):
+        safe_text = _guard_internal_speech_stream(text)
+        async for frame in super().tts_node(_space_digits_stream(safe_text), model_settings):
             yield frame
 
     async def on_enter(self) -> None:
@@ -1777,6 +1828,10 @@ class VachanamAgent(Agent):
         Call once the patient has described their problem. Pass the complaint
         exactly as spoken."""
         _say_lookup_filler(context)  # cover the routing-LLM/DB beat (no dead air)
+        # A new complaint invalidates the previous route before any await. This
+        # prevents a throat query from inheriting a skin doctor if routing is
+        # ambiguous, slow, or returns candidates/out-of-scope.
+        self._state.doctor_id = None
         self._state.complaint = complaint
         result = await route_to_doctor(
             complaint=complaint,
@@ -1787,7 +1842,7 @@ class VachanamAgent(Agent):
         if result.get("doctor_id"):
             # Single match — safe to pre-select for later tools.
             self._state.doctor_id = UUID(result["doctor_id"])
-        # Multiple candidates: leave state unset; the patient picks after
+        # Multiple candidates: state remains unset; the patient picks after
         # hearing each doctor's availability (result carries instruction).
         return result
 
@@ -3723,7 +3778,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # recognition snaps to the real roster ("కరిష్మా") instead of phonetic
         # lookalikes ("హరీష్ కుమార్", real call 2026-07-18).
         _stt_terms = [d.name for d in doctor_contexts]
-        _stt_terms += [branch_name, _spk_clinic, "appointment", "token", "cancel"]
+        for d in doctor_contexts:
+            _stt_terms.extend([d.specialization, *(d.routing_keywords or [])])
+        _stt_terms += [
+            branch_name, _spk_clinic, "appointment", "token", "cancel",
+            "పంటి", "పంటి సమస్య", "పళ్ళు", "పళ్ల నొప్పి", "దంతాలు",
+            "panti", "pallu", "tooth", "teeth", "dental",
+            "గొంతు", "గొంతు నొప్పి", "throat", "tonsil", "ENT",
+            "చర్మం", "స్కిన్", "skin problem",
+        ]
+        _stt_terms = list(dict.fromkeys(t for t in _stt_terms if t))
         # #401 (real call 06:57Z: "can you speak English with me" NEVER
         # surfaced in the te-strict transcript — the agent had nothing to act
         # on and kept talking appointments): bias the LANGUAGE NAMES so a
@@ -3746,7 +3810,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         extra_tail = ""
 
         # One controller per call. Language handoffs share it, while concurrent
-        # clinic calls remain isolated. Delay 0 keeps manual finalize disabled.
+        # clinic calls remain isolated. Zero remains the explicit opt-out.
         _soniox_finalizer = _SonioxFinalizeController(
             settings.soniox_manual_finalize_delay_ms
         )
@@ -4026,8 +4090,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # conservative 1.0s max only guarded against cutting a speaker off;
             # trim it to shave ~0.3-0.4s off every Telugu reply (2026-06-24
             # latency pass). Raise back toward 1.0 if speakers get clipped.
-            min_endpointing_delay=0.2,
-            max_endpointing_delay=0.6,
+            # Soniox already performs semantic endpointing and client VAD sends
+            # a vendor-recommended finalize after 200ms. Do not add another
+            # 200–600ms of silence on top of that finalized transcript.
+            min_endpointing_delay=0.05,
+            max_endpointing_delay=0.3,
             # BARGE-IN FIX (Vinay 2026-06-22: "when I interrupt mid-sentence the
             # agent skips the sentence it was supposed to say"). Telugu/Indian
             # callers backchannel constantly while the agent speaks ("haan",

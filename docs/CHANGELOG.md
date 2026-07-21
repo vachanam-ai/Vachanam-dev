@@ -13,6 +13,44 @@ Format per session:
 
 ---
 
+## 2026-07-21 — Grounded call brain, speech firewall, demo latency, and offer pricing (#443)
+
+Production evidence separated four failures. Soniox produced `పని సమస్యలు`
+for the caller's dental phrase; the route tool retained an earlier doctor until
+a new single match arrived; the reminder prompt contained literal execution
+signatures; and the accumulated prompt contradicted itself about when to offer
+more help. The measured remaining turn was a stack, not one 3-second provider:
+roughly 0.41–0.44s transcription, 0.58s end-of-turn, 0.57–1.05s Gemini, and
+0.17–0.59s TTS first audio on the latest calls.
+
+Production now uses one compact POML-like prompt with explicit priority,
+private execution, current-turn replacement, grounding, speech, and workflow
+sections. Soniox receives Healthcare/appointment context plus each clinic's
+specialties and routing keywords, including Telugu dental/ENT homophones. A
+new complaint clears the previous doctor immediately; `పని/పంటి` ambiguity
+asks one contrastive question. Reminder context contains no callable signature,
+and a chunk-split-safe TTS firewall removes internal execution narration even
+if the model violates the prompt.
+
+Latency: vendor-recommended manual finalization now fires after 200ms of
+continuing VAD silence; the redundant LiveKit post-final wait is 50–300ms.
+Soniox level 1, vendor sensitivity, and 2000ms hard tail remain unchanged.
+The user-facing target is first audible response, not the misleading provisional
+token metric; sub-200ms stable end-of-turn is not promised.
+
+Commercial: the universal 14-day trial stays. First three paid months are
+Lite ₹1,799, Starter ₹3,999, Clinic ₹6,999, Multi ₹11,999; list price applies
+from month four. WhatsApp confirmations/reminders remain included on Clinic and
+Multi. The 10–20% launch margin is a temporary acquisition subsidy; 40% is the
+current post-offer floor, with 60%+ the healthier long-term target for a
+voice/telephony-heavy SaaS.
+
+Regression proof before release: 717 unit tests passed; 392 integration tests
+passed / 1 skipped; 154 security + concurrency tests passed / 1 skipped;
+prompt-focused subset 162 passed; Python compile checks and the Vite production
+build passed. Total: 1,263 passed / 2 skipped.
+
+
 ## 2026-07-21 — Measured Soniox turn-latency controls (FIXLOG #442)
 
 Production traces put Soniox end-of-utterance at 0.61–0.90s, Gemini first

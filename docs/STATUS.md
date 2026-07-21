@@ -1,5 +1,17 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-21 — CLIENT-DEMO CALL RELEASE #443.** Production prompt replaced
+> by a compact priority/state machine; fresh symptoms invalidate old routing;
+> Soniox receives clinic specialties plus Telugu dental/ENT context; పని/పంటి
+> ambiguity is clarified; reminders contain private data without tool
+> signatures; streamed TTS has a deterministic internal-trace firewall.
+> Latency profile: Soniox level 1 + vendor-default sensitivity/cap, 200ms
+> VAD manual finalization, LiveKit 50–300ms post-final window. Offer pricing is
+> restored for the first 3 paid months after the universal 14-day trial;
+> WhatsApp remains Clinic/Multi. Release gate: 1,263 passed / 2 skipped plus
+> Python compile and production frontend build. Production deployment is in
+> progress; live worker proof will replace this sentence after registration.
+
 > **2026-07-21 — SONIOX TURN-LATENCY ROLLOUT DEPLOYED (FIXLOG #442, FLY v149).**
 > LiveKit/Soniox 1.6.6 endpoint tuning is wired with a one-variable rollout:
 > semantic endpoint latency level 1 only. Sensitivity stays vendor-default,

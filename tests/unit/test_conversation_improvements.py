@@ -38,9 +38,10 @@ def test_reminder_extra_gates_cancel_claims_on_tool_success():
     """Transcript 10:31Z: agent said 'already cancelled' — DB shows that token
     ended no_show, never cancelled. Cancel claims need tool success=true."""
     t = REMINDER_PROMPT_EXTRA
-    assert "cancel_booking" in t
-    assert "success=true" in t
-    assert "NEVER claim a cancellation" in t
+    assert "private_context" in t
+    assert "MUST NEVER be spoken" in t
+    assert "only after the action succeeded" in t
+    assert "new_date" not in t and "calendar.tool" not in t
 
 
 def test_receptionist_playbook_block_present():
@@ -49,8 +50,7 @@ def test_receptionist_playbook_block_present():
     (noise / silent caller / wrong number), and message-taking discipline."""
     p = _prompt()
     assert "RECEPTIONIST PLAYBOOK" in p
-    # Renamed + strengthened #427: the booking close now REQUIRES an
-    # offer-of-more-help beat before end_call, not just a what-next line.
+    # The offer exists, but the 2026-07-21 repetition fix makes it optional once.
     assert "OFFER MORE HELP BEFORE CLOSING" in p
     assert "SILENT CALLER" in p
     assert "BACKGROUND NOISE" in p

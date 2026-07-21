@@ -1,6 +1,35 @@
 import re
 import unicodedata
 
+# Internal execution language must never reach a caller. This is a deterministic
+# boundary check, not a request to the LLM. Keep patient-safe words such as
+# "appointment" and "calendar date" out of this list; match only implementation
+# identifiers and explicit execution narration.
+_INTERNAL_TRACE = re.compile(
+    r"(?i)(?:\bexecuting\b|\btool[ _-]?call\b|\bfunction[ _-]?call\b|"
+    r"calendar\.tool|\b(?:old_token_id|new_date|new_time|token_id|doctor_id|"
+    r"patient_phone|different_person|booking_for_other)\b\s*[:=]?|"
+    r"\b(?:confirm_booking|reschedule_booking|cancel_booking|check_availability|"
+    r"route_to_doctor|assign_token|find_my_bookings|get_queue_status)\b)"
+)
+
+
+def internal_trace_match(text: str):
+    """Return the first private-execution marker in speech, if present."""
+    return _INTERNAL_TRACE.search(text or "")
+
+
+def strip_internal_tool_speech(text: str) -> str:
+    """Remove any sentence/line that exposes tool execution details.
+
+    This intentionally fails closed: losing one generated sentence is preferable
+    to reading identifiers, JSON, or calendar operations to a patient.
+    """
+    if not internal_trace_match(text):
+        return text
+    pieces = re.split(r"(?<=[.!?।])|\r?\n", text)
+    return " ".join(p.strip() for p in pieces if p.strip() and not internal_trace_match(p))
+
 # ── #408 (Vinay 2026-07-19): every digit the agent speaks is ENGLISH, always —
 # phone numbers one-by-one ("eight zero nine six…"), times as "six thirty",
 # ages as "forty eight" — never Telugu/Hindi number words, in ANY language.
@@ -130,6 +159,7 @@ def spoken_english_numbers(text: str) -> str:
 
 
 def sanitize_for_tts(text: str) -> str:
+    text = strip_internal_tool_speech(text)
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'^\*\s+', '', text, flags=re.MULTILINE)
