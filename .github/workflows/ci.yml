@@ -50,6 +50,12 @@ jobs:
           --health-retries 5
 
     env:
+      # ── Clock ───────────────────────────────────────────────────────────────
+      # The app computes clinic dates in IST; tests use date.today(). On UTC
+      # runners those disagree between 18:30-24:00 UTC (= IST past midnight),
+      # failing 8 date tests. Pin the suite to the product's timezone.
+      TZ: Asia/Kolkata
+
       # ── Database ────────────────────────────────────────────────────────────
       DATABASE_URL: postgresql+asyncpg://vachanam:localdev123@localhost:5432/vachanam_dev
       # conftest's prod-fuse (#324) REQUIRES a distinct test DB whose name

@@ -9,7 +9,7 @@ enforced, no renewal was requested. Now:
   leaves in-grace and cycle-less orgs alone.
 """
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
