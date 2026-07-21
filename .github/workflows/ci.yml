@@ -90,6 +90,9 @@ jobs:
       SARVAM_API_KEY: test-sarvam-key
       OPENAI_API_KEY: test-openai-key
       GEMINI_API_KEY: test-gemini-key
+      # test_streaming_tts_chain_405 constructs the smallest.ai plugin, whose
+      # ctor requires a key (any value; nothing is called).
+      SMALLEST_API_KEY: test-smallest-key
 
       # ── LiveKit ─────────────────────────────────────────────────────────────
       LIVEKIT_URL: wss://test.livekit.local
