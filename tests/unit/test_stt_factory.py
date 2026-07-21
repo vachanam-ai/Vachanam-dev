@@ -40,6 +40,46 @@ def test_language_switch_handoff_gets_new_language_hint():
     assert stt._params.language_hints == ["hi"]
 
 
+def test_soniox_conservative_latency_profile_is_effective():
+    with patch.multiple(
+        ag.settings,
+        soniox_api_key="sk-test",
+        stt_provider="auto",
+        soniox_endpoint_latency_level=1,
+        soniox_max_endpoint_delay_ms=2000,
+        soniox_endpoint_sensitivity=None,
+    ):
+        stt = ag._build_stt(get_lang("te"))
+    assert stt._params.endpoint_latency_adjustment_level == 1
+    assert stt._params.max_endpoint_delay_ms == 2000
+    assert stt._params.endpoint_sensitivity is None
+
+
+def test_sarvam_can_be_forced_without_removing_soniox_key():
+    with patch.multiple(
+        ag.settings,
+        soniox_api_key="sk-test",
+        stt_provider="sarvam",
+    ):
+        stt = ag._build_stt(get_lang("te"))
+    assert isinstance(stt, sarvam.STT)
+
+
+def test_delayed_finalize_wrapper_is_opt_in():
+    controller = ag._SonioxFinalizeController(delay_ms=200)
+    with patch.multiple(
+        ag.settings,
+        soniox_api_key="sk-test",
+        stt_provider="soniox",
+    ):
+        stt = ag._build_stt(
+            get_lang("te"),
+            finalize_controller=controller,
+        )
+    assert isinstance(stt, ag._FinalizingSonioxSTT)
+    assert stt._finalize_controller is controller
+
+
 def test_no_direct_sarvam_construction_outside_factory():
     """All three former sarvam.STT( sites must route through _build_stt, or a
     future edit could silently pin one path to the wrong provider."""
@@ -48,4 +88,6 @@ def test_no_direct_sarvam_construction_outside_factory():
     src = inspect.getsource(ag)
     # the only sarvam.STT( left is inside _build_stt itself
     assert src.count("sarvam.STT(") == 1
-    assert src.count("soniox.STT(") == 1
+    # Construction is selected dynamically so the same factory can attach the
+    # session-scoped delayed-finalize controller without another provider site.
+    assert "else soniox.STT" in src

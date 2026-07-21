@@ -16,19 +16,24 @@ from pathlib import Path
 SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 
 
-def test_soniox_runs_at_plugin_defaults():
-    stt = SRC.split("def _build_stt")[1][:2500]
-    assert "max_endpoint_delay_ms" not in stt
-    assert "endpoint_sensitivity" not in stt
-    # the revert reason stays documented at the tuning site
-    assert "PLUGIN DEFAULTS" in stt
+def test_soniox_uses_isolated_conservative_latency_profile():
+    stt = SRC.split("def _build_stt")[1][:5000]
+    assert "endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level" in stt
+    assert "max_endpoint_delay_ms=settings.soniox_max_endpoint_delay_ms" in stt
+    assert "endpoint_sensitivity=settings.soniox_endpoint_sensitivity" in stt
+    assert "max_endpoint_delay_ms=800" not in stt
+    assert "endpoint_sensitivity=0.3" not in stt
 
 
-def test_no_forced_finalize_and_no_thinking_ack():
-    assert "_FinalizingSonioxSTT" not in SRC
+def test_delayed_finalize_is_session_scoped_and_thinking_ack_stays_removed():
+    assert "class _FinalizingSonioxSTT(soniox.STT)" in SRC
+    assert "class _SonioxFinalizeController" in SRC
     assert "_soniox_finalize_all" not in SRC
     assert "thinking_ack" not in SRC
-    assert '{"type": "finalize"}' not in SRC
+    assert '{"type": "finalize"}' in SRC
+    assert "old_state == 'speaking' and new_state == 'listening'" in SRC
+    assert "_soniox_finalizer.cancel()" in SRC
+    assert "weakref.WeakSet()" in SRC
     # the do-not-re-add note stands where the ack lived
     assert "THINKING ACK: REMOVED (#399)" in SRC
 
@@ -59,8 +64,7 @@ def test_soniox_context_biasing_400():
     stt = SRC.split("def _build_stt")[1][:3500]
     assert "soniox.ContextObject(terms=" in stt
     assert "_stt_terms = [d.name for d in doctor_contexts]" in SRC
-    assert "_build_stt(lang_cfg, _stt_terms)" in SRC   # session pipeline
-    assert "_build_stt(cfg2, _stt_terms)" in SRC       # switch_language handoff
+    assert SRC.count("finalize_controller=_soniox_finalizer") == 2
     # #401: a switch ask must survive cross-language transcription — the
     # language names ride the bias terms in both scripts.
     assert '"English", "ఇంగ్లీష్", "Hindi", "హిందీ"' in SRC
@@ -175,15 +179,15 @@ def test_streaming_script_guard_and_warm_405():
 def test_soniox_region_configurable_406():
     """#406: Soniox WS endpoint rides settings.soniox_ws_url (US default; JP is
     4ms from Fly bom vs 230ms US — measured 2026-07-18). Keys are region-scoped,
-    so the flip is env-only. Endpointing params stay at plugin defaults (#399)."""
+    so the flip is env-only. #442 changes endpoint controls independently."""
     from backend.config import settings as s
 
     stt = SRC.split("def _build_stt")[1][:4000]
     assert "base_url=settings.soniox_ws_url" in stt
     assert s.soniox_ws_url.startswith("wss://stt-rt")
-    # the ban stands: no endpoint tuning snuck in with the region change
-    assert "max_endpoint_delay_ms" not in stt
-    assert "endpoint_sensitivity" not in stt
+    assert "endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level" in stt
+    assert "max_endpoint_delay_ms=settings.soniox_max_endpoint_delay_ms" in stt
+    assert "endpoint_sensitivity=settings.soniox_endpoint_sensitivity" in stt
 
 
 def test_vertex_missing_creds_falls_back_404(tmp_path, monkeypatch):

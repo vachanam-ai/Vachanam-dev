@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -12,6 +13,24 @@ class Settings(BaseSettings):
     # 230ms to the US default; big slice of transcription_delay).
     soniox_ws_url: str = "wss://stt-rt.soniox.com/transcribe-websocket"
     sarvam_api_key: str           # Sarvam Saaras v3 — STT fallback
+    # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
+    # conservative production canary; 0 restores Soniox's default behavior.
+    # Tune one control at a time on real Telugu calls (0..3).
+    soniox_endpoint_latency_level: int = 1
+    # Hard tail ceiling only -- not the median-latency control. Keep the API
+    # default until isolated call evidence justifies lowering it.
+    soniox_max_endpoint_delay_ms: int = 2000
+    # Leave unset for the server default. Sensitivity is deliberately separate
+    # from the latency level so an experiment cannot silently combine knobs.
+    soniox_endpoint_sensitivity: float | None = None
+    # 0 disables client finalization. A value >=200 enables a cancellable
+    # finalize after that much continuing VAD silence. Soniox recommends about
+    # 200ms; values 1..199 are rejected to prevent the inaccurate immediate-
+    # finalize behavior reverted in #399.
+    soniox_manual_finalize_delay_ms: int = 0
+    # auto = Soniox when keyed, otherwise Sarvam; sarvam gives operations a
+    # reversible provider A/B without deleting/rotating the Soniox credential.
+    stt_provider: str = 'auto'
     openai_api_key: str
     gemini_api_key: str
 
@@ -185,6 +204,42 @@ class Settings(BaseSettings):
     transcript_capture_enabled: bool = True
     transcript_retention_days: int = 90
     otp_dev_echo: bool = True         # dev only: return code in response
+
+    @field_validator('soniox_endpoint_latency_level')
+    @classmethod
+    def _valid_soniox_latency_level(cls, value: int) -> int:
+        if not 0 <= value <= 3:
+            raise ValueError('must be between 0 and 3')
+        return value
+
+    @field_validator('soniox_max_endpoint_delay_ms')
+    @classmethod
+    def _valid_soniox_endpoint_cap(cls, value: int) -> int:
+        if not 500 <= value <= 3000:
+            raise ValueError('must be between 500 and 3000 milliseconds')
+        return value
+
+    @field_validator('soniox_endpoint_sensitivity')
+    @classmethod
+    def _valid_soniox_sensitivity(cls, value: float | None) -> float | None:
+        if value is not None and not -1.0 <= value <= 1.0:
+            raise ValueError('must be between -1.0 and 1.0')
+        return value
+
+    @field_validator('soniox_manual_finalize_delay_ms')
+    @classmethod
+    def _valid_soniox_finalize_delay(cls, value: int) -> int:
+        if value != 0 and not 200 <= value <= 3000:
+            raise ValueError('must be 0 (disabled) or between 200 and 3000 milliseconds')
+        return value
+
+    @field_validator('stt_provider')
+    @classmethod
+    def _valid_stt_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {'auto', 'soniox', 'sarvam'}:
+            raise ValueError('must be auto, soniox, or sarvam')
+        return normalized
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

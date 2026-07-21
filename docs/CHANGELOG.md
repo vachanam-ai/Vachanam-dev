@@ -13,6 +13,31 @@ Format per session:
 
 ---
 
+## 2026-07-21 — Measured Soniox turn-latency controls (FIXLOG #442)
+
+Production traces put Soniox end-of-utterance at 0.61–0.90s, Gemini first
+token at 0.80–1.40s, and best TTS first audio near 0.18s. The previous failed
+latency experiment changed the endpoint cap, sensitivity, and immediate manual
+finalization together, so it proved that combination unsafe but did not identify
+which control damaged Telugu accuracy.
+
+The rollout now isolates one supported Soniox control:
+endpoint_latency_adjustment_level=1. Sensitivity is unset, the 2000ms tail cap
+is unchanged, and manual finalization is disabled. LiveKit Soniox 1.6.6 also
+exposes preflight transcripts, allowing the existing preemptive-generation
+pipeline to begin useful work before the final endpoint event.
+
+Guarded follow-ups are implemented but off: cancellable per-call manual
+finalization at 200ms or later, plus an auto|soniox|sarvam provider switch.
+Config validation rejects aggressive values; each concurrent call owns its
+controller, including its language handoffs. Startup logs package versions and
+effective settings. Added STT/config/concurrency regressions and fixed the test
+email fuse at the environment layer so config reload tests cannot restore a live
+credential. Full research and market comparison:
+docs/SONIOX_LATENCY_RESEARCH.md.
+
+---
+
 ## 2026-07-15 — Lite ₹1,999 entry plan + follow-up on every plan (FIXLOG #376)
 
 **Decisions (Vinay):** add a cheap **Lite** tier for low-volume clinics that

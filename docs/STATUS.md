@@ -1,5 +1,15 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-21 — SONIOX TURN-LATENCY ROLLOUT READY (FIXLOG #442).**
+> LiveKit/Soniox 1.6.6 endpoint tuning is wired with a one-variable rollout:
+> semantic endpoint latency level 1 only. Sensitivity stays vendor-default,
+> maximum endpoint delay stays 2000 ms, and manual finalize stays OFF. A
+> cancellable, per-call 200 ms+ manual-finalize path and Soniox/Sarvam provider
+> switch exist as guarded follow-up experiments/rollback controls. Worker
+> startup reports installed versions plus the effective profile. Regression:
+> full repository 1,256 passed / 2 skipped; focused latency/STT 37 passed.
+> Research and operations: SONIOX_LATENCY_RESEARCH.md.
+
 > **2026-07-14 — WHATSAPP MVP2 CODE-COMPLETE (spec 2026-07-13, T1-T10) + REAL-CALL FIXES #361-370.**
 > WhatsApp: clinic-number Coexistence, direct Meta Cloud API. Built: plan
 > gate (Clinic+Multi) · ff29 migration (wa_phone_number_id + ratings —

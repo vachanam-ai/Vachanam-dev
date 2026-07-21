@@ -7,12 +7,21 @@
 # After creating it, the DB is persistent; the fixture creates/drops tables
 # per test function, not the database itself.
 
+import os
+
 import pytest
 import pytest_asyncio
 import redis.asyncio as aioredis
 from sqlalchemy import text
 from sqlalchemy.pool import NullPool
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+# EMAIL FUSE must exist at the environment layer before backend.config is
+# imported. Some tests intentionally reload that module; mutating only the
+# original Settings singleton lets a reload repopulate production credentials
+# from the developer .env and makes later tests capable of sending real mail.
+os.environ["RESEND_API_KEY"] = ""
+os.environ["SMTP_HOST"] = ""
 
 from backend.models.schema import Base
 from backend.config import settings
@@ -25,17 +34,16 @@ import backend.database as _db_module
 # (2) hermetic + flushable per test; (3) never burns the Upstash free-tier
 # command quota. The limiter reads settings.redis_url lazily, so overriding it
 # here (before any test runs) repoints both the limiter and the `redis` fixture.
-import os as _os
-
-settings.redis_url = _os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0")
+settings.redis_url = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0")
 
 # EMAIL FUSE (FIXLOG #369, sibling of the #324 DB fuse): the local .env
 # carries the LIVE Resend key, and every full-suite run was REALLY mailing
 # support@vachanam.in ("Demo request — Sunrise Dental", receipts to fake
 # addresses...) because tests exercised the ticket/receipt paths for real.
-# Every sender early-returns on an empty key/host, so blanking them here
-# makes all outbound mail a structured no-op. Tests that assert payloads
-# mock the transport themselves and never rely on the real key.
+# Every sender early-returns on an empty key/host. The pre-import environment
+# fuse survives backend.config reloads; these assignments are defense in depth
+# for the singleton imported by modules during collection. Tests that assert
+# payloads mock the transport themselves and never rely on the real key.
 settings.resend_api_key = ""
 settings.smtp_host = ""
 

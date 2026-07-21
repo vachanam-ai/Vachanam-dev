@@ -24,6 +24,7 @@ import os
 import random
 import re
 import sys
+import weakref
 from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
 from datetime import timezone as _tz
 
@@ -1031,14 +1032,92 @@ def _build_session_tts(voice_id: str, tts_lang: str) -> lk_tts.FallbackAdapter:
     )
 
 
-# #399 REVERT of #394/#396 (real call 06:29Z 2026-07-18): forced finalize on
-# VAD end + eager endpointing (max_endpoint_delay_ms=800, sensitivity=0.3)
+# #442 replaces the unsafe combined #394/#396 experiment with isolated,
+# reversible controls. Production starts at semantic latency level 1 only;
+# sensitivity stays unset and the 200ms manual-finalize path stays disabled
+# until a separate canary. This preserves the lesson from the #399 revert:
 # DEGRADED Telugu recognition — "కరిష్మా" transcribed as "హరీష్ కుమార్", caller
 # utterances chopped into fragments mid-sentence. Latency won, accuracy lost —
-# unacceptable trade. STT runs at PLUGIN DEFAULTS (yesterday's proven config);
-# turn-gap work continues on the LLM side only (thinking=minimal #397, prompt
-# diet next) — never again by cutting the transcript short.
-def _build_stt(lang_cfg, context_terms: list | None = None):
+# unacceptable trade. Never combine endpoint knobs without isolated evidence.
+class _SonioxFinalizeController:
+    '''Session-scoped, cancellable Soniox manual finalization.
+
+    Soniox recommends retaining about 200ms of silence after speech before a
+    manual finalize. A controller belongs to one AgentSession and is shared by
+    that session's language-handoff STT instances, so one clinic call can never
+    finalize another concurrent call's stream.
+    '''
+
+    def __init__(self, delay_ms: int) -> None:
+        self.delay_ms = delay_ms
+        self._streams = weakref.WeakSet()
+        self._task: asyncio.Task | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.delay_ms > 0
+
+    def register(self, stream) -> None:
+        self._streams.add(stream)
+
+    def cancel(self) -> None:
+        task = self._task
+        self._task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def schedule(self, still_silent) -> None:
+        '''Finalize after continuing silence; cancel/re-arm on every VAD edge.'''
+        self.cancel()
+        if not self.enabled:
+            return
+
+        async def _after_silence() -> None:
+            try:
+                await asyncio.sleep(self.delay_ms / 1000)
+                if not still_silent():
+                    return
+                finalized = 0
+                for stream in list(self._streams):
+                    queue = getattr(stream, 'audio_queue', None)
+                    if queue is None:
+                        continue
+                    queue.put_nowait('{"type": "finalize"}')
+                    finalized += 1
+                logger.info(
+                    'soniox_manual_finalize delay_ms=%d streams=%d',
+                    self.delay_ms,
+                    finalized,
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001 -- latency aid never breaks a call
+                logger.warning('soniox_manual_finalize_failed: %s', exc)
+            finally:
+                if self._task is asyncio.current_task():
+                    self._task = None
+
+        self._task = asyncio.create_task(_after_silence())
+
+
+class _FinalizingSonioxSTT(soniox.STT):
+    '''Soniox STT whose live streams register with one call's controller.'''
+
+    def __init__(self, *, finalize_controller: _SonioxFinalizeController, **kwargs):
+        self._finalize_controller = finalize_controller
+        super().__init__(**kwargs)
+
+    def stream(self, **kwargs):
+        stream = super().stream(**kwargs)
+        self._finalize_controller.register(stream)
+        return stream
+
+
+def _build_stt(
+    lang_cfg,
+    context_terms: list | None = None,
+    finalize_controller: _SonioxFinalizeController | None = None,
+):
     """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_API_KEY
     is set (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu vs
     Sarvam), Sarvam Saaras v3 fallback otherwise so a missing/revoked Soniox
@@ -1048,9 +1127,12 @@ def _build_stt(lang_cfg, context_terms: list | None = None):
     strict-language rule as Sarvam's fixed `language=` (Vinay 2026-06-17:
     auto-detect degrades on shared Indian-language words). Language change
     happens ONLY via the switch_language agent handoff, which builds a new
-    STT through this same factory. Endpointing params stay at PLUGIN DEFAULTS
-    (#399: the 07-18 latency tuning of these knobs corrupted Telugu
-    recognition — see the revert note above; do not re-tune them).
+    STT through this same factory. #442 changes one control at a time:
+    semantic latency level 1 is the production canary; sensitivity is unset,
+    the hard cap remains 2000ms, and delayed manual finalize is opt-in.
+
+    The #399 lesson still stands: combined aggressive knobs corrupted Telugu
+    recognition; do not combine those controls again without separate evidence.
 
     context_terms (#400, Vinay 2026-07-18 real call: he said "కరిష్మా", Soniox
     heard "హరీష్ కుమార్" and the agent argued about a phantom patient): Soniox
@@ -1059,12 +1141,31 @@ def _build_stt(lang_cfg, context_terms: list | None = None):
     real roster instead of phonetic lookalikes. Accuracy lever only — zero
     endpointing/latency risk.
     """
-    if settings.soniox_api_key:
+    provider = settings.stt_provider
+    use_soniox = provider != 'sarvam' and bool(settings.soniox_api_key)
+    if use_soniox:
         ctx = None
         terms = [t for t in (context_terms or []) if t and t.strip()]
         if terms:
             ctx = soniox.ContextObject(terms=terms[:50])
-        return soniox.STT(
+        stt_type = (
+            _FinalizingSonioxSTT
+            if finalize_controller is not None and finalize_controller.enabled
+            else soniox.STT
+        )
+        stt_kwargs = {}
+        if stt_type is _FinalizingSonioxSTT:
+            stt_kwargs['finalize_controller'] = finalize_controller
+        logger.info(
+            'stt_config provider=soniox endpoint_level=%d max_endpoint_ms=%d '
+            'sensitivity=%s manual_finalize_ms=%d',
+            settings.soniox_endpoint_latency_level,
+            settings.soniox_max_endpoint_delay_ms,
+            settings.soniox_endpoint_sensitivity,
+            finalize_controller.delay_ms if finalize_controller is not None else 0,
+        )
+        return stt_type(
+            **stt_kwargs,
             api_key=settings.soniox_api_key,
             # #406: region-configurable endpoint. Measured from the Fly bom
             # machine (2026-07-18): tcp connect 4ms to the JP edge vs 230ms US
@@ -1080,8 +1181,15 @@ def _build_stt(lang_cfg, context_terms: list | None = None):
                 language_hints=[lang_cfg.code],
                 language_hints_strict=True,
                 context=ctx,
+                max_endpoint_delay_ms=settings.soniox_max_endpoint_delay_ms,
+                endpoint_sensitivity=settings.soniox_endpoint_sensitivity,
+                endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level,
             ),
         )
+    if provider == 'soniox':
+        logger.error('stt_provider=soniox requested without key; falling back to Sarvam')
+    else:
+        logger.info('stt_config provider=sarvam requested=%s', provider)
     return sarvam.STT(
         api_key=settings.sarvam_api_key,
         model="saaras:v3",
@@ -3637,6 +3745,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # LANGUAGE directive).
         extra_tail = ""
 
+        # One controller per call. Language handoffs share it, while concurrent
+        # clinic calls remain isolated. Delay 0 keeps manual finalize disabled.
+        _soniox_finalizer = _SonioxFinalizeController(
+            settings.soniox_manual_finalize_delay_ms
+        )
+
         def _compose_instructions(lc: str) -> str:
             return (
                 build_system_prompt(
@@ -3738,7 +3852,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 lang_code=lc,
                 agent_factory=_agent_for_lang,
                 switch_ack=get_switch_ack(lc),
-                stt=_build_stt(cfg2, _stt_terms),
+                stt=_build_stt(
+                    cfg2,
+                    _stt_terms,
+                    finalize_controller=_soniox_finalizer,
+                ),
                 tts=_build_session_tts(_voice_for_lang(branch, lc), cfg2.tts_code),
             )
 
@@ -3870,7 +3988,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # (explicit caller ask, 2026-07-03): an AGENT HANDOFF carrying its
             # own STT/TTS built through the same _build_stt factory — never a
             # hot-swap of this session pipeline, never speech auto-detection.
-            stt=_build_stt(lang_cfg, _stt_terms),
+            stt=_build_stt(
+                lang_cfg,
+                _stt_terms,
+                finalize_controller=_soniox_finalizer,
+            ),
             llm=_session_llm,
             # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
             # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
@@ -3955,6 +4077,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # every agent sentence (Vinay 06:29Z call). Perceived-latency masking
         # stays PROMPT-side only (the #387 spoken lead-in) — deterministic
         # audio injection into a live dialogue is retired. Do not re-add.
+
+        # Optional vendor-compliant manual finalization. Re-arm only on a real
+        # speaking->listening VAD edge; any resumed speech cancels the timer.
+        # Delay validation enforces Soniox's >=200ms trailing-silence guidance.
+        @session.on('user_state_changed')
+        def _on_soniox_user_state(ev) -> None:
+            old_state = getattr(ev, 'old_state', None)
+            new_state = getattr(ev, 'new_state', None)
+            if new_state == 'speaking':
+                _soniox_finalizer.cancel()
+            elif old_state == 'speaking' and new_state == 'listening':
+                _soniox_finalizer.schedule(
+                    lambda: getattr(session, 'user_state', None) != 'speaking'
+                )
+
+        async def _cancel_soniox_finalize_on_shutdown() -> None:
+            _soniox_finalizer.cancel()
+
+        ctx.add_shutdown_callback(_cancel_soniox_finalize_on_shutdown)
 
         # Per-turn latency breakdown so the 7s "stop speaking -> agent speaks"
         # gap is attributable to a stage (STT finalize / LLM TTFT / TTS TTFB /
@@ -4772,6 +4913,24 @@ def _prewarm(proc) -> None:
     inference runs in the shared worker inference executor, so the per-call cost
     is just a lightweight handle, not the model weights).
     """
+    from importlib.metadata import PackageNotFoundError, version
+
+    def _pkg_version(name: str) -> str:
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            return "missing"
+
+    logger.info(
+        "voice_runtime livekit_agents=%s soniox_plugin=%s "
+        "endpoint_level=%d max_endpoint_ms=%d sensitivity=%s manual_finalize_ms=%d",
+        _pkg_version("livekit-agents"),
+        _pkg_version("livekit-plugins-soniox"),
+        settings.soniox_endpoint_latency_level,
+        settings.soniox_max_endpoint_delay_ms,
+        settings.soniox_endpoint_sensitivity,
+        settings.soniox_manual_finalize_delay_ms,
+    )
     proc.userdata["vad"] = silero.VAD.load()
     # The Gemini+GPT FallbackAdapter is clinic-agnostic — build it ONCE per
     # process and reuse, so its construction is off every call's pre-greeting
