@@ -56,19 +56,25 @@ from agent.livekit_minimal.agent import (  # noqa: E402
     _build_session_tts,
     _build_stt,
 )
-from timeline import CallTimeline  # noqa: E402
+from timeline import CallTimeline, pop_sentences  # noqa: E402
 
 _FINALIZE_MS = int(os.getenv("RAW_FINALIZE_MS", "120"))
 _MIN_ENDPOINT_S = float(os.getenv("RAW_MIN_ENDPOINT_S", "0.05"))
 _MAX_ENDPOINT_S = float(os.getenv("RAW_MAX_ENDPOINT_S", "0.1"))
 
 # Minimal generic persona — a plain friendly Telugu speaker, ZERO domain, so the
-# only thing under test is the pipeline, not prompt/tool cost.
+# only thing under test is the pipeline. HARD length cap: the first raw call had
+# the LLM emit 750 tokens / 141s of audio, which buried the streaming question.
 PROMPT = (
-    "నువ్వు స్నేహపూర్వకమైన వ్యక్తివి. తెలుగులో, చాలా చిన్నగా ఒక్క వాక్యంలో "
-    "సహజంగా మాట్లాడు. జాబితాలు, గుర్తులు వాడకు."
+    "నువ్వు స్నేహపూర్వకమైన వ్యక్తివి. తెలుగులో సహజంగా మాట్లాడు. "
+    "గరిష్ఠంగా ఒకటి లేదా రెండు చిన్న వాక్యాలు మాత్రమే — ఎప్పుడూ 25 పదాలు దాటవద్దు. "
+    "జాబితాలు, గుర్తులు వాడకు."
 )
 GREETING = "నమస్కారం! చెప్పండి."
+
+# Sentence enders (Telugu danda + ASCII) — synthesize each sentence the moment
+# its boundary arrives so TTS audio starts while the LLM is still generating.
+_ENDERS = "।.?!…\n"
 
 
 class _TLAgent(Agent):
@@ -98,13 +104,35 @@ class _TLAgent(Agent):
         self._tl.mark("llm_node_done")
 
     async def tts_node(self, text, model_settings):
+        # STREAMING FIX: the smallest.ai WS plugin buffers the whole LLM output
+        # before byte one. Segment the token stream into sentences here and hand
+        # each complete sentence to the default node immediately — so first audio
+        # lands after sentence 1, not after the entire reply.
         self._tl.mark("tts_node_in")
-        first = True
-        async for frame in super().tts_node(text, model_settings):
-            if first:
-                self._tl.mark("tts_node_first_frame")
-                first = False
-            yield frame
+        state = {"first": True}
+
+        async def _say(sentence: str):
+            self._tl.mark("tts_sentence", chars=len(sentence), text=sentence)
+
+            async def _one():
+                yield sentence
+
+            async for frame in super(_TLAgent, self).tts_node(_one(), model_settings):
+                if state["first"]:
+                    self._tl.mark("tts_node_first_frame")
+                    state["first"] = False
+                yield frame
+
+        buf = ""
+        async for tok in text:
+            buf += tok
+            sentences, buf = pop_sentences(buf, _ENDERS)
+            for sentence in sentences:
+                async for frame in _say(sentence):
+                    yield frame
+        if buf.strip():
+            async for frame in _say(buf):
+                yield frame
         self._tl.mark("tts_node_done")
 
 

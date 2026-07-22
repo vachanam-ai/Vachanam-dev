@@ -16,6 +16,21 @@ import time
 from typing import Callable
 
 
+def pop_sentences(buf: str, enders: str) -> tuple[list[str], str]:
+    """Split off every COMPLETE sentence (ending in an `enders` char) from buf;
+    return (sentences, remainder). Sentences keep their trailing punctuation.
+    Used to stream the LLM token stream into TTS one sentence at a time."""
+    out: list[str] = []
+    start = 0
+    for i, c in enumerate(buf):
+        if c in enders:
+            seg = buf[start:i + 1]
+            if seg.strip():
+                out.append(seg)
+            start = i + 1
+    return out, buf[start:]
+
+
 def _clean(v: object) -> str:
     """k=v stays space-delimited: collapse whitespace in string values so a
     transcript ('నాకు అపాయింట్మెంట్') can't split into fake extra fields."""
@@ -56,4 +71,11 @@ if __name__ == "__main__":  # smallest runnable check
     assert " t=850.0 dt=750.0 ev=stt_final" in out[2]  # 750ms STT gap visible
     assert "text=నాకు_అపాయింట్మెంట్_కావాలి" in out[2]  # spaces collapsed
     assert " dt=450.0 ev=agent_speaking" in out[3]
+
+    # sentence streaming: complete sentences pop, partial stays buffered
+    s, rem = pop_sentences("హలో. ఎలా ఉన్నారు? నేను", _ENDERS := "।.?!…\n")
+    assert s == ["హలో.", " ఎలా ఉన్నారు?"] and rem == " నేను", (s, rem)
+    s2, rem2 = pop_sentences(rem + " బాగున్నాను.", _ENDERS)
+    assert s2 == [" నేను బాగున్నాను."] and rem2 == "", (s2, rem2)
+    assert pop_sentences("no ender here", _ENDERS) == ([], "no ender here")
     print("ok")
