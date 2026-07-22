@@ -106,6 +106,29 @@ def test_missing_stages_are_null_not_zero(trace_and_out):
     assert s["total_ms"] == pytest.approx(1000, abs=1)
 
 
+def test_late_final_transcript_after_commit_is_rejected_not_corrupted(trace_and_out):
+    """Prod bug (real call 2026-07-22, turn 19): a final-transcript event from
+    an EARLIER utterance arrived late, landed on the wrong (already-committed)
+    turn, and produced stt_finalize_ms=6428.9 + commit_ms=-6425.0. STT final
+    always precedes EOU commit in the real pipeline — a final-transcript call
+    arriving on an ALREADY-COMMITTED turn is definitionally stale and must be
+    dropped, not stamped."""
+    tr, out, clock = trace_and_out
+    tr.mark_speech_end()
+    clock.advance(0.05)
+    tr.mark_final_transcript()  # the REAL, correctly-ordered one
+    clock.advance(0.02)
+    tr.mark_turn_committed(eou_delay=0.5, transcription_delay=0.05)
+    clock.advance(6.4)
+    tr.mark_final_transcript()  # stale straggler from an earlier utterance
+    clock.advance(0.3)
+    tr.mark_playout_start()
+    tr.flush()
+    (s,) = out
+    assert s["stt_finalize_ms"] == pytest.approx(50, abs=1)  # first value kept
+    assert s["commit_ms"] is not None and s["commit_ms"] >= 0
+
+
 def test_stale_metric_after_flush_cannot_attach_to_next_turn(trace_and_out):
     tr, out, clock = trace_and_out
     _run_full_turn(tr, clock)

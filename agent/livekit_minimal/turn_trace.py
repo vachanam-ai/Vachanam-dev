@@ -68,8 +68,18 @@ class TurnLatencyTrace:
         self._turn = {"t_speech_end": self._clock(), "llm_runs": 0}
 
     def mark_final_transcript(self) -> None:
-        if self._turn is not None:
-            self._turn["t_final_transcript"] = self._clock()
+        if self._turn is None:
+            return
+        # STT final-transcript always precedes EOU commit in the real
+        # pipeline (commit needs the final text). A call arriving on an
+        # ALREADY-COMMITTED turn is a late straggler from an earlier
+        # utterance that missed its own turn window — reject it rather
+        # than corrupt this turn's numbers (prod: real call 2026-07-22,
+        # stt_finalize_ms=6428.9 / commit_ms=-6425.0 from exactly this).
+        # First-final-wins for the normal (not-yet-committed) case too.
+        if "t_committed" in self._turn or "t_final_transcript" in self._turn:
+            return
+        self._turn["t_final_transcript"] = self._clock()
 
     def mark_turn_committed(self, eou_delay: float | None = None,
                             transcription_delay: float | None = None) -> None:
