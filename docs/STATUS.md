@@ -7,8 +7,8 @@
 > doctors: TOKEN+date; appointment doctors: DATE+TIME only; come-on-time close);
 > other languages keep the LLM path. Live-AgentSession gate keeps every tool
 > test contract unchanged. Kill switch VOICE_DETERMINISTIC_CONFIRM. ⚠ te lines
-> first-pass — validate on a real call; NEEDS FLY DEPLOY (rides next master
-> push through the new pipeline once FLY_API_TOKEN is set).
+> first-pass — validate on a real call. FLY_API_TOKEN secret added 2026-07-22 —
+> this push is the pipeline's first live release+deploy.
 
 > **2026-07-22 — CI/CD PIPELINE LIVE + TTFA REVIEW + PHASE-1 TRACE (#444).**
 > CI/CD: master push now auto-runs lint/pytest/frontend/gitleaks → semver tag →
