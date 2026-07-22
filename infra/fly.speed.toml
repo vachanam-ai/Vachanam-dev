@@ -1,0 +1,21 @@
+# PURE-SPEED sandbox worker — exact prod parity (region, VM, image base).
+# Registers as agent_name "vachanam-speed"; receives calls ONLY while the
+# route script (sandbox/speed-test/route.py --speed) points a DID here.
+# Destroy or scale to 0 after testing: `fly scale count 0 -a vachanam-speed`.
+app = "vachanam-speed"
+primary_region = "bom"
+
+[build]
+  dockerfile = "Dockerfile.speed"
+
+[env]
+  APP_ENV = "production"
+  LOG_LEVEL = "info"
+
+[deploy]
+  strategy = "rolling"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 4
+  memory_mb = 4096

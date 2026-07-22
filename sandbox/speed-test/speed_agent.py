@@ -123,4 +123,6 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint))
+    # Dispatchable under its OWN name — the routing script points a single
+    # DID's dispatch rule here for a test window; prod stays on vachanam-agent.
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="vachanam-speed"))

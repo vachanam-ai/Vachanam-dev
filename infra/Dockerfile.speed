@@ -1,0 +1,38 @@
+# PURE-SPEED sandbox worker (sandbox/speed-test/speed_agent.py) — identical
+# base to Dockerfile.agent (same deps, same baked models, same non-root user)
+# so the measured floor is the PRODUCTION runtime, not a lighter one. Only the
+# CMD and the extra sandbox/ COPY differ.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY agent/livekit_minimal/requirements.txt /app/agent/livekit_minimal/requirements.txt
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir \
+      -r /app/agent/livekit_minimal/requirements.txt \
+      -r /app/backend/requirements.txt
+
+COPY agent/ /app/agent/
+COPY backend/ /app/backend/
+COPY sandbox/ /app/sandbox/
+
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser /app
+USER appuser
+
+ENV PYTHONUNBUFFERED=1
+
+# BUILD-ONLY placeholders (see Dockerfile.agent) — runtime secrets override.
+ENV SARVAM_API_KEY=build \
+    OPENAI_API_KEY=build \
+    GEMINI_API_KEY=build \
+    DATABASE_URL=postgresql+asyncpg://build:build@localhost/build \
+    REDIS_URL=redis://localhost:6379 \
+    JWT_SECRET=build-only-not-a-real-secret
+
+RUN python -m agent.livekit_minimal.agent download-files
+
+CMD ["python", "sandbox/speed-test/speed_agent.py", "start"]
