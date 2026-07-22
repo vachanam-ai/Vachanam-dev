@@ -1,5 +1,15 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-22 — F5 DETERMINISTIC CONFIRMATIONS (#445).** Successful booking/
+> reschedule/cancel now speak a fixed native-script line DIRECTLY (StopResponse
+> suppresses the second LLM pass) — tool completion → first audio ≈0.3-0.5s on
+> the product's most valuable turns (was ~1.5-2.5s). te/en/hi templates (token
+> doctors: TOKEN+date; appointment doctors: DATE+TIME only; come-on-time close);
+> other languages keep the LLM path. Live-AgentSession gate keeps every tool
+> test contract unchanged. Kill switch VOICE_DETERMINISTIC_CONFIRM. ⚠ te lines
+> first-pass — validate on a real call; NEEDS FLY DEPLOY (rides next master
+> push through the new pipeline once FLY_API_TOKEN is set).
+
 > **2026-07-22 — CI/CD PIPELINE LIVE + TTFA REVIEW + PHASE-1 TRACE (#444).**
 > CI/CD: master push now auto-runs lint/pytest/frontend/gitleaks → semver tag →
 > GitHub Release → Fly agent deploy; one-click rollback workflow (any tag);

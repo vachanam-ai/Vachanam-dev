@@ -50,6 +50,7 @@ from livekit.agents import (  # noqa: E402
     MetricsCollectedEvent,
     RoomInputOptions,
     RunContext,
+    StopResponse,
     ToolError,
     function_tool,
     metrics,
@@ -85,6 +86,7 @@ from backend.services.clinic_cache import (  # noqa: E402
     load_doctors,
 )
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
+from agent.livekit_minimal.confirm_speech import build_confirm_text  # noqa: E402
 from agent.livekit_minimal.turn_trace import (  # noqa: E402
     TurnLatencyTrace,
     format_summary_line,
@@ -2162,7 +2164,60 @@ class VachanamAgent(Agent):
             if self._state.followup_task_id:
                 # Cascade-rebook call achieved its goal — stop the retry loop.
                 await self._complete_followup_task("rebooked_on_call")
+            # F5: the write + calendar are DONE — speak the confirmation
+            # deterministically and skip the second LLM pass entirely.
+            if self._speak_deterministic_confirm(
+                context,
+                "booked_token" if result.get("announce") == "token_number"
+                else "booked_slot",
+                token=token_number,
+                date_=parsed_date,
+                time_=self._parse_time(appointment_time),
+            ):
+                raise StopResponse()
         return result
+
+    def _speak_deterministic_confirm(
+        self,
+        context: RunContext,
+        kind: str,
+        *,
+        token: int | None = None,
+        date_=None,
+        time_=None,
+    ) -> bool:
+        """F5 (plan Task 6.3): queue the fixed native-script confirmation for a
+        SUCCESSFUL mutation directly on the session — no second LLM pass, so
+        tool completion → first audio is just the TTS synth (~0.3-0.5s instead
+        of ~1.5-2.5s). Returns True ONLY when the line was queued; the caller
+        then raises StopResponse to suppress the LLM reply. Constraint 6 holds:
+        call sites sit strictly AFTER the atomic write + calendar write. Any
+        failure returns False → the normal LLM-spoken path takes over (RULE 8).
+        """
+        if not settings.voice_deterministic_confirm:
+            return False
+        try:
+            # Deterministic speech needs a LIVE voice session. Tool harnesses
+            # (integration tests, sims) pass stub contexts — those keep the
+            # returned-dict + LLM-spoken contract unchanged.
+            sess = getattr(context, "session", None)
+            if not isinstance(sess, AgentSession):
+                return False
+            lang = self._state.language or self._lang_code
+            text = build_confirm_text(
+                lang, kind, token=token, date_=date_, time_=time_
+            )
+            if not text:
+                return False  # language has no template yet → LLM speaks
+            # say() rides the normal output pipeline (sanitizer + guard +
+            # digit spacing in tts_node); add_to_chat_ctx default keeps the
+            # history coherent for the NEXT turn despite the StopResponse.
+            sess.say(sanitize_for_tts(text))
+            logger.info("deterministic_confirm_spoken kind=%s lang=%s", kind, lang)
+            return True
+        except Exception as e:  # noqa: BLE001 — RULE 8: never fail the booking
+            logger.warning("deterministic_confirm_failed kind=%s: %s", kind, e)
+            return False
 
     async def _complete_followup_task(self, summary: str) -> bool:
         """Mark this call's FollowupTask completed (stops the outbound retry
@@ -2550,7 +2605,20 @@ class VachanamAgent(Agent):
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB + calendar move
-        return await self._do_reschedule(old_token_id, new_date, new_time)
+        result = await self._do_reschedule(old_token_id, new_date, new_time)
+        if result.get("success"):
+            # F5: new booking confirmed + old one cancelled — speak the outcome
+            # deterministically, skip the second LLM pass.
+            _new_time = self._parse_time(result.get("new_time"))
+            if self._speak_deterministic_confirm(
+                context,
+                "resched_slot" if _new_time is not None else "resched_token",
+                token=result.get("new_token_number"),
+                date_=date_cls.fromisoformat(result["new_date"]),
+                time_=_new_time,
+            ):
+                raise StopResponse()
+        return result
 
     async def _do_reschedule(
         self, old_token_id: str, new_date: str, new_time: str | None = None
@@ -2786,7 +2854,17 @@ class VachanamAgent(Agent):
         # pinned so barge-in can't discard the completed cancel (FIXLOG #361).
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB + calendar delete
-        return await self._do_cancel(token_id)
+        result = await self._do_cancel(token_id)
+        # F5: patient-initiated cancel — speak the ack deterministically.
+        # reason=="cancel" only: a manual-reschedule cancel must keep the LLM
+        # reply (it still has the NEW booking to announce).
+        if (
+            result.get("success")
+            and reason == "cancel"
+            and self._speak_deterministic_confirm(context, "cancelled")
+        ):
+            raise StopResponse()
+        return result
 
     def _clear_hold(self) -> None:
         """Forget the server-side hold so _cleanup_on_shutdown won't DECR a key

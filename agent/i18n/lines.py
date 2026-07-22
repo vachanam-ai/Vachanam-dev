@@ -49,6 +49,17 @@ class Lines:
     # Optional — languages without them keep the two-segment composition.
     inbound_intro: str = ""        # {clinic}
     inbound_intro_known: str = ""  # {clinic} {patient}
+    # F5 (plan Task 6.3, 2026-07-22): deterministic post-tool confirmation
+    # speech — played DIRECTLY on a successful booking/reschedule/cancel, no
+    # second LLM pass. Default "" → that language keeps the LLM-spoken path.
+    # Token doctors hear the TOKEN, appointment doctors hear DATE+TIME only
+    # (same rule the LLM instruction enforces); every line closes with the
+    # come-on-time ask (Vinay). ⚠ te first-pass here — validate on a real call.
+    confirm_booked_token: str = ""   # {token} {date}
+    confirm_booked_slot: str = ""    # {date} {time}
+    confirm_resched_slot: str = ""   # {date} {time}
+    confirm_resched_token: str = ""  # {token} {date}
+    confirm_cancelled: str = ""
 
 
 # Shared English brevity directive for non-Telugu languages (LLM instruction).
@@ -131,6 +142,25 @@ LINES: dict[str, Lines] = {
             "ఒకటి లేదా రెండు ముక్కల్లో ఉండాలి. డిస్క్లోజర్ మళ్ళీ చెప్పొద్దు. "
             "ఒకసారి ఒకే ఒక్క ప్రశ్న అడుగు."
         ),
+        # ⚠ first-pass — phrasing built from the validated reminder/greeting
+        # vocabulary; needs Vinay's real-call sign-off like every te line.
+        confirm_booked_token=(
+            "మీ బుకింగ్ {date} కి కన్ఫర్మ్ అయింది అండి. మీ టోకెన్ నంబర్ {token}. "
+            "దయచేసి సమయానికి రండి."
+        ),
+        confirm_booked_slot=(
+            "మీ అపాయింట్మెంట్ కన్ఫర్మ్ అయింది అండి — {date}, {time} కి. "
+            "దయచేసి సమయానికి రండి."
+        ),
+        confirm_resched_slot=(
+            "మీ అపాయింట్మెంట్ మార్చాము అండి — ఇప్పుడు {date}, {time} కి. "
+            "పాతది క్యాన్సిల్ అయింది. దయచేసి సమయానికి రండి."
+        ),
+        confirm_resched_token=(
+            "మీ అపాయింట్మెంట్ {date} కి మార్చాము అండి. కొత్త టోకెన్ నంబర్ {token}. "
+            "పాతది క్యాన్సిల్ అయింది. దయచేసి సమయానికి రండి."
+        ),
+        confirm_cancelled="మీ అపాయింట్మెంట్ క్యాన్సిల్ అయింది అండి.",
     ),
 
     # ── English (Indian) — for per-caller language mapping (2026-07-03) ──────
@@ -182,6 +212,22 @@ LINES: dict[str, Lines] = {
             "Hello, I'm the AI assistant from {clinic}. How can I help you, {patient}?"
         ),
         brevity=_BREVITY_EN,
+        confirm_booked_token=(
+            "Your booking for {date} is confirmed. Your token number is {token}. "
+            "Please come on time."
+        ),
+        confirm_booked_slot=(
+            "Your appointment is confirmed for {date} at {time}. Please come on time."
+        ),
+        confirm_resched_slot=(
+            "Your appointment is moved to {date} at {time}. The earlier one is "
+            "cancelled. Please come on time."
+        ),
+        confirm_resched_token=(
+            "Your appointment is moved to {date}. Your new token number is {token}. "
+            "The earlier one is cancelled. Please come on time."
+        ),
+        confirm_cancelled="Your appointment is cancelled.",
     ),
 
     # ── Hindi — first-pass ────────────────────────────────────────────────────
@@ -224,6 +270,23 @@ LINES: dict[str, Lines] = {
             "नमस्ते, मैं {clinic} की AI असिस्टेंट बोल रही हूँ। बताइए {patient} जी, क्या मदद करूँ?"
         ),
         brevity=_BREVITY_EN,
+        # ⚠ first-pass, same review flow as the other hi lines.
+        confirm_booked_token=(
+            "आपकी बुकिंग {date} के लिए कन्फ़र्म हो गई है। आपका टोकन नंबर {token} है। "
+            "कृपया समय पर आइए।"
+        ),
+        confirm_booked_slot=(
+            "आपका अपॉइंटमेंट {date} को {time} बजे कन्फ़र्म हो गया है। कृपया समय पर आइए।"
+        ),
+        confirm_resched_slot=(
+            "आपका अपॉइंटमेंट अब {date} को {time} बजे कर दिया गया है। पुराना कैंसिल हो "
+            "गया है। कृपया समय पर आइए।"
+        ),
+        confirm_resched_token=(
+            "आपका अपॉइंटमेंट {date} के लिए बदल दिया गया है। नया टोकन नंबर {token} है। "
+            "पुराना कैंसिल हो गया है। कृपया समय पर आइए।"
+        ),
+        confirm_cancelled="आपका अपॉइंटमेंट कैंसिल हो गया है।",
     ),
 
     # ── Tamil — FIRST-PASS ⚠ needs native validation ─────────────────────────
