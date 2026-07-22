@@ -1,4 +1,4 @@
-# PURE-SPEED sandbox worker (sandbox/speed-test/speed_agent.py) — identical
+# RAW-LATENCY sandbox worker (sandbox/raw-latency/raw_agent.py) — identical
 # base to Dockerfile.agent (same deps, same baked models, same non-root user)
 # so the measured floor is the PRODUCTION runtime, not a lighter one. Only the
 # CMD and the extra sandbox/ COPY differ.
@@ -35,4 +35,4 @@ ENV SARVAM_API_KEY=build \
 
 RUN python -m agent.livekit_minimal.agent download-files
 
-CMD ["python", "sandbox/speed-test/speed_agent.py", "start"]
+CMD ["python", "sandbox/raw-latency/raw_agent.py", "start"]
