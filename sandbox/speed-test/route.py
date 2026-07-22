@@ -1,14 +1,20 @@
-"""Flip the Sri Venkateshwara DID between prod and the speed-test agent.
+"""Flip inbound routing between prod and the speed-test agent.
 
-    python sandbox/speed-test/route.py            # show current rules
-    python sandbox/speed-test/route.py --speed    # +918046733493 -> vachanam-speed
-    python sandbox/speed-test/route.py --prod     # remove the override (back to prod)
+    python sandbox/speed-test/route.py            # show trunks + rules
+    python sandbox/speed-test/route.py --speed    # ALL DIDs -> vachanam-speed
+    python sandbox/speed-test/route.py --prod     # ALL DIDs -> vachanam-agent
 
-Mechanism: the shared catch-all rule (SDR_3fmWZSGdsGeo, all 3 numbers ->
-vachanam-agent) is NEVER touched. --speed creates a SECOND, number-specific
-rule for the Venkateshwara DID dispatching vachanam-speed; --prod deletes it.
-If LiveKit rejects the overlapping rule, this prints the error and changes
-nothing — fall back is a manual decision, never automatic.
+Simplest thing that actually works (after v2/v3/v4 all failed on
+precedence/field-support/auth-copy): there is ONE inbound trunk carrying all
+three DIDs and ONE catch-all dispatch rule. `inbound_numbers` on a rule filters
+by CALLER, not dialed number, and a rule's agent can't be updated in place —
+so we just DELETE the catch-all rule and RECREATE it pointing at the chosen
+agent. Same trunk, no auth copying, no trunk mutation.
+
+TRADE-OFF (accepted for a short active test window): --speed routes ALL three
+DIDs to the sandbox, not just Venkateshwara. The other two are the test line
++918000009999 and +918071387303 — low traffic. Flip back with --prod the
+moment the test call is done.
 """
 import asyncio
 import sys
@@ -19,13 +25,15 @@ from dotenv import load_dotenv
 load_dotenv(str(Path(__file__).resolve().parents[2] / ".env"))
 
 TRUNK = "ST_kcZDagvoGXMZ"
-NUMBER = "+918046733493"  # Sri Venkateshwara
-RULE_NAME = "speed-test-venkateshwara"
+RULE_NAME = "vobiz-inbound-dispatch"
+PROD_AGENT = "vachanam-agent"
 SPEED_AGENT = "vachanam-speed"
 
 
 async def main() -> None:
     from livekit import api
+    from livekit.protocol.agent_dispatch import RoomAgentDispatch
+    from livekit.protocol.room import RoomConfiguration
     from livekit.protocol.sip import (
         CreateSIPDispatchRuleRequest,
         DeleteSIPDispatchRuleRequest,
@@ -33,55 +41,44 @@ async def main() -> None:
         SIPDispatchRule,
         SIPDispatchRuleIndividual,
     )
-    from livekit.protocol.room import RoomAgentDispatch, RoomConfiguration
 
     lk = api.LiveKitAPI()
-    try:
-        rules = (await lk.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())).items
-        override = next((r for r in rules if r.name == RULE_NAME), None)
 
+    async def show() -> None:
+        for r in (await lk.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())).items:
+            agents = (
+                [a.agent_name for a in r.room_config.agents]
+                if r.HasField("room_config")
+                else []
+            )
+            print(f"RULE {r.sip_dispatch_rule_id} name={r.name!r} agents={agents}")
+
+    async def repoint(agent: str, prefix: str) -> None:
+        # delete every existing rule on this trunk, then create one catch-all
+        for r in (await lk.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())).items:
+            if TRUNK in r.trunk_ids:
+                await lk.sip.delete_sip_dispatch_rule(
+                    DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=r.sip_dispatch_rule_id)
+                )
+        await lk.sip.create_sip_dispatch_rule(CreateSIPDispatchRuleRequest(
+            name=RULE_NAME,
+            trunk_ids=[TRUNK],
+            rule=SIPDispatchRule(
+                dispatch_rule_individual=SIPDispatchRuleIndividual(room_prefix=prefix)
+            ),
+            room_config=RoomConfiguration(
+                agents=[RoomAgentDispatch(agent_name=agent)]
+            ),
+        ))
+
+    try:
         if "--speed" in sys.argv:
-            if override:
-                print(f"override already active: {override.sip_dispatch_rule_id}")
-                return
-            req = CreateSIPDispatchRuleRequest(
-                name=RULE_NAME,
-                trunk_ids=[TRUNK],
-                inbound_numbers=[NUMBER],
-                rule=SIPDispatchRule(
-                    dispatch_rule_individual=SIPDispatchRuleIndividual(
-                        room_prefix="speed-"
-                    )
-                ),
-                room_config=RoomConfiguration(
-                    agents=[RoomAgentDispatch(agent_name=SPEED_AGENT)]
-                ),
-            )
-            r = await lk.sip.create_sip_dispatch_rule(req)
-            print(f"SPEED ON: {NUMBER} -> {SPEED_AGENT} (rule {r.sip_dispatch_rule_id})")
-            print("Revert with: python sandbox/speed-test/route.py --prod")
+            await repoint(SPEED_AGENT, "speed-")
+            print(f"SPEED ON: all DIDs -> {SPEED_AGENT}")
         elif "--prod" in sys.argv:
-            if not override:
-                print("no override active — prod routing already in effect")
-                return
-            await lk.sip.delete_sip_dispatch_rule(
-                DeleteSIPDispatchRuleRequest(
-                    sip_dispatch_rule_id=override.sip_dispatch_rule_id
-                )
-            )
-            print(f"PROD RESTORED: override {override.sip_dispatch_rule_id} deleted")
-        else:
-            for r in rules:
-                agents = (
-                    [a.agent_name for a in r.room_config.agents]
-                    if r.HasField("room_config")
-                    else []
-                )
-                print(
-                    f"rule {r.sip_dispatch_rule_id} name={r.name!r} "
-                    f"trunks={list(r.trunk_ids)} numbers={list(r.inbound_numbers)} "
-                    f"agents={agents}"
-                )
+            await repoint(PROD_AGENT, "call-")
+            print(f"PROD RESTORED: all DIDs -> {PROD_AGENT}")
+        await show()
     finally:
         await lk.aclose()
 

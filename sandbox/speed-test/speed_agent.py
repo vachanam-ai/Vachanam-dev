@@ -20,7 +20,10 @@ import os
 import pathlib
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+
+from backchannel import pick_backchannel  # noqa: E402
 
 import livekit.rtc as rtc  # noqa: E402
 
@@ -66,6 +69,11 @@ from agent.livekit_minimal.turn_trace import (  # noqa: E402
 _FINALIZE_MS = int(os.getenv("SPEED_FINALIZE_MS", "120"))
 _MIN_ENDPOINT_S = float(os.getenv("SPEED_MIN_ENDPOINT_S", "0.05"))
 _MAX_ENDPOINT_S = float(os.getenv("SPEED_MAX_ENDPOINT_S", "0.1"))
+
+# LATENCY MASKING (Vinay 2026-07-22): play an instant ack on VAD speech-end to
+# hide the ~700-1000ms STT-final wall. Picker lives in backchannel.py (pure,
+# testable); the env gate lets Vinay toggle it via `fly secrets` without rebuild.
+_BACKCHANNEL = os.getenv("SPEED_BACKCHANNEL", "1") != "0"
 
 PROMPT = """You are the receptionist of Sri Venkateshwara clinic, Hyderabad.
 Speak Telugu only, in Telugu script. Very short natural replies — one or two
@@ -119,6 +127,7 @@ async def entrypoint(ctx: JobContext) -> None:
         emit=lambda s: print("\n>>> " + format_summary_line(s) + "\n", flush=True),
     )
     trace.set_context(language="te")
+    _bc = {"last": None}
 
     @session.on("user_state_changed")
     def _state(ev) -> None:
@@ -131,6 +140,10 @@ async def entrypoint(ctx: JobContext) -> None:
             finalizer.schedule(
                 lambda: getattr(session, "user_state", None) != "speaking"
             )
+            # mask the STT-final wait with an instant ack (see _BACKCHANNELS)
+            if _BACKCHANNEL and getattr(session, "agent_state", None) != "speaking":
+                _bc["last"] = pick_backchannel(_bc["last"])
+                session.say(_bc["last"], add_to_chat_ctx=False)
 
     ctx.add_shutdown_callback(lambda: finalizer.cancel())
 
