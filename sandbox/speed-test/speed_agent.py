@@ -1,29 +1,46 @@
-"""PURE-SPEED sandbox agent — raw conversation floor test (Vinay 2026-07-22).
+"""PURE-SPEED sandbox agent — aggressive minimal-latency build (Vinay 2026-07-22).
 
-The production pipeline minus EVERYTHING that isn't the pipeline: no DB, no
-Redis, no tools, no booking, no speech firewall, no sanitizers, no greeting
-machinery, no branch resolution. Same STT/LLM/TTS constructors as prod
-(Soniox level-1 te → Vertex Mumbai 2.5-flash thinking-off → smallest WS
-streaming), preemptive generation on, same endpointing. Receptionist persona
-with the REAL Sri Venkateshwara roster baked into a tiny prompt.
+Prod STT/LLM/TTS constructors, NO db/tools/guards/greeting, real Sri
+Venkateshwara roster. This build PUSHES every latency lever the review found
+and lets Vinay hear what breaks — the sandbox is the safe place for #399-risk
+settings. Every knob is an env var (change via `fly secrets set` + restart, no
+rebuild):
 
-Every turn prints its voice_turn_latency line straight to the terminal.
+  SPEED_OUTPUT_QUEUE_MS   default 50   LiveKit output buffer (prod hardcodes 200)
+  SPEED_FINALIZE_MS       default 120  Soniox manual finalize (prod 200; <200 = #399 risk)
+  SPEED_MIN_ENDPOINT_S    default 0.05
+  SPEED_MAX_ENDPOINT_S    default 0.1  (prod 0.3)
 
-Run (local mic/speakers — measures the pipeline floor without PSTN):
-    python sandbox/speed-test/speed_agent.py console
-
-Run against LiveKit Cloud (browser mic via Agents Playground):
-    python sandbox/speed-test/speed_agent.py dev
-
-NOT for production dispatch. No AGENT_NAME registration — it can never
-receive a clinic call.
+Emits the full voice_turn_latency ladder per turn. Registers as vachanam-speed;
+never a prod dispatch target unless route.py --speed points a DID here.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+
+import livekit.rtc as rtc  # noqa: E402
+
+# ── LEVER 1: shrink the hardcoded LiveKit output queue ──────────────────────
+# room_io/_output.py builds rtc.AudioSource(..., queue_size_ms=200) with no
+# config hook. It looks the class up as `rtc.AudioSource` at call time, so
+# replacing the attribute before session.start() forces a smaller buffer.
+_OUTPUT_QUEUE_MS = int(os.getenv("SPEED_OUTPUT_QUEUE_MS", "50"))
+_OrigAudioSource = rtc.AudioSource
+
+
+class _FastAudioSource(_OrigAudioSource):
+    def __init__(self, sample_rate, num_channels, *a, queue_size_ms=200, **kw):
+        super().__init__(
+            sample_rate, num_channels, *a,
+            queue_size_ms=min(queue_size_ms, _OUTPUT_QUEUE_MS), **kw
+        )
+
+
+rtc.AudioSource = _FastAudioSource
 
 from livekit.agents import (  # noqa: E402
     Agent,
@@ -41,13 +58,15 @@ from agent.livekit_minimal.agent import (  # noqa: E402
     _build_session_tts,
     _build_stt,
 )
-from backend.config import settings  # noqa: E402
 from agent.livekit_minimal.turn_trace import (  # noqa: E402
     TurnLatencyTrace,
     format_summary_line,
 )
 
-# Real roster (read-only prod query 2026-07-22). Edit freely — sandbox only.
+_FINALIZE_MS = int(os.getenv("SPEED_FINALIZE_MS", "120"))
+_MIN_ENDPOINT_S = float(os.getenv("SPEED_MIN_ENDPOINT_S", "0.05"))
+_MAX_ENDPOINT_S = float(os.getenv("SPEED_MAX_ENDPOINT_S", "0.1"))
+
 PROMPT = """You are the receptionist of Sri Venkateshwara clinic, Hyderabad.
 Speak Telugu only, in Telugu script. Very short natural replies — one or two
 spoken phrases, one question at a time, no lists, no formatting.
@@ -63,26 +82,36 @@ pretend bookings succeed instantly. Never mention you are a test."""
 GREETING = "నమస్కారం! శ్రీ వెంకటేశ్వర క్లినిక్. చెప్పండి, ఎలా సహాయం చేయగలను?"
 
 
+class _TracingAgent(Agent):
+    """Plain agent + a tts_node that stamps the first synthesized frame."""
+
+    def __init__(self, trace: TurnLatencyTrace) -> None:
+        super().__init__(instructions=PROMPT)
+        self._trace = trace
+
+    async def tts_node(self, text, model_settings):
+        first = True
+        async for frame in super().tts_node(text, model_settings):
+            if first:
+                self._trace.mark_tts_first_frame()
+                first = False
+            yield frame
+
+
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     lang_cfg = get_lang("te")
-
-    # PROD PARITY: the manual-finalize controller (#396) — forces Soniox to
-    # finalize after ~200ms of trailing silence instead of waiting for its slow
-    # server-side endpoint detection. This is the single biggest warm-turn lever
-    # the first sandbox build was MISSING (measured: transcription_delay ~600ms
-    # without it). Delay from the same env as prod (SONIOX_MANUAL_FINALIZE_DELAY_MS).
-    finalizer = _SonioxFinalizeController(settings.soniox_manual_finalize_delay_ms)
+    finalizer = _SonioxFinalizeController(_FINALIZE_MS)
 
     session = AgentSession(
         stt=_build_stt(lang_cfg, finalize_controller=finalizer),
         llm=_build_fallback_llm(),
         tts=_build_session_tts(lang_cfg.default_voice, lang_cfg.tts_code),
         vad=silero.VAD.load(),
-        turn_detection=None,  # te unsupported by MultilingualModel (prod parity)
+        turn_detection=None,
         preemptive_generation=True,
-        min_endpointing_delay=0.05,
-        max_endpointing_delay=0.3,
+        min_endpointing_delay=_MIN_ENDPOINT_S,
+        max_endpointing_delay=_MAX_ENDPOINT_S,
     )
 
     trace = TurnLatencyTrace(
@@ -92,25 +121,25 @@ async def entrypoint(ctx: JobContext) -> None:
     trace.set_context(language="te")
 
     @session.on("user_state_changed")
-    def _speech_end(ev) -> None:
+    def _state(ev) -> None:
         new = getattr(ev, "new_state", None)
         if new == "speaking":
             finalizer.cancel()
+            trace.mark_speech_start()
         elif getattr(ev, "old_state", None) == "speaking" and new == "listening":
             trace.mark_speech_end()
             finalizer.schedule(
                 lambda: getattr(session, "user_state", None) != "speaking"
             )
 
-    async def _finalizer_cleanup() -> None:
-        finalizer.cancel()
-
-    ctx.add_shutdown_callback(_finalizer_cleanup)
+    ctx.add_shutdown_callback(lambda: finalizer.cancel())
 
     @session.on("user_input_transcribed")
-    def _final(ev) -> None:
+    def _tx(ev) -> None:
         if getattr(ev, "is_final", False):
             trace.mark_final_transcript()
+        else:
+            trace.mark_interim()
 
     @session.on("agent_state_changed")
     def _playout(ev) -> None:
@@ -127,20 +156,18 @@ async def entrypoint(ctx: JobContext) -> None:
                 transcription_delay=getattr(m, "transcription_delay", None),
             )
         elif tn == "LLMMetrics":
-            trace.mark_llm_run(
-                getattr(m, "speech_id", "") or "", ttft=getattr(m, "ttft", 0.0)
-            )
+            trace.mark_llm_run(getattr(m, "speech_id", "") or "", ttft=getattr(m, "ttft", 0.0))
         elif tn == "TTSMetrics":
-            trace.mark_tts(
-                getattr(m, "speech_id", "") or "", ttfb=getattr(m, "ttfb", 0.0)
-            )
+            trace.mark_tts(getattr(m, "speech_id", "") or "", ttfb=getattr(m, "ttfb", 0.0))
 
-    agent = Agent(instructions=PROMPT)
-    await session.start(agent=agent, room=ctx.room)
+    print(
+        f"\n=== SPEED PROFILE: output_queue={_OUTPUT_QUEUE_MS}ms "
+        f"finalize={_FINALIZE_MS}ms endpoint={_MIN_ENDPOINT_S}/{_MAX_ENDPOINT_S}s ===\n",
+        flush=True,
+    )
+    await session.start(agent=_TracingAgent(trace), room=ctx.room)
     session.say(GREETING)
 
 
 if __name__ == "__main__":
-    # Dispatchable under its OWN name — the routing script points a single
-    # DID's dispatch rule here for a test window; prod stays on vachanam-agent.
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="vachanam-speed"))
