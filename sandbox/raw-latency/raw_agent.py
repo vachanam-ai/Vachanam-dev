@@ -160,11 +160,24 @@ def _build_tts(lang):
     provider = os.getenv("RAW_TTS", "soniox")
     if provider == "soniox":
         from livekit.plugins import soniox
-        return soniox.TTS(
+        kw = dict(
             model=os.getenv("RAW_SONIOX_TTS_MODEL", "tts-rt-v1"),
             voice=os.getenv("RAW_SONIOX_VOICE", "Priya"),  # Indian voice (or Meera)
             language=os.getenv("RAW_SONIOX_LANG", "te"),
+            # Pin TTS to the JP edge — the region our STT already uses (~4ms TCP
+            # connect from Fly bom vs ~230ms global). The default tts-rt.soniox.com
+            # baked ~200ms RTT into every chunk (measured TTFB ~620ms). Flip back
+            # via RAW_SONIOX_TTS_WS_URL if JP ever refuses the key.
+            websocket_url=os.getenv(
+                "RAW_SONIOX_TTS_WS_URL", "wss://tts-rt.jp.soniox.com/tts-websocket"
+            ),
         )
+        try:  # reuse the job's aiohttp session so the WS handshake skips TLS setup
+            from livekit.agents import utils
+            kw["http_session"] = utils.http_context.http_session()
+        except Exception:
+            pass
+        return soniox.TTS(**kw)
     if provider == "cartesia":
         from livekit.plugins import cartesia
         return cartesia.TTS(
@@ -189,14 +202,6 @@ async def entrypoint(ctx: JobContext) -> None:
     lang = get_lang("te")
     finalizer = _SonioxFinalizeController(_FINALIZE_MS)
     tts = _build_tts(lang)
-    # Prewarm the TTS connection so the FIRST real turn doesn't pay WS setup
-    # (measured Soniox cold-connection TTFB ~550ms vs smallest's pooled ~170ms).
-    if hasattr(tts, "prewarm"):
-        try:
-            tts.prewarm()
-            tl.mark("tts_prewarmed")
-        except Exception as exc:  # never let a warm-up abort the call
-            print(f"RAWLAT tts_prewarm_failed err={exc}", flush=True)
     session = AgentSession(
         stt=_build_stt(lang, finalize_controller=finalizer),
         llm=_build_fallback_llm(),
