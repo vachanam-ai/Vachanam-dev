@@ -1589,7 +1589,11 @@ class VachanamAgent(Agent):
                 yield chunk
 
         safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
+        _first = True
         async for frame in super().tts_node(_space_digits_stream(safe_text), model_settings):
+            if _first and _trace is not None:
+                _trace.mark_tts_first_frame()  # first synthesized audio frame
+                _first = False
             yield frame
 
     async def on_enter(self) -> None:
@@ -4271,6 +4275,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         def _trace_final_transcript(ev) -> None:
             if getattr(ev, "is_final", False):
                 _turn_trace.mark_final_transcript()
+            else:
+                # interim: tracks the caller's last recognizable sound so the
+                # VAD silence hangover (last word -> VAD end) is measurable.
+                _turn_trace.mark_interim()
 
         @session.on("agent_state_changed")
         def _trace_playout(ev) -> None:
@@ -4301,6 +4309,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             new_state = getattr(ev, 'new_state', None)
             if new_state == 'speaking':
                 _soniox_finalizer.cancel()
+                _turn_trace.mark_speech_start()
             elif old_state == 'speaking' and new_state == 'listening':
                 _turn_trace.mark_speech_end()
                 _soniox_finalizer.schedule(

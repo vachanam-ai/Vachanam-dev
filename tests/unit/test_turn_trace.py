@@ -190,6 +190,69 @@ def test_summary_carries_only_allowlisted_numeric_or_tag_fields(trace_and_out):
         assert "=" in token or token == "voice_turn_latency"
 
 
+def test_full_timeline_ladder_isolates_hangover_and_from_last_word(trace_and_out):
+    """Exact-timestamp ladder (Vinay 2026-07-22 'mark exact timestamps'):
+    speech_start + interim + tts-first-frame marks let us split the parts the
+    coarse trace hid — the VAD silence hangover (last sound -> VAD declares
+    done) and from_last_word (user's real last word -> first audio queued),
+    the internal figure closest to what the caller perceives. Whatever is left
+    between from_last_word and the caller's ear is pure telephony."""
+    tr, out, clock = trace_and_out
+    tr.mark_speech_start()          # t=100.0 user starts talking
+    clock.advance(0.1)
+    tr.mark_interim()               # first interim 100.1
+    clock.advance(0.8)
+    tr.mark_interim()               # last interim 100.9 (~user's last word)
+    clock.advance(0.3)              # VAD silence hangover
+    tr.mark_speech_end()            # 101.2 opens turn, pulls pending marks
+    clock.advance(0.2)
+    tr.mark_final_transcript()      # 101.4
+    tr.mark_turn_committed(eou_delay=0.5, transcription_delay=0.2)
+    tr.mark_llm_run("s1", ttft=0.5)
+    clock.advance(0.4)
+    tr.mark_tts_first_frame()       # 101.8 first synthesized audio frame
+    tr.mark_tts("s1", ttfb=0.3)
+    clock.advance(0.2)
+    tr.mark_playout_start()         # 102.0
+    tr.flush()
+    (s,) = out
+    assert s["speak_dur_ms"] == pytest.approx(1200, abs=1)
+    assert s["vad_hangover_ms"] == pytest.approx(300, abs=1)   # 101.2-100.9
+    assert s["tts_synth_ms"] == pytest.approx(400, abs=1)      # 101.8-101.4
+    assert s["playout_gap_ms"] == pytest.approx(200, abs=1)    # 102.0-101.8
+    assert s["from_last_word_ms"] == pytest.approx(1100, abs=1)  # 102.0-100.9
+
+
+def test_new_timeline_fields_are_null_when_marks_absent(trace_and_out):
+    """Backward compat: a turn opened the old way (no speech_start/interim/
+    tts_first) still emits, with the new fields null — never a fake zero."""
+    tr, out, clock = trace_and_out
+    _run_full_turn(tr, clock)  # helper does NOT call the new marks
+    tr.flush()
+    (s,) = out
+    for f in ("speak_dur_ms", "vad_hangover_ms", "tts_synth_ms",
+              "playout_gap_ms", "from_last_word_ms"):
+        assert s[f] is None
+
+
+def test_speech_start_resets_pending_interims(trace_and_out):
+    """A new utterance's speech_start must clear the previous pending interims
+    so a stale last-interim can't inflate the next turn's hangover."""
+    tr, out, clock = trace_and_out
+    tr.mark_interim()               # stray interim from noise
+    clock.advance(5.0)
+    tr.mark_speech_start()          # real utterance begins -> reset
+    clock.advance(0.1)
+    tr.mark_interim()               # 105.1 real last word
+    clock.advance(0.2)
+    tr.mark_speech_end()
+    clock.advance(0.3)
+    tr.mark_playout_start()
+    tr.flush()
+    (s,) = out
+    assert s["vad_hangover_ms"] == pytest.approx(200, abs=1)  # not 5000+
+
+
 def test_five_scripted_turns_produce_five_coherent_lines(trace_and_out):
     tr, out, clock = trace_and_out
     for _ in range(5):

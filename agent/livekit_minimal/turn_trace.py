@@ -27,6 +27,9 @@ SUMMARY_ALLOWED_KEYS = frozenset({
     "total_ms", "stt_finalize_ms", "commit_ms", "eou_delay_ms",
     "transcription_delay_ms", "llm_ttft_ms", "llm_runs", "safety_buffer_ms",
     "tts_ttfb_ms", "tool", "tool_ms", "unaccounted_ms",
+    # exact-timestamp ladder (2026-07-22): split the parts total_ms hid
+    "speak_dur_ms", "vad_hangover_ms", "tts_synth_ms", "playout_gap_ms",
+    "from_last_word_ms",
 })
 
 
@@ -49,6 +52,12 @@ class TurnLatencyTrace:
         self._turn: dict | None = None
         self._speech_ids: set[str] = set()
         self._stale_ids: set[str] = set()
+        # Pending marks for the utterance IN PROGRESS. speech_start + interims
+        # fire BEFORE mark_speech_end opens the turn, so they're buffered here
+        # and pulled in when the turn opens.
+        self._pending_speech_start: float | None = None
+        self._pending_first_interim: float | None = None
+        self._pending_last_interim: float | None = None
 
     # ── context tags (set once per call / language handoff) ─────────────────
     def set_context(self, language: str | None = None,
@@ -62,10 +71,38 @@ class TurnLatencyTrace:
             self._ctx["cache_hit"] = cache_hit
 
     # ── marks ───────────────────────────────────────────────────────────────
+    def mark_speech_start(self) -> None:
+        """VAD user_state -> speaking. Resets pending interims so a stray
+        pre-utterance interim can't inflate the next turn's hangover."""
+        self._pending_speech_start = self._clock()
+        self._pending_first_interim = None
+        self._pending_last_interim = None
+
+    def mark_interim(self) -> None:
+        """Any interim (non-final) transcript — tracks when the caller last
+        made recognizable sound. last_interim ~= their real last word."""
+        now = self._clock()
+        if self._pending_first_interim is None:
+            self._pending_first_interim = now
+        self._pending_last_interim = now
+
     def mark_speech_end(self) -> None:
         self.flush()
         self._speech_ids = set()
-        self._turn = {"t_speech_end": self._clock(), "llm_runs": 0}
+        self._turn = {
+            "t_speech_end": self._clock(),
+            "llm_runs": 0,
+            "t_speech_start": self._pending_speech_start,
+            "t_first_interim": self._pending_first_interim,
+            "t_last_interim": self._pending_last_interim,
+        }
+        self._pending_speech_start = None
+        self._pending_first_interim = None
+        self._pending_last_interim = None
+
+    def mark_tts_first_frame(self) -> None:
+        if self._turn is not None and "t_tts_first" not in self._turn:
+            self._turn["t_tts_first"] = self._clock()
 
     def mark_final_transcript(self) -> None:
         if self._turn is None:
@@ -157,6 +194,14 @@ class TurnLatencyTrace:
             "unaccounted_ms": None if total is None
             else round(total - known, 1),
         }
+        # exact-timestamp ladder: isolate the parts total_ms structurally hides
+        summary["speak_dur_ms"] = _ms(t.get("t_speech_start"), t["t_speech_end"])
+        summary["vad_hangover_ms"] = _ms(t.get("t_last_interim"), t["t_speech_end"])
+        summary["tts_synth_ms"] = _ms(t.get("t_final_transcript"), t.get("t_tts_first"))
+        summary["playout_gap_ms"] = _ms(t.get("t_tts_first"), t["t_playout"])
+        # the internal figure closest to perceived latency: caller's real last
+        # word -> first audio queued. Residual to their ear = pure telephony.
+        summary["from_last_word_ms"] = _ms(t.get("t_last_interim"), t["t_playout"])
         if "tool" in t:
             summary["tool"] = t["tool"]
             if "tool_s" in t:
