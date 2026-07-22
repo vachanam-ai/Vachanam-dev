@@ -72,9 +72,12 @@ PROMPT = (
 )
 GREETING = "నమస్కారం! చెప్పండి."
 
-# Sentence enders (Telugu danda + ASCII) — synthesize each sentence the moment
-# its boundary arrives so TTS audio starts while the LLM is still generating.
+# Sentence enders (Telugu danda + ASCII). Sentence-segmentation was needed for
+# smallest.ai (its WS buffered the whole reply); Soniox TTS streams natively
+# from the first words, so segmentation is OFF by default and only turned on
+# (RAW_TTS_SEGMENT=1) for a buffering provider.
 _ENDERS = "।.?!…\n"
+_SEGMENT = os.getenv("RAW_TTS_SEGMENT", "0") == "1"
 
 
 class _TLAgent(Agent):
@@ -104,11 +107,23 @@ class _TLAgent(Agent):
         self._tl.mark("llm_node_done")
 
     async def tts_node(self, text, model_settings):
-        # STREAMING FIX: the smallest.ai WS plugin buffers the whole LLM output
-        # before byte one. Segment the token stream into sentences here and hand
-        # each complete sentence to the default node immediately — so first audio
-        # lands after sentence 1, not after the entire reply.
+        # Native-streaming TTS (Soniox/Cartesia): pass the token stream straight
+        # through — the provider emits audio from the first words. Only for a
+        # buffering provider (smallest) do we segment into sentences (below).
         self._tl.mark("tts_node_in")
+        if not _SEGMENT:
+            first = True
+            async for frame in super().tts_node(text, model_settings):
+                if first:
+                    self._tl.mark("tts_node_first_frame")
+                    first = False
+                yield frame
+            self._tl.mark("tts_node_done")
+            return
+
+        # STREAMING FIX for a buffering provider: segment the token stream into
+        # sentences and hand each complete sentence to the default node
+        # immediately — first audio after sentence 1, not after the whole reply.
         state = {"first": True}
 
         async def _say(sentence: str):
@@ -137,11 +152,19 @@ class _TLAgent(Agent):
 
 
 def _build_tts(lang):
-    """TTS provider A/B (Vinay 2026-07-23: 'cartesia way better than smallest').
-    RAW_TTS=cartesia (default) rides Cartesia Sonic — native token streaming,
-    sub-90ms TTFB, Telugu supported. RAW_TTS=smallest keeps the prod path for a
-    same-pipeline comparison. Reads CARTESIA_API_KEY from env (Fly secret)."""
-    provider = os.getenv("RAW_TTS", "cartesia")
+    """TTS provider A/B. RAW_TTS=soniox (default, Vinay 2026-07-23 'way better
+    sounding') — Soniox TTS tts-rt-v1: native WS token streaming (audio from the
+    first words), Telugu supported, ~$0.70/hr (~smallest cost), SAME vendor+key
+    as our STT. cartesia = Sonic (rejected on 5-7x cost, kept for A/B). smallest
+    = prod path. soniox/cartesia read their key from env (SONIOX/CARTESIA_API_KEY)."""
+    provider = os.getenv("RAW_TTS", "soniox")
+    if provider == "soniox":
+        from livekit.plugins import soniox
+        return soniox.TTS(
+            model=os.getenv("RAW_SONIOX_TTS_MODEL", "tts-rt-v1-preview"),
+            voice=os.getenv("RAW_SONIOX_VOICE", "Maya"),
+            language=os.getenv("RAW_SONIOX_LANG", "te"),
+        )
     if provider == "cartesia":
         from livekit.plugins import cartesia
         return cartesia.TTS(
