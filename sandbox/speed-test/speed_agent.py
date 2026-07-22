@@ -23,7 +23,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
-from backchannel import pick_backchannel  # noqa: E402
+from backchannel import BACKCHANNELS, pick_backchannel  # noqa: E402
 
 import livekit.rtc as rtc  # noqa: E402
 
@@ -106,21 +106,39 @@ class _TracingAgent(Agent):
             yield frame
 
 
+async def _prime_backchannels(tts) -> dict[str, list]:
+    """Synthesize every ack ONCE at startup and keep the audio frames. Live
+    synthesis costs ~300-400ms TTFB — the exact wait we're masking — so a
+    filler synthesized on demand is inaudible before the real reply preempts
+    it. Cached frames replay in <50ms, land the ack ~200ms after speech-end."""
+    cache: dict[str, list] = {}
+    for text in BACKCHANNELS:
+        frames: list = []
+        async for ev in tts.synthesize(text):
+            frames.append(ev.frame)
+        cache[text] = frames
+        print(f"=== primed backchannel '{text}' frames={len(frames)} ===", flush=True)
+    return cache
+
+
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     lang_cfg = get_lang("te")
     finalizer = _SonioxFinalizeController(_FINALIZE_MS)
+    tts = _build_session_tts(lang_cfg.default_voice, lang_cfg.tts_code)
 
     session = AgentSession(
         stt=_build_stt(lang_cfg, finalize_controller=finalizer),
         llm=_build_fallback_llm(),
-        tts=_build_session_tts(lang_cfg.default_voice, lang_cfg.tts_code),
+        tts=tts,
         vad=silero.VAD.load(),
         turn_detection=None,
         preemptive_generation=True,
         min_endpointing_delay=_MIN_ENDPOINT_S,
         max_endpointing_delay=_MAX_ENDPOINT_S,
     )
+
+    bc_cache = await _prime_backchannels(tts) if _BACKCHANNEL else {}
 
     trace = TurnLatencyTrace(
         ctx.room.name,
@@ -140,12 +158,22 @@ async def entrypoint(ctx: JobContext) -> None:
             finalizer.schedule(
                 lambda: getattr(session, "user_state", None) != "speaking"
             )
-            # mask the STT-final wait with an instant ack (see _BACKCHANNELS)
-            if _BACKCHANNEL and getattr(session, "agent_state", None) != "speaking":
+            # mask the STT-final wait: replay a pre-cached ack instantly
+            if bc_cache and getattr(session, "agent_state", None) != "speaking":
                 _bc["last"] = pick_backchannel(_bc["last"])
-                session.say(_bc["last"], add_to_chat_ctx=False)
+                frames = bc_cache[_bc["last"]]
 
-    ctx.add_shutdown_callback(lambda: finalizer.cancel())
+                async def _replay(fs=frames):
+                    for f in fs:
+                        yield f
+
+                session.say(_bc["last"], audio=_replay(), add_to_chat_ctx=False)
+                print(f">>> backchannel_played text={_bc['last']}", flush=True)
+
+    async def _on_shutdown() -> None:
+        finalizer.cancel()
+
+    ctx.add_shutdown_callback(_on_shutdown)
 
     @session.on("user_input_transcribed")
     def _tx(ev) -> None:
