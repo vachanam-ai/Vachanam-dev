@@ -36,10 +36,12 @@ from livekit.plugins import silero  # noqa: E402
 
 from agent.i18n import get_lang  # noqa: E402
 from agent.livekit_minimal.agent import (  # noqa: E402
+    _SonioxFinalizeController,
     _build_fallback_llm,
     _build_session_tts,
     _build_stt,
 )
+from backend.config import settings  # noqa: E402
 from agent.livekit_minimal.turn_trace import (  # noqa: E402
     TurnLatencyTrace,
     format_summary_line,
@@ -65,8 +67,15 @@ async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     lang_cfg = get_lang("te")
 
+    # PROD PARITY: the manual-finalize controller (#396) — forces Soniox to
+    # finalize after ~200ms of trailing silence instead of waiting for its slow
+    # server-side endpoint detection. This is the single biggest warm-turn lever
+    # the first sandbox build was MISSING (measured: transcription_delay ~600ms
+    # without it). Delay from the same env as prod (SONIOX_MANUAL_FINALIZE_DELAY_MS).
+    finalizer = _SonioxFinalizeController(settings.soniox_manual_finalize_delay_ms)
+
     session = AgentSession(
-        stt=_build_stt(lang_cfg),
+        stt=_build_stt(lang_cfg, finalize_controller=finalizer),
         llm=_build_fallback_llm(),
         tts=_build_session_tts(lang_cfg.default_voice, lang_cfg.tts_code),
         vad=silero.VAD.load(),
@@ -84,10 +93,19 @@ async def entrypoint(ctx: JobContext) -> None:
 
     @session.on("user_state_changed")
     def _speech_end(ev) -> None:
-        if getattr(ev, "old_state", None) == "speaking" and (
-            getattr(ev, "new_state", None) == "listening"
-        ):
+        new = getattr(ev, "new_state", None)
+        if new == "speaking":
+            finalizer.cancel()
+        elif getattr(ev, "old_state", None) == "speaking" and new == "listening":
             trace.mark_speech_end()
+            finalizer.schedule(
+                lambda: getattr(session, "user_state", None) != "speaking"
+            )
+
+    async def _finalizer_cleanup() -> None:
+        finalizer.cancel()
+
+    ctx.add_shutdown_callback(_finalizer_cleanup)
 
     @session.on("user_input_transcribed")
     def _final(ev) -> None:
