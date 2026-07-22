@@ -161,8 +161,8 @@ def _build_tts(lang):
     if provider == "soniox":
         from livekit.plugins import soniox
         return soniox.TTS(
-            model=os.getenv("RAW_SONIOX_TTS_MODEL", "tts-rt-v1-preview"),
-            voice=os.getenv("RAW_SONIOX_VOICE", "Maya"),
+            model=os.getenv("RAW_SONIOX_TTS_MODEL", "tts-rt-v1"),
+            voice=os.getenv("RAW_SONIOX_VOICE", "Priya"),  # Indian voice (or Meera)
             language=os.getenv("RAW_SONIOX_LANG", "te"),
         )
     if provider == "cartesia":
@@ -188,10 +188,19 @@ async def entrypoint(ctx: JobContext) -> None:
 
     lang = get_lang("te")
     finalizer = _SonioxFinalizeController(_FINALIZE_MS)
+    tts = _build_tts(lang)
+    # Prewarm the TTS connection so the FIRST real turn doesn't pay WS setup
+    # (measured Soniox cold-connection TTFB ~550ms vs smallest's pooled ~170ms).
+    if hasattr(tts, "prewarm"):
+        try:
+            tts.prewarm()
+            tl.mark("tts_prewarmed")
+        except Exception as exc:  # never let a warm-up abort the call
+            print(f"RAWLAT tts_prewarm_failed err={exc}", flush=True)
     session = AgentSession(
         stt=_build_stt(lang, finalize_controller=finalizer),
         llm=_build_fallback_llm(),
-        tts=_build_tts(lang),
+        tts=tts,
         vad=silero.VAD.load(),
         turn_detection=None,
         preemptive_generation=True,
