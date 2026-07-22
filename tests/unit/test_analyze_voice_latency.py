@@ -50,6 +50,21 @@ def test_unaccounted_over_100ms_p50_prints_pause_warning():
     assert "instrumentation incomplete" in text.lower()
 
 
+def test_turn_lines_mirrored_to_redis_durably():
+    """Fly's log buffer rotates within minutes — real calls' turn lines were
+    LOST before they could be read (2026-07-22, Vinay's test calls). Every
+    summary line must also ride Redis (same #432 durability pattern) so the
+    Phase-2 corpus survives. Best-effort: Redis failure can't touch the call."""
+    src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
+    emit = src.split("def _emit_turn_summary")[1][:1200]
+    assert "rpush" in emit and "lat:turns" in emit
+    assert "expire" in emit
+    assert "except Exception" in emit  # telemetry must never touch the call
+    # analyzer can read that list back
+    ascript = Path("scripts/analyze_voice_latency.py").read_text(encoding="utf-8")
+    assert "--redis" in ascript and "lat:turns" in ascript
+
+
 def test_agent_wiring_source_guards():
     src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
     # trace created per session, emitted through the logger, flushed at shutdown

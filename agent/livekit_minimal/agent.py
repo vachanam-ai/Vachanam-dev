@@ -4241,10 +4241,27 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # Phase 1 (plan 2026-07-21, Task 1.1): ONE correlated summary line per
         # caller turn ("voice_turn_latency ...") so the perceived gap is
         # attributable instead of guessed. Pure logging — no behaviour change.
-        _turn_trace = TurnLatencyTrace(
-            ctx.room.name,
-            emit=lambda s: logger.info(format_summary_line(s)),
-        )
+        def _emit_turn_summary(s: dict) -> None:
+            line = format_summary_line(s)
+            logger.info(line)
+            # Fly's log buffer rotates within minutes — real calls' turn lines
+            # were LOST before they could be read (2026-07-22). Mirror every
+            # line to Redis (#432 durability pattern) so the Phase-2 corpus
+            # survives. Best-effort: telemetry must never touch the call.
+
+            async def _stash() -> None:
+                try:
+                    from backend.redis_client import get_redis
+
+                    _r = await get_redis()
+                    await _r.rpush("lat:turns", line)
+                    await _r.expire("lat:turns", 7 * 86400)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            asyncio.create_task(_stash())
+
+        _turn_trace = TurnLatencyTrace(ctx.room.name, emit=_emit_turn_summary)
         _turn_trace.set_context(
             language=lang_code, cache_hit=_cached_llm is not None
         )

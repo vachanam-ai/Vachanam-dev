@@ -91,13 +91,33 @@ def render_report(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+def _redis_lines() -> list[str]:
+    """Read the durable mirror (agent RPUSHes every summary to `lat:turns`,
+    7-day expiry) — survives Fly's minutes-long log rotation."""
+    import asyncio
+
+    async def _fetch() -> list[str]:
+        from backend.redis_client import get_redis
+
+        r = await get_redis()
+        return [
+            x if isinstance(x, str) else x.decode()
+            for x in await r.lrange("lat:turns", 0, -1)
+        ]
+
+    return asyncio.run(_fetch())
+
+
 def main() -> None:
-    paths = sys.argv[1:] or ["-"]
+    args = sys.argv[1:]
     rows: list[dict] = []
-    for p in paths:
-        fh = sys.stdin if p == "-" else open(p, encoding="utf-8", errors="replace")
-        with fh if p != "-" else fh:
-            rows.extend(r for r in (parse_line(ln) for ln in fh) if r)
+    if args and args[0] == "--redis":
+        rows = [r for r in (parse_line(ln) for ln in _redis_lines()) if r]
+    else:
+        for p in args or ["-"]:
+            fh = sys.stdin if p == "-" else open(p, encoding="utf-8", errors="replace")
+            with fh if p != "-" else fh:
+                rows.extend(r for r in (parse_line(ln) for ln in fh) if r)
     print(render_report(rows))
 
 
