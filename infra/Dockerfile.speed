@@ -15,6 +15,9 @@ COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir \
       -r /app/agent/livekit_minimal/requirements.txt \
       -r /app/backend/requirements.txt
+# Cartesia TTS A/B (sandbox only). Pin to the 1.6.6 livekit family — version
+# skew across livekit plugins is what caused the #441 pool death.
+RUN pip install --no-cache-dir "livekit-plugins-cartesia==1.6.6"
 
 COPY agent/ /app/agent/
 COPY backend/ /app/backend/

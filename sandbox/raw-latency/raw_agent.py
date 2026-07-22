@@ -136,6 +136,22 @@ class _TLAgent(Agent):
         self._tl.mark("tts_node_done")
 
 
+def _build_tts(lang):
+    """TTS provider A/B (Vinay 2026-07-23: 'cartesia way better than smallest').
+    RAW_TTS=cartesia (default) rides Cartesia Sonic — native token streaming,
+    sub-90ms TTFB, Telugu supported. RAW_TTS=smallest keeps the prod path for a
+    same-pipeline comparison. Reads CARTESIA_API_KEY from env (Fly secret)."""
+    provider = os.getenv("RAW_TTS", "cartesia")
+    if provider == "cartesia":
+        from livekit.plugins import cartesia
+        return cartesia.TTS(
+            model=os.getenv("RAW_CARTESIA_MODEL", "sonic-3"),
+            voice=os.getenv("RAW_CARTESIA_VOICE", "f786b574-daa5-4673-aa0c-cbe3e8534c02"),
+            language=os.getenv("RAW_CARTESIA_LANG", "te"),
+        )
+    return _build_session_tts(lang.default_voice, lang.tts_code)
+
+
 async def entrypoint(ctx: JobContext) -> None:
     await ctx.connect()
     buf: list[str] = []
@@ -152,7 +168,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session = AgentSession(
         stt=_build_stt(lang, finalize_controller=finalizer),
         llm=_build_fallback_llm(),
-        tts=_build_session_tts(lang.default_voice, lang.tts_code),
+        tts=_build_tts(lang),
         vad=silero.VAD.load(),
         turn_detection=None,
         preemptive_generation=True,
@@ -218,7 +234,8 @@ async def entrypoint(ctx: JobContext) -> None:
     ctx.add_shutdown_callback(_flush)
 
     print(
-        f"=== RAW PROFILE: output_queue={_OUTPUT_QUEUE_MS}ms finalize={_FINALIZE_MS}ms "
+        f"=== RAW PROFILE: tts={os.getenv('RAW_TTS', 'cartesia')} "
+        f"output_queue={_OUTPUT_QUEUE_MS}ms finalize={_FINALIZE_MS}ms "
         f"endpoint={_MIN_ENDPOINT_S}/{_MAX_ENDPOINT_S}s ===",
         flush=True,
     )
