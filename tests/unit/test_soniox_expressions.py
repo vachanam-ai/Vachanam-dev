@@ -34,9 +34,23 @@ def test_digit_bracket_not_stripped():
 def test_strip_handles_arbitrary_open_set_tags():
     # the set is OPEN — the strip must remove ANY emotion tag, not a fixed list,
     # so a novel/lowercase tag never leaks to the smallest fallback (RULE 6).
-    assert ag._strip_expression_tags("[Giggles] హహ") == "హహ"
-    assert ag._strip_expression_tags("[angry] ఇది తప్పు") == "ఇది తప్పు"
+    assert ag._strip_expression_tags("[giggles] హహ") == "హహ"
+    assert ag._strip_expression_tags("[angrily] ఇది తప్పు") == "ఇది తప్పు"
     assert ag._strip_expression_tags("[Concerned] అయ్యో") == "అయ్యో"
+
+
+def test_strip_handles_full_soniox_vocabulary():
+    """Vinay 2026-07-24: the real Soniox expression vocabulary is lowercase,
+    sometimes multi-word ([takes a deep breath], [long pause], [clears throat]).
+    Every form must strip clean on the smallest fallback."""
+    for tag in ("[laughs]", "[whispers]", "[softly]", "[happily]", "[excitedly]",
+                "[sighs]", "[takes a deep breath]", "[long pause]",
+                "[clears throat]", "[hesitates]", "[pause]"):
+        assert ag._strip_expression_tags(f"{tag} నమస్కారం") == "నమస్కారం", tag
+    # mid-sentence too
+    assert ag._strip_expression_tags("సరే [pause] చూస్తాను") == "సరే చూస్తాను"
+    # "..." hesitation is TEXT, not a tag — must pass through untouched
+    assert ag._strip_expression_tags("అది... చూడాలి") == "అది... చూడాలి"
 
 
 def test_both_smallest_paths_strip_tags():
@@ -56,10 +70,14 @@ def test_soniox_path_keeps_tags():
 
 def test_prompt_teaches_expressions_open_set_and_keeps_digit_rule():
     p = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
-    # gives concrete examples…
-    for tag in ("[Happy]", "[Excited]", "[Whisper]", "[Giggles]"):
+    # teaches the REAL Soniox vocabulary (lowercase, incl multi-word forms)…
+    for tag in ("[happily]", "[excitedly]", "[whispers]", "[sighs]",
+                "[takes a deep breath]", "[long pause]"):
         assert tag in p, tag
-    # …but explicitly OPEN, not a closed list (Vinay: don't limit)
+    # …explicitly OPEN (Vinay: don't limit), pushed toward human-ness,
+    # with the taste guard (never laugh at pain).
     assert "NOT limited" in p
+    assert "SOUND HUMAN" in p
+    assert "pain or bad news" in p
     # the load-bearing "write digits, not native number words" rule must survive
     assert "DIGITS" in p
