@@ -21,8 +21,9 @@ unless marked otherwise. External items are blocking — the software cannot do 
   `j6cancelpatient2026`; analytics + rebook framing split.
 - [x] **Doctor calendar-id change** (TD-023) — moves the recurring hours event to the
   new calendar instead of 404-ing.
-- [x] **Recording hard-off in production** — `recording_allowed` is false in prod
-  regardless of the flag (DPDP / no-voice-recording).
+- [x] **Recording fail-closed** — default off; temporary testing can record only
+  exact `ADMIN_PHONE` calls after a spoken notice. Every other call explicitly
+  passes `record=False` (see `docs/runbooks/TEMP_RECORDING.md`).
 - [x] **Dockerfiles non-root** (TD-014); **CSP** `frame-ancestors` + `upgrade-insecure-requests`.
 - [x] Round-4/5 bounty fixes (token calendar, DID fallout, OTP fail-closed, JWT 8h,
   call ceiling, single-default-doctor, staff password strength, etc.).
@@ -74,7 +75,8 @@ unless marked otherwise. External items are blocking — the software cannot do 
 - [ ] `alembic upgrade head` on the prod DB (head = `j6cancelpatient2026`).
 - [ ] Fly Mumbai: open **UDP 5060** (SIP) + **10000-60000** (RTP).
 - [ ] DNS/TLS: vachanam.in → frontend, `api.` → Render; MX for hello@vachanam.in.
-- [ ] `APP_ENV=production` (disables /docs, /dev/test, OTP echo, recording).
+- [ ] `APP_ENV=production` (disables /docs, /dev/test, and OTP echo; recording is
+  independently off by default and admin-only when temporarily enabled).
 - [ ] Strong rotated `JWT_SECRET`; `FRONTEND_URL` = prod origin (CORS).
 - [ ] UptimeRobot → `GET /health`.
 
@@ -84,7 +86,8 @@ unless marked otherwise. External items are blocking — the software cannot do 
   event appears (slot doctor) → booking shows in the receptionist queue.
 - [ ] One real subscription: pay via Razorpay → webhook flips org to `active` + a
   `BillingCycle` row appears.
-- [ ] Confirm `recording_allowed` is false in prod (it is, by code — just verify env).
+- [ ] Before a paying-clinic soak, confirm `RECORDING_ENABLED=false`; during the
+  temporary test window, verify only `ADMIN_PHONE` calls appear in Agent Insights.
 
 ---
 

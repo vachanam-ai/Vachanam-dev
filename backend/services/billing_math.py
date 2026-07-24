@@ -166,7 +166,7 @@ def _gst_on(amount: float) -> float:
     return 0.0 if GST_WAIVED else round(amount * GST_RATE, 2)
 
 # Vachanam's own VARIABLE cost floor (CLAUDE.md, 2026-06 repricing): per voice
-# minute (Vobiz + Sarvam STT + smallest.ai TTS + Gemini + LiveKit) + DID rent.
+# minute (Vobiz + speech services + Gemini + LiveKit) + DID rent.
 # NOTE: this is VARIABLE only — it excludes fixed overhead (servers, salaries,
 # misc), which is amortised across total minutes and dominates at low volume.
 VARIABLE_COST_PER_MIN = 2.0

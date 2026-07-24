@@ -13,6 +13,38 @@ Format per session:
 
 ---
 
+## 2026-07-24 — Temporary admin recording and Soniox-only TTS
+
+Added a temporary production test recorder with an exact `ADMIN_PHONE`
+allowlist. The recording flag cannot affect ordinary patient calls: all other
+sessions explicitly pass `record=False`. Recorded test calls play a localized
+notice as the first segment and wait for that opening to finish before capture;
+if notice playback fails, the call continues unrecorded. Capture is LiveKit
+Agent Insights audio only—transcripts, traces, and logs are disabled—and the
+existing consent ledger records the recording notice.
+
+Removed Smallest as a TTS provider rather than leaving it as a hidden fallback.
+Live replies, greetings, cached fillers, blocked-call speech, language handoffs,
+and the voice picker now use Soniox only. Deleted the provider switch, Smallest
+SDK/plugin dependencies, REST/WS adapters, catalog service, welcome generator,
+and obsolete tests/scripts. Existing non-Soniox voice IDs safely resolve to the
+Soniox default until the clinic selects Priya, Meera, Arjun, or Rohan.
+
+Operational details and the off-switch are in
+`docs/runbooks/TEMP_RECORDING.md`. Focused regression proof: 164 checks. Full
+unit proof: 754 checks green (753 in the full pass plus the one corrected
+prompt-cache guard rerun).
+
+## 2026-07-24 — Soniox long-pause coverage for slow tools
+
+Changed the existing deterministic slow-tool filler from a bare “Okay” to a
+short language-specific hold cue ending in Soniox `[long pause]`. The cached
+clip begins immediately and plays concurrently with availability, booking
+lookup, booking, rescheduling, and cancellation work. Quick tools stay quiet;
+the 12-second cooldown still prevents repetitive “one moment” lines across a
+single booking flow. The prompt now explains expression placement and reserves
+the routine slow-tool pause for the runtime so the model cannot double-speak it.
+
 ## 2026-07-24 — Voice prompt, Soniox controls, and time-aware booking truth
 
 Replaced the open-ended expression and forced-filler instructions with a

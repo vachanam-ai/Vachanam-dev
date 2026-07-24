@@ -22,9 +22,15 @@ from backend.services.audit_service import audit
 logger = structlog.get_logger()
 router = APIRouter()
 
-# TTS voices come from the smallest.ai catalog (GET /branches/{id}/voices) +
-# no static list. A clinic's chosen voice_id lives in
-# branches.tts_voice (NULL → the language's default smallest voice).
+# Soniox is the sole TTS provider. A clinic's chosen catalog voice lives in
+# branches.tts_voice; legacy values resolve to the configured Soniox default.
+SONIOX_VOICES = (
+    {"voice_id": "Priya", "display_name": "Priya", "gender": "female"},
+    {"voice_id": "Meera", "display_name": "Meera", "gender": "female"},
+    {"voice_id": "Arjun", "display_name": "Arjun", "gender": "male"},
+    {"voice_id": "Rohan", "display_name": "Rohan", "gender": "male"},
+)
+SONIOX_VOICE_IDS = {voice["voice_id"] for voice in SONIOX_VOICES}
 
 # Voice-agent languages a clinic can pick (single source of truth: agent.i18n).
 from agent.i18n import LANGUAGES as _LANGUAGES  # noqa: E402
@@ -79,7 +85,7 @@ class BranchSettings(BaseModel):
     address: str | None = None
     city: str | None = None
     clinic_phone: str | None = None
-    tts_voice: str | None = None   # smallest.ai voice_id; NULL → language default
+    tts_voice: str | None = None   # Soniox catalog voice; NULL/legacy → default
     language: str = "te"
     did_number: str | None
     emergency_contact: str | None
@@ -137,14 +143,6 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
     )
 
 
-import re as _re
-
-# A smallest.ai voice_id (catalog like "padmaja"): letters,
-# digits, _ and -, 1-64 chars. The picker only offers catalog ids; this is
-# just a sanity guard (the full catalog is dynamic, so we don't whitelist names).
-_VOICE_ID_RE = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-
-
 # Standard Indian-clinic FAQ template (web-researched 2026-07-03: consultation
 # fee, timings/Sunday, payment modes, free-followup window, location/parking,
 # insurance, reports, what to bring, home visits, services). Clinics fill the
@@ -181,7 +179,7 @@ class FaqUpdate(BaseModel):
 
 
 class VoiceUpdate(BaseModel):
-    tts_voice: str | None = None   # smallest voice_id (omit to change language only)
+    tts_voice: str | None = None   # Soniox catalog voice (omit to change language only)
     language: str | None = None    # optional: also set the clinic's spoken language
 
 
@@ -221,8 +219,11 @@ async def update_branch_voice(
     await assert_branch_access(current_user, branch_id, db)
     if current_user.role not in ("org_admin",):
         raise HTTPException(status_code=403, detail="Only the clinic owner can change the voice")
-    if body.tts_voice is not None and not _VOICE_ID_RE.match(body.tts_voice):
-        raise HTTPException(status_code=422, detail="Invalid voice id")
+    if body.tts_voice is not None and body.tts_voice not in SONIOX_VOICE_IDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Voice must be one of {sorted(SONIOX_VOICE_IDS)}",
+        )
     if body.language is not None and body.language not in ALLOWED_LANGUAGES:
         raise HTTPException(status_code=422, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
     if body.tts_voice is None and body.language is None:
@@ -263,11 +264,7 @@ async def list_branch_voices(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Voice catalog for the Settings picker, filtered to the clinic's language
-    (or an explicit ?language=). Includes which voice is current. Provider-aware
-    (2026-07-24): with TTS_PROVIDER=soniox the picker offers the Soniox
-    Indian-accent voices — the ones the agent actually speaks with — instead of
-    the smallest catalog whose picks would be silently ignored."""
+    """Soniox voice catalog for the Settings picker."""
     await assert_branch_access(current_user, branch_id, db)
     branch = (
         await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
@@ -276,32 +273,14 @@ async def list_branch_voices(
         raise HTTPException(status_code=404, detail="Branch not found")
     lang = (language or getattr(branch, "language", None) or "te").lower()
 
-    from backend.config import settings as _settings
-
-    if _settings.tts_provider == "soniox" and _settings.soniox_api_key:
-        # Every Soniox voice speaks all supported languages, so no language
-        return {
-            "language": lang,
-            "current": getattr(branch, "tts_voice", None),
-            "voices": [
-                {"voice_id": "Priya", "display_name": "Priya", "gender": "female", "languages": [lang]},
-                {"voice_id": "Meera", "display_name": "Meera", "gender": "female", "languages": [lang]},
-                {"voice_id": "Arjun", "display_name": "Arjun", "gender": "male", "languages": [lang]},
-                {"voice_id": "Rohan", "display_name": "Rohan", "gender": "male", "languages": [lang]},
-            ],
-        }
-
-    from backend.services import smallest_voice
-
-    try:
-        catalog = smallest_voice.list_voices(lang)
-    except smallest_voice.VoiceServiceError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
+    current = getattr(branch, "tts_voice", None)
+    if current not in SONIOX_VOICE_IDS:
+        from backend.config import settings as _settings
+        current = _settings.soniox_tts_default_voice
     return {
         "language": lang,
-        "current": getattr(branch, "tts_voice", None),
-        "voices": catalog,
+        "current": current,
+        "voices": [{**voice, "languages": [lang]} for voice in SONIOX_VOICES],
     }
 
 

@@ -151,7 +151,7 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     lp = await client.patch(
         f"/branches/{bid}/voice",
         headers=_auth(owner),
-        json={"tts_voice": "padmaja", "language": "ta"},
+        json={"tts_voice": "Meera", "language": "ta"},
     )
     assert lp.status_code == 200, lp.text
     assert lp.json()["language"] == "ta"
@@ -159,7 +159,7 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     bad = await client.patch(
         f"/branches/{bid}/voice",
         headers=_auth(owner),
-        json={"tts_voice": "padmaja", "language": "zz"},
+        json={"tts_voice": "Meera", "language": "zz"},
     )
     assert bad.status_code == 422
 
@@ -190,20 +190,11 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     from backend.services.telephony import branch_outbound_trunk_id
     assert branch_outbound_trunk_id(row) == "ST_madhapur"
 
-    # Voice picker (cloning REMOVED 2026-07-24): the smallest path returns the
-    # plain catalog for the language.
-    with patch("backend.services.smallest_voice.list_voices", return_value=[{"voice_id": "padmaja", "display_name": "Padmaja"}]),          patch.object(settings, "tts_provider", "smallest"):
-        vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
-        assert vs.status_code == 200, vs.text
-        assert [v["voice_id"] for v in vs.json()["voices"]] == ["padmaja"]
-
-    # Soniox provider path (2026-07-24): the picker offers the 4 Indian-accent
-    # Soniox voices the agent actually speaks with; smallest catalog untouched.
-    with patch.object(settings, "tts_provider", "soniox"), \
-         patch.object(settings, "soniox_api_key", "k-test"):
-        vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
-        ids = [v["voice_id"] for v in vs.json()["voices"]]
-        assert ids == ["Priya", "Meera", "Arjun", "Rohan"]
+    # Soniox is the sole TTS provider; the picker exposes only its catalog.
+    vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
+    assert vs.status_code == 200, vs.text
+    ids = [v["voice_id"] for v in vs.json()["voices"]]
+    assert ids == ["Priya", "Meera", "Arjun", "Rohan"]
 
     # ── 2. The agent's inbound DID->branch resolution finds THIS branch only ──
     did_norm = normalize_did(DID)

@@ -4,48 +4,11 @@ directive + Telugu-heavy history) and the Telugu text went through the
 ENGLISH TTS pipeline, producing garbled foreign-sounding audio ("suddenly
 started speaking Bengali").
 
-Two layers:
-1. Prompt: the mirror directive is gone; an ABSOLUTE same-language output
-   rule is present in every language's prompt.
-2. Synth boundary: _detect_script_lang overrides the TTS language param to
-   match the text's dominant Indic script (RULE 8 — wrong-accent speech
-   beats alien garble). Latin text never overrides (te calls are code-mixed).
+The prompt removes language mirroring and applies an ABSOLUTE same-language
+output rule. Soniox is multilingual, so the deleted provider-specific script
+override is no longer part of the synthesis boundary.
 """
 from __future__ import annotations
-
-from agent.livekit_minimal.agent import _detect_script_lang
-
-
-# ---------------------------------------------------------------- script guard
-
-def test_latin_text_keeps_configured_language():
-    assert _detect_script_lang("I can speak English. How can I help?", "en") == "en"
-
-
-def test_telugu_text_on_english_call_detected_as_te():
-    # The exact live-call failure: Telugu apology emitted post-switch.
-    assert _detect_script_lang(
-        "అయ్యో, టెక్నికల్ సమస్య వల్ల మీ అపాయింట్‌మెంట్ వివరాలు కనిపించట్లేదండి.", "en"
-    ) == "te"
-
-
-def test_code_mixed_telugu_with_english_loanwords_stays_te():
-    # Normal te-call output: Telugu script + Latin loanwords — te must win.
-    assert _detect_script_lang("మీ appointment టైమ్ 4:30 కి confirm అయింది", "te") == "te"
-
-
-def test_bengali_script_detected_as_bn():
-    assert _detect_script_lang("আপনার অ্যাপয়েন্টমেন্ট নিশ্চিত", "te") == "bn"
-
-
-def test_devanagari_respects_marathi_session():
-    assert _detect_script_lang("आपली अपॉइंटमेंट नक्की झाली", "mr") == "mr"
-    assert _detect_script_lang("आपकी अपॉइंटमेंट पक्की हो गई", "te") == "hi"
-
-
-def test_empty_text_never_crashes():
-    assert _detect_script_lang("", "te") == "te"
-
 
 # ---------------------------------------------------------------- prompt rules
 

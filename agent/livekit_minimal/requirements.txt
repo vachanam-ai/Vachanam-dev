@@ -16,8 +16,6 @@ livekit-api>=1.1.1
 # when SONIOX_API_KEY is unset — see _build_stt in agent.py.
 livekit-plugins-soniox==1.6.6
 livekit-plugins-sarvam==1.6.6
-# TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
-livekit-plugins-smallestai==1.6.6
 livekit-plugins-google==1.6.6
 livekit-plugins-silero==1.6.6
 livekit-plugins-noise-cancellation>=0.2.5

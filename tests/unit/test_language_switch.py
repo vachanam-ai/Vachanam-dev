@@ -12,7 +12,7 @@ def test_english_is_a_supported_language():
     assert "en" in LANGUAGES
     cfg = get_lang("en")
     assert cfg.stt_code == "en-IN"       # Sarvam Saaras
-    assert cfg.tts_code == "en"          # smallest.ai short code
+    assert cfg.tts_code == "en"          # Soniox language code
     lines = get_lines("en")
     # Every spoken line the call paths use must exist in English.
     for field in (

@@ -190,13 +190,18 @@ async def test_only_latest_code_valid_older_rejected(monkeypatch, redis):
 
 
 def test_recording_hard_off_in_production():
-    """No-voice-recording: production never records even if the flag is on."""
-    prod = Settings(app_env="production", recording_enabled=True)
-    assert prod.recording_allowed is False
-    dev = Settings(app_env="development", recording_enabled=True)
-    assert dev.recording_allowed is True
-    off = Settings(app_env="development", recording_enabled=False)
-    assert off.recording_allowed is False
+    """Temporary test recording can never broaden beyond ADMIN_PHONE."""
+    prod = Settings(
+        app_env="production", recording_enabled=True, admin_phone="+91 98765 43210"
+    )
+    assert prod.recording_allowed is True
+    assert prod.recording_allowed_for("9876543210") is True
+    assert prod.recording_allowed_for("+919000000000") is False
+    assert Settings(
+        app_env="production", recording_enabled=True, admin_phone=""
+    ).recording_allowed is False
+    off = Settings(recording_enabled=False, admin_phone="9876543210")
+    assert off.recording_allowed_for("9876543210") is False
 
 
 def test_confirmed_at_is_timezone_aware():

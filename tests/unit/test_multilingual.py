@@ -33,13 +33,12 @@ def test_registry_covers_mvp_languages():
 
 
 def test_stt_tts_codes_correct():
-    # STT = Sarvam Saaras (*-IN). TTS = smallest.ai (short codes). Each language
-    # also has a default smallest voice.
+    # STT = Sarvam Saaras (*-IN). Soniox TTS uses short language codes.
     assert get_lang("te").stt_code == "te-IN"
-    assert get_lang("te").tts_code == "te"          # smallest short code
+    assert get_lang("te").tts_code == "te"
+    assert get_lang("te").default_voice == "Priya"
     assert get_lang("bn").stt_code == "bn-IN"
-    assert get_lang("te").default_voice == "sravani"  # #405, Vinay 2026-07-18
-    assert get_lang("hi").default_voice == "niharika"
+    assert get_lang("hi").default_voice == "Priya"
 
 
 # "EN" left this list 2026-07-03 — English became a real language (per-caller

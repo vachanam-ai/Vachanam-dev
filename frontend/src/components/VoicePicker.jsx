@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 // Landing-page showcase: the SAME AI agent greeting, spoken in each supported
-// language. Samples are real smallest.ai audio (the clinic's default voice per
-// language), generated into /public/voices/lang/<code>.wav.
+// language. Static samples live in /public/voices/lang/<code>.wav.
 export const LANGUAGES = [
   { code: "te", native: "తెలుగు", english: "Telugu" },
   { code: "hi", native: "हिन्दी", english: "Hindi" },

@@ -59,7 +59,10 @@ def test_eligibility_and_agent_ride_source_guard():
     on the AGENT (llm=...), never on the session — a language-switch handoff
     (new agent, no llm override) then inherits the plain session LLM."""
     src = inspect.getsource(agent_mod)
-    assert "_cache_eligible = not caller_prompt_extra and not extra_tail" in src
+    cache_guard = src.split("_cache_eligible =", 1)[1].split("_cache_key", 1)[0]
+    assert "not caller_prompt_extra" in cache_guard
+    assert "not extra_tail" in cache_guard
+    assert "not _recording_active" in cache_guard
     assert "llm=_cached_llm," in src
     # background bake happens only on an eligible miss
     assert "_create_prompt_cache(" in src

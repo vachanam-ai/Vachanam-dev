@@ -23,12 +23,11 @@ def test_t1_streaming_stt_preemptive_generation_done():
 
 
 def test_t2_partial_llm_tokens_stream_to_tts_done():
-    """#2: native-streaming TTS — first audio mid-generation. Soniox tts-rt streams
-    tokens natively; the smallest WS primary streams too."""
+    """#2: Soniox native streaming emits audio before the full reply finishes."""
     from livekit.plugins import soniox
 
     assert soniox.TTS(api_key="k", voice="Priya", language="te").capabilities.streaming
-    assert "class _StreamingSmallestTTS" in SRC
+    assert "def _build_soniox_tts" in SRC
 
 
 def test_t3_prompt_prefix_cache_done_via_vertex_417():

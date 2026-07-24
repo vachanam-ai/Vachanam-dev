@@ -15,35 +15,28 @@ class LangConfig:
     native_name: str   # endonym, shown in the Settings dropdown
     script: str        # script name, used in the system prompt directive
     stt_code: str      # Sarvam Saaras language= (STT)
-    tts_code: str      # smallest.ai Waves `language` (TTS) — short code, same as `code`
-    default_voice: str  # smallest.ai voice_id when the clinic hasn't chosen one
+    tts_code: str      # Soniox TTS language code — same as internal `code`
+    default_voice: str  # Soniox catalog voice when the clinic hasn't chosen one
 
     @property
     def tts_lang(self) -> str:
-        """smallest.ai TTS language code. smallest uses the same short codes as
-        our internal keys (te/hi/ta/kn/ml/mr/bn), so this is just `code`."""
+        """Soniox TTS language code."""
         return self.tts_code
 
 
-# TTS = smallest.ai Waves Lightning v3.1. Language codes match smallest's short
-# codes exactly (verified against GET /lightning-v3.1/get_voices, 2026-06-15).
-# Default voices picked from the live catalog: te = `sravani` (pro catalog,
-# Vinay 2026-07-18 — heard on smallest's playground; supersedes the 2026-07-08
-# padmaja pick; pro voices need model lightning_v3.1_pro — welcome_synth.
-# model_for_voice maps it). `padmaja` still covers the rest of the Dravidian
-# pool (ta/kn/ml); `niharika` covers hi/mr/bn. STT stays Sarvam Saaras
-# (the *-IN codes). Telugu first (reference/default).
+# Soniox tts-rt is multilingual; Priya is the default across languages. Clinics
+# can choose any of the four catalog voices through Settings.
 LANGUAGES: dict[str, LangConfig] = {
-    "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "sravani"),
-    # Indian English (Saaras en-IN / smallest "en") — added 2026-07-03 for the
+    "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "Priya"),
+    # Indian English (Saaras en-IN) — added 2026-07-03 for the
     # per-caller language mapping ("can you speak English?").
-    "en": LangConfig("en", "English", "English", "Latin", "en-IN", "en", "niharika"),
-    "hi": LangConfig("hi", "Hindi", "हिन्दी", "Devanagari", "hi-IN", "hi", "niharika"),
-    "ta": LangConfig("ta", "Tamil", "தமிழ்", "Tamil", "ta-IN", "ta", "padmaja"),
-    "kn": LangConfig("kn", "Kannada", "ಕನ್ನಡ", "Kannada", "kn-IN", "kn", "padmaja"),
-    "ml": LangConfig("ml", "Malayalam", "മലയാളം", "Malayalam", "ml-IN", "ml", "padmaja"),
-    "mr": LangConfig("mr", "Marathi", "मराठी", "Devanagari", "mr-IN", "mr", "niharika"),
-    "bn": LangConfig("bn", "Bengali", "বাংলা", "Bengali", "bn-IN", "bn", "niharika"),
+    "en": LangConfig("en", "English", "English", "Latin", "en-IN", "en", "Priya"),
+    "hi": LangConfig("hi", "Hindi", "हिन्दी", "Devanagari", "hi-IN", "hi", "Priya"),
+    "ta": LangConfig("ta", "Tamil", "தமிழ்", "Tamil", "ta-IN", "ta", "Priya"),
+    "kn": LangConfig("kn", "Kannada", "ಕನ್ನಡ", "Kannada", "kn-IN", "kn", "Priya"),
+    "ml": LangConfig("ml", "Malayalam", "മലയാളം", "Malayalam", "ml-IN", "ml", "Priya"),
+    "mr": LangConfig("mr", "Marathi", "मराठी", "Devanagari", "mr-IN", "mr", "Priya"),
+    "bn": LangConfig("bn", "Bengali", "বাংলা", "Bengali", "bn-IN", "bn", "Priya"),
 }
 
 DEFAULT_LANG = "te"

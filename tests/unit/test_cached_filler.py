@@ -74,6 +74,24 @@ async def test_cache_filler_clips_populates_userdata(monkeypatch):
     assert all(c["pcm"] and c["sr"] and c["ch"] for c in clips)
 
 
+async def test_soniox_filler_cache_preserves_long_pause(monkeypatch):
+    line = "ఒక్క నిమిషం అండి... చూస్తున్నాను. [long pause]"
+    ud = {"wait_fillers": [line], "wait_clips": []}
+    sess = _FakeSession(ud)
+    captured = []
+
+    async def _fake_synth(texts, voice_id, lang_code):
+        captured.extend(texts)
+        return [_make_wav() for _ in texts]
+
+    monkeypatch.setattr(ag, "synth_wavs", _fake_synth)
+    await ag.cache_filler_clips(
+        sess, ud["wait_fillers"], "Priya", "te", key="wait_clips"
+    )
+
+    assert captured == [line]
+
+
 def test_say_lookup_filler_uses_cached_audio_when_present():
     pcm, sr, ch = ag._wav_to_pcm(_make_wav())
     ud = {"fillers": ["x"], "filler_clips": [{"text": "okay అండి", "pcm": pcm, "sr": sr, "ch": ch}]}

@@ -231,7 +231,7 @@ export default function Settings() {
     }
   };
 
-  // smallest.ai voice catalog for the clinic's language (drives the picker).
+  // Soniox voice catalog for the clinic's language (drives the picker).
   const voices = useQuery({
     queryKey: ["branch-voices", branchId, data?.language],
     queryFn: () => getBranchVoices(branchId, data?.language),

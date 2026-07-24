@@ -56,12 +56,8 @@ from livekit.agents import (  # noqa: E402
 )
 from livekit.agents import llm as lk_llm  # noqa: E402
 from livekit.agents import stt as lk_stt  # noqa: E402
-from livekit.agents import tts as lk_tts  # noqa: E402
 from livekit.agents.llm import ChatContext  # noqa: E402
-from livekit.agents import utils as _lk_utils  # noqa: E402
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS as _DEFAULT_CONN  # noqa: E402
-from livekit.plugins import google, noise_cancellation, sarvam, silero, smallestai, soniox  # noqa: E402
-from livekit.plugins.smallestai.tts import SynthesizeStream as _SmallestSynthStream  # noqa: E402
+from livekit.plugins import google, noise_cancellation, sarvam, silero, soniox  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
 import redis.asyncio as aioredis  # noqa: E402
@@ -71,6 +67,7 @@ from agent.i18n import (  # noqa: E402
     LANGUAGES,
     get_lang,
     get_lines,
+    get_recording_notice,
     get_switch_ack,
 )
 from agent.i18n.languages import DEFAULT_LANG  # noqa: E402
@@ -202,9 +199,10 @@ async def cache_filler_clips(
     `key` selects the bucket: "filler_clips" = short acks ("ఓకే,"),
     "wait_clips" = the "ఒక్క నిమిషం అండి" waits used only for slow tools."""
     try:
-        wavs = await synth_wavs(list(texts), voice_id, lang_code)
+        clip_texts = list(texts)
+        wavs = await synth_wavs(clip_texts, voice_id, lang_code)
         clips = []
-        for text, wav in zip(texts, wavs):
+        for text, wav in zip(clip_texts, wavs):
             pcm, sr, ch = _wav_to_pcm(wav)
             clips.append({"text": text, "pcm": pcm, "sr": sr, "ch": ch})
         ud = getattr(session, "userdata", None)
@@ -455,8 +453,7 @@ async def _space_digits_stream(text):
 
 
 # Soniox expression control tokens. Keep a closed, production-tested vocabulary:
-# unknown stage directions are stripped before either TTS can read them aloud.
-# Smallest.ai does not support the controls, so its fallback strips every tag.
+# unknown stage directions are stripped before TTS can read them aloud.
 _EXPR_TAG = re.compile(r"\[[A-Za-z][A-Za-z0-9 /_-]*\]\s*")
 SONIOX_EXPRESSION_TAGS = frozenset({
     "[laughs]", "[giggles]", "[chuckles]", "[whispers]", "[softly]",
@@ -466,10 +463,6 @@ SONIOX_EXPRESSION_TAGS = frozenset({
     "[thinking]", "[hesitates]", "[pause]", "[long pause]",
     "[clears throat]", "[coughs]", "[yawns]", "[sobs]", "[sniffs]",
 })
-
-
-def _strip_expression_tags(text: str) -> str:
-    return _EXPR_TAG.sub("", text or "")
 
 
 def _filter_soniox_expression_tags(text: str) -> str:
@@ -919,181 +912,6 @@ async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
 
 
 
-# Unicode block → smallest.ai language code. Guards the synth boundary: if the
-# LLM drifts and emits text in a script that doesn't match the session's TTS
-# language (live call 2026-07-05: Telugu reply after an English switch), smallest
-# reads the script under the wrong language model and the caller hears garbled
-# "wrong-language" audio. Speaking the DETECTED script's language is always the
-# lesser evil (RULE 8). Latin text carries no signal (te calls are code-mixed) —
-# keep the configured language.
-_SCRIPT_LANGS = (
-    ((0x0C00, 0x0C7F), "te"),
-    ((0x0900, 0x097F), "hi"),   # Devanagari — hi unless the call is already mr
-    ((0x0B80, 0x0BFF), "ta"),
-    ((0x0C80, 0x0CFF), "kn"),
-    ((0x0D00, 0x0D7F), "ml"),
-    ((0x0980, 0x09FF), "bn"),
-    ((0x0B00, 0x0B7F), "or"),
-)
-
-
-def _detect_script_lang(text: str, configured: str) -> str:
-    """Language whose script dominates `text`, else `configured`."""
-    counts: dict[str, int] = {}
-    for ch in text:
-        cp = ord(ch)
-        for (lo, hi), lang in _SCRIPT_LANGS:
-            if lo <= cp <= hi:
-                counts[lang] = counts.get(lang, 0) + 1
-                break
-    if not counts:
-        return configured
-    best = max(counts, key=counts.get)  # type: ignore[arg-type]
-    if best == "hi" and configured == "mr":
-        return "mr"  # Devanagari is shared; trust the session's choice
-    return best
-
-
-class _RawRestChunked(lk_tts.ChunkedStream):
-    """Synthesize ONE utterance via the RAW smallest.ai REST /tts (WAV) and emit it
-    as PCM frames — the exact path the welcome clip uses (reliable + correct speed).
-    The plugin's own WS path Connection-errors on Fly, and its HTTP ChunkedStream
-    played the audio at the wrong SPEED ('5x', 2026-06-25)."""
-
-    def __init__(self, *, tts, input_text, conn_options) -> None:
-        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
-        self._mytts = tts
-
-    async def _run(self, output_emitter) -> None:
-        import io
-        import wave
-
-        from backend.services.welcome_synth import synth_wav
-
-        opts = self._mytts._opts
-        # Script guard (FIXLOG #270): text in a different script than the session
-        # language must be synthesized AS its own language or it comes out as
-        # garbled foreign-sounding audio. ponytail: voice_id stays the session's
-        # voice — swapping to the matching-language clinic voice per utterance
-        # needs _voice_for_lang plumbing; add if accent complaints appear.
-        lang = _detect_script_lang(self._input_text, opts.language)
-        if lang != opts.language:
-            logger.warning(
-                "tts_script_lang_mismatch configured=%s detected=%s", opts.language, lang
-            )
-        # speed 1.0: Vinay 2026-07-06 — normal speed (1.1 sounded rushed on
-        # phone). Bump back up only if it sounds too slow.
-        wav = await asyncio.to_thread(
-            synth_wav, self._input_text, opts.voice_id, lang, 1.0
-        )
-        wf = wave.open(io.BytesIO(wav), "rb")
-        sr = wf.getframerate()
-        ch = wf.getnchannels()
-        n = wf.getnframes()
-        # Loudness: smallest voices differ ~13 dB (padmaja vs anitha, measured
-        # 2026-07-05, Vinay "voice is low") — normalize every utterance so any
-        # catalog voice lands at consistent phone volume.
-        from agent.livekit_minimal.greeting import normalize_pcm
-        pcm = normalize_pcm(wf.readframes(n))
-        wf.close()
-        output_emitter.initialize(
-            request_id=_lk_utils.shortuuid(),
-            sample_rate=sr,
-            num_channels=ch,
-            mime_type="audio/pcm",
-        )
-        output_emitter.push(pcm)
-        output_emitter.flush()
-
-
-class _HttpSmallestTTS(smallestai.TTS):
-    """Session TTS over the RAW REST /tts path (_RawRestChunked). streaming=False
-    so AgentSession synthesizes per sentence; reuses smallestai.TTS only for its
-    _opts/voice config. Since #405 this is the RULE 8 FALLBACK — the exact
-    pre-#405 behavior — behind the WS-streaming primary."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self._capabilities = lk_tts.TTSCapabilities(streaming=False)
-
-    def synthesize(self, text, *, conn_options=_DEFAULT_CONN):
-        # smallest fallback can't voice Soniox expression tags — strip them (RULE 6).
-        return _RawRestChunked(
-            tts=self, input_text=_strip_expression_tags(text), conn_options=conn_options
-        )
-
-
-class _AgcEmitterProxy:
-    """Streaming loudness normalization (#405). The REST path peak-normalized
-    each WHOLE clip (greeting.normalize_pcm — smallest voices differ ~13 dB);
-    a streaming chunk arrives before the clip's true peak is known, so track
-    the RUNNING peak and apply the same capped gain per chunk. Gain only ever
-    DECREASES as louder audio arrives — no mid-word upward volume jumps."""
-
-    _TARGET = 0.89 * 32767.0  # same constants as normalize_pcm
-    _MAX_GAIN = 6.0
-
-    def __init__(self, emitter) -> None:
-        self._emitter = emitter
-        self._peak = 1.0
-
-    def __getattr__(self, name):
-        return getattr(self._emitter, name)
-
-    def push(self, data: bytes) -> None:
-        import numpy as np
-
-        a = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-        if a.size:
-            self._peak = max(self._peak, float(np.abs(a).max()))
-            gain = min(self._TARGET / self._peak, self._MAX_GAIN)
-            if gain > 1.02:
-                data = np.clip(a * gain, -32768, 32767).astype(np.int16).tobytes()
-        self._emitter.push(data)
-
-
-class _GuardedSmallestStream(_SmallestSynthStream):
-    """Plugin WS synth stream + the #270 script guard: an utterance whose
-    script differs from the session language is synthesized AS its own
-    language (post-switch drift sounded like garbled 'Bengali')."""
-
-    async def _run_ws(self, text: str, output_emitter) -> None:
-        text = _strip_expression_tags(text)  # smallest can't voice Soniox tags (RULE 6)
-        base = (
-            self._opts.language.language
-            if hasattr(self._opts.language, "language")
-            else str(self._opts.language)
-        )
-        lang = _detect_script_lang(text, base)
-        if lang != base:
-            logger.warning(
-                "tts_script_lang_mismatch configured=%s detected=%s", base, lang
-            )
-            self._opts.language = lang  # per-stream copy — session opts untouched
-        await super()._run_ws(text, _AgcEmitterProxy(output_emitter))
-
-
-class _StreamingSmallestTTS(smallestai.TTS):
-    """#405 session TTS primary: smallest.ai WS streaming. Measured (2026-07-18,
-    same Telugu sentence): first audio 0.18-0.21s vs 1.09-1.26s on the raw REST
-    path — REST waits for the WHOLE clip server-side before byte one. The
-    2026-06-25 objections that forced REST are both gone: WS returns raw PCM at
-    the requested sample_rate (the 5x-speed bug was WAV-header-as-PCM on the
-    HTTP path), and the plugin's connection POOL + prewarm cover the Fly cold
-    connect. Always wrapped with _HttpSmallestTTS in a FallbackAdapter (RULE 8)."""
-
-    def stream(self, *, conn_options=_DEFAULT_CONN):
-        return _GuardedSmallestStream(tts=self, conn_options=conn_options)
-
-    def synthesize(self, text, *, conn_options=_DEFAULT_CONN):
-        # One-shot synth (warm probes etc.) rides the proven REST path — the
-        # plugin's own ChunkedStream would hit HTTP /tts declaring "pcm" and
-        # replay the 2026-06-25 WAV-header-as-PCM 5x-speed bug.
-        return _RawRestChunked(
-            tts=self, input_text=_strip_expression_tags(text), conn_options=conn_options
-        )
-
-
 # Soniox Indian-accent voices + resolver live in greeting.py (single source —
 # the greeting/filler synth needs the same resolution and agent→greeting is the
 # import direction that exists already).
@@ -1103,33 +921,10 @@ from agent.livekit_minimal.greeting import (  # noqa: E402
 )
 
 
-def _smallest_tts_instances(voice_id: str, tts_lang: str) -> list:
-    """The pre-2026-07-24 smallest.ai chain: WS-streaming primary + raw-REST
-    fallback. Pro-catalog voices (sravani) ride lightning_v3.1_pro; standard
-    voices stay on settings.smallest_model. Reused as the Soniox RULE-8 fallback."""
-    from backend.services.welcome_synth import model_for_voice
-
-    common = dict(
-        api_key=settings.smallest_api_key,
-        model=model_for_voice(voice_id),
-        voice_id=voice_id,
-        language=tts_lang,
-        sample_rate=settings.smallest_sample_rate,
-    )
-    return [
-        _StreamingSmallestTTS(output_format="pcm", **common),
-        # WAV, not pcm: the HTTP /tts endpoint returns a WAV container even
-        # when asked for pcm (2026-06-25) — the decoder reads the header.
-        _HttpSmallestTTS(output_format="wav", **common),
-    ]
-
-
 def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
     """Soniox tts-rt streaming TTS — native token streaming (audio from the first
-    words), same vendor/key as our STT. No cloning: a non-catalog stored id (a
-    smallest voice) falls to the default catalog voice; the smallest fallback
-    keeps the real id so it stays valid. #8 prewarms the WS so the cold connect
-    is off the caller's first turn."""
+    words), same vendor/key as our STT. Legacy non-catalog stored voice IDs fall
+    to the Soniox default. #8 prewarms the WS off the caller's first turn."""
     voice = _resolve_soniox_voice(voice_id)
     kw = dict(
         model=settings.soniox_tts_model,
@@ -1164,34 +959,20 @@ def _soniox_prewarm_matches(warm, voice_id: str, tts_lang: str) -> bool:
 
 def _build_session_tts(
     voice_id: str, tts_lang: str, prewarmed_soniox=None
-) -> lk_tts.FallbackAdapter:
-    """TTS for one voice/language pair. TTS_PROVIDER=soniox (default 2026-07-24,
-    Vinay — better voice, native streaming) makes Soniox tts-rt the streaming
-    primary with the smallest.ai chain as the RULE-8 fallback (Soniox down →
-    smallest, the line never dies). TTS_PROVIDER=smallest is the instant rollback
-    path (no deploy). A missing Soniox key also falls to smallest-only.
-    prewarmed_soniox (#8): the per-worker warm Soniox TTS, reused when its
-    (voice, language) match this call."""
-    smallest = _smallest_tts_instances(voice_id, tts_lang)
-    if settings.tts_provider == "soniox" and settings.soniox_api_key:
-        primary = (
-            prewarmed_soniox
-            if _soniox_prewarm_matches(prewarmed_soniox, voice_id, tts_lang)
-            else _build_soniox_tts(voice_id, tts_lang)
-        )
-        # #8: fire the background WS connect NOW (audit 2026-07-24: the plugin's
-        # prewarm() needs a RUNNING loop — in the sync worker prewarm it hit
-        # RuntimeError and silently did nothing, so the first turn still paid the
-        # cold connect). Here we're inside the async entrypoint: the connect runs
-        # concurrent with the rest of call setup and is warm by the first turn.
-        try:
-            primary.prewarm()
-        except Exception as e:  # noqa: BLE001 — a warmup must never break TTS build
-            logger.debug("soniox_tts_prewarm_call_failed: %s", e)
-        return lk_tts.FallbackAdapter(
-            [primary, *smallest], sample_rate=settings.smallest_sample_rate
-        )
-    return lk_tts.FallbackAdapter(smallest, sample_rate=settings.smallest_sample_rate)
+) -> "soniox.TTS":
+    """The sole session TTS. A missing Soniox key is a configuration error."""
+    if not settings.soniox_api_key:
+        raise RuntimeError("SONIOX_API_KEY is required: Soniox is the only TTS provider")
+    primary = (
+        prewarmed_soniox
+        if _soniox_prewarm_matches(prewarmed_soniox, voice_id, tts_lang)
+        else _build_soniox_tts(voice_id, tts_lang)
+    )
+    try:
+        primary.prewarm()
+    except Exception as e:  # noqa: BLE001 — a warmup must never break TTS build
+        logger.debug("soniox_tts_prewarm_call_failed: %s", e)
+    return primary
 
 
 def _prewarm_soniox_tts(proc) -> None:
@@ -1202,7 +983,8 @@ def _prewarm_soniox_tts(proc) -> None:
     sync hook lacks. The actual connect fires in _build_session_tts (async
     entrypoint context), concurrent with call setup. Best-effort: the entrypoint
     rebuilds if this missed."""
-    if not (settings.tts_provider == "soniox" and settings.soniox_api_key):
+    if not settings.soniox_api_key:
+        logger.critical("soniox_tts_not_configured")
         return
     try:
         proc.userdata["tts_soniox"] = _build_soniox_tts(
@@ -2710,7 +2492,7 @@ class VachanamAgent(Agent):
             self._lang_code, code, str(self._state.branch_id),
         )
         # LiveKit agent handoff: returning (new_agent, result) swaps the active
-        # agent — the new one carries its OWN Sarvam STT + smallest TTS in the
+        # agent — the new one carries its OWN STT + Soniox TTS in the
         # target language plus rebuilt instructions. Its on_enter speaks the
         # acknowledgement deterministically. The conversation history MUST ride
         # along (live test 2026-07-03: without it the new agent forgot the
@@ -3349,6 +3131,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # the prompt. SIP routing (phone_number/branch_id/outbound_trunk_id) still reads
     # the RAW `meta`, so build the safe view separately rather than overwriting it.
     followup_meta = _followup_meta_safe(meta) if is_followup else {}
+    _outbound_recording_active = settings.recording_allowed_for(outbound_number)
 
     # LATENCY: warm a DB connection NOW, before the outbound dial / SIP wait below
     # (both are dead time — the phone is ringing). Every call runs on a FRESH event
@@ -3413,9 +3196,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 is_reminder=is_reminder,
                 is_rebook=is_rebook_call,
                 is_followup=is_followup,
+                recording_active=_outbound_recording_active,
             )
             wavs = await synth_wavs(texts, _voice_for_lang(_gbr, _glang), _glang)
-            _out_greet.update(texts=texts, wavs=wavs, lang=_glang)
+            _out_greet.update(
+                texts=texts,
+                wavs=wavs,
+                lang=_glang,
+                recording_active=_outbound_recording_active,
+            )
             logger.info("outbound_greet_prep_ok segments=%d lang=%s", len(texts), _glang)
         except Exception as _ge:  # noqa: BLE001 — RULE 8: fall back to live greeting
             logger.warning("outbound_greet_prep_failed: %s", _ge)
@@ -3497,6 +3286,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     state = SessionState(session_id=ctx.room.name)
     state.patient_phone = caller or None
+    _recording_active = settings.recording_allowed_for(state.patient_phone)
+    logger.info(
+        "recording_scope active=%s scope=admin_only caller=...%s",
+        _recording_active,
+        (state.patient_phone or "")[-4:] or "????",
+    )
     state.call_type = "outbound" if outbound_number else "inbound_booking"
     state.call_start = datetime_cls.now(timezone_utc)
 
@@ -3759,7 +3554,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             llm=ctx.proc.userdata.get("llm") or _build_fallback_llm(),
             # Provider-aware TTS (audit 2026-07-24): the blocked line speaks the
             # same voice as the rest of the product, with the same RULE-8
-            # fallback chain (was a raw smallest WS client with no fallback).
+            # same Soniox-only TTS path as every normal call.
             tts=_build_session_tts(
                 (getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice,
                 lang_cfg.tts_code,
@@ -3770,6 +3565,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         await gate_session.start(
             room=ctx.room,
             agent=Agent(instructions="Say nothing. The call is being ended."),
+            record=False,
         )
         _blocked_text = lines.service_blocked
         # Never leave a patient with a dead end (Vinay 2026-07-17): when the
@@ -3824,8 +3620,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
                 asyncio.create_task(_store_clinic_spoken())
         emergency_contact = branch.emergency_contact or ""
-        # smallest.ai voice_id (clinic-chosen); fall back to the
-        # language's default smallest voice when unset (TTS provider = smallest).
+        # Soniox catalog voice (clinic-chosen); fall back to the language default.
         # Clinic's chosen voice, unless it's a clone registered for a different
         # language than this CALL speaks (per-caller mapping may differ from the
         # branch language) — then the target language's default voice.
@@ -3843,6 +3638,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # any failure → _welcome_task returns False and the live session.say
         # fallback below speaks the SAME composed segments after session.start.
         _welcome_task = None
+        _pre_greeted = False
         _greet_texts: list[str] | None = None
         # Clinic name rendered in the CALL language's script (cached HTTP hop;
         # no-op when scripts already match). Needed for the greeting AND later
@@ -3950,7 +3746,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     await asyncio.wait_for(_greet_prep_task, timeout=2.0)
                 except Exception as _gw:  # noqa: BLE001
                     logger.warning("outbound_greet_prep_wait: %s", _gw)
-            if _out_greet.get("wavs") and _out_greet.get("lang") == lang_code:
+            if (
+                _out_greet.get("wavs")
+                and _out_greet.get("lang") == lang_code
+                and _out_greet.get("recording_active") == _recording_active
+            ):
                 _greet_texts = _out_greet["texts"]
                 _welcome_task = asyncio.create_task(
                     play_wavs(ctx.room, _out_greet["wavs"], t_answer=_t_answer)
@@ -3962,12 +3762,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _spk_clinic,
                 spk_caller=_spk_caller,
                 followup_message=_fu_msg,
+                recording_active=_recording_active,
             )
             # #439: cache the STATIC welcome (no caller name, no follow-up
             # message) so it plays instantly instead of a ~10s live synth every
             # call. Dynamic greetings (name / follow-up) stay live (cache_key=None).
-            # Voice component is provider-aware (audit 2026-07-24): a smallest-
-            # cached WAV must never play after the Soniox switch (and vice versa).
+            # Voice component is Soniox-marked so legacy cached WAVs never play.
             _greet_cache_key = (
                 _greeting_cache_key(
                     str(branch.id), lang_code, _greeting_voice_key(tts_voice), _greet_texts
@@ -3980,6 +3780,28 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     t_answer=_t_answer, cache_key=_greet_cache_key,
                 )
             )
+
+        # Recording-only sequencing: finish the opening whose first segment is
+        # the notice BEFORE we build the prompt or start AgentSession capture.
+        # A playback failure clears the mode and notice, so prompt, speech, and
+        # the explicit record=False decision all remain consistent.
+        if _recording_active:
+            try:
+                _pre_greeted = bool(
+                    _welcome_task is not None and await _welcome_task
+                )
+            except Exception as _we:  # noqa: BLE001 — fail closed, never block call
+                logger.warning("recording_notice_play_failed: %s", _we)
+            if _pre_greeted:
+                _welcome_task = None
+                logger.info("recording_notice_completed before_capture=True")
+            else:
+                _recording_active = False
+                _notice = get_recording_notice(lang_code)
+                if _greet_texts and _greet_texts[0] == _notice:
+                    _greet_texts = _greet_texts[1:]
+                logger.error("recording_fail_closed reason=notice_playback_failed")
+
         state.emergency_contact = emergency_contact
         state.plan = org_plan  # was always "clinic" — solo cap could never fire
         state.language = lang_code  # quality/feedback signal (CallLog + transcript)
@@ -4120,6 +3942,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     language=lc,
                     clinic_address=getattr(branch, "address", None),
                     faq=getattr(branch, "faq", None),
+                    recording_active=_recording_active,
                 )
                 + date_context
                 + get_lines(lc).brevity
@@ -4195,7 +4018,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         def _agent_for_lang(lc: str, chat_ctx=None) -> VachanamAgent:
             """Build the handoff agent for a mid-call language switch: full
-            prompt, Sarvam STT and smallest TTS all in the target language,
+            prompt, STT and Soniox TTS all in the target language,
             sharing this call's state/db/room + conversation history. Used by
             switch_language."""
             cfg2 = get_lang(lc)
@@ -4227,13 +4050,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # agent's chat history so the LLM knows exactly what was already said
         # and never re-greets or re-discloses.
         _seed_ctx = None
-        if _greet_texts and _welcome_task is not None:
+        if _greet_texts and (_welcome_task is not None or _pre_greeted):
             _seed_ctx = ChatContext.empty()
             _seed_ctx.add_message(role="assistant", content=" ".join(_greet_texts))
         # #417: cache-eligible = the composed instructions carry NO per-call
         # extras — then they byte-match what the day's CachedContent baked and
         # the Vertex primary can ride it (~0.2s off every LLM turn, measured).
-        _cache_eligible = not caller_prompt_extra and not extra_tail
+        _cache_eligible = (
+            not caller_prompt_extra and not extra_tail and not _recording_active
+        )
         _cache_key = _prompt_cache_key(branch.id, lang_code)
         _cached_llm = _cached_primary_llm(_cache_key, instructions) if _cache_eligible else None
         vachanam_agent = VachanamAgent(
@@ -4298,13 +4123,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         _t_build = _perf.monotonic()
         # Session TTS captured in a var so we can PRIME its connection during the
-        # masked welcome-clip window. The smallest.ai plugin cold-connects on its
-        # FIRST synth and (on Fly) often throws "Connection error" → 3 retries with
-        # 2s backoff = ~6s of dead air on the first real response ("silent for 10s
-        # after intro", 2026-06-24). Priming it while the clip plays makes that cold
-        # connect happen invisibly.
-        # #405: WS-streaming primary (first audio ~0.2s vs ~1.1s REST) with the
-        # raw-REST path as RULE 8 fallback inside the adapter.
+        # greeting cover window. Priming the Soniox streaming connection while
+        # the clip plays keeps its cold handshake off the first real response.
         _session_tts = _build_session_tts(
             tts_voice, lang_cfg.tts_code, ctx.proc.userdata.get("tts_soniox")
         )
@@ -4359,10 +4179,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 finalize_controller=_soniox_finalizer,
             ),
             llm=_session_llm,
-            # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
-            # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
-            # language is the clinic's short code (smallest uses
-            # the same te/hi/ta/... codes). output_format pcm streams to LiveKit.
+            # TTS = Soniox tts-rt, the sole provider. The language is the clinic's
+            # short te/hi/ta/... code and PCM streams directly to LiveKit.
             tts=_session_tts,
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
             # LATENCY (biggest network-independent win): a SEMANTIC turn detector.
@@ -4841,6 +4659,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             session.start(
                 room=ctx.room,
                 agent=vachanam_agent,
+                record=(
+                    {
+                        "audio": True,
+                        "transcript": False,
+                        "traces": False,
+                        "logs": False,
+                    }
+                    if _recording_active else False
+                ),
                 room_input_options=RoomInputOptions(
                     noise_cancellation=noise_cancellation.BVCTelephony(),
                 ),
@@ -4861,8 +4688,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             _t = _perf.monotonic()
             try:
                 # #405: warm the STREAMING path (opens the WS pool connection and
-                # validates it end-to-end — a broken WS falls back inside the
-                # adapter here, in the masked window, not on the first reply).
+                # validates it end-to-end in the masked window, not on the
+                # first reply).
                 _ws = _session_tts.stream()
                 _ws.push_text("సరే")
                 _ws.end_input()
@@ -4890,7 +4717,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 key="wait_clips",
             )
         )
-        _pre_greeted = False
         if _welcome_task is not None:
             # MIC GATE (#289, live 2026-07-08): the raw greeting clip is
             # uninterruptible, but session.start() often finishes WHILE the clip
@@ -4955,6 +4781,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 is_reminder=is_reminder,
                 is_rebook=is_rebook_call,
                 is_followup=is_followup,
+                recording_active=_recording_active,
             )
             for _seg in _fb_texts:
                 await session.say(
@@ -4970,6 +4797,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _spk_clinic,
                 spk_caller=_spk_caller,
                 followup_message=(inbound_followup or {}).get("message") or None,
+                recording_active=_recording_active,
             )
             _uninterruptible = bool((inbound_followup or {}).get("message"))
             for _seg in _fb_texts:
@@ -4977,7 +4805,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     sanitize_for_tts(_seg), allow_interruptions=not _uninterruptible
                 )
 
-        if not _is_outbound_greet:
+        if not _is_outbound_greet or _recording_active:
             # DPDP s.5 demonstrable notice: the opening (instant clip or the
             # fallback just spoken) contains the AI-assistant / data-processing
             # disclosure. Record that notice was served on this inbound call
@@ -4988,14 +4816,24 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 from backend.models.schema import Consent as _Consent
 
                 async with _dbm.AsyncSessionLocal() as _cdb:
-                    _cdb.add(_Consent(
-                        branch_id=state.branch_id,
-                        session_id=state.session_id,
-                        patient_phone=state.patient_phone,
-                        consent_type="data_processing",
-                        notice_version="1.0",
-                        method="verbal",
-                    ))
+                    if not _is_outbound_greet:
+                        _cdb.add(_Consent(
+                            branch_id=state.branch_id,
+                            session_id=state.session_id,
+                            patient_phone=state.patient_phone,
+                            consent_type="data_processing",
+                            notice_version="1.0",
+                            method="verbal",
+                        ))
+                    if _recording_active:
+                        _cdb.add(_Consent(
+                            branch_id=state.branch_id,
+                            session_id=state.session_id,
+                            patient_phone=state.patient_phone,
+                            consent_type="recording",
+                            notice_version="admin-test-audio-1.0",
+                            method="verbal",
+                        ))
                     await _cdb.commit()
             except Exception as _ce:
                 logger.warning("consent_record_failed: %s", _ce)
@@ -5356,13 +5194,15 @@ def _prewarm(proc) -> None:
 
     logger.info(
         "voice_runtime livekit_agents=%s soniox_plugin=%s "
-        "endpoint_level=%d max_endpoint_ms=%d sensitivity=%s manual_finalize_ms=%d",
+        "endpoint_level=%d max_endpoint_ms=%d sensitivity=%s manual_finalize_ms=%d "
+        "recording_test_mode=%s recording_scope=admin_only",
         _pkg_version("livekit-agents"),
         _pkg_version("livekit-plugins-soniox"),
         settings.soniox_endpoint_latency_level,
         settings.soniox_max_endpoint_delay_ms,
         settings.soniox_endpoint_sensitivity,
         settings.soniox_manual_finalize_delay_ms,
+        settings.recording_allowed,
     )
     proc.userdata["vad"] = silero.VAD.load()
     # The Gemini+GPT FallbackAdapter is clinic-agnostic — build it ONCE per
@@ -5384,8 +5224,7 @@ def _prewarm(proc) -> None:
     # _build_session_tts for calls on the default voice/language (the common case).
     _prewarm_soniox_tts(proc)
 
-    # (The welcome-TTS warmup went with the canned welcome clip — the instant
-    # greeting synthesizes over raw REST per call; see greeting.py.)
+    # The instant greeting uses the same Soniox-only synthesis path.
 
 
 if __name__ == "__main__":

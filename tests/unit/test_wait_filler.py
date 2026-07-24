@@ -1,11 +1,8 @@
-"""#429 (Vinay 2026-07-20): "for checking and booking appointments and
-rescheduling — for tasks it takes some time, say okka nimisham andi ... and it
-should not be replying with this phrase for every task. only to the one which
-genuinely takes time."
+"""Slow-tool hold speech.
 
-So: a wait-conveying phrase exists per language, it is wired ONLY to the slow
-tools (DB + Google Calendar I/O), quick tools stay quiet, and a cooldown stops
-one booking flow from saying it twice.
+The wait line exists per language, ends in Soniox's proven [long pause], is
+wired ONLY to slow tools (DB + Google Calendar I/O), and is throttled so one
+booking flow does not repeat it for every tool.
 """
 import inspect
 
@@ -31,31 +28,25 @@ def test_wait_fillers_every_language_and_fallback():
     assert get_wait_fillers(None) == get_wait_fillers("te")
 
 
-def test_wait_phrase_is_a_plain_okay():
-    """Vinay 2026-07-20, after hearing the narrated version live: "okka nimisham
-    andi feels really bad. change it to okay andi. okay(english). similarly
-    hindi version also". The filler is a SHORT okay in every language — the
-    slow-tool gating + cooldown convey the wait, not the words."""
-    assert get_wait_fillers("te")[0] == "ఓకే అండి."
-    assert get_wait_fillers("en")[0] == "Okay."
-    assert get_wait_fillers("hi")[0] == "ठीक है।"
+def test_wait_phrase_uses_natural_hold_wording():
+    assert get_wait_fillers("te")[0].startswith("ఒక్క నిమిషం అండి")
+    assert get_wait_fillers("en")[0].startswith("One moment, please")
+    assert get_wait_fillers("hi")[0].startswith("एक मिनट कृपया")
 
 
-def test_wait_phrase_never_narrates_a_wait():
-    """The rejected wording must not come back in any language."""
-    banned = ("ఒక్క నిమిషం", "ఒక్క సెకను", "One moment", "Just a second",
-              "एक मिनट", "एक सेकंड", "checking", "चेक कर")
+def test_wait_phrase_uses_exactly_one_long_pause():
     for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"):
         for variant in get_wait_fillers(code):
-            for bad in banned:
-                assert bad not in variant, (code, variant, bad)
+            assert variant.count("[long pause]") == 1, (code, variant)
+            assert variant.endswith("[long pause]"), (code, variant)
 
 
-def test_wait_phrase_stays_short():
-    # A filler that runs long defeats its purpose (it covers ~1-2s of dead air).
+def test_wait_phrase_stays_concise():
+    # Exclude the control token: the spoken wording must remain a short hold cue.
     for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"):
         for variant in get_wait_fillers(code):
-            assert len(variant) <= 16, (code, variant)
+            spoken = variant.removesuffix("[long pause]").strip()
+            assert len(spoken) <= 42, (code, variant)
 
 
 # ── played once, then throttled ──────────────────────────────────────────────

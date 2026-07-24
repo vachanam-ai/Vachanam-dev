@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent.i18n import get_lines, get_welcome
+from agent.i18n import get_lines, get_recording_notice, get_welcome
 from agent.livekit_minimal import greeting as g
 
 TE = "te"
@@ -46,6 +46,14 @@ def test_inbound_new_caller_trimmed_single_intro():
     assert texts[0] == get_lines(TE).inbound_intro.format(clinic=CLINIC)
 
 
+def test_recording_notice_is_first_and_gated_for_inbound():
+    normal = g.inbound_greeting_texts(TE, CLINIC)
+    recorded = g.inbound_greeting_texts(TE, CLINIC, recording_active=True)
+    assert get_recording_notice(TE) not in normal
+    assert recorded[0] == get_recording_notice(TE)
+    assert recorded[1:] == normal
+
+
 def test_inbound_known_caller_greets_by_name():
     texts = g.inbound_greeting_texts(TE, CLINIC, spk_caller="రమేష్")
     assert len(texts) == 1  # #302 trimmed single intro
@@ -69,6 +77,16 @@ def test_outbound_reminder_speaks_telugu_time_not_digits():
     assert texts[0] == get_welcome(TE).format(clinic=CLINIC)
     assert "16:30" not in texts[1]  # spoken words, never raw digits (RULE 6)
     assert "రమేష్" in texts[1]
+
+
+def test_recording_notice_is_first_and_gated_for_outbound():
+    kwargs = dict(is_reminder=True, recording_active=True)
+    recorded = g.outbound_greeting_texts(
+        TE, CLINIC, "రమేష్", "డా. శ్రీనివాస్",
+        {"appointment_time": "16:30"}, {}, **kwargs
+    )
+    assert recorded[0] == get_recording_notice(TE)
+    assert recorded[1] == get_welcome(TE).format(clinic=CLINIC)
 
 
 def test_outbound_rebook_speaks_date_words():
@@ -99,42 +117,36 @@ def test_fallback_speaks_same_words_as_clip():
 
 def test_synth_sanitizes_at_boundary(monkeypatch):
     """RULE 6: markdown/symbols must be stripped INSIDE the synth call."""
-    sent = {}
+    sent = []
 
-    class _Resp:
-        content = _wav()
+    class _Frame:
+        data = b"\x00\x00" * 480
+        sample_rate = 24000
+        num_channels = 1
 
-        def raise_for_status(self):
+    class _Event:
+        frame = _Frame()
+
+    class _FakeTTS:
+        def __init__(self, **kwargs):
             pass
 
-    class _Client:
-        def __init__(self, *a, **k):
+        def synthesize(self, text):
+            sent.append(text)
+
+            async def _gen():
+                yield _Event()
+            return _gen()
+
+        async def aclose(self):
             pass
 
-        async def __aenter__(self):
-            return self
+    import livekit.plugins.soniox as sx
 
-        async def __aexit__(self, *a):
-            return False
-
-        async def post(self, url, headers=None, json=None):
-            sent["text"] = json["text"]
-            return _Resp()
-
-    monkeypatch.setattr(g.httpx, "AsyncClient", _Client)
-    # Pin the smallest path — this test mocks the smallest REST client; the
-    # Soniox path sanitizes identically (asserted below on its source).
-    monkeypatch.setattr(g.settings, "tts_provider", "smallest", raising=False)
-    wavs = asyncio.run(g.synth_wavs(["**నమస్కారం**"], "kavitha", TE))
+    monkeypatch.setattr(sx, "TTS", _FakeTTS)
+    wavs = asyncio.run(g.synth_wavs(["**నమస్కారం**"], "Priya", TE))
     assert len(wavs) == 1
-    assert "*" not in sent["text"]
-
-    # RULE 6 holds on the Soniox synth path too (source guard — the live WS
-    # can't run outside a job context in tests).
-    import inspect
-
-    soniox_src = inspect.getsource(g._synth_wavs_soniox)
-    assert "sanitize_for_tts(text)" in soniox_src
+    assert sent == ["నమస్కారం"]
 
 
 def test_normalize_pcm_boosts_quiet_and_leaves_loud():

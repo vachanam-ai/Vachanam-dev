@@ -1,5 +1,34 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-24 — TEMPORARY ADMIN-ONLY RECORDING + SONIOX-ONLY TTS (LOCAL,
+> deployment pending).** `RECORDING_ENABLED=true` can now record audio only when
+> the caller/callee exactly matches configured `ADMIN_PHONE`; every other
+> LiveKit session explicitly starts with `record=False`. The localized recording
+> notice is the first segment and must finish before audio capture starts; a
+> notice-playback failure disables recording for that call. Capture is audio
+> only (no transcript, traces, or logs), and a per-call `recording` consent row
+> is written. LiveKit Agent Insights retains uploads for 30 days; its project
+> Data & Privacy “Agent observability” toggle must be enabled. Shutdown is one
+> secret flip: `flyctl secrets set RECORDING_ENABLED=false -a vachanam-agent`.
+> TTS is now Soniox-only across live replies, greetings, fillers, blocked-call
+> notices, and the Settings catalog. Smallest imports, runtime adapters, config,
+> packages, services, scripts, and rollback branches were removed. Legacy stored
+> voice IDs resolve to Priya until changed to a Soniox catalog voice. Proof so
+> far: focused 164 checks green; full unit 754 green after one corrected
+> recording-aware prompt-cache guard; Settings integration 2 green; Ruff,
+> frontend lint, 6 Vitest tests, Vite build, and seven real Soniox sample WAVs
+> green. Local agent image installed the new dependency set, then Docker Desktop
+> aborted in LiveKit's existing turn-detector `download-files` layer after it
+> reported completion; the remote CI/Fly build is the deployment gate.
+
+> **2026-07-24 — EXPRESSION-AWARE SLOW-TOOL HOLDS.** Availability,
+> booking lookup, booking, rescheduling, and cancellation now play a cached
+> language-specific “one moment / checking” cue ending in Soniox
+> `[long pause]` while the operation runs. Quick tools remain quiet and the
+> existing 12-second cooldown prevents repeated holds in one booking flow.
+> Prompt guidance makes expression placement explicit and prevents the model
+> from duplicating the runtime-owned pause.
+
 > **2026-07-24 — VOICE PROMPT + APPOINTMENT-TRUTH RELEASE.** Rewrote the
 > production voice prompt around concrete audible
 > behaviour: calm baseline, optional/rare disfluency, one closed Soniox
@@ -25,9 +54,11 @@
 > Also live in v1.10.x: full Soniox expression vocabulary + sound-human prompt.
 > NEXT: Vinay re-calls → pull lat:turns → ms table → fix the measured stage only.
 
-> **2026-07-24 — SONIOX TTS SWITCH + FEASIBLE LATENCY TECHNIQUES + ODIA REMOVED
+> **2026-07-24 — SUPERSEDED TTS DESIGN (history): SONIOX SWITCH + FEASIBLE LATENCY TECHNIQUES + ODIA REMOVED
 > (built + unit-green LOCAL; NOT deployed).** Vinay: latency #1, keep Soniox
-> (better voice), smallest as fallback, drop Soniox cloning. Against the 12-technique
+> (better voice), then-smallest fallback, drop Soniox cloning. The fallback and
+> provider switch described below were removed by the Soniox-only release above.
+> Against the 12-technique
 > writeup, built the genuinely-feasible set and proved the rest:
 > • **TTS → Soniox tts-rt** streaming primary + smallest.ai RULE-8 fallback,
 >   `TTS_PROVIDER` kill-switch (instant rollback, no deploy). Model `tts-rt-v1`,

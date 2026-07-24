@@ -11,7 +11,7 @@ resolves both the speech-provider config and the spoken lines through here.
 Telugu ("te") is the reference/default and is always present.
 """
 from .languages import DEFAULT_LANG, LANGUAGES, LangConfig, get_lang
-from .lines import Lines, get_lines, get_switch_ack, get_welcome
+from .lines import Lines, get_lines, get_recording_notice, get_switch_ack, get_welcome
 
 __all__ = [
     "DEFAULT_LANG",
@@ -20,6 +20,7 @@ __all__ = [
     "get_lang",
     "Lines",
     "get_lines",
+    "get_recording_notice",
     "get_switch_ack",
     "get_welcome",
 ]

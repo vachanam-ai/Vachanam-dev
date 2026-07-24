@@ -464,6 +464,28 @@ def get_welcome(code: str | None) -> str:
     return WELCOME.get((code or "").lower().strip(), WELCOME[DEFAULT_LANG])
 
 
+# Temporary admin-test recording notice. This is always the first spoken
+# segment and finishes before audio capture starts. Telugu is the existing
+# validated legal line; the remaining languages are first-pass translations.
+RECORDING_NOTICE: dict[str, str] = {
+    "te": "ఈ కాల్ నాణ్యత మెరుగుదల కోసం రికార్డ్ చేయబడుతుంది.",
+    "en": "This call will be recorded for quality testing.",
+    "hi": "गुणवत्ता परीक्षण के लिए यह कॉल रिकॉर्ड की जाएगी।",
+    "ta": "தரப் பரிசோதனைக்காக இந்த அழைப்பு பதிவு செய்யப்படும்.",
+    "kn": "ಗುಣಮಟ್ಟ ಪರೀಕ್ಷೆಗಾಗಿ ಈ ಕರೆಯನ್ನು ರೆಕಾರ್ಡ್ ಮಾಡಲಾಗುತ್ತದೆ.",
+    "ml": "ഗുണനിലവാര പരിശോധനയ്ക്കായി ഈ കോൾ റെക്കോർഡ് ചെയ്യും.",
+    "mr": "गुणवत्ता तपासणीसाठी हा कॉल रेकॉर्ड केला जाईल.",
+    "bn": "গুণমান পরীক্ষার জন্য এই কলটি রেকর্ড করা হবে।",
+}
+
+
+def get_recording_notice(code: str | None) -> str:
+    """Recording notice for a language code (falls back to Telugu)."""
+    return RECORDING_NOTICE.get(
+        (code or "").lower().strip(), RECORDING_NOTICE[DEFAULT_LANG]
+    )
+
+
 # ── Silence line-check (Vinay 2026-07-20): "if user doesn't speak for 10 secs
 # straight, say 'hello, are you there? hello, line lo unnara?' every 10 secs
 # until 30 and end the call." te is Vinay's dictated wording in script; the
@@ -496,27 +518,49 @@ RECONNECT: dict[str, str] = {
 }
 
 
-# ── Slow-tool filler (Vinay 2026-07-20): spoken ONLY while a genuinely slow
-# tool runs (availability / book / reschedule / cancel), never for quick ones.
-# WORDING (Vinay, same day, after hearing it live): "okka nimisham andi feels
-# really bad. change it to okay andi. okay(english). similarly hindi version
-# also" — so this is a plain short "okay", NOT a narrated "one minute, I'm
-# checking". The *timing* (slow tools only + 12s cooldown) is what conveys the
-# wait; the words stay out of the way.
+# ── Slow-tool hold (Vinay 2026-07-24): spoken ONLY while a genuinely slow
+# tool runs (availability / booking lookup / book / reschedule / cancel), never
+# for quick ones. Soniox renders the trailing [long pause] as intentional
+# thinking time while the tool continues in parallel. Two variants keep later
+# flows natural; the runtime cooldown prevents back-to-back repetition.
 WAIT_FILLERS: dict[str, tuple[str, ...]] = {
-    "te": ("ఓకే అండి.", "ఓకే."),
-    "en": ("Okay.", "Sure."),
-    "hi": ("ठीक है।", "ओके।"),
-    "ta": ("சரி.", "ஓகே."),
-    "kn": ("ಸರಿ.", "ಓಕೆ."),
-    "ml": ("ശരി.", "ഓകെ."),
-    "mr": ("ठीक आहे.", "ओके."),
-    "bn": ("ঠিক আছে।", "ওকে।"),
+    "te": (
+        "ఒక్క నిమిషం అండి... చూస్తున్నాను. [long pause]",
+        "చూస్తున్నాను అండి... [long pause]",
+    ),
+    "en": (
+        "One moment, please... I’m checking. [long pause]",
+        "Let me check that... [long pause]",
+    ),
+    "hi": (
+        "एक मिनट कृपया... [long pause]",
+        "ज़रा देख लेते हैं... [long pause]",
+    ),
+    "ta": (
+        "ஒரு நிமிடம்... பார்க்கிறேன். [long pause]",
+        "சற்று பார்க்கிறேன்... [long pause]",
+    ),
+    "kn": (
+        "ಒಂದು ನಿಮಿಷ... ನೋಡುತ್ತಿದ್ದೇನೆ. [long pause]",
+        "ಸ್ವಲ್ಪ ನೋಡುತ್ತೇನೆ... [long pause]",
+    ),
+    "ml": (
+        "ഒരു നിമിഷം... നോക്കുകയാണ്. [long pause]",
+        "ഒന്ന് നോക്കട്ടೆ... [long pause]",
+    ),
+    "mr": (
+        "एक मिनिट... पाहत आहे. [long pause]",
+        "जरा पाहूया... [long pause]",
+    ),
+    "bn": (
+        "এক মিনিট... দেখছি। [long pause]",
+        "একটু দেখে নিই... [long pause]",
+    ),
 }
 
 
 def get_wait_fillers(code: str | None) -> tuple[str, ...]:
-    """Short "okay" filler for slow tools, per language (falls back to Telugu)."""
+    """Natural Soniox hold lines for slow tools (falls back to Telugu)."""
     return WAIT_FILLERS.get((code or "").lower().strip(), WAIT_FILLERS[DEFAULT_LANG])
 
 

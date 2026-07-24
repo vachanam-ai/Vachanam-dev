@@ -3,8 +3,8 @@ agent needs to speak — not a prerecorded message but the original conversation
 
 Replaces the canned welcome-bridge clip and the pre-rendered outbound mask:
 the actual per-call opening (clinic welcome + disclosure / greet-by-name /
-reminder / doctor's question) is synthesized fresh over the raw smallest.ai
-REST /tts and streamed into the room on a temporary track, CONCURRENT with
+reminder / doctor's question) is synthesized through Soniox tts-rt and streamed
+into the room on a temporary track, CONCURRENT with
 session.start(). Outbound calls synthesize during RING time, so the patient
 hears the real opening the instant they answer.
 
@@ -22,24 +22,20 @@ import wave
 from datetime import date as date_cls
 from datetime import time as time_cls
 
-import httpx
 import structlog
 from livekit import rtc
 
-from agent.i18n import get_lines, get_welcome
+from agent.i18n import get_lines, get_recording_notice, get_welcome
 from agent.services.telugu_dates import telugu_date, telugu_time
 from agent.services.tts_sanitizer import sanitize_for_tts
 from backend.config import settings
 
 logger = structlog.get_logger()
 
-_TTS_URL = "https://api.smallest.ai/waves/v1/tts"
-_SPEED = 1.0  # matches the live agent — Vinay 07-06: normal speed (1.1 rushed)
-
-# ── Soniox voice seam (2026-07-24, single source — agent.py imports these) ──
+# ── Soniox voice seam (single source — agent.py imports these) ─────────────
 # The 4 Indian-accent voices in the tts-rt-v1 catalog (Priya/Meera female,
 # Arjun/Rohan male); every Soniox voice speaks all 60+ languages incl Telugu.
-# No cloning: a stored smallest voice_id resolves to the default catalog voice.
+# No cloning: any legacy non-Soniox voice id resolves to the default catalog voice.
 SONIOX_TTS_VOICES = {"Priya", "Meera", "Arjun", "Rohan"}
 
 
@@ -47,21 +43,14 @@ def resolve_soniox_voice(voice_id: str) -> str:
     return voice_id if voice_id in SONIOX_TTS_VOICES else settings.soniox_tts_default_voice
 
 
-def use_soniox_tts() -> bool:
-    return settings.tts_provider == "soniox" and bool(settings.soniox_api_key)
-
-
 def greeting_voice_key(voice_id: str) -> str:
-    """Voice component for the greeting Redis cache key. Provider-aware so a
-    smallest-cached WAV can never be served after the switch to Soniox (and a
-    rollback to smallest re-misses instead of playing Priya)."""
-    return f"sx:{resolve_soniox_voice(voice_id)}" if use_soniox_tts() else voice_id
+    """Soniox voice component for the greeting Redis cache key."""
+    return f"sx:{resolve_soniox_voice(voice_id)}"
 
 
 def normalize_pcm(pcm: bytes, peak_target: float = 0.89, max_gain: float = 6.0) -> bytes:
     """Peak-normalize 16-bit PCM. Measured 2026-07-05 (Vinay: "voice is low"):
-    smallest voices differ ~13 dB — padmaja (our te default) RMS 1107 vs anitha
-    4971. Bring every voice to a
+    catalog voices can differ in level. Bring every voice to a
     consistent, phone-loud level. Gain capped so a near-silent/noisy clip is
     never blasted into hiss."""
     import numpy as np
@@ -85,11 +74,13 @@ def inbound_greeting_texts(
     spk_clinic: str,
     spk_caller: str | None = None,
     followup_message: str | None = None,
+    recording_active: bool = False,
 ) -> list[str]:
     """Segments of the REAL inbound opening. Mirrors the session.say fallback
     exactly — both paths must speak the same words (disclosure included, DPDP)."""
     lines = get_lines(lang_code)
-    out = [get_welcome(lang_code).format(clinic=spk_clinic)]
+    prefix = [get_recording_notice(lang_code)] if recording_active else []
+    out = prefix + [get_welcome(lang_code).format(clinic=spk_clinic)]
     if followup_message and lines.inbound_followup_greeting:
         raw = lines.inbound_followup_greeting
         if raw.endswith("{message}"):
@@ -103,11 +94,11 @@ def inbound_greeting_texts(
         # Trimmed ONE-sentence intro (Vinay 2026-07-10) — replaces the
         # welcome+greeting pair; carries its own namaskaram + AI disclosure.
         if lines.inbound_intro_known:
-            return [lines.inbound_intro_known.format(patient=spk_caller, clinic=spk_clinic)]
+            return prefix + [lines.inbound_intro_known.format(patient=spk_caller, clinic=spk_clinic)]
         out.append(lines.known_caller_greeting.format(patient=spk_caller, clinic=spk_clinic))
     else:
         if lines.inbound_intro:
-            return [lines.inbound_intro.format(clinic=spk_clinic)]
+            return prefix + [lines.inbound_intro.format(clinic=spk_clinic)]
         out.append(lines.disclosure_greeting.format(clinic=spk_clinic))
     return out
 
@@ -123,12 +114,15 @@ def outbound_greeting_texts(
     is_reminder: bool = False,
     is_rebook: bool = False,
     is_followup: bool = False,
+    recording_active: bool = False,
 ) -> list[str]:
     """Segments of the REAL outbound opening (welcome line + call-type body).
     The i18n outbound bodies deliberately drop the leading namaskaram — the
     welcome segment speaks it."""
     lines = get_lines(lang_code)
-    out = [get_welcome(lang_code).format(clinic=spk_clinic)]
+    out = ([get_recording_notice(lang_code)] if recording_active else []) + [
+        get_welcome(lang_code).format(clinic=spk_clinic)
+    ]
     if is_reminder:
         raw_t = meta.get("appointment_time", "")
         try:
@@ -168,27 +162,6 @@ def outbound_greeting_texts(
 
 
 # ------------------------------------------------------------------ synthesis
-
-async def _synth_one(client: httpx.AsyncClient, text: str, voice_id: str, lang_code: str) -> bytes:
-    resp = await client.post(
-        _TTS_URL,
-        headers={
-            "Authorization": f"Bearer {settings.smallest_api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": settings.smallest_model,
-            "voice_id": voice_id,
-            "sample_rate": settings.smallest_sample_rate,
-            "speed": _SPEED,
-            "language": lang_code,
-            "output_format": "wav",
-            "text": sanitize_for_tts(text),  # RULE 6 — nothing reaches TTS unsanitized
-        },
-    )
-    resp.raise_for_status()
-    return resp.content
-
 
 async def _synth_wavs_soniox(texts: list[str], voice_id: str, lang_code: str) -> list[bytes]:
     """Synthesize segments via Soniox tts-rt (one-shot synthesize per segment,
@@ -236,17 +209,8 @@ async def _synth_wavs_soniox(texts: list[str], voice_id: str, lang_code: str) ->
 
 
 async def synth_wavs(texts: list[str], voice_id: str, lang_code: str) -> list[bytes]:
-    """Synthesize every segment. Provider-aware (2026-07-24): with TTS_PROVIDER=
-    soniox the greeting/filler audio comes from Soniox so the caller hears ONE
-    voice for the whole call (welcome, conversation, fillers) — not a smallest
-    welcome followed by a Soniox session voice. Raises on any failure — the
-    caller falls back to the live session.say path (RULE 8)."""
-    if use_soniox_tts():
-        return await _synth_wavs_soniox(texts, voice_id, lang_code)
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        return list(await asyncio.gather(
-            *(_synth_one(client, t, voice_id, lang_code) for t in texts)
-        ))
+    """Synthesize every segment through Soniox, the sole TTS provider."""
+    return await _synth_wavs_soniox(texts, voice_id, lang_code)
 
 
 # ------------------------------------------------------------------- playback
@@ -367,8 +331,7 @@ async def synth_and_play(
     later segments are still synthesizing, so first audio ≈ one REST round-trip.
 
     #439: when cache_key is given (STATIC unknown-caller welcome), the audio is
-    served from Redis (instant, ~0 synth) instead of a ~10s live smallest.ai
-    synth on every call — the call-start latency that made callers hang up. The
+    served from Redis (instant, ~0 synth) instead of live Soniox synthesis. The
     first call for a (branch, lang, voice, text) synths and stores; every call
     after plays the cached bytes. Dynamic greetings (caller's name) pass
     cache_key=None and always synth live."""
@@ -382,22 +345,8 @@ async def synth_and_play(
             wavs = await synth_wavs(texts, voice_id, lang_code)
             asyncio.create_task(_greeting_cache_set(cache_key, wavs))
             return await play_wavs(room, wavs, t_answer=t_answer)
-        # No cache (dynamic greeting): Soniox rides the same one-voice path
-        # (sequential synth then play — its persistent connection is fast);
-        # smallest keeps the original pipelined synth+play.
-        if use_soniox_tts():
-            wavs = await synth_wavs(texts, voice_id, lang_code)
-            return await play_wavs(room, wavs, t_answer=t_answer)
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            tasks = [
-                asyncio.ensure_future(_synth_one(client, t, voice_id, lang_code))
-                for t in texts
-            ]
-            try:
-                return await play_wavs(room, tasks, t_answer=t_answer)
-            finally:
-                for t in tasks:
-                    t.cancel()
+        wavs = await synth_wavs(texts, voice_id, lang_code)
+        return await play_wavs(room, wavs, t_answer=t_answer)
     except Exception as e:  # noqa: BLE001 — RULE 8
         logger.warning("greeting_synth_failed", error=str(e)[:160])
         return False

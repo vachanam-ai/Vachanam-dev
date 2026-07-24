@@ -2,7 +2,7 @@
 them as a NAME, not spelled letter-by-letter (RULE 6).
 
 Bug (prod 2026-06-23): a reminder call said the doctor's name "Srinivas" as
-"S… R… I… N… I…" — smallest.ai TTS, fed a Latin name inside a Telugu sentence,
+"S… R… I… N… I…" — TTS, fed a Latin name inside a Telugu sentence,
 reads the Latin glyphs as individual letters. The fix is to convert the name
 into the target script before it ever reaches TTS.
 

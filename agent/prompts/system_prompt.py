@@ -78,6 +78,7 @@ def build_system_prompt(
     language: str = "te",
     clinic_address: str | None = None,
     faq: list[dict] | None = None,
+    recording_active: bool = False,
 ) -> str:
     """Render the sole priority-ordered, grounded production prompt."""
     return build_grounded_prompt(
@@ -90,4 +91,5 @@ def build_system_prompt(
         language=language,
         clinic_address=clinic_address,
         faq=faq,
+        recording_active=recording_active,
     )

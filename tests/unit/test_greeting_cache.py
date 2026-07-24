@@ -1,5 +1,5 @@
 """#439 (Vinay 2026-07-21: calls dying at ~15s; root cause = ~16s call-start,
-of which ~10s was the welcome greeting synthesized LIVE via smallest.ai on
+of which ~10s was the welcome greeting synthesized live on
 every call). The STATIC welcome audio is now cached in Redis: first call for a
 (branch, lang, voice, text) synths + stores; every call after plays the cached
 bytes instantly. Dynamic greetings (caller name / follow-up) stay live.

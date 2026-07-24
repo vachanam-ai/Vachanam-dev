@@ -69,7 +69,7 @@ class Branch(Base):
     name_spoken: Mapped[str | None] = mapped_column(String(255))
     # Pre-rendered welcome+greeting audio (WAV bytes), played INSTANTLY on answer
     # to mask the ~6s LiveKit session.start (Sarvam STT cold connect). Generated
-    # once per clinic (smallest.ai), so the caller hears continuous warm speech
+    # once per clinic, so the caller hears continuous warm speech
     # instead of a cold-TTS delay + dead air. NULL → fall back to live synth.
     welcome_audio: Mapped[bytes | None] = mapped_column(LargeBinary)
     # Welcome-ONLY clip ("నమస్కారం, <clinic> క్లినిక్‌కి స్వాగతం") for OUTBOUND calls
@@ -110,16 +110,11 @@ class Branch(Base):
     wa_phone_number_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, unique=True
     )
-    # smallest.ai Waves voice_id for this clinic's agent (clinic-selectable; can
-    # NULL → the agent uses the language's default smallest
-    # voice (agent/i18n). Nullable + widened from the old Sarvam-speaker column
-    # (TTS provider switched Sarvam Bulbul → smallest.ai 2026-06-15).
+    # Soniox catalog voice for this clinic's agent. NULL or a legacy provider ID
+    # resolves to the configured Soniox default without breaking existing rows.
     tts_voice: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Cloned smallest.ai voices registered to this clinic: list of
-    # {"voice_id","name","language"}. A clinic clones a voice in the smallest.ai
-    # dashboard, then registers the returned voice_id here so it shows in the
-    # Settings voice picker for that language and can be selected as tts_voice.
-    # Tenant-scoped (RULE 1) — a clinic only ever sees its own clones.
+    # Deprecated legacy clone metadata. Kept only for schema compatibility;
+    # Soniox-only TTS never reads or exposes it.
     cloned_voices: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
     # Clinic FAQ answered by the voice agent on calls: list of {"q","a"} in the
     # clinic's own words (fees, timings, parking, insurance, reports...). NULL/

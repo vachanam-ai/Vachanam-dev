@@ -34,24 +34,8 @@ class Settings(BaseSettings):
     openai_api_key: str
     gemini_api_key: str
 
-    # TTS — smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15,
-    # Vinay). voice_id is per-clinic (branches.tts_voice) incl cloned voices;
-    # language is the clinic's Branch.language code (smallest uses the same short
-    # codes te/hi/ta/kn/ml/mr/bn/or). Used by the agent (livekit smallestai
-    # plugin) AND voice cloning (smallest SDK). https://docs.smallest.ai/waves
-    smallest_api_key: str = ""
-    smallest_model: str = "lightning_v3.1"
-    smallest_sample_rate: int = 24000
-
-    # TTS provider switch (Vinay 2026-07-24, latency-first). "soniox" makes
-    # Soniox tts-rt the streaming primary with smallest.ai as the RULE-8 fallback;
-    # "smallest" is the pre-2026-07-24 path (instant rollback, no deploy). Voice
-    # cloning was dropped — every clinic uses a catalog voice, so a stored
-    # smallest voice_id resolves to soniox_tts_default_voice on the Soniox primary
-    # while the smallest fallback keeps the real id. JP-edge TTS (~200ms cut)
-    # needs Soniox to enable JP-region TTS on the key — flip soniox_tts_ws_url
-    # when that lands (currently region-scoped to global; JP TTS 401s).
-    tts_provider: str = "soniox"
+    # TTS — Soniox tts-rt is the sole provider. The same key serves STT and TTS.
+    # Legacy branch voice IDs safely resolve to soniox_tts_default_voice.
     soniox_tts_model: str = "tts-rt-v1"  # per Soniox RT-TTS docs; sandbox-validated
     soniox_tts_ws_url: str = "wss://tts-rt.soniox.com/tts-websocket"
     soniox_tts_default_voice: str = "Priya"
@@ -138,10 +122,9 @@ class Settings(BaseSettings):
 
     # Voice agent (LiveKit)
     public_url: str = "http://localhost:7860"
-    # Raw flag. NEVER read this directly to decide whether to record — use the
-    # recording_allowed property, which hard-disables recording in production
-    # regardless of the flag (memory: no-voice-recording; the env override is
-    # TESTING-ONLY and must never reach a paying clinic). DPDP consent.
+    # Temporary audio-recording master switch. NEVER read this directly — use
+    # recording_allowed_for(), which only permits the configured ADMIN_PHONE
+    # test participant. Every other call is explicitly unrecorded.
     recording_enabled: bool = False
     max_call_duration_seconds: int = 0  # 0 = unlimited; non-zero wraps call at N seconds (Solo plan billing cap)
 
@@ -224,14 +207,6 @@ class Settings(BaseSettings):
     transcript_retention_days: int = 90
     otp_dev_echo: bool = True         # dev only: return code in response
 
-    @field_validator('tts_provider')
-    @classmethod
-    def _valid_tts_provider(cls, value: str) -> str:
-        v = (value or '').lower().strip()
-        if v not in ('soniox', 'smallest'):
-            raise ValueError("must be 'soniox' or 'smallest'")
-        return v
-
     @field_validator('soniox_endpoint_latency_level')
     @classmethod
     def _valid_soniox_latency_level(cls, value: int) -> int:
@@ -280,10 +255,24 @@ class Settings(BaseSettings):
 
     @property
     def recording_allowed(self) -> bool:
-        """Whether call recording may happen. HARD-OFF in production regardless
-        of recording_enabled (memory: no-voice-recording — the env flag is a
-        TESTING-ONLY override and must never reach a paying clinic). DPDP."""
-        return self.recording_enabled and self.app_env != "production"
+        """Whether the tightly scoped admin-only test mode is configured."""
+        return self.recording_enabled and bool(self._phone_digits(self.admin_phone))
+
+    @staticmethod
+    def _phone_digits(phone: str | None) -> str:
+        """Compare Indian numbers independent of +91/spacing without logging PII."""
+        digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    def recording_allowed_for(self, participant_phone: str | None) -> bool:
+        """True only for the configured admin test participant.
+
+        This is deliberately valid in production for the temporary testing
+        window, but can never broaden to ordinary patient calls.
+        """
+        participant = self._phone_digits(participant_phone)
+        admin = self._phone_digits(self.admin_phone)
+        return self.recording_allowed and bool(participant) and participant == admin
 
     @property
     def voice_plane_configured(self) -> bool:

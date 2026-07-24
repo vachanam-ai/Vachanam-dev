@@ -16,7 +16,7 @@ Taxonomy (OWASP Web Top 10 2021 + API Security Top 10 2023) → coverage:
   A09 Logging/Monitoring ..................... test_audit_log
   A10 SSRF / API8 ............................ N/A: no endpoint fetches a client-supplied
                                                URL. Every outbound httpx target (Razorpay,
-                                               Google, Sarvam/smallest, Vobiz, Turnstile) is a
+                                               Google, Soniox/Sarvam, Vobiz, Turnstile) is a
                                                fixed provider host from config, never request
                                                input. Re-verify if a webhook-URL field is ever
                                                added.

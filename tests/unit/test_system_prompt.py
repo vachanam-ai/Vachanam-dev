@@ -311,21 +311,20 @@ def test_system_prompt_rebook_instruction_present():
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def test_step_0_includes_recording_notice_when_enabled(monkeypatch):
-    """When recording_enabled=True, Step 0 must include the Telugu recording sentence."""
-    monkeypatch.setattr("backend.config.settings.recording_enabled", True)
+def test_step_0_includes_recording_notice_when_enabled():
+    """A recorded session tells the model the notice was already spoken."""
     prompt = build_system_prompt(
         clinic_name="Test Clinic",
         doctors=[],
         emergency_contact="+919000000000",
         plan="clinic",
+        recording_active=True,
     )
     assert "రికార్డ్" in prompt
 
 
-def test_step_0_omits_recording_notice_when_disabled(monkeypatch):
-    """When recording_enabled=False (default), the recording sentence must be absent."""
-    monkeypatch.setattr("backend.config.settings.recording_enabled", False)
+def test_step_0_omits_recording_notice_when_disabled():
+    """The default unrecorded session does not claim a notice was spoken."""
     prompt = build_system_prompt(
         clinic_name="Test Clinic",
         doctors=[],
