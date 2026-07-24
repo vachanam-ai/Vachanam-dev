@@ -50,7 +50,7 @@ def test_build_live_agent_prompt_wraps_real_prompt_with_facts():
     assert "NO tools" in p and "KNOWN FACTS" in p
     assert "four hundred rupees" in p
     # the REAL receptionist prompt is included (its AM/PM ban + #408 digit rule)
-    assert '"AM"' in p and "NUMBERS ARE ALWAYS DIGITS" in p
+    assert '"AM"' in p and "PLAIN DIGITS" in p  # freed number contract 2026-07-24
 
 
 def test_agent_first_inbound_order():
