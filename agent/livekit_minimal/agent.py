@@ -1063,9 +1063,11 @@ class _StreamingSmallestTTS(smallestai.TTS):
         )
 
 
-# Soniox catalog voices we support (no cloning — 2026-07-24). A stored voice_id
-# outside this set is a smallest id and resolves to soniox_tts_default_voice.
-_SONIOX_TTS_VOICES = {"Priya", "Meera", "Maya"}
+# Soniox Indian-accent voices (per the tts-rt-v1 catalog: Priya/Meera female,
+# Arjun/Rohan male; every voice works in all 60+ languages incl. Telugu). No
+# cloning — a stored voice_id outside this set is a smallest id and resolves to
+# soniox_tts_default_voice.
+_SONIOX_TTS_VOICES = {"Priya", "Meera", "Arjun", "Rohan"}
 
 
 def _smallest_tts_instances(voice_id: str, tts_lang: str) -> list:
