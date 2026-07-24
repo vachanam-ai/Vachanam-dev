@@ -21,7 +21,7 @@ openai>=1.30.0
 # call_scoring. #330: the OLD google-generativeai pin satisfied nothing (code
 # never imports it) while the real dependency was missing in prod, so every
 # prod bot answer fell back and hourly call-scoring silently no-opped.
-google-genai>=1.0.0
+google-genai>=2.14.0
 razorpay>=1.4.0
 python-multipart>=0.0.27
 fastapi-limiter==0.2.0
