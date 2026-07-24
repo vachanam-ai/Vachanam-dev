@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     # needs Soniox to enable JP-region TTS on the key — flip soniox_tts_ws_url
     # when that lands (currently region-scoped to global; JP TTS 401s).
     tts_provider: str = "soniox"
-    soniox_tts_model: str = "tts-rt-v1-preview"
+    soniox_tts_model: str = "tts-rt-v1"  # per Soniox RT-TTS docs; sandbox-validated
     soniox_tts_ws_url: str = "wss://tts-rt.soniox.com/tts-websocket"
     soniox_tts_default_voice: str = "Priya"
     soniox_tts_sample_rate: int = 24000

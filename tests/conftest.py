@@ -47,6 +47,12 @@ settings.redis_url = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0"
 settings.resend_api_key = ""
 settings.smtp_host = ""
 
+# PREFETCH FUSE (2026-07-24): the #5 tool prefetch fires route_to_doctor (a REAL
+# Gemini routing call) from on_user_turn_completed on any booking-intent turn.
+# Off by default in tests so exercising the turn hook never makes a live LLM call
+# or leaks a background task; test_tool_prefetch re-enables it per-test.
+settings.voice_tool_prefetch = False
+
 # The real DATABASE_URL as loaded from .env — captured BEFORE the fuse below
 # overwrites it, so _refuse_unsafe_test_db can still compare against it.
 _ORIG_DATABASE_URL = settings.database_url

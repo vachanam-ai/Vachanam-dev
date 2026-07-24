@@ -74,4 +74,6 @@ def test_soniox_context_includes_specialties_and_medical_terms():
 def test_route_tool_clears_stale_doctor_before_await():
     src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
     method = src.split("async def route_to_doctor(self", 1)[1].split("async def check_availability", 1)[0]
-    assert method.index("self._state.doctor_id = None") < method.index("await route_to_doctor(")
+    # stale doctor cleared BEFORE the routing await (now routed via _consume_or_route,
+    # #5 — prefetch consumption also happens after the clear).
+    assert method.index("self._state.doctor_id = None") < method.index("await self._consume_or_route(")
