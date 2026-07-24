@@ -398,7 +398,7 @@ def test_system_prompt_exploratory_ask_is_not_a_booking_command():
     availability QUESTION — answer + offer, never book on a hypothetical."""
     prompt = _make_prompt()
     assert "EXPLORATORY ASK" in prompt
-    assert "Booking on a hypothetical is a serious" in prompt
+    assert "hypothetical is a serious failure" in prompt
 
 
 def test_system_prompt_audio_chaos_rules_pinned():
@@ -468,12 +468,12 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     HARD RULES must be pinned: phones are always English digits (Telugu only on
     explicit request), and internal tool params are never voiced."""
     prompt = _make_prompt()
-    # HARD RULE 7 — phones written as digits; #408 converter speaks them in
-    # English one-by-one (the old "Telugu on explicit request" escape is GONE:
-    # Vinay 2026-07-19 — "never in any language", no exceptions).
-    assert "PHONE NUMBERS: write the plain digits" in prompt
-    assert "one digit at a time in ENGLISH" in prompt
-    assert "No exceptions" in prompt
+    # HARD RULE 7 — phones/times written as DIGITS, never native number words.
+    # The #408 converter (spoken_english_numbers, tested in test_tts_sanitizer)
+    # speaks them in English one-by-one — that's the deterministic boundary's job,
+    # freed from the prompt (Vinay 2026-07-24 "free up the system prompt").
+    assert "PLAIN DIGITS" in prompt
+    assert "native" in prompt  # never native/Telugu number words
     # HARD RULE 8 — never voice mechanics; different_person handled silently
     assert "NEVER voice your own internal mechanics" in prompt
     assert "different person" in prompt.lower()
@@ -486,8 +486,8 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     # #296: friend booking must pass booking_for_other + never surface caller's own
     assert "pass booking_for_other=true to check_availability" in prompt
     assert "that is the caller's" in prompt.lower() or "it is the caller" in prompt.lower()
-    # phone native-number-words ban stays pinned (#408)
-    assert "NEVER write a phone number in Telugu/native number" in prompt
+    # phone native-number-words ban stays pinned (#408, freed wording 2026-07-24)
+    assert "native/Telugu number OR time words" in prompt
 
 
 def test_system_prompt_lead_in_rule():

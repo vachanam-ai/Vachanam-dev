@@ -457,6 +457,18 @@ async def _space_digits_stream(text):
         yield spoken_english_numbers(pend)
 
 
+# Soniox expression tags ([Happy], [Excited], [Questioning], [Whisper]) — Soniox
+# speaks them expressively; the smallest.ai fallback must STRIP them so a literal
+# "[Happy]" never reaches a caller (RULE 6). Only [Letter…] tags are removed, so
+# a bracketed number ("[12]") is left untouched. Soniox is the primary and keeps
+# the tags — the strip lives ONLY in the smallest fallback classes.
+_EXPR_TAG = re.compile(r"\[[A-Za-z][A-Za-z0-9 /_-]*\]\s*")
+
+
+def _strip_expression_tags(text: str) -> str:
+    return _EXPR_TAG.sub("", text or "")
+
+
 _SPEECH_GUARD_CARRY = 24
 _SPEECH_BOUNDARY = re.compile(r"[.!?।\n]")
 
@@ -974,7 +986,10 @@ class _HttpSmallestTTS(smallestai.TTS):
         self._capabilities = lk_tts.TTSCapabilities(streaming=False)
 
     def synthesize(self, text, *, conn_options=_DEFAULT_CONN):
-        return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
+        # smallest fallback can't voice Soniox expression tags — strip them (RULE 6).
+        return _RawRestChunked(
+            tts=self, input_text=_strip_expression_tags(text), conn_options=conn_options
+        )
 
 
 class _AgcEmitterProxy:
@@ -1012,6 +1027,7 @@ class _GuardedSmallestStream(_SmallestSynthStream):
     language (post-switch drift sounded like garbled 'Bengali')."""
 
     async def _run_ws(self, text: str, output_emitter) -> None:
+        text = _strip_expression_tags(text)  # smallest can't voice Soniox tags (RULE 6)
         base = (
             self._opts.language.language
             if hasattr(self._opts.language, "language")
@@ -1042,7 +1058,9 @@ class _StreamingSmallestTTS(smallestai.TTS):
         # One-shot synth (warm probes etc.) rides the proven REST path — the
         # plugin's own ChunkedStream would hit HTTP /tts declaring "pcm" and
         # replay the 2026-06-25 WAV-header-as-PCM 5x-speed bug.
-        return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
+        return _RawRestChunked(
+            tts=self, input_text=_strip_expression_tags(text), conn_options=conn_options
+        )
 
 
 # Soniox catalog voices we support (no cloning — 2026-07-24). A stored voice_id

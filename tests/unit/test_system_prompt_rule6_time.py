@@ -32,9 +32,9 @@ def test_prompt_requires_digit_times_english_speech():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     # AM/PM still banned
     assert '"AM"' in p and '"PM"' in p
-    # #408: digits required, native number words banned
-    assert "NUMBERS ARE ALWAYS DIGITS" in p
+    # #408: digits required, native number words banned (freed to a compact rule
+    # 2026-07-24 — English one-by-one speech is the sanitizer's job, not the prompt)
+    assert "PLAIN DIGITS" in p
     assert "ఆరున్నర" in p  # shown as the banned example
-    assert "six thirty" in p
     # day-part word stays native around the digits
     assert "సాయంత్రం 6:30 కి" in p
