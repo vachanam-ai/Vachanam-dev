@@ -2,6 +2,16 @@
 
 Updated: 2026-07-25
 
+## Production deployment
+
+Deployed as commit `ec4e90f`, Fly version **178**, on 2026-07-25. Runtime logs
+prove the active machine is in `bom`, LiveKit registered the worker in
+`India West`, Vertex is `asia-south1`, Soniox STT/TTS are `jp`, the local VAD
+signal is 60 ms, preemptive TTS is enabled, all six DID greeting routes loaded,
+and every job process prewarmed its persistent Soniox TTS socket. No process
+initialization errors occurred. The deployment is complete; the remaining gate
+is a real-call corpus of at least 30 Telugu turns.
+
 ## Definition of the target
 
 The product target is **500 ms warm perceived response latency**, measured from

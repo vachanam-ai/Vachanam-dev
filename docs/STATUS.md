@@ -1,6 +1,6 @@
 # Vachanam — Status (single source of truth)
 
-> **2026-07-25 — 500MS COLOCATION PATH READY FOR PRODUCTION.** The worker,
+> **2026-07-25 — 500MS COLOCATION PATH DEPLOYED (PRODUCTION — Fly v178).** The worker,
 > LiveKit dispatch, and Vertex LLM are already Mumbai/India-West; Soniox remains
 > on its closest supported Japan regional deployment. The measured warm median
 > was 1.363s from last recognized word to queued audio, with 234ms VAD hangover,
@@ -11,9 +11,12 @@
 > exact-variant Vertex caches, and no competing dummy LLM call. Startup's 2s
 > tenant lookup is moved behind first audio using a prewarmed patient-free DID
 > greeting map with authoritative mismatch cancellation. Focused proof: 78
-> checks green plus Ruff/compile. Full design and acceptance/rollback gates:
-> `docs/LATENCY_500MS_COLOCATION_PLAN.md`. Production still needs deployment and
-> a ≥30-turn real Telugu corpus before 500ms can be claimed.
+> checks green plus Ruff/compile. Production proof: Fly v178 is started in
+> `bom`; LiveKit registered `India West`; runtime reports Vertex
+> `asia-south1`, Soniox STT/TTS `jp`, 60ms VAD, preemptive TTS, six warm DID
+> greeting routes, and warm Soniox TTS sockets. Full design and
+> acceptance/rollback gates: `docs/LATENCY_500MS_COLOCATION_PLAN.md`. A ≥30-turn
+> real Telugu corpus is still required before 500ms can be claimed.
 
 > **2026-07-24 — P0 VOICE LATENCY CORRECTION (PRODUCTION — Fly v177).**
 > Production call evidence showed first audio at 14.36s, despite the caller
