@@ -50,7 +50,6 @@ PLANS: dict[str, Plan] = {
 #     Lite 1,799 CANNOT hold 10% at worst case (fixed DID floor — it already
 #     sat below the 40% invariant at Rs1,999, accepted 07-15); ~breakeven at
 #     typical cost, flagged to Vinay.
-#   * voice CLONING unlocked on EVERY plan (see cloning_allowed).
 #   * GST not added on top (GST_WAIVED below — "for now remove gst 18%").
 # After the window: standard price, standard gates. UI shows the actual price
 # struck through + the offer price, labeled "Offer price — first 3 months".
@@ -93,16 +92,10 @@ def effective_price(plan: str, subscription_started_at=None, now=None) -> tuple[
     return p.base_rupees, False
 
 
-def cloning_allowed(plan: str, subscription_started_at=None, now=None) -> bool:
-    """Voice cloning: Clinic/Multi always; EVERY plan during the launch-offer
-    window (Vinay 2026-07-17: "cloned voice in all plans for 3 months").
-    Existing clones keep working after the window — only NEW cloning is gated."""
-    return plan in CLONING_PLANS or in_offer_window(subscription_started_at, now)
-
 # Voice-agent languages available per plan (agent.i18n codes). None = every
 # language the platform supports. 2026-07-12 (Vinay): ALL plans get all
 # languages — language is zero-variable-cost; plans now differentiate on
-# minutes, doctors and premium voice (cloning/follow-up loop) instead.
+# minutes, doctors and the follow-up loop instead.
 PLAN_LANGUAGES: dict[str, list[str] | None] = {
     "lite": None,
     "solo": None,
@@ -110,20 +103,15 @@ PLAN_LANGUAGES: dict[str, list[str] | None] = {
     "multi": None,
 }
 
-# Voice CLONING (own recorded voice per language) stays a Clinic/Multi feature.
-CLONING_PLANS = ("clinic", "multi")
+# Voice CLONING: feature REMOVED entirely 2026-07-24 (Vinay — Soniox is the TTS
+# and its clone quality wasn't good enough; catalog voices only). The old
+# CLONING_PLANS / cloning_allowed / PREMIUM_VOICE_PLANS gates died with it.
 
-# Treatment FOLLOW-UP voice loop — split out of the old PREMIUM_VOICE_PLANS
-# 2026-07-15 (Vinay: "follow-up is the main part to retain patients, include
-# it"). Available on EVERY plan now: it is just metered outbound minutes
-# (revenue, not a cost sink), so gating retention behind premium made no
-# economic sense. This ALSO enables the loop on Starter, which previously
-# lacked it — a deliberate consistency fix.
+# Treatment FOLLOW-UP voice loop — 2026-07-15 (Vinay: "follow-up is the main
+# part to retain patients, include it"). Available on EVERY plan: it is just
+# metered outbound minutes (revenue, not a cost sink), so gating retention
+# behind premium made no economic sense.
 FOLLOWUP_PLANS = ("lite", "solo", "clinic", "multi")
-
-# Back-compat alias: some call sites imported PREMIUM_VOICE_PLANS for the
-# CLONING gate. Keep it pointing at CLONING_PLANS so nothing silently breaks.
-PREMIUM_VOICE_PLANS = CLONING_PLANS
 
 # Plans with WhatsApp (confirmations, reminders, rating asks, chat) — Vinay's
 # positioning call, spec 2026-07-13. Message cost ≈ ₹0.40/booking, absorbed.

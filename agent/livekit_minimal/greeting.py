@@ -36,11 +36,32 @@ logger = structlog.get_logger()
 _TTS_URL = "https://api.smallest.ai/waves/v1/tts"
 _SPEED = 1.0  # matches the live agent — Vinay 07-06: normal speed (1.1 rushed)
 
+# ── Soniox voice seam (2026-07-24, single source — agent.py imports these) ──
+# The 4 Indian-accent voices in the tts-rt-v1 catalog (Priya/Meera female,
+# Arjun/Rohan male); every Soniox voice speaks all 60+ languages incl Telugu.
+# No cloning: a stored smallest voice_id resolves to the default catalog voice.
+SONIOX_TTS_VOICES = {"Priya", "Meera", "Arjun", "Rohan"}
+
+
+def resolve_soniox_voice(voice_id: str) -> str:
+    return voice_id if voice_id in SONIOX_TTS_VOICES else settings.soniox_tts_default_voice
+
+
+def use_soniox_tts() -> bool:
+    return settings.tts_provider == "soniox" and bool(settings.soniox_api_key)
+
+
+def greeting_voice_key(voice_id: str) -> str:
+    """Voice component for the greeting Redis cache key. Provider-aware so a
+    smallest-cached WAV can never be served after the switch to Soniox (and a
+    rollback to smallest re-misses instead of playing Priya)."""
+    return f"sx:{resolve_soniox_voice(voice_id)}" if use_soniox_tts() else voice_id
+
 
 def normalize_pcm(pcm: bytes, peak_target: float = 0.89, max_gain: float = 6.0) -> bytes:
     """Peak-normalize 16-bit PCM. Measured 2026-07-05 (Vinay: "voice is low"):
     smallest voices differ ~13 dB — padmaja (our te default) RMS 1107 vs anitha
-    4971 — and clinic-cloned voices are arbitrary. Bring every voice to a
+    4971. Bring every voice to a
     consistent, phone-loud level. Gain capped so a near-silent/noisy clip is
     never blasted into hiss."""
     import numpy as np
@@ -169,9 +190,59 @@ async def _synth_one(client: httpx.AsyncClient, text: str, voice_id: str, lang_c
     return resp.content
 
 
+async def _synth_wavs_soniox(texts: list[str], voice_id: str, lang_code: str) -> list[bytes]:
+    """Synthesize segments via Soniox tts-rt (one-shot synthesize per segment,
+    sequential on ONE persistent connection) and wrap the PCM in WAV containers
+    so the whole downstream machinery (Redis cache, play_wavs, filler PCM decode)
+    is provider-agnostic. Raises on failure — caller falls back (RULE 8)."""
+    from livekit.plugins import soniox as _sx
+
+    tts = _sx.TTS(
+        model=settings.soniox_tts_model,
+        voice=resolve_soniox_voice(voice_id),
+        language=lang_code,
+        sample_rate=settings.soniox_tts_sample_rate,
+        api_key=settings.soniox_api_key,
+        websocket_url=settings.soniox_tts_ws_url,
+    )
+    try:
+        out: list[bytes] = []
+        for text in texts:
+            frames: list[bytes] = []
+            sr = settings.soniox_tts_sample_rate
+            ch = 1
+            async with asyncio.timeout(15):
+                async for ev in tts.synthesize(sanitize_for_tts(text)):  # RULE 6
+                    frame = getattr(ev, "frame", None)
+                    if frame is not None:
+                        frames.append(bytes(frame.data))
+                        sr, ch = frame.sample_rate, frame.num_channels
+            if not frames:
+                raise RuntimeError("soniox synth returned no audio")
+            buf = io.BytesIO()
+            wf = wave.open(buf, "wb")
+            wf.setnchannels(ch)
+            wf.setsampwidth(2)  # pcm_s16le
+            wf.setframerate(sr)
+            wf.writeframes(b"".join(frames))
+            wf.close()
+            out.append(buf.getvalue())
+        return out
+    finally:
+        try:
+            await tts.aclose()
+        except Exception:  # noqa: BLE001 — cleanup must not mask a synth result
+            pass
+
+
 async def synth_wavs(texts: list[str], voice_id: str, lang_code: str) -> list[bytes]:
-    """Synthesize every segment concurrently. Raises on any failure — the
+    """Synthesize every segment. Provider-aware (2026-07-24): with TTS_PROVIDER=
+    soniox the greeting/filler audio comes from Soniox so the caller hears ONE
+    voice for the whole call (welcome, conversation, fillers) — not a smallest
+    welcome followed by a Soniox session voice. Raises on any failure — the
     caller falls back to the live session.say path (RULE 8)."""
+    if use_soniox_tts():
+        return await _synth_wavs_soniox(texts, voice_id, lang_code)
     async with httpx.AsyncClient(timeout=10.0) as client:
         return list(await asyncio.gather(
             *(_synth_one(client, t, voice_id, lang_code) for t in texts)
@@ -311,7 +382,12 @@ async def synth_and_play(
             wavs = await synth_wavs(texts, voice_id, lang_code)
             asyncio.create_task(_greeting_cache_set(cache_key, wavs))
             return await play_wavs(room, wavs, t_answer=t_answer)
-        # No cache (dynamic greeting): the original pipelined synth+play.
+        # No cache (dynamic greeting): Soniox rides the same one-voice path
+        # (sequential synth then play — its persistent connection is fast);
+        # smallest keeps the original pipelined synth+play.
+        if use_soniox_tts():
+            wavs = await synth_wavs(texts, voice_id, lang_code)
+            return await play_wavs(room, wavs, t_answer=t_answer)
         async with httpx.AsyncClient(timeout=10.0) as client:
             tasks = [
                 asyncio.ensure_future(_synth_one(client, t, voice_id, lang_code))

@@ -7,7 +7,6 @@ exhaust. Every plan holds >=40% margin at worst case (Rs3/min + Rs1,500 infra).
 from backend.services.billing_math import (
     PLAN_LANGUAGES,
     PLANS,
-    PREMIUM_VOICE_PLANS,
     TRIAL_MINUTES,
     call_blocked,
     included_minutes_for,
@@ -146,7 +145,7 @@ def test_lite_plan_economics():
     languages, follow-up INCLUDED. Deliberately NOT 40%-worst (per-clinic
     fixed cost too large under ₹2k); holds ~35% at TYPICAL cost, and overage
     protects the downside."""
-    from backend.services.billing_math import CLONING_PLANS, FOLLOWUP_PLANS
+    from backend.services.billing_math import FOLLOWUP_PLANS
 
     lite = PLANS["lite"]
     assert lite.base_rupees == 1999
@@ -161,9 +160,8 @@ def test_lite_plan_economics():
     typical_margin = (lite.base_rupees - typical_cost) / lite.base_rupees
     assert typical_margin >= 0.30, f"lite typical margin {typical_margin:.1%}"
 
-    # Follow-up loop included; cloning NOT.
+    # Follow-up loop included (cloning removed platform-wide 2026-07-24).
     assert "lite" in FOLLOWUP_PLANS
-    assert "lite" not in CLONING_PLANS
 
 
 def test_plan_feature_gates_shape():
@@ -173,12 +171,13 @@ def test_plan_feature_gates_shape():
     assert PLAN_LANGUAGES["solo"] is None
     assert PLAN_LANGUAGES["clinic"] is None
     assert PLAN_LANGUAGES["multi"] is None
-    # 2026-07-15 split: cloning stays Clinic/Multi; follow-up on every plan.
-    from backend.services.billing_math import CLONING_PLANS, FOLLOWUP_PLANS
+    # Follow-up on every plan; voice cloning REMOVED platform-wide 2026-07-24
+    # (the old CLONING_PLANS / PREMIUM_VOICE_PLANS gates are gone).
+    import backend.services.billing_math as bm
+    from backend.services.billing_math import FOLLOWUP_PLANS
 
-    assert CLONING_PLANS == ("clinic", "multi")
     assert set(FOLLOWUP_PLANS) == {"lite", "solo", "clinic", "multi"}
-    assert PREMIUM_VOICE_PLANS == ("clinic", "multi")  # back-compat alias
+    assert not hasattr(bm, "CLONING_PLANS") and not hasattr(bm, "cloning_allowed")
 
 
 def test_revenue_active_within_bucket_is_base_only():

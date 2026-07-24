@@ -15,7 +15,7 @@ _TTS_URL = "https://api.smallest.ai/waves/v1/tts"
 
 # #405: voices from the pro catalog (44.1 kHz premium pool, incl. sravani —
 # Vinay 2026-07-18) must be requested with the pro model; standard-catalog
-# voices AND clinic clones stay on settings.smallest_model. PRO_VOICE_INFO
+# voices stay on settings.smallest_model. PRO_VOICE_INFO
 # also feeds the Settings voice picker (the catalog endpoint only lists the
 # standard pool, so blessed pro voices are injected from here).
 PRO_VOICE_INFO: dict[str, dict] = {

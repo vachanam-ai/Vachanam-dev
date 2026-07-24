@@ -62,10 +62,10 @@ cap logic); "Starter" is the DISPLAY name for `solo`.
 
 | Plan | Price | Included | Doctors | Languages | Premium |
 |---|---|---|---|---|---|
-| **Lite** (`lite`) | ₹1,999/mo + ₹5/min | 1 DID, 150 min (≈55 calls) | 1 | all 8 | follow-up loop; 4-min AI call cap |
-| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 3 | all 8 | follow-up loop; 4-min AI call cap |
-| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | all 8 | voice cloning, WhatsApp, follow-up loop |
-| **Multi** | ₹17,999/mo + ₹5/min | 1 DID, 3,000 min (≈1,080 calls) | unlimited | all 8 | own voice per language, WhatsApp |
+| **Lite** (`lite`) | ₹1,999/mo + ₹5/min | 1 DID, 150 min (≈55 calls) | 1 | all 7 | follow-up loop; 4-min AI call cap |
+| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 3 | all 7 | follow-up loop; 4-min AI call cap |
+| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | all 7 | WhatsApp, follow-up loop |
+| **Multi** | ₹17,999/mo + ₹5/min | 1 DID, 3,000 min (≈1,080 calls) | unlimited | all 7 | WhatsApp |
 
 (2026-07-12, Vinay: Starter doctors 1→3 + all languages on every plan — both
 zero-variable-cost levers, margins unchanged.)
@@ -73,28 +73,27 @@ zero-variable-cost levers, margins unchanged.)
 still pay a receptionist full salary. It DELIBERATELY does NOT hold the
 40%-worst invariant — the per-clinic DID+infra floor is too large a share of
 ₹1,999. Vinay accepted the tradeoff: ~35% margin at TYPICAL cost + low volume,
-overage ₹5/min caps the downside. Follow-up loop is NOW on every plan — split
-`PREMIUM_VOICE_PLANS` → `CLONING_PLANS` (clinic/multi) + `FOLLOWUP_PLANS` (all);
-cloning + WhatsApp stay Clinic+. plan_type enum gains `lite` (migration gg30).)
+overage ₹5/min caps the downside. Follow-up loop is NOW on every plan
+(`FOLLOWUP_PLANS`); WhatsApp stays Clinic+. plan_type enum gains `lite`
+(migration gg30). Voice CLONING REMOVED platform-wide 2026-07-24, Vinay.)
 
 Overage ₹5/min on every plan. Extra DID ₹1,999/mo. Extra branch ₹7,999/mo —
 each extra branch is provisioned as a full new clinic (own DID, Vobiz
 sub-account, trunk, doctors, staff; nothing carries over — RULE 1 isolation).
 Market in CALLS, meter in MINUTES. Single source of truth for plan economics
 AND feature gates: `backend/services/billing_math.py` (PLANS, PLAN_LANGUAGES,
-CLONING_PLANS, FOLLOWUP_PLANS, WHATSAPP_PLANS, TRIAL_MINUTES).
+FOLLOWUP_PLANS, WHATSAPP_PLANS, TRIAL_MINUTES).
 
 All prices are **exclusive of 18% GST** (shown as "+18% GST"; B2B clinics reclaim
 it via input credit). **2026-07-17 LAUNCH OFFER (Vinay — clinic feedback "pricing
 too much; keep low until first clients"):** for a clinic's FIRST 3 PAID months —
 offer prices at 10-15% worst-case margin (Starter ₹3,999 · Clinic ₹6,999 ·
-Multi ₹11,999; Lite stays ₹1,999 — NO discount, Vinay: already margin-thin —
-but keeps the window's cloning unlock), GST NOT added for now
-(`GST_WAIVED` in billing_math — flip to restore), voice cloning on EVERY plan
-during the window, Lite doctors 1→3. UI shows actual price struck through +
-offer price labeled "Offer price — first 3 months". Source of truth:
-`billing_math.py` OFFER_PRICES / in_offer_window / effective_price /
-cloning_allowed.
+Multi ₹11,999; Lite stays ₹1,999 — NO discount, Vinay: already margin-thin),
+GST NOT added for now (`GST_WAIVED` in billing_math — flip to restore), Lite
+doctors 1→3. UI shows actual price struck through + offer price labeled
+"Offer price — first 3 months". Source of truth: `billing_math.py`
+OFFER_PRICES / in_offer_window / effective_price. (Voice cloning REMOVED
+platform-wide 2026-07-24.)
 
 Free trial: REMOVED 2026-07-17 (Vinay) — new signups start `paused`; the AI
 line answers with the blocked line until the first payment activates. Legacy

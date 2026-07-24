@@ -558,37 +558,16 @@ def _availability_caller_phone(state) -> str | None:
 
 
 def _voice_for_lang(branch, lang_code: str) -> str:
-    """The TTS voice_id to speak `lang_code` for this branch. Vinay 2026-07-05:
-    the agent speaks ONLY clinic-provided voices — one clone per language — so
-    the clinic's clone REGISTERED FOR this language always wins (that's what a
-    language switch inherits too). A cloned voice is language-bound (the te
-    clone spoke 0.45s of noise for an English sentence, measured 2026-07-03),
-    so a clone never crosses languages. Order: clinic clone for THIS language →
-    the clinic's chosen tts_voice unless it's a clone of ANOTHER language →
-    the language's catalog default (RULE 8 — a language the clinic hasn't
-    voiced yet must still get a working call; logged for the Settings badge)."""
+    """The TTS voice_id to speak `lang_code` for this branch: the clinic's chosen
+    tts_voice, else the language's catalog default (RULE 8 — a language the
+    clinic hasn't voiced must still get a working call). Voice CLONING was
+    REMOVED 2026-07-24 (Vinay) — the per-language clone lookup died with it;
+    legacy branches.cloned_voices data is simply ignored."""
     cfg = get_lang(lang_code)
-    clones = [
-        cv for cv in (getattr(branch, "cloned_voices", None) or [])
-        if isinstance(cv, dict) and cv.get("voice_id")
-    ]
-    for cv in clones:
-        if (cv.get("language") or "").lower().strip() == cfg.code:
-            return cv["voice_id"]
     v = (getattr(branch, "tts_voice", None) or "").strip()
     if not v:
         logger.info("voice_fallback_catalog lang=%s reason=no_clinic_voice", cfg.code)
         return cfg.default_voice
-    for cv in clones:
-        if cv.get("voice_id") != v:
-            continue
-        clone_lang = (cv.get("language") or "").lower().strip()
-        if clone_lang and clone_lang != cfg.code:
-            logger.info(
-                "voice_fallback_catalog lang=%s reason=clinic_voice_is_%s_bound",
-                cfg.code, clone_lang,
-            )
-            return cfg.default_voice
     return v
 
 
@@ -961,7 +940,7 @@ class _RawRestChunked(lk_tts.ChunkedStream):
         n = wf.getnframes()
         # Loudness: smallest voices differ ~13 dB (padmaja vs anitha, measured
         # 2026-07-05, Vinay "voice is low") — normalize every utterance so any
-        # catalog/cloned voice lands at consistent phone volume.
+        # catalog voice lands at consistent phone volume.
         from agent.livekit_minimal.greeting import normalize_pcm
         pcm = normalize_pcm(wf.readframes(n))
         wf.close()
@@ -1063,11 +1042,13 @@ class _StreamingSmallestTTS(smallestai.TTS):
         )
 
 
-# Soniox Indian-accent voices (per the tts-rt-v1 catalog: Priya/Meera female,
-# Arjun/Rohan male; every voice works in all 60+ languages incl. Telugu). No
-# cloning — a stored voice_id outside this set is a smallest id and resolves to
-# soniox_tts_default_voice.
-_SONIOX_TTS_VOICES = {"Priya", "Meera", "Arjun", "Rohan"}
+# Soniox Indian-accent voices + resolver live in greeting.py (single source —
+# the greeting/filler synth needs the same resolution and agent→greeting is the
+# import direction that exists already).
+from agent.livekit_minimal.greeting import (  # noqa: E402
+    greeting_voice_key as _greeting_voice_key,
+    resolve_soniox_voice as _resolve_soniox_voice,
+)
 
 
 def _smallest_tts_instances(voice_id: str, tts_lang: str) -> list:
@@ -1097,7 +1078,7 @@ def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
     smallest voice) falls to the default catalog voice; the smallest fallback
     keeps the real id so it stays valid. #8 prewarms the WS so the cold connect
     is off the caller's first turn."""
-    voice = voice_id if voice_id in _SONIOX_TTS_VOICES else settings.soniox_tts_default_voice
+    voice = _resolve_soniox_voice(voice_id)
     kw = dict(
         model=settings.soniox_tts_model,
         voice=voice,
@@ -1121,9 +1102,12 @@ def _soniox_prewarm_matches(warm, voice_id: str, tts_lang: str) -> bool:
     clinic has a non-default Soniox voice."""
     if warm is None:
         return False
-    resolved = voice_id if voice_id in _SONIOX_TTS_VOICES else settings.soniox_tts_default_voice
     o = getattr(warm, "_opts", None)
-    return o is not None and o.voice == resolved and o.language == tts_lang
+    return (
+        o is not None
+        and o.voice == _resolve_soniox_voice(voice_id)
+        and o.language == tts_lang
+    )
 
 
 def _build_session_tts(
@@ -1143,6 +1127,15 @@ def _build_session_tts(
             if _soniox_prewarm_matches(prewarmed_soniox, voice_id, tts_lang)
             else _build_soniox_tts(voice_id, tts_lang)
         )
+        # #8: fire the background WS connect NOW (audit 2026-07-24: the plugin's
+        # prewarm() needs a RUNNING loop — in the sync worker prewarm it hit
+        # RuntimeError and silently did nothing, so the first turn still paid the
+        # cold connect). Here we're inside the async entrypoint: the connect runs
+        # concurrent with the rest of call setup and is warm by the first turn.
+        try:
+            primary.prewarm()
+        except Exception as e:  # noqa: BLE001 — a warmup must never break TTS build
+            logger.debug("soniox_tts_prewarm_call_failed: %s", e)
         return lk_tts.FallbackAdapter(
             [primary, *smallest], sample_rate=settings.smallest_sample_rate
         )
@@ -1150,11 +1143,13 @@ def _build_session_tts(
 
 
 def _prewarm_soniox_tts(proc) -> None:
-    """#8: build the default-voice Soniox TTS ONCE per worker so the WS/TLS
-    connect is off the caller's first turn. Stored on proc.userdata['tts_soniox']
-    and reused by _build_session_tts when the call's (voice, language) match —
-    the common case (Telugu default voice). Best-effort: the entrypoint rebuilds
-    if this missed."""
+    """#8 part 1: build the default-voice Soniox TTS object ONCE per worker
+    (proc.userdata['tts_soniox']), reused by _build_session_tts when the call's
+    (voice, language) match. NOTE (audit 2026-07-24): construction alone does NOT
+    open the WS — the plugin's prewarm() needs a running event loop, which this
+    sync hook lacks. The actual connect fires in _build_session_tts (async
+    entrypoint context), concurrent with call setup. Best-effort: the entrypoint
+    rebuilds if this missed."""
     if not (settings.tts_provider == "soniox" and settings.soniox_api_key):
         return
     try:
@@ -1848,7 +1843,13 @@ class VachanamAgent(Agent):
         if not _is_booking_intent(complaint):
             return
         self._prefetch_complaint = complaint
-        self._prefetch_route = asyncio.create_task(self._run_prefetch_routing(complaint))
+        task = asyncio.create_task(self._run_prefetch_routing(complaint))
+        # Retrieve the exception of an unconsumed failed prefetch so asyncio never
+        # logs "Task exception was never retrieved" (audit 2026-07-24).
+        task.add_done_callback(
+            lambda t: None if t.cancelled() else t.exception()
+        )
+        self._prefetch_route = task
 
     async def _run_prefetch_routing(self, complaint: str) -> dict:
         """Route on a DEDICATED session — async sessions are not concurrency-safe,
@@ -3650,15 +3651,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         gate_session = AgentSession(
             stt=_build_stt(lang_cfg),
             llm=ctx.proc.userdata.get("llm") or _build_fallback_llm(),
-            # TTS = smallest.ai Waves (STT stays Sarvam Saaras). voice falls back
-            # to the language's default smallest voice when the clinic hasn't set one.
-            tts=smallestai.TTS(
-                api_key=settings.smallest_api_key,
-                model=settings.smallest_model,
-                voice_id=(getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice,
-                language=lang_cfg.tts_code,
-                sample_rate=settings.smallest_sample_rate,
-                output_format="pcm",
+            # Provider-aware TTS (audit 2026-07-24): the blocked line speaks the
+            # same voice as the rest of the product, with the same RULE-8
+            # fallback chain (was a raw smallest WS client with no fallback).
+            tts=_build_session_tts(
+                (getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice,
+                lang_cfg.tts_code,
+                ctx.proc.userdata.get("tts_soniox"),
             ),
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
         )
@@ -3719,7 +3718,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
                 asyncio.create_task(_store_clinic_spoken())
         emergency_contact = branch.emergency_contact or ""
-        # smallest.ai voice_id (clinic-chosen or cloned); fall back to the
+        # smallest.ai voice_id (clinic-chosen); fall back to the
         # language's default smallest voice when unset (TTS provider = smallest).
         # Clinic's chosen voice, unless it's a clone registered for a different
         # language than this CALL speaks (per-caller mapping may differ from the
@@ -3861,8 +3860,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # #439: cache the STATIC welcome (no caller name, no follow-up
             # message) so it plays instantly instead of a ~10s live synth every
             # call. Dynamic greetings (name / follow-up) stay live (cache_key=None).
+            # Voice component is provider-aware (audit 2026-07-24): a smallest-
+            # cached WAV must never play after the Soniox switch (and vice versa).
             _greet_cache_key = (
-                _greeting_cache_key(str(branch.id), lang_code, tts_voice, _greet_texts)
+                _greeting_cache_key(
+                    str(branch.id), lang_code, _greeting_voice_key(tts_voice), _greet_texts
+                )
                 if not _spk_caller and not _fu_msg else None
             )
             _welcome_task = asyncio.create_task(
@@ -4252,7 +4255,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             llm=_session_llm,
             # TTS = smallest.ai Waves Lightning (replaced Sarvam Bulbul 2026-06-15).
             # STT above stays Sarvam Saaras. voice_id is the clinic's smallest voice
-            # (or a cloned voice); language is the clinic's short code (smallest uses
+            # language is the clinic's short code (smallest uses
             # the same te/hi/ta/... codes). output_format pcm streams to LiveKit.
             tts=_session_tts,
             vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),

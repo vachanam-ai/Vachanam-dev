@@ -1,6 +1,6 @@
 """Language switching (Vinay 2026-07-03 case 2): English as a 9th language,
 per-caller mapping plumbing, switch directive in the prompt, and the
-clone-voice fallback for a switched language."""
+voice fallback for a switched language."""
 from types import SimpleNamespace
 
 from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack, get_welcome
@@ -58,39 +58,25 @@ def test_solo_cap_copy_says_ten_minutes():
     assert "4 minutes" not in p
 
 
-def _branch(voice, clones):
-    return SimpleNamespace(tts_voice=voice, cloned_voices=clones)
+def _branch(voice, clones=None):
+    return SimpleNamespace(tts_voice=voice, cloned_voices=clones or [])
 
 
 def test_voice_for_lang_keeps_catalog_voice():
-    b = _branch("padmaja", [])
+    b = _branch("padmaja")
     assert _voice_for_lang(b, "en") == "padmaja"
 
 
-def test_voice_for_lang_clone_is_language_bound():
-    """Measured 2026-07-03 (smallest live API): a te clone speaking en returned
-    0.45s of noise for a full sentence — gibberish on a real call. A clone may
-    ONLY voice its registered language; other languages use that language's
-    default catalog voice."""
-    b = _branch("clone123", [{"voice_id": "clone123", "name": "Sree", "language": "te"}])
-    assert _voice_for_lang(b, "te") == "clone123"
-    assert _voice_for_lang(b, "en") == get_lang("en").default_voice
-    assert _voice_for_lang(b, "hi") == get_lang("hi").default_voice
-
-
 def test_voice_for_lang_no_voice_set_uses_language_default():
-    b = _branch(None, [])
+    b = _branch(None)
     assert _voice_for_lang(b, "hi") == get_lang("hi").default_voice
 
 
-def test_voice_for_lang_per_language_clone_wins():
-    """FIXLOG #265 (Vinay 2026-07-05): the agent speaks ONLY clinic voices —
-    the clone registered for the CALL's language always wins, even when the
-    branch's tts_voice is a catalog voice or another language's clone."""
+def test_voice_for_lang_ignores_legacy_cloned_voices():
+    """Voice CLONING removed 2026-07-24 (Vinay): legacy branches.cloned_voices
+    rows are ignored — the chosen tts_voice (or the language default) wins."""
     b = _branch("padmaja", [
         {"voice_id": "clone_te", "name": "Sree", "language": "te"},
-        {"voice_id": "clone_hi", "name": "Sree-hi", "language": "hi"},
     ])
-    assert _voice_for_lang(b, "te") == "clone_te"
-    assert _voice_for_lang(b, "hi") == "clone_hi"   # switch inherits clinic voice
-    assert _voice_for_lang(b, "en") == "padmaja"    # catalog voices are multilingual
+    assert _voice_for_lang(b, "te") == "padmaja"
+    assert _voice_for_lang(b, "en") == "padmaja"

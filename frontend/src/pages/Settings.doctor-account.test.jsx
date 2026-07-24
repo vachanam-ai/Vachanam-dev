@@ -21,7 +21,6 @@ vi.mock("../api/client.js", () => ({
   getBranchVoices: vi.fn(() => Promise.resolve([])),
   addStaff: vi.fn(),
   changePlan: vi.fn(),
-  cloneBranchVoice: vi.fn(),
   createPaymentOrder: vi.fn(),
   registerClonedVoice: vi.fn(),
   removeClonedVoice: vi.fn(),

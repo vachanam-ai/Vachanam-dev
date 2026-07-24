@@ -122,9 +122,19 @@ def test_synth_sanitizes_at_boundary(monkeypatch):
             return _Resp()
 
     monkeypatch.setattr(g.httpx, "AsyncClient", _Client)
+    # Pin the smallest path — this test mocks the smallest REST client; the
+    # Soniox path sanitizes identically (asserted below on its source).
+    monkeypatch.setattr(g.settings, "tts_provider", "smallest", raising=False)
     wavs = asyncio.run(g.synth_wavs(["**నమస్కారం**"], "kavitha", TE))
     assert len(wavs) == 1
     assert "*" not in sent["text"]
+
+    # RULE 6 holds on the Soniox synth path too (source guard — the live WS
+    # can't run outside a job context in tests).
+    import inspect
+
+    soniox_src = inspect.getsource(g._synth_wavs_soniox)
+    assert "sanitize_for_tts(text)" in soniox_src
 
 
 def test_normalize_pcm_boosts_quiet_and_leaves_loud():

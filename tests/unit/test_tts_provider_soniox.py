@@ -131,7 +131,99 @@ def test_session_rebuilds_soniox_when_language_differs(monkeypatch):
 
 
 def test_prewarm_and_reuse_are_wired_into_agent():
-    """#8 wiring: prewarm hook fires in _prewarm and BOTH session-TTS call sites
-    (main + language-switch handoff) pass the prewarmed instance for reuse."""
+    """#8 wiring: prewarm hook fires in _prewarm and ALL session-TTS call sites
+    (main + language-switch handoff + blocked-line gate) pass the prewarmed
+    instance for reuse."""
     assert "_prewarm_soniox_tts(proc)" in _SRC
-    assert _SRC.count('ctx.proc.userdata.get("tts_soniox")') == 2
+    assert _SRC.count('ctx.proc.userdata.get("tts_soniox")') == 3
+
+
+def test_session_build_fires_real_ws_prewarm(monkeypatch):
+    """Audit 2026-07-24: soniox.TTS.prewarm() needs a RUNNING loop — in the sync
+    worker hook it silently no-ops. The REAL connect must fire at session build
+    (async entrypoint). Guard: _build_session_tts calls primary.prewarm()."""
+    monkeypatch.setattr(ag.settings, "tts_provider", "soniox", raising=False)
+    monkeypatch.setattr(ag.settings, "soniox_api_key", "k-test", raising=False)
+
+    called = []
+    warm = ag._build_soniox_tts("Priya", "te")
+    monkeypatch.setattr(warm, "prewarm", lambda: called.append(1), raising=False)
+    adapter = ag._build_session_tts("sravani", "te", prewarmed_soniox=warm)
+    assert adapter._tts_instances[0] is warm
+    assert called == [1]
+
+
+def test_greeting_and_fillers_ride_soniox_one_voice(monkeypatch):
+    """Audit 2026-07-24 (three-voice call bug): greeting + filler clips synth via
+    smallest REST while the session speaks Soniox — synth_wavs must route to
+    Soniox when it's the provider, and the greeting cache key must carry a
+    provider marker so stale smallest WAVs never play."""
+    from agent.livekit_minimal import greeting as gr
+
+    monkeypatch.setattr(gr.settings, "tts_provider", "soniox", raising=False)
+    monkeypatch.setattr(gr.settings, "soniox_api_key", "k-test", raising=False)
+    assert gr.use_soniox_tts() is True
+    assert gr.resolve_soniox_voice("sravani") == gr.settings.soniox_tts_default_voice
+    assert gr.resolve_soniox_voice("Meera") == "Meera"
+    assert gr.greeting_voice_key("sravani").startswith("sx:")
+
+    monkeypatch.setattr(gr.settings, "tts_provider", "smallest", raising=False)
+    assert gr.use_soniox_tts() is False
+    assert gr.greeting_voice_key("sravani") == "sravani"  # rollback re-misses
+
+    src = Path("agent/livekit_minimal/greeting.py").read_text(encoding="utf-8")
+    assert "_synth_wavs_soniox" in src.split("async def synth_wavs")[1]  # routed
+    assert "_greeting_voice_key(tts_voice)" in _SRC                      # key marker
+
+
+async def test_synth_wavs_soniox_produces_valid_wavs(monkeypatch):
+    """The Soniox one-shot synth wraps PCM frames into WAV containers the whole
+    downstream machinery (cache/play/filler decode) can consume."""
+    import io
+    import wave
+
+    from agent.livekit_minimal import greeting as gr
+
+    class _Frame:
+        data = b"\x00\x01" * 480
+        sample_rate = 24000
+        num_channels = 1
+
+    class _Ev:
+        frame = _Frame()
+
+    class _FakeTTS:
+        def __init__(self, **kw):
+            pass
+
+        def synthesize(self, text):
+            async def _gen():
+                yield _Ev()
+                yield _Ev()
+            return _gen()
+
+        async def aclose(self):
+            pass
+
+    import livekit.plugins.soniox as sx
+    monkeypatch.setattr(sx, "TTS", _FakeTTS)
+    monkeypatch.setattr(gr.settings, "soniox_api_key", "k-test", raising=False)
+
+    wavs = await gr._synth_wavs_soniox(["నమస్కారం", "రెండవది"], "sravani", "te")
+    assert len(wavs) == 2
+    for w in wavs:
+        wf = wave.open(io.BytesIO(w), "rb")
+        assert wf.getframerate() == 24000 and wf.getnchannels() == 1
+        assert wf.getnframes() == 960  # 2 frames x 480 samples
+        wf.close()
+
+
+def test_voices_endpoint_offers_soniox_catalog_when_provider_soniox():
+    """Audit 2026-07-24 (UI gap): with TTS_PROVIDER=soniox the Settings picker
+    offered the smallest catalog whose picks the agent silently ignored. The
+    endpoint must return the Soniox Indian voices instead."""
+    src = Path("backend/routers/branches.py").read_text(encoding="utf-8")
+    sect = src.split("async def list_branch_voices")[1].split("async def ", 1)[0]
+    assert 'tts_provider == "soniox"' in sect
+    for v in ("Priya", "Meera", "Arjun", "Rohan"):
+        assert f'"{v}"' in sect, v

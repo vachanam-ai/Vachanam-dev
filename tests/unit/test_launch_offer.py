@@ -9,7 +9,6 @@ from backend.services.billing_math import (
     DID_COST_PER_MONTH,  # noqa: F401 — documents the cost model source
     OFFER_MONTHS,
     OFFER_PRICES,
-    cloning_allowed,
     effective_price,
     in_offer_window,
 )
@@ -29,22 +28,13 @@ def test_offer_pricing_first_three_paid_months_then_standard():
     assert effective_price("nope", _NOW) == (0, False)
 
 
-def test_offer_window_machinery_kept_for_cloning():
-    # The date window itself is retained (cloning still keys off it); only the
-    # PRICE discount is gone. So a future offer is a one-line OFFER_PRICES re-add.
+def test_offer_window_machinery_kept():
+    # The date window itself is retained (effective_price keys off it); a future
+    # offer is a one-line OFFER_PRICES re-add.
     assert in_offer_window(None) is True
     assert in_offer_window(_NOW) is True
     assert in_offer_window(_OLD) is False
     assert in_offer_window(_OLD.replace(tzinfo=None)) is False  # naive-safe
-
-
-def test_cloning_every_plan_during_window_standard_gates_after():
-    assert cloning_allowed("lite", _NOW) is True     # offer window unlock
-    assert cloning_allowed("solo", None) is True
-    assert cloning_allowed("lite", _OLD) is False    # window over → standard gate
-    assert cloning_allowed("solo", _OLD) is False
-    assert cloning_allowed("clinic", _OLD) is True   # Clinic/Multi always
-    assert cloning_allowed("multi", _OLD) is True
 
 
 def test_ui_surfaces_show_offer_and_standard_prices():

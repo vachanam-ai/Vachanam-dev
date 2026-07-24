@@ -19,11 +19,22 @@
 > • **Odia removed** — platform now 7 Indian languages (te/hi/ta/kn/ml/mr/bn) +
 >   English on request. get_lang('or')→Telugu, no migration. ⚠ CLAUDE.md pricing
 >   copy still says "all 8" — needs a Vinay marketing-copy update to "all 7".
-> • **Soniox expression tags** — LLM may prefix a reply with [Happy]/[Excited]/
->   [Questioning]/[Whisper]; Soniox voices them, smallest fallback strips them
->   (RULE 6). **Prompt freed** of the verbose number/time pronunciation rules —
+> • **Soniox expression tags** — OPEN set ([Happy]/[Giggles]/[Angry]/… examples,
+>   LLM adds any that fits); Soniox acts them, smallest fallback strips ANY [Word]
+>   tag (RULE 6). **Prompt freed** of the verbose number/time pronunciation rules —
 >   the deterministic English-digit sanitizer (#408) KEPT (still enforces + guards
 >   the fallback); only the LLM-facing pronunciation how-to was removed.
+> • **Pre-push audit (#453)** fixed 4 real bugs: prewarm was a silent no-op (WS
+>   connect now fires at session build), three-voice call (greeting/fillers/blocked
+>   line now synth via Soniox — ONE voice per call; provider-marked greeting cache),
+>   /voices picker now offers the real Soniox voices (Priya/Meera/Arjun/Rohan),
+>   prefetch task exception retrieval. Copy all-8→all-7 everywhere (incl CLAUDE.md,
+>   ToS).
+> • **Voice cloning REMOVED platform-wide (#454, Vinay):** endpoints, service fns,
+>   billing gates (CLONING_PLANS/cloning_allowed), agent per-language clone
+>   resolution, Settings clone UI + recorder, and all marketing copy. Catalog
+>   voices only. branches.cloned_voices column retained (inert; drop = future
+>   migration).
 > ⚠ NOT deployed: unit suite green locally, prod still on the pre-existing image.
 > Needs a live call to validate the Soniox voice, then push (CI auto-deploys).
 > The measured floor stands: latency is the Soniox STT Tokyo RTT, not the pipeline —

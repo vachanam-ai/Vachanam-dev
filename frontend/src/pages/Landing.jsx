@@ -20,7 +20,7 @@ const PLANS = [
     actual: "₹5,999",
     per: "/month + ₹5/min after",
     tagline: "Small clinics, up to 3 doctors",
-    points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "Token booking + calendar", "Reminder calls + receptionist app"]
+    points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 7 Indian languages", "Natural human-like AI voice", "Token booking + calendar", "Reminder calls + receptionist app"]
   },
   {
     name: "Clinic",
@@ -30,7 +30,7 @@ const PLANS = [
     per: "/month + ₹5/min after",
     tagline: "Growing clinics, up to 5 doctors",
     popular: true,
-    points: ["≈540 calls included (1,500 min)", "5 doctors", "All 8 Indian languages", "AI speaks in YOUR cloned voice", "WhatsApp confirmations + reminders", "Treatment follow-up calls", "Owner analytics"]
+    points: ["≈540 calls included (1,500 min)", "5 doctors", "All 7 Indian languages", "Natural human-like AI voice", "WhatsApp confirmations + reminders", "Treatment follow-up calls", "Owner analytics"]
   },
   {
     name: "Multi",
@@ -39,7 +39,7 @@ const PLANS = [
     actual: "₹17,999",
     per: "/month + ₹5/min after",
     tagline: "Multi-specialty, unlimited doctors",
-    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 8 Indian languages", "Your voice in every language", "WhatsApp confirmations + reminders", "Multi-doctor routing", "Branch-level analytics"]
+    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 7 Indian languages", "Natural human-like AI voice", "WhatsApp confirmations + reminders", "Multi-doctor routing", "Branch-level analytics"]
   }
 ];
 
@@ -360,12 +360,11 @@ export default function Landing() {
         <div className="mx-auto max-w-6xl px-4">
           <p data-item className="eyebrow">Speaks your patients&rsquo; language</p>
           <h2 data-item className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-            Eight languages. One warm AI agent.
+            Seven languages. One warm AI agent.
           </h2>
           <p data-item className="mt-3 max-w-2xl font-ui text-ink-soft">
             Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali. Natural pace,
-            warm tone. Tap any to hear exactly what your patients will hear. Want your own
-            voice? Clinics can clone it.
+            warm tone. Tap any to hear exactly what your patients will hear.
           </p>
           <div data-item className="mt-8">
             <VoicePicker />
@@ -413,7 +412,7 @@ export default function Landing() {
               <span className="text-slate"> + ₹5/min after</span>
             </p>
             <p className="font-ui text-xs text-slate">
-              For low-volume clinics: ≈55 calls (150 min), 3 doctors, all 8 languages, your cloned voice, reminder + treatment follow-up calls.
+              For low-volume clinics: ≈55 calls (150 min), 3 doctors, all 7 languages, reminder + treatment follow-up calls.
             </p>
           </div>
           <Link to="/register?plan=lite" className="btn-ghost shrink-0 px-5 py-2 text-sm">

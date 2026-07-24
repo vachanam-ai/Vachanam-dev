@@ -190,25 +190,20 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     from backend.services.telephony import branch_outbound_trunk_id
     assert branch_outbound_trunk_id(row) == "ST_madhapur"
 
-    # Cloned voice: register a dashboard voice_id IN THE BRANCH'S LANGUAGE (ta
-    # after the PATCH above) → it becomes the agent voice and shows in the
-    # picker tagged cloned. Per-language model (FIXLOG #265): a different-
-    # language voice would be stored for ITS language without hijacking
-    # tts_voice, and registering never rewrites branch.language.
-    with patch("backend.services.smallest_voice.list_voices", return_value=[{"voice_id": "padmaja", "display_name": "Padmaja"}]):
-        reg = await client.post(
-            f"/branches/{bid}/cloned-voices",
-            headers=_auth(owner),
-            json={"voice_id": "voice_abc123", "name": "Dr Vinay", "language": "ta"},
-        )
-        assert reg.status_code == 200, reg.text
-        assert reg.json()["tts_voice"] == "voice_abc123"  # set as current
+    # Voice picker (cloning REMOVED 2026-07-24): the smallest path returns the
+    # plain catalog for the language.
+    with patch("backend.services.smallest_voice.list_voices", return_value=[{"voice_id": "padmaja", "display_name": "Padmaja"}]),          patch.object(settings, "tts_provider", "smallest"):
         vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
-        picker = vs.json()["voices"]
-        assert picker[0]["voice_id"] == "voice_abc123" and picker[0]["cloned"] is True
-        # Remove it → falls back to the language default (tts_voice cleared).
-        rm = await client.delete(f"/branches/{bid}/cloned-voices/voice_abc123", headers=_auth(owner))
-        assert rm.status_code == 200 and rm.json()["tts_voice"] is None
+        assert vs.status_code == 200, vs.text
+        assert [v["voice_id"] for v in vs.json()["voices"]] == ["padmaja"]
+
+    # Soniox provider path (2026-07-24): the picker offers the 4 Indian-accent
+    # Soniox voices the agent actually speaks with; smallest catalog untouched.
+    with patch.object(settings, "tts_provider", "soniox"), \
+         patch.object(settings, "soniox_api_key", "k-test"):
+        vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
+        ids = [v["voice_id"] for v in vs.json()["voices"]]
+        assert ids == ["Priya", "Meera", "Arjun", "Rohan"]
 
     # ── 2. The agent's inbound DID->branch resolution finds THIS branch only ──
     did_norm = normalize_did(DID)
@@ -270,14 +265,10 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     assert "Walkin Wanda" in q.text  # the booking is visible to reception
 
 
-async def test_voice_cloning_included_on_every_plan(client, db):
-    """SUPERSEDED policy guard (repricing 2026-07-11, replaces Vinay 2026-06-20
-    'every plan'): cloning is Clinic/Multi only. A solo/Starter clinic sees
-    voice_cloning_allowed False and gets 403 on register; after an upgrade to
-    the clinic plan the same call succeeds. 2026-07-17 launch offer: the first
-    3 PAID months unlock cloning on EVERY plan (billing_math.cloning_allowed),
-    so this org is placed OUTSIDE the window (started 120 days ago) to keep
-    exercising the standard gate."""
+async def test_plan_settings_no_cloning_and_all_languages(client, db):
+    """Voice cloning REMOVED entirely 2026-07-24 (Vinay): the settings payload no
+    longer carries voice_cloning_allowed, the clone endpoints are GONE (404), and
+    every plan still sees all languages (2026-07-12; Odia removed 2026-07-24)."""
     org = Organization(
         name="Solo Org", owner_phone="+919000777002",
         owner_email=f"solo-{uuid.uuid4().hex[:6]}@test.com", plan="solo", status="active",
@@ -296,26 +287,18 @@ async def test_voice_cloning_included_on_every_plan(client, db):
 
     g = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
     assert g.status_code == 200
-    assert g.json()["voice_cloning_allowed"] is False
-    # All languages on every plan (2026-07-12): Starter sees the full dropdown.
+    assert "voice_cloning_allowed" not in g.json()
     codes = [o["code"] for o in g.json()["allowed_languages"]]
-    assert {"te", "hi", "en"} <= set(codes) and len(codes) == 8  # Odia removed 2026-07-24
+    assert {"te", "hi", "en"} <= set(codes) and len(codes) == 8  # 7 Indian + en
 
+    # The clone endpoints are gone — routes removed, not just gated.
     r = await client.post(
         f"/branches/{bid}/cloned-voices", headers=_auth(owner),
         json={"voice_id": "voice_solo", "name": "Solo Voice", "language": "te"},
     )
-    assert r.status_code == 403, r.text
-    assert "Upgrade" in r.json()["detail"]
-
-    # Upgrade to the clinic plan -> the same register now succeeds.
-    org.plan = "clinic"
-    await db.commit()
-    g2 = await client.get(f"/branches/{bid}/settings", headers=_auth(owner))
-    assert g2.json()["voice_cloning_allowed"] is True
-    with patch("backend.services.smallest_voice.list_voices", return_value=[]):
-        r2 = await client.post(
-            f"/branches/{bid}/cloned-voices", headers=_auth(owner),
-            json={"voice_id": "voice_solo", "name": "Solo Voice", "language": "te"},
-        )
-    assert r2.status_code == 200, r2.text
+    assert r.status_code in (404, 405), r.text
+    r2 = await client.post(
+        f"/branches/{bid}/voice-clone", headers=_auth(owner),
+        data={"display_name": "x"},
+    )
+    assert r2.status_code in (404, 405), r2.text

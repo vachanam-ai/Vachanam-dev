@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent.livekit_minimal import agent as ag
 
 SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 

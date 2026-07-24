@@ -111,7 +111,7 @@ class Branch(Base):
         String(32), nullable=True, unique=True
     )
     # smallest.ai Waves voice_id for this clinic's agent (clinic-selectable; can
-    # be a cloned voice). NULL → the agent uses the language's default smallest
+    # NULL → the agent uses the language's default smallest
     # voice (agent/i18n). Nullable + widened from the old Sarvam-speaker column
     # (TTS provider switched Sarvam Bulbul → smallest.ai 2026-06-15).
     tts_voice: Mapped[str | None] = mapped_column(String(64), nullable=True)

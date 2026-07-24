@@ -43,8 +43,9 @@ drops before confirmation, the slot is freed immediately for others.
 
 ## Languages
 
-Eight Indian languages: Telugu, Hindi, English, Tamil, Kannada, Malayalam,
-Marathi, Bengali, Odia — included on EVERY plan (2026-07-12). Each patient's
+Seven Indian languages plus English: Telugu, Hindi, English, Tamil, Kannada,
+Malayalam, Marathi, Bengali — included on EVERY plan (Odia removed 2026-07-24).
+Each patient's
 language is remembered for their next call. A caller can ask mid-call to
 switch language and the agent continues in the new language.
 
@@ -52,10 +53,10 @@ switch language and the agent continues in the new language.
 
 | Plan | Price | Included calling | Doctors | Languages | Extras |
 |---|---|---|---|---|---|
-| Lite | ₹1,999/month | 150 minutes (≈55 calls) | up to 3 | all 8 | treatment follow-up calls; AI calls capped at 10 minutes |
-| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 | treatment follow-up calls; AI calls capped at 10 minutes |
-| Clinic (most popular) | ₹9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 8 | custom cloned voice, treatment follow-up calls |
-| Multi | ₹17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 8 | your own voice in every language |
+| Lite | ₹1,999/month | 150 minutes (≈55 calls) | up to 3 | all 7 | treatment follow-up calls; AI calls capped at 10 minutes |
+| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 7 | treatment follow-up calls; AI calls capped at 10 minutes |
+| Clinic (most popular) | ₹9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 7 | treatment follow-up calls |
+| Multi | ₹17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 7 | WhatsApp confirmations + reminders |
 
 - Overage on every plan: ₹5 per minute beyond included minutes, billed with
   the next invoice.
@@ -141,15 +142,6 @@ of the Clinic plan to evaluate.
   digits + token only). If the calendar write fails the booking itself fails
   cleanly — the calendar and the queue never disagree.
 - Notifications never contain health details.
-
-## Custom voice (voice cloning)
-
-- Clinic and Multi plans can upload or record a short voice sample (5–15
-  seconds) per language; the AI then speaks in that voice on calls.
-- One voice per language; re-recording replaces the old one. Multi allows a
-  distinct voice for every language.
-- Until a clinic voice exists for a language, a natural stock voice is used
-  so calls always work.
 
 ## Dashboard and analytics (owner)
 

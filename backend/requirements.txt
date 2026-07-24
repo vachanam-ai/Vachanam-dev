@@ -24,7 +24,7 @@ openai>=1.30.0
 google-genai>=1.0.0
 razorpay>=1.4.0
 python-multipart>=0.0.27
-# smallest.ai Waves SDK — voice cloning (add/list/delete) + voice catalog.
+# smallest.ai Waves SDK — voice catalog (list_voices).
 smallestai>=4.4.7
 fastapi-limiter==0.2.0
 markdown>=3.6

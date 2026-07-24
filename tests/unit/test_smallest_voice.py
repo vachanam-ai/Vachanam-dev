@@ -1,8 +1,7 @@
-"""smallest.ai voice catalog + cloning service (Vinay 2026-06-15).
+"""smallest.ai voice catalog service (Vinay 2026-06-15; cloning REMOVED 2026-07-24).
 
 The SDK is mocked (no live API in tests, like calendar/Razorpay). Proves:
   - list_voices filters the catalog to a language
-  - clone_voice returns the new voice_id from the SDK response
   - a missing key / SDK error surfaces as VoiceServiceError (clean HTTP later),
     never a raw 500
 """
@@ -16,18 +15,10 @@ import backend.services.smallest_voice as sv
 class _FakeWaves:
     def __init__(self, voices):
         self._voices = voices
-        self.deleted = []
 
     def get_voices(self, model):
         return NS(voices=self._voices)
 
-    def add_voice(self, display_name, file):
-        # file is a (filename, bytes) tuple
-        assert isinstance(file, tuple) and isinstance(file[1], bytes)
-        return NS(data=NS(voice_id="voice_clone_abc"), message="ok")
-
-    def delete_voice(self, voice_id):
-        self.deleted.append(voice_id)
 
 
 def _voice(vid, langs, gender="female"):
@@ -38,7 +29,7 @@ def _voice(vid, langs, gender="female"):
 def fake_waves(monkeypatch):
     fw = _FakeWaves([
         _voice("padmaja", ["telugu", "tamil", "kannada", "malayalam"]),
-        _voice("niharika", ["hindi", "marathi", "bengali", "odia"]),
+        _voice("niharika", ["hindi", "marathi", "bengali"]),
         _voice("avery", ["english"], "female"),
     ])
     monkeypatch.setattr(sv, "_waves", lambda: fw)
@@ -70,33 +61,6 @@ def test_list_voices_no_filter_returns_all(fake_waves):
     allv = sv.list_voices(None)
     assert {v["voice_id"] for v in allv} == {"sravani", "padmaja", "niharika"}
     assert allv[0]["display_name"] and "languages" in allv[0]
-
-
-def test_clone_voice_returns_voice_id(fake_waves, monkeypatch):
-    # clone_voice() posts to smallest.ai with raw httpx (NOT the mocked SDK), so
-    # mock httpx.post here — otherwise the test hits the live API and 500s.
-    # The key check runs before the mocked post — stub it so the test passes
-    # in environments without SMALLEST_API_KEY (CI has no .env, #346).
-    import httpx
-
-    monkeypatch.setattr(sv.settings, "smallest_api_key", "test-smallest-key")
-
-    class _Resp:
-        status_code = 200
-        content = b"{}"
-        text = ""
-
-        def json(self):
-            return {"voiceId": "voice_clone_abc"}
-
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
-    vid = sv.clone_voice("Dr Voice", "sample.wav", b"RIFFfakeaudio")
-    assert vid == "voice_clone_abc"
-
-
-def test_delete_cloned_voice_calls_sdk(fake_waves):
-    sv.delete_cloned_voice("voice_clone_abc")
-    assert fake_waves.deleted == ["voice_clone_abc"]
 
 
 def _vd(vid, gender):

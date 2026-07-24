@@ -101,7 +101,7 @@ services:
       # REQUIRED in prod — Fernet key encrypting per-clinic Vobiz SIP passwords.
       - key: FIELD_ENCRYPTION_KEY
         sync: false
-      # smallest.ai TTS — backend needs it for voice cloning (clone endpoints).
+      # smallest.ai TTS — backend needs it for the voice catalog picker.
       - key: SMALLEST_API_KEY
         sync: false
       # Email OTP (preferred over SMTP). RESEND_FROM domain must be verified.

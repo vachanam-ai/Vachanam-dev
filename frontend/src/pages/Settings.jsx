@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   addStaff,
   changePlan,
-  cloneBranchVoice,
   createPaymentOrder,
   deleteAccount,
   fetchBranchSettings,
@@ -14,8 +13,6 @@ import {
   removeStaff,
   getBranchFaq,
   getBranchVoices,
-  registerClonedVoice,
-  removeClonedVoice,
   saveBranchFaq,
   setBranchVoice,
   testCalendar,
@@ -38,7 +35,6 @@ function loadRazorpay() {
   });
 }
 import { useAuth } from "../hooks/useAuth.jsx";
-import { startRecording } from "../lib/recorder.js";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 // Runtime deployment flag: build with VITE_WHATSAPP_LIVE=true only after Meta
@@ -243,26 +239,6 @@ export default function Settings() {
     staleTime: 5 * 60 * 1000
   });
 
-  // Register a cloned voice by its smallest.ai id (created in the dashboard).
-  const [cloneId, setCloneId] = useState("");
-  const [cloneName, setCloneName] = useState("");
-  const registerClone = useMutation({
-    mutationFn: () =>
-      registerClonedVoice(branchId, {
-        voice_id: cloneId.trim(),
-        name: cloneName.trim(),
-        language: data?.language ?? "te",
-        set_current: true
-      }),
-    onSuccess: (d) => {
-      qc.setQueryData(["branch-settings", branchId], d);
-      qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
-      setCloneId("");
-      setCloneName("");
-      toast.success("Cloned voice added and set as the clinic voice");
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not add voice")
-  });
   // Clinic FAQ the agent answers on calls. Pre-seed the editor with the
   // standard Indian-clinic template when the clinic hasn't saved one yet.
   const [faqRows, setFaqRows] = useState(null); // null until loaded
@@ -288,60 +264,6 @@ export default function Settings() {
       toast.success("FAQ saved — the agent will answer these from the next call");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not save the FAQ")
-  });
-
-  // Clone a voice from an uploaded audio sample (smallest.ai instant clone).
-  const [uploadName, setUploadName] = useState("");
-  const [uploadFile, setUploadFile] = useState(null);
-  // "" = clone in the clinic's current agent language (backend default).
-  const [uploadLanguage, setUploadLanguage] = useState("");
-  const uploadClone = useMutation({
-    mutationFn: () =>
-      cloneBranchVoice(branchId, uploadName.trim(), uploadFile, uploadLanguage || undefined),
-    onSuccess: (d) => {
-      qc.setQueryData(["branch-settings", branchId], d);
-      qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
-      setUploadName("");
-      setUploadFile(null);
-      setRecPreview(null);
-      toast.success("Voice cloned — the agent now uses it for this language");
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not clone voice")
-  });
-
-  // Mic-record the clone sample right here (clinics don't have WAV files lying
-  // around — Vinay 2026-07-05: "clinic will record 1 version per language").
-  // recorder.js hands back a WAV File that feeds the same uploadClone mutation.
-  const recRef = useRef(null);
-  const [recording, setRecording] = useState(false);
-  const [recPreview, setRecPreview] = useState(null); // {url, seconds}
-  const toggleRecord = async () => {
-    if (recording) {
-      setRecording(false);
-      const out = await recRef.current.stop();
-      recRef.current = null;
-      if (out.seconds < 5) return toast.error("Too short — record at least 5 seconds");
-      setUploadFile(out.file);
-      setRecPreview(out);
-    } else {
-      try {
-        recRef.current = await startRecording();
-        setRecPreview(null);
-        setRecording(true);
-      } catch {
-        toast.error("Microphone access denied — allow the mic or upload a file instead");
-      }
-    }
-  };
-
-  const removeRegistered = useMutation({
-    mutationFn: (vid) => removeClonedVoice(branchId, vid),
-    onSuccess: (d) => {
-      qc.setQueryData(["branch-settings", branchId], d);
-      qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
-      toast.success("Voice removed");
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove voice")
   });
 
   const calTest = useMutation({
@@ -685,56 +607,11 @@ export default function Settings() {
         </p>
       </Section>
 
-      {/* 6 — Voice */}
-      <Section id="voice" title="Clinic voices"
-        sub="Your agent speaks ONLY in voices you provide — record one per language below. Languages without your voice use a stock voice until you add yours. Applies from the next call.">
-
-        {/* Only languages the clinic HAS voiced get a row (Vinay 2026-07-17:
-            nine "stock voice — add yours" rows looked bad). No clones yet →
-            one hint line instead of the full language list. */}
-        {(() => {
-          const langs = data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES;
-          const voiced = langs
-            .map((l) => ({
-              lang: l,
-              cv: (voices.data?.voices ?? []).find(
-                (v) => v.cloned && (v.languages ?? []).includes(l.code)
-              )
-            }))
-            .filter((x) => x.cv);
-          if (!voiced.length)
-            return (
-              <p className="rounded-lg bg-teal-mint/40 px-3 py-2 font-ui text-sm text-slate">
-                No clinic voice yet — the agent uses a stock voice. Record yours below;
-                each language appears here once you add its voice.
-              </p>
-            );
-          return (
-            <div className="space-y-1">
-              {voiced.map(({ lang: l, cv }) => (
-                <div key={l.code}
-                  className="flex items-center justify-between rounded-lg bg-teal-mint/40 px-3 py-2">
-                  <span className="font-ui text-sm">
-                    {l.name} <span className="text-xs text-slate">{l.native_name}</span>
-                  </span>
-                  <span className="flex items-center gap-3 font-ui text-xs">
-                    <span className="text-teal">Your voice · {cv.display_name}</span>
-                    <button type="button"
-                      className="text-danger underline-offset-2 hover:underline"
-                      onClick={() => removeRegistered.mutate(cv.voice_id)}
-                      disabled={removeRegistered.isPending}>
-                      Remove
-                    </button>
-                  </span>
-                </div>
-              ))}
-            </div>
-          );
-        })()}
-
-        {/* Stock-voice picker for the clinic language (fallback / until cloned) */}
+      {/* 6 — Voice (cloning REMOVED 2026-07-24 — catalog voices only) */}
+      <Section id="voice" title="Agent voice"
+        sub="Pick the voice your AI agent speaks with. Applies from the next call.">
         <select
-          className="field mt-3"
+          className="field mt-1"
           value={data?.tts_voice ?? ""}
           onChange={(e) => voice.mutate(e.target.value)}
           disabled={voice.isPending || voices.isLoading}
@@ -743,85 +620,15 @@ export default function Settings() {
           {(voices.data?.voices ?? []).map((v) => (
             <option key={v.voice_id} value={v.voice_id}>
               {v.display_name}
-              {v.cloned ? " · your voice" : v.gender ? ` · ${v.gender}` : ""}
+              {v.gender ? ` · ${v.gender}` : ""}
             </option>
           ))}
         </select>
         {voices.isError && (
           <p className="mt-2 font-ui text-xs text-danger">
-            Couldn’t load voices from smallest.ai — check the API key.
+            Couldn’t load voices — try again shortly.
           </p>
         )}
-
-        {/* Record or upload a sample → instant clone, one per language */}
-        <div className="mt-4 rounded-xl border border-hairline p-4">
-          <p className="font-ui text-sm font-medium">Add your voice for a language</p>
-          <p className="mt-1 font-ui text-xs text-slate">
-            Record 10–15 seconds of natural speech in that language (or upload a WAV/MP3).
-            Re-recording a language replaces its previous voice.
-          </p>
-          <div className="mt-3 space-y-2">
-            <input className="field" placeholder="Voice name (e.g. Dr Asha)"
-              value={uploadName} onChange={(e) => setUploadName(e.target.value)} />
-            <select className="field" value={uploadLanguage}
-              aria-label="Sample language"
-              onChange={(e) => setUploadLanguage(e.target.value)}>
-              <option value="">
-                Clinic language ({data?.language ?? "te"})
-              </option>
-              {(data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES).map((l) => (
-                <option key={l.code} value={l.code}>{l.name}</option>
-              ))}
-            </select>
-            <button type="button"
-              className={`w-full min-h-[44px] rounded-xl border font-ui text-sm font-medium transition ${
-                recording ? "border-danger bg-danger/10 text-danger" : "border-hairline hover:border-teal-light/60"
-              }`}
-              onClick={toggleRecord}>
-              {recording ? "■ Stop recording" : "● Record with microphone"}
-            </button>
-            {recPreview && (
-              <div className="flex items-center gap-2">
-                <audio controls src={recPreview.url} className="h-9 flex-1" />
-                <span className="font-ui text-xs text-slate">{Math.round(recPreview.seconds)}s</span>
-              </div>
-            )}
-            <input type="file" accept="audio/*" className="field"
-              onChange={(e) => { setUploadFile(e.target.files?.[0] ?? null); setRecPreview(null); }} />
-            <button type="button" className="btn-primary w-full min-h-[44px]"
-              disabled={uploadClone.isPending || recording}
-              onClick={() => {
-                if (!uploadName.trim()) return toast.error("Give the voice a name");
-                if (!uploadFile) return toast.error("Record or choose an audio file");
-                uploadClone.mutate();
-              }}>
-              {uploadClone.isPending ? "Cloning…" : "Clone & use this voice"}
-            </button>
-          </div>
-        </div>
-
-        {/* Or register a voice already cloned in the smallest.ai dashboard */}
-        <div className="mt-3 rounded-xl border border-hairline p-4">
-          <p className="font-ui text-sm font-medium">Or add by voice ID</p>
-          <p className="mt-1 font-ui text-xs text-slate">
-            Already cloned a voice in your smallest.ai dashboard? Paste its voice ID.
-          </p>
-          <div className="mt-3 space-y-2">
-            <input className="field" placeholder="Voice name (e.g. Dr Asha)"
-              value={cloneName} onChange={(e) => setCloneName(e.target.value)} />
-            <input className="field" placeholder="voice_…  (from smallest.ai)"
-              value={cloneId} onChange={(e) => setCloneId(e.target.value)} />
-            <button type="button" className="btn-primary w-full min-h-[44px]"
-              disabled={registerClone.isPending}
-              onClick={() => {
-                if (!cloneName.trim()) return toast.error("Give the voice a name");
-                if (!cloneId.trim()) return toast.error("Paste the voice ID");
-                registerClone.mutate();
-              }}>
-              {registerClone.isPending ? "Adding…" : "Add & use this voice"}
-            </button>
-          </div>
-        </div>
       </Section>
 
       {/* Clinic FAQ — the agent answers these on calls */}

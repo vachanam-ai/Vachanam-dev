@@ -115,10 +115,10 @@ Vachanam offers four subscription plans. All prices are exclusive of 18% GST (ch
 
 | Plan | Monthly price | Included minutes | Doctors | Languages |
 |---|---|---|---|---|
-| **Lite** | INR 1,999/month | 150 minutes (≈55 calls) | 1 | all 8 supported languages |
-| **Starter** | INR 5,999/month | 700 minutes (≈250 calls) | up to 3 | all 8 supported languages |
-| **Clinic** | INR 9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 8 supported languages |
-| **Multi** | INR 17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 8 supported languages |
+| **Lite** | INR 1,999/month | 150 minutes (≈55 calls) | 1 | all 7 supported languages |
+| **Starter** | INR 5,999/month | 700 minutes (≈250 calls) | up to 3 | all 7 supported languages |
+| **Clinic** | INR 9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 7 supported languages |
+| **Multi** | INR 17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 7 supported languages |
 
 - Overage on every plan: INR 5 per minute beyond the included minutes, billed with the next invoice. Included minutes reset monthly and do not carry over.
 - Optional add-ons: additional phone number INR 1,999/month; additional branch INR 7,999/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
