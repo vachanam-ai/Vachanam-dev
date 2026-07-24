@@ -43,6 +43,20 @@ class Settings(BaseSettings):
     smallest_model: str = "lightning_v3.1"
     smallest_sample_rate: int = 24000
 
+    # TTS provider switch (Vinay 2026-07-24, latency-first). "soniox" makes
+    # Soniox tts-rt the streaming primary with smallest.ai as the RULE-8 fallback;
+    # "smallest" is the pre-2026-07-24 path (instant rollback, no deploy). Voice
+    # cloning was dropped — every clinic uses a catalog voice, so a stored
+    # smallest voice_id resolves to soniox_tts_default_voice on the Soniox primary
+    # while the smallest fallback keeps the real id. JP-edge TTS (~200ms cut)
+    # needs Soniox to enable JP-region TTS on the key — flip soniox_tts_ws_url
+    # when that lands (currently region-scoped to global; JP TTS 401s).
+    tts_provider: str = "soniox"
+    soniox_tts_model: str = "tts-rt-v1-preview"
+    soniox_tts_ws_url: str = "wss://tts-rt.soniox.com/tts-websocket"
+    soniox_tts_default_voice: str = "Priya"
+    soniox_tts_sample_rate: int = 24000
+
     # WhatsApp (Meta Cloud API — spec 2026-07-13). meta_phone_number_id is the
     # WABA test number for dev; per-clinic numbers live on Branch.wa_phone_number_id.
     meta_access_token: str = ""
@@ -204,6 +218,14 @@ class Settings(BaseSettings):
     transcript_capture_enabled: bool = True
     transcript_retention_days: int = 90
     otp_dev_echo: bool = True         # dev only: return code in response
+
+    @field_validator('tts_provider')
+    @classmethod
+    def _valid_tts_provider(cls, value: str) -> str:
+        v = (value or '').lower().strip()
+        if v not in ('soniox', 'smallest'):
+            raise ValueError("must be 'soniox' or 'smallest'")
+        return v
 
     @field_validator('soniox_endpoint_latency_level')
     @classmethod

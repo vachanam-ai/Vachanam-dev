@@ -1045,29 +1045,69 @@ class _StreamingSmallestTTS(smallestai.TTS):
         return _RawRestChunked(tts=self, input_text=text, conn_options=conn_options)
 
 
-def _build_session_tts(voice_id: str, tts_lang: str) -> lk_tts.FallbackAdapter:
-    """WS-streaming primary + raw-REST fallback for one voice/language pair.
-    Pro-catalog voices (sravani) ride model lightning_v3.1_pro; standard
-    voices and clinic clones stay on settings.smallest_model."""
+# Soniox catalog voices we support (no cloning — 2026-07-24). A stored voice_id
+# outside this set is a smallest id and resolves to soniox_tts_default_voice.
+_SONIOX_TTS_VOICES = {"Priya", "Meera", "Maya"}
+
+
+def _smallest_tts_instances(voice_id: str, tts_lang: str) -> list:
+    """The pre-2026-07-24 smallest.ai chain: WS-streaming primary + raw-REST
+    fallback. Pro-catalog voices (sravani) ride lightning_v3.1_pro; standard
+    voices stay on settings.smallest_model. Reused as the Soniox RULE-8 fallback."""
     from backend.services.welcome_synth import model_for_voice
 
-    model = model_for_voice(voice_id)
     common = dict(
         api_key=settings.smallest_api_key,
-        model=model,
+        model=model_for_voice(voice_id),
         voice_id=voice_id,
         language=tts_lang,
         sample_rate=settings.smallest_sample_rate,
     )
-    return lk_tts.FallbackAdapter(
-        [
-            _StreamingSmallestTTS(output_format="pcm", **common),
-            # WAV, not pcm: the HTTP /tts endpoint returns a WAV container even
-            # when asked for pcm (2026-06-25) — the decoder reads the header.
-            _HttpSmallestTTS(output_format="wav", **common),
-        ],
-        sample_rate=settings.smallest_sample_rate,
+    return [
+        _StreamingSmallestTTS(output_format="pcm", **common),
+        # WAV, not pcm: the HTTP /tts endpoint returns a WAV container even
+        # when asked for pcm (2026-06-25) — the decoder reads the header.
+        _HttpSmallestTTS(output_format="wav", **common),
+    ]
+
+
+def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
+    """Soniox tts-rt streaming TTS — native token streaming (audio from the first
+    words), same vendor/key as our STT. No cloning: a non-catalog stored id (a
+    smallest voice) falls to the default catalog voice; the smallest fallback
+    keeps the real id so it stays valid. #8 prewarms the WS so the cold connect
+    is off the caller's first turn."""
+    voice = voice_id if voice_id in _SONIOX_TTS_VOICES else settings.soniox_tts_default_voice
+    kw = dict(
+        model=settings.soniox_tts_model,
+        voice=voice,
+        language=tts_lang,
+        sample_rate=settings.soniox_tts_sample_rate,
+        api_key=settings.soniox_api_key,
+        websocket_url=settings.soniox_tts_ws_url,
     )
+    try:  # reuse the job's aiohttp session so the WS handshake skips TLS setup
+        from livekit.agents import utils
+
+        kw["http_session"] = utils.http_context.http_session()
+    except Exception:  # noqa: BLE001 — no job context (prewarm/tests): plugin opens its own
+        pass
+    return soniox.TTS(**kw)
+
+
+def _build_session_tts(voice_id: str, tts_lang: str) -> lk_tts.FallbackAdapter:
+    """TTS for one voice/language pair. TTS_PROVIDER=soniox (default 2026-07-24,
+    Vinay — better voice, native streaming) makes Soniox tts-rt the streaming
+    primary with the smallest.ai chain as the RULE-8 fallback (Soniox down →
+    smallest, the line never dies). TTS_PROVIDER=smallest is the instant rollback
+    path (no deploy). A missing Soniox key also falls to smallest-only."""
+    smallest = _smallest_tts_instances(voice_id, tts_lang)
+    if settings.tts_provider == "soniox" and settings.soniox_api_key:
+        return lk_tts.FallbackAdapter(
+            [_build_soniox_tts(voice_id, tts_lang), *smallest],
+            sample_rate=settings.smallest_sample_rate,
+        )
+    return lk_tts.FallbackAdapter(smallest, sample_rate=settings.smallest_sample_rate)
 
 
 # #442 replaces the unsafe combined #394/#396 experiment with isolated,

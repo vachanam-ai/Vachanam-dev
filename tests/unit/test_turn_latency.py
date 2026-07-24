@@ -106,13 +106,16 @@ def test_vertex_mumbai_primary_404(tmp_path, monkeypatch):
     assert opts[2].vertexai is False
 
 
-def test_streaming_tts_chain_405():
-    """#405: session TTS = WS-streaming primary (measured first-audio 0.2-0.46s
-    vs 1.09-1.26s REST) + the exact pre-#405 REST path as RULE 8 fallback.
-    Pro-catalog voices (sravani) ride lightning_v3.1_pro; clones stay standard."""
+def test_streaming_tts_chain_405(monkeypatch):
+    """#405: the smallest.ai chain = WS-streaming primary (measured first-audio
+    0.2-0.46s vs 1.09-1.26s REST) + the exact pre-#405 REST path as RULE 8
+    fallback. Since 2026-07-24 this is the TTS_PROVIDER=smallest rollback path
+    (Soniox is default primary — see test_tts_provider_soniox). Pro-catalog
+    voices (sravani) ride lightning_v3.1_pro; clones stay standard."""
     from agent.i18n import get_lang
     from agent.livekit_minimal import agent as ag
 
+    monkeypatch.setattr(ag.settings, "tts_provider", "smallest", raising=False)
     adapter = ag._build_session_tts("sravani", "te")
     prim, fb = adapter._tts_instances
     assert type(prim).__name__ == "_StreamingSmallestTTS"
