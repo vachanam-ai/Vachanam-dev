@@ -28,11 +28,6 @@ class Settings(BaseSettings):
     # 200ms; values 1..199 are rejected to prevent the inaccurate immediate-
     # finalize behavior reverted in #399.
     soniox_manual_finalize_delay_ms: int = 200
-    # F5 (plan Task 6.3): successful booking/reschedule/cancel speaks a fixed
-    # native-script confirmation directly (no second LLM pass). Kill switch —
-    # set false to restore the LLM-spoken confirmation (plan rollout rule:
-    # every new behavioural path stays env-revertible until its 24h soak).
-    voice_deterministic_confirm: bool = True
     # auto = Soniox when keyed, otherwise Sarvam; sarvam gives operations a
     # reversible provider A/B without deleting/rotating the Soniox credential.
     stt_provider: str = 'auto'

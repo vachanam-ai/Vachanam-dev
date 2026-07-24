@@ -263,7 +263,6 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
     result = await agent._do_reschedule(confirmed["token_id"], day.isoformat(), "11:00")
     assert result["success"], result
     assert result["old_cancelled"] is True
-    assert "come on time" in result["instruction"]
 
     rows = (
         await db.execute(
@@ -751,7 +750,6 @@ async def test_confirm_booking_announces_time_only_for_appointment_doctor(clinic
     assert result["success"], result
     assert result["announce"] == "time_only"
     assert result["booking_type"] == "appointment"
-    assert "come on time" in result["instruction"]
 
 
 async def test_confirm_booking_announces_token_number_for_token_doctor(clinic, db, redis):
@@ -779,7 +777,6 @@ async def test_confirm_booking_announces_token_number_for_token_doctor(clinic, d
     assert result["success"], result
     assert result["announce"] == "token_number"
     assert result["booking_type"] == "token"
-    assert "come on time" in result["instruction"]
 
 
 # ── 2026-06-16 fixes (Vinay live test) ──────────────────────────────────────

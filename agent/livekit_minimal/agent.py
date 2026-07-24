@@ -50,7 +50,6 @@ from livekit.agents import (  # noqa: E402
     MetricsCollectedEvent,
     RoomInputOptions,
     RunContext,
-    StopResponse,
     ToolError,
     function_tool,
     metrics,
@@ -86,11 +85,6 @@ from backend.services.clinic_cache import (  # noqa: E402
     load_doctors,
 )
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
-from agent.livekit_minimal.confirm_speech import build_confirm_text  # noqa: E402
-from agent.livekit_minimal.turn_trace import (  # noqa: E402
-    TurnLatencyTrace,
-    format_summary_line,
-)
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -1571,29 +1565,8 @@ class VachanamAgent(Agent):
         Short runs stay joined: dates/tokens/times like "13" must be spoken
         as one number word, not digit-by-digit (#333). Chunk splits are
         handled by _space_digits_stream's trailing-digit carry."""
-        # Phase 1 trace (Task 3.2 prerequisite): stamp first chunk INTO the
-        # guard and first safe chunk OUT — measures the 24-char carry cost
-        # (safety_buffer_ms). Trace is optional; absence changes nothing.
-        _trace = self.session.userdata.get("turn_trace")
-
-        async def _stamp_in(src):
-            async for chunk in src:
-                if _trace is not None:
-                    _trace.mark_guard_first_in()
-                yield chunk
-
-        async def _stamp_out(src):
-            async for chunk in src:
-                if _trace is not None:
-                    _trace.mark_guard_first_out()
-                yield chunk
-
-        safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
-        _first = True
+        safe_text = _guard_internal_speech_stream(text)
         async for frame in super().tts_node(_space_digits_stream(safe_text), model_settings):
-            if _first and _trace is not None:
-                _trace.mark_tts_first_frame()  # first synthesized audio frame
-                _first = False
             yield frame
 
     async def on_enter(self) -> None:
@@ -2168,60 +2141,7 @@ class VachanamAgent(Agent):
             if self._state.followup_task_id:
                 # Cascade-rebook call achieved its goal — stop the retry loop.
                 await self._complete_followup_task("rebooked_on_call")
-            # F5: the write + calendar are DONE — speak the confirmation
-            # deterministically and skip the second LLM pass entirely.
-            if self._speak_deterministic_confirm(
-                context,
-                "booked_token" if result.get("announce") == "token_number"
-                else "booked_slot",
-                token=token_number,
-                date_=parsed_date,
-                time_=self._parse_time(appointment_time),
-            ):
-                raise StopResponse()
         return result
-
-    def _speak_deterministic_confirm(
-        self,
-        context: RunContext,
-        kind: str,
-        *,
-        token: int | None = None,
-        date_=None,
-        time_=None,
-    ) -> bool:
-        """F5 (plan Task 6.3): queue the fixed native-script confirmation for a
-        SUCCESSFUL mutation directly on the session — no second LLM pass, so
-        tool completion → first audio is just the TTS synth (~0.3-0.5s instead
-        of ~1.5-2.5s). Returns True ONLY when the line was queued; the caller
-        then raises StopResponse to suppress the LLM reply. Constraint 6 holds:
-        call sites sit strictly AFTER the atomic write + calendar write. Any
-        failure returns False → the normal LLM-spoken path takes over (RULE 8).
-        """
-        if not settings.voice_deterministic_confirm:
-            return False
-        try:
-            # Deterministic speech needs a LIVE voice session. Tool harnesses
-            # (integration tests, sims) pass stub contexts — those keep the
-            # returned-dict + LLM-spoken contract unchanged.
-            sess = getattr(context, "session", None)
-            if not isinstance(sess, AgentSession):
-                return False
-            lang = self._state.language or self._lang_code
-            text = build_confirm_text(
-                lang, kind, token=token, date_=date_, time_=time_
-            )
-            if not text:
-                return False  # language has no template yet → LLM speaks
-            # say() rides the normal output pipeline (sanitizer + guard +
-            # digit spacing in tts_node); add_to_chat_ctx default keeps the
-            # history coherent for the NEXT turn despite the StopResponse.
-            sess.say(sanitize_for_tts(text))
-            logger.info("deterministic_confirm_spoken kind=%s lang=%s", kind, lang)
-            return True
-        except Exception as e:  # noqa: BLE001 — RULE 8: never fail the booking
-            logger.warning("deterministic_confirm_failed kind=%s: %s", kind, e)
-            return False
 
     async def _complete_followup_task(self, summary: str) -> bool:
         """Mark this call's FollowupTask completed (stops the outbound retry
@@ -2609,20 +2529,7 @@ class VachanamAgent(Agent):
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB + calendar move
-        result = await self._do_reschedule(old_token_id, new_date, new_time)
-        if result.get("success"):
-            # F5: new booking confirmed + old one cancelled — speak the outcome
-            # deterministically, skip the second LLM pass.
-            _new_time = self._parse_time(result.get("new_time"))
-            if self._speak_deterministic_confirm(
-                context,
-                "resched_slot" if _new_time is not None else "resched_token",
-                token=result.get("new_token_number"),
-                date_=date_cls.fromisoformat(result["new_date"]),
-                time_=_new_time,
-            ):
-                raise StopResponse()
-        return result
+        return await self._do_reschedule(old_token_id, new_date, new_time)
 
     async def _do_reschedule(
         self, old_token_id: str, new_date: str, new_time: str | None = None
@@ -2723,8 +2630,7 @@ class VachanamAgent(Agent):
                 "instruction": (
                     "The appointment is ALREADY at exactly this date/time — "
                     "nothing needed to change. Tell the caller it is confirmed "
-                    "for that time, then politely ask them to come on time in "
-                    "their selected language. Do NOT say it failed."
+                    "for that time, in one short line. Do NOT say it failed."
                 ),
             }
         # Release any hold THIS session already placed before re-assigning. The
@@ -2829,8 +2735,7 @@ class VachanamAgent(Agent):
             "instruction": (
                 "The reschedule SUCCEEDED — the appointment is now on the new "
                 "date/time above and the old one is cancelled. Tell the caller "
-                "it is done, then politely ask them to come on time in their "
-                "selected language. Do NOT say it failed."
+                "it is done, in one breath. Do NOT say it failed."
             ),
         }
 
@@ -2858,17 +2763,7 @@ class VachanamAgent(Agent):
         # pinned so barge-in can't discard the completed cancel (FIXLOG #361).
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB + calendar delete
-        result = await self._do_cancel(token_id)
-        # F5: patient-initiated cancel — speak the ack deterministically.
-        # reason=="cancel" only: a manual-reschedule cancel must keep the LLM
-        # reply (it still has the NEW booking to announce).
-        if (
-            result.get("success")
-            and reason == "cancel"
-            and self._speak_deterministic_confirm(context, "cancelled")
-        ):
-            raise StopResponse()
-        return result
+        return await self._do_cancel(token_id)
 
     def _clear_hold(self) -> None:
         """Forget the server-side hold so _cleanup_on_shutdown won't DECR a key
@@ -4242,56 +4137,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
-        # Phase 1 (plan 2026-07-21, Task 1.1): ONE correlated summary line per
-        # caller turn ("voice_turn_latency ...") so the perceived gap is
-        # attributable instead of guessed. Pure logging — no behaviour change.
-        def _emit_turn_summary(s: dict) -> None:
-            line = format_summary_line(s)
-            logger.info(line)
-            # Fly's log buffer rotates within minutes — real calls' turn lines
-            # were LOST before they could be read (2026-07-22). Mirror every
-            # line to Redis (#432 durability pattern) so the Phase-2 corpus
-            # survives. Best-effort: telemetry must never touch the call.
-
-            async def _stash() -> None:
-                try:
-                    from backend.redis_client import get_redis
-
-                    _r = await get_redis()
-                    await _r.rpush("lat:turns", line)
-                    await _r.expire("lat:turns", 7 * 86400)
-                except Exception:  # noqa: BLE001
-                    pass
-
-            asyncio.create_task(_stash())
-
-        _turn_trace = TurnLatencyTrace(ctx.room.name, emit=_emit_turn_summary)
-        _turn_trace.set_context(
-            language=lang_code, cache_hit=_cached_llm is not None
-        )
-        session.userdata["turn_trace"] = _turn_trace
-
-        @session.on("user_input_transcribed")
-        def _trace_final_transcript(ev) -> None:
-            if getattr(ev, "is_final", False):
-                _turn_trace.mark_final_transcript()
-            else:
-                # interim: tracks the caller's last recognizable sound so the
-                # VAD silence hangover (last word -> VAD end) is measurable.
-                _turn_trace.mark_interim()
-
-        @session.on("agent_state_changed")
-        def _trace_playout(ev) -> None:
-            if getattr(ev, "new_state", None) == "speaking":
-                _turn_trace.mark_playout_start()
-
-        @session.on("function_tools_executed")
-        def _trace_tools(ev) -> None:
-            calls = getattr(ev, "function_calls", None) or []
-            if calls:
-                # name only — never arguments (privacy allowlist).
-                _turn_trace.mark_tool(getattr(calls[0], "name", "unknown"))
-
         # THINKING ACK: REMOVED (#399). Two attempts (#395 turn-commit timer,
         # #397 thinking-state gate) both misfired on real calls — phone-line
         # echo flaps user_state, and agent_state passes through "thinking"
@@ -4309,16 +4154,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             new_state = getattr(ev, 'new_state', None)
             if new_state == 'speaking':
                 _soniox_finalizer.cancel()
-                _turn_trace.mark_speech_start()
             elif old_state == 'speaking' and new_state == 'listening':
-                _turn_trace.mark_speech_end()
                 _soniox_finalizer.schedule(
                     lambda: getattr(session, 'user_state', None) != 'speaking'
                 )
 
         async def _cancel_soniox_finalize_on_shutdown() -> None:
             _soniox_finalizer.cancel()
-            _turn_trace.flush()  # last turn's summary must not die with the call
 
         ctx.add_shutdown_callback(_cancel_soniox_finalize_on_shutdown)
 
@@ -4342,22 +4184,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     getattr(m, "transcription_delay", 0.0),
                     getattr(m, "on_user_turn_completed_delay", 0.0),
                 )
-                _turn_trace.mark_turn_committed(
-                    eou_delay=getattr(m, "end_of_utterance_delay", None),
-                    transcription_delay=getattr(m, "transcription_delay", None),
-                )
             elif tn == "LLMMetrics":
                 logger.info("lat_llm ttft=%.2fs", getattr(m, "ttft", 0.0))
-                _turn_trace.mark_llm_run(
-                    getattr(m, "speech_id", "") or "",
-                    ttft=getattr(m, "ttft", 0.0),
-                )
             elif tn == "TTSMetrics":
                 logger.info("lat_tts ttfb=%.2fs", getattr(m, "ttfb", 0.0))
-                _turn_trace.mark_tts(
-                    getattr(m, "speech_id", "") or "",
-                    ttfb=getattr(m, "ttfb", 0.0),
-                )
             elif tn == "STTMetrics":
                 logger.info("lat_stt duration=%.2fs", getattr(m, "duration", 0.0))
 
