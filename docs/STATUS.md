@@ -1,5 +1,29 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-24 — SONIOX TTS SWITCH + FEASIBLE LATENCY TECHNIQUES + ODIA REMOVED
+> (built + unit-green LOCAL; NOT deployed).** Vinay: latency #1, keep Soniox
+> (better voice), smallest as fallback, drop Soniox cloning. Against the 12-technique
+> writeup, built the genuinely-feasible set and proved the rest:
+> • **TTS → Soniox tts-rt** streaming primary + smallest.ai RULE-8 fallback,
+>   `TTS_PROVIDER` kill-switch (instant rollback, no deploy). Model `tts-rt-v1`,
+>   default voice Priya. No cloning.
+> • **#8 TTS prewarm** — Soniox WS warmed per worker, reused on matching turns
+>   (kills the ~450ms cold connect that made Soniox TTFB look bad).
+> • **#5 tool prefetch** — doctor-routing fired in parallel on booking turns, on a
+>   DEDICATED session (RULE 1 branch-scoped), cancel-safe; kill-switch VOICE_TOOL_PREFETCH.
+> • **Already done (proven in code):** #1 preemptive, #2 streaming TTS, #3 Vertex
+>   cache #417, #7 async-eval, #11 KV, #12 STT-JP-edge + LLM-Mumbai.
+> • **Not built (honest):** #4/#9 tiered routing (LLM not the bottleneck, gain≈0),
+>   #6 AEC (N/A on PSTN), #10 cached-audio injection (BANNED — same as the #399
+>   revert). See `docs/superpowers/specs/2026-07-24-soniox-tts-latency-design.md`.
+> • **Odia removed** — platform now 7 Indian languages (te/hi/ta/kn/ml/mr/bn) +
+>   English on request. get_lang('or')→Telugu, no migration. ⚠ CLAUDE.md pricing
+>   copy still says "all 8" — needs a Vinay marketing-copy update to "all 7".
+> ⚠ NOT deployed: unit suite green locally, prod still on the pre-existing image.
+> Needs a live call to validate the Soniox voice, then push (CI auto-deploys).
+> The measured floor stands: latency is the Soniox STT Tokyo RTT, not the pipeline —
+> Soniox TTS trades ~a bit of TTFB for the better voice, offset by #8 prewarm.
+
 > **2026-07-24 — REVERTED THE TTFA LATENCY EXPERIMENTS (commit `4932c49`).**
 > Vinay's call: the per-turn latency work did not deliver a satisfying win, so
 > the voice path is rolled back to the last known-good checkpoint `0584e31`.
