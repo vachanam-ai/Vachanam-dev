@@ -1,5 +1,20 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-24 — REVERTED THE TTFA LATENCY EXPERIMENTS (commit `4932c49`).**
+> Vinay's call: the per-turn latency work did not deliver a satisfying win, so
+> the voice path is rolled back to the last known-good checkpoint `0584e31`.
+> REVERTED: F5 deterministic confirmations (#445, confirm_speech.py + i18n
+> confirm lines + VOICE_DETERMINISTIC_CONFIRM flag), the #444 per-turn
+> `voice_turn_latency` trace (turn_trace.py) and its #446/#447 telemetry fixes,
+> and the #449 latency ladder. The "come on time" booking-instruction addition
+> went with them. STT/booking behavior is now exactly `0584e31`. The two banners
+> below (#445, #444) are HISTORY — no longer current. KEPT: the CI/CD auto-deploy
+> pipeline, semver versioning, one-click rollback. The raw-latency sandbox rig
+> (sandbox/raw-latency/, Dockerfile.speed, fly.speed.toml, analyze_voice_latency.py)
+> is deleted; Fly app `vachanam-speed` scaled to 0 (secrets kept). DIDs routed
+> back to `vachanam-agent`. ⚠ Prod runtime still runs the pre-revert image until
+> the next master deploy — redeploy to put `0584e31` voice code live.
+
 > **2026-07-22 — F5 DETERMINISTIC CONFIRMATIONS (#445).** Successful booking/
 > reschedule/cancel now speak a fixed native-script line DIRECTLY (StopResponse
 > suppresses the second LLM pass) — tool completion → first audio ≈0.3-0.5s on
