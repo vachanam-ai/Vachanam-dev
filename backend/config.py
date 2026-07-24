@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     soniox_tts_default_voice: str = "Priya"
     soniox_tts_sample_rate: int = 24000
 
+    # #5 tool prefetch (2026-07-24): on a high-confidence booking turn, run the
+    # doctor-routing call in parallel with the reply LLM on a dedicated session.
+    # Kill switch — set false to disable instantly if it misbehaves.
+    voice_tool_prefetch: bool = True
+
     # WhatsApp (Meta Cloud API — spec 2026-07-13). meta_phone_number_id is the
     # WABA test number for dev; per-clinic numbers live on Branch.wa_phone_number_id.
     meta_access_token: str = ""

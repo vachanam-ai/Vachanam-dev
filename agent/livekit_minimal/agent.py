@@ -1584,6 +1584,24 @@ def _extract_call_record(session) -> tuple[int, str | None]:
         return 0, None
 
 
+# #5 tool prefetch: terms that strongly signal a booking / health-complaint turn
+# (maps to the route_to_doctor tool). Telugu entries are substrings robust to
+# ZWNJ / spelling variants; English is matched lowercased.
+_BOOKING_INTENT_TERMS = (
+    "appointment", "doctor", "book", "slot", "checkup", "check-up", "consult",
+    "pain", "dentist", "skin", "tooth", "teeth",
+    "డాక్టర్", "అపాయింట్", "నొప్పి", "సమస్య", "చూపించ", "పంటి", "పన్ను", "బుక్",
+)
+
+
+def _is_booking_intent(text: str) -> bool:
+    """High-confidence signal that a turn maps to route_to_doctor. Heuristic — a
+    false positive costs only one wasted, cancel-safe routing call; a false
+    negative just skips the prefetch (correctness unaffected either way)."""
+    low = (text or "").lower()
+    return any(term in low for term in _BOOKING_INTENT_TERMS)
+
+
 class VachanamAgent(Agent):
     """Booking receptionist with real tools. One instance per call."""
 
@@ -1636,6 +1654,10 @@ class VachanamAgent(Agent):
         # #lost (Vinay 2026-07-20): count consecutive lone-"hello" user turns —
         # 3 in a row means the caller can't hear us (one-way audio / dropped line).
         self._consecutive_hellos = 0
+        # #5 tool prefetch: one in-flight doctor-routing task fired from the
+        # current turn's transcript (dedicated session), consumed by route_to_doctor.
+        self._prefetch_route: asyncio.Task | None = None
+        self._prefetch_complaint = ""
 
     async def tts_node(self, text, model_settings):
         """Space out LONG digit runs (5+) before they reach TTS. A joined
@@ -1744,6 +1766,14 @@ class VachanamAgent(Agent):
         except Exception as e:  # noqa: BLE001 — never swallow a real turn
             logger.warning("hello_counter_error: %s", e)
 
+        # #5 tool prefetch: fire the (slow) doctor-routing call in parallel with
+        # the reply LLM on a dedicated session. Only wasted on a rare echo turn
+        # (cancelled next turn), so the maximal-overlap placement wins.
+        try:
+            self._maybe_prefetch_routing(self._message_text(new_message))
+        except Exception as e:  # noqa: BLE001 — a latency aid must never break a turn
+            logger.warning("prefetch_routing_error: %s", e)
+
         try:
             import difflib
 
@@ -1775,6 +1805,65 @@ class VachanamAgent(Agent):
                 raise
             # Any other error must NEVER swallow a real turn — let it through.
             logger.warning("echo_guard_error: %s", e)
+
+    def _cancel_prefetch(self) -> None:
+        """Drop the in-flight routing prefetch (stale turn / topic change). Bounds
+        leaked tasks to <=1 — every new turn cancels the prior one."""
+        task = self._prefetch_route
+        self._prefetch_route = None
+        self._prefetch_complaint = ""
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _maybe_prefetch_routing(self, text: str) -> None:
+        """#5: on a high-confidence booking turn (before a doctor is chosen), start
+        route_to_doctor in parallel with the reply LLM. Cancels any stale prefetch
+        first. No-op when disabled, off-intent, or a doctor is already selected."""
+        self._cancel_prefetch()
+        if not settings.voice_tool_prefetch:
+            return
+        if getattr(self._state, "doctor_id", None) is not None:
+            return
+        complaint = (text or "").strip()
+        if not _is_booking_intent(complaint):
+            return
+        self._prefetch_complaint = complaint
+        self._prefetch_route = asyncio.create_task(self._run_prefetch_routing(complaint))
+
+    async def _run_prefetch_routing(self, complaint: str) -> dict:
+        """Route on a DEDICATED session — async sessions are not concurrency-safe,
+        so the prefetch must never share the call's self._db with the live turn.
+        Still strictly branch-scoped (RULE 1)."""
+        async with AsyncSessionLocal() as pdb:
+            return await route_to_doctor(
+                complaint=complaint,
+                branch_id=self._state.branch_id,
+                db=pdb,
+                llm_call=_routing_llm_call,
+            )
+
+    async def _consume_or_route(self, complaint: str) -> dict:
+        """Return the prefetched routing result when it matches this complaint (the
+        LLM's extracted complaint is a subset of / contains the prefetched
+        transcript); otherwise drop the stale prefetch and route fresh on the live
+        session. A prefetch failure refetches (RULE 8 — never fail the tool)."""
+        task = self._prefetch_route
+        pre = self._prefetch_complaint
+        self._prefetch_route = None
+        self._prefetch_complaint = ""
+        if task is not None and complaint and (complaint in pre or pre in complaint):
+            try:
+                return await task
+            except Exception as e:  # noqa: BLE001 — prefetch failed; route fresh
+                logger.warning("prefetch_route_failed_refetch: %s", e)
+        elif task is not None and not task.done():
+            task.cancel()
+        return await route_to_doctor(
+            complaint=complaint,
+            branch_id=self._state.branch_id,
+            db=self._db,
+            llm_call=_routing_llm_call,
+        )
 
     async def _handle_lost_connection(self) -> None:
         """#lost: the caller said "hello" 3 times running — they almost
@@ -1913,12 +2002,9 @@ class VachanamAgent(Agent):
         # ambiguous, slow, or returns candidates/out-of-scope.
         self._state.doctor_id = None
         self._state.complaint = complaint
-        result = await route_to_doctor(
-            complaint=complaint,
-            branch_id=self._state.branch_id,
-            db=self._db,
-            llm_call=_routing_llm_call,
-        )
+        # #5: consume the parallel prefetch if it matches this complaint, else
+        # route fresh on the live session.
+        result = await self._consume_or_route(complaint)
         if result.get("doctor_id"):
             # Single match — safe to pre-select for later tools.
             self._state.doctor_id = UUID(result["doctor_id"])
