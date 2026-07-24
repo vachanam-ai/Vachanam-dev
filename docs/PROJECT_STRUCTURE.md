@@ -257,6 +257,7 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/__init__.py` | placeholder | Package marker. |
 | `tests/unit/__init__.py` | placeholder | Package marker. |
 | `tests/unit/test_tts_sanitizer.py` | tested (11/11) | TTS sanitization rules. |
+| `tests/unit/test_booking_confirmation_wording.py` | tested | Booking/reschedule confirmations require the punctuality message; cancellation excludes it. |
 | `tests/unit/test_bot_pipeline_builder.py`, `test_bot_tools_and_fallback.py`, `test_bot_tts_sanitizer.py`, `test_pipecat_imports.py` | tested | Pipecat bot pipeline, tool registration, LLM fallback, sanitizer wiring. (Replaced LiveKit-era test_emergency/test_silence_handler/test_audio_quality — modules deleted with the Pipecat rewrite.) |
 | `tests/unit/test_auth.py` | tested (6/6) | JWT + Google OAuth verification. |
 | `tests/integration/__init__.py` | placeholder | Package marker. |

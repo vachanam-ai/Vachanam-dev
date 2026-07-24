@@ -1,7 +1,7 @@
 # Persistent Voice Latency Reduction Plan
 
-**Date:** 2026-07-21  
-**Status:** Ready for implementation  
+**Date:** 2026-07-21; updated 2026-07-24
+**Status:** Phase 1 shipped; Phase 2 measurement is next
 **Scope:** Caller stops speaking → caller hears the first word of Vachanam's reply  
 **Primary language gate:** Telugu over real 8 kHz telephone audio
 
@@ -27,15 +27,29 @@ baseline, not proposed again:
 | LiveKit endpointing | `min_endpointing_delay=0.05`, `max_endpointing_delay=0.3`, preemptive generation enabled |
 | LLM | Gemini 2.5 Flash on Vertex Mumbai, thinking disabled; global Gemini fallbacks |
 | Prompt | Compact grounded prompt, real-prompt prewarm and explicit Vertex prompt cache for eligible calls |
-| TTS | Streaming Smallest primary, REST fallback, warmed during call setup |
+| TTS | Streaming Soniox primary, streaming/REST Smallest fallbacks, prewarmed during call setup |
 | Slow tools | Pre-cached short filler while availability/booking/reschedule/cancel work runs |
-| Existing metrics | Separate `lat_eou`, `lat_llm`, `lat_tts`, and `lat_stt` log lines |
+| Existing metrics | Correlated `voice_turn_latency` summaries persisted in Redis `lat:turns` |
 
-The old measured sequential lower bound was roughly 1.6 seconds before
-transport overhead. The latest changes should improve that, but the caller
-still perceives about three seconds. The existing metric lines are not joined
-by turn, and they do not measure several intervals between the stages. We
-therefore cannot safely choose the next knob from the current logs.
+The latest trace shows roughly 1.4 seconds p50 and 2.5 seconds p95 inside the
+measured voice pipeline, while callers still perceive about three seconds over
+PSTN. LLM TTFT is about 550 ms and is not the dominant stage. The unexplained
+remainder is about 176 ms p50 / 836 ms p95, and one captured turn had a roughly
+13-second commit spike. Provider swapping is therefore premature: the next
+work is to classify those framework/transport and commit outliers.
+
+## Immediate execution order (2026-07-24)
+
+1. Export `lat:turns` after at least 30 calls / 200 turns and run
+   `scripts/analyze_voice_latency.py --redis`.
+2. Split the report into ordinary, tool, first-turn, cache-hit, cache-miss, and
+   PSTN cohorts. Keep p50, p95, p99, and the worst ten turns.
+3. For every turn above five seconds, correlate final STT receipt, LiveKit turn
+   commit, first LLM token, first safe text, first TTS frame, and playout start.
+4. Fix the largest unexplained interval first. The current leading candidate is
+   LiveKit commit/framework buffering, not Gemini TTFT.
+5. Re-run the same corpus. Only then choose one controlled STT, TTS, cache, or
+   tool-path experiment from the decision table below.
 
 ## Non-negotiable constraints
 
@@ -73,7 +87,7 @@ Quality gates:
 - a genuine multi-word interruption still stops speech promptly;
 - all booking, branch-isolation, TTS-safety and mutation-interruption tests pass.
 
-## Phase 1 — Make one turn fully measurable
+## Phase 1 — Make one turn fully measurable (shipped)
 
 **Purpose:** Identify the dominant remaining delay before changing behaviour.
 
@@ -122,7 +136,7 @@ and report p50/p95/p99 by:
 The report must also display `unaccounted_ms`. If more than 100 ms remains
 unattributed at p50, instrumentation is incomplete and tuning pauses.
 
-### Task 1 acceptance
+### Task 1 acceptance — complete
 
 - Unit tests prove turn IDs cannot cross sessions or language handoffs.
 - Out-of-order LiveKit metrics cannot attach to the wrong turn.
@@ -130,7 +144,7 @@ unattributed at p50, instrumentation is incomplete and tuning pauses.
 - A privacy test rejects transcript/phone/name fields in the summary.
 - Five local scripted turns produce one coherent line per turn.
 
-## Phase 2 — Establish the post-#443 baseline
+## Phase 2 — Establish the post-#443 baseline (next)
 
 Use the exact current production configuration. Do not change provider or
 endpoint controls during collection.

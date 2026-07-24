@@ -8,7 +8,7 @@ _build_caller_context maps a returning caller's existing bookings to:
 These are pure-function tests over stub rows (no DB) — they prove the new-vs-
 existing branching and the family-shared-number guard (don't reveal one name).
 """
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace as NS
 
 from agent.livekit_minimal.agent import _build_caller_context
@@ -58,6 +58,20 @@ def test_past_booking_is_ignored():
     name, extra = _build_caller_context(rows, TODAY)
     assert name is None
     assert extra == ""
+
+
+def test_past_same_day_clock_booking_is_not_greeted_as_upcoming():
+    rows = [_row(days=0, appt=time(16, 0))]
+    name, extra = _build_caller_context(rows, datetime(2026, 6, 14, 19, 0))
+    assert name is None
+    assert extra == ""
+
+
+def test_later_same_day_clock_booking_remains_upcoming():
+    rows = [_row(days=0, appt=time(20, 0))]
+    name, extra = _build_caller_context(rows, datetime(2026, 6, 14, 19, 0))
+    assert name == "Vinay"
+    assert "8:00 PM" in extra
 
 
 def test_family_shared_number_does_not_reveal_a_single_name():

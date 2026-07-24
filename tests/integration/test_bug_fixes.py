@@ -19,7 +19,7 @@ Bug 1: LLM-orchestrated reschedules kept cancelling without booking (or
        old booking untouched.
 """
 import uuid
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 import pytest_asyncio
@@ -217,6 +217,47 @@ async def test_cancelled_token_number_never_reissued(clinic, db, redis):
         await db.execute(select(Token).where(Token.id == uuid.UUID(confirmed["token_id"])))
     ).scalar_one()
     assert tok.status == "cancelled_by_patient"
+
+
+async def test_past_same_day_slot_cannot_be_cancelled_or_rescheduled(
+    clinic, db, redis, monkeypatch
+):
+    """Defense in depth: even a stale token id cannot mutate a finished slot."""
+    import agent.livekit_minimal.agent as agent_module
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    patient = Patient(
+        branch_id=branch.id, name="Past Patient", phone="+919777000111",
+        is_primary=True,
+    )
+    db.add(patient)
+    await db.flush()
+    token = Token(
+        branch_id=branch.id, doctor_id=doc.id, patient_id=patient.id,
+        date=date.today(), appointment_time=time(16, 0), status="confirmed",
+        source="voice",
+    )
+    db.add(token)
+    await db.commit()
+
+    async def fixed_now(branch_id, session):
+        return datetime.combine(date.today(), time(19, 0))
+
+    monkeypatch.setattr(agent_module, "_branch_now", fixed_now)
+    state = SessionState(session_id="past-slot", branch_id=branch.id)
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        calendar_service=None, meta_service=NullMeta(), transfer_to="",
+    )
+
+    cancelled = await agent._do_cancel(str(token.id))
+    moved = await agent._do_reschedule(str(token.id), _tomorrow().isoformat(), "10:00")
+    assert cancelled["success"] is False
+    assert cancelled["error"] == "appointment_is_past"
+    assert moved["success"] is False and moved["error"] == "appointment_is_past"
+    await db.refresh(token)
+    assert token.status == "confirmed"
 
 
 # â”€â”€ Bug 1: reschedule is atomic â€” never leaves two confirmed bookings â”€â”€â”€â”€â”€â”€â”€â”€

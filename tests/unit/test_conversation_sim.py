@@ -49,8 +49,8 @@ def test_build_live_agent_prompt_wraps_real_prompt_with_facts():
     # sim wrapper forbids tools + injects the facts
     assert "NO tools" in p and "KNOWN FACTS" in p
     assert "four hundred rupees" in p
-    # the REAL receptionist prompt is included (its AM/PM ban + #408 digit rule)
-    assert '"AM"' in p and "PLAIN DIGITS" in p  # freed number contract 2026-07-24
+    # The REAL receptionist prompt is included (natural times + phone digit rule).
+    assert "day-part or AM/PM" in p and "PLAIN DIGITS" in p
 
 
 def test_agent_first_inbound_order():

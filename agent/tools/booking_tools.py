@@ -81,6 +81,23 @@ async def _branch_now(branch_id: UUID, db: AsyncSession) -> datetime:
         return datetime.now(ZoneInfo("Asia/Kolkata"))
 
 
+def booking_is_upcoming(token: Token, now: datetime) -> bool:
+    """Whether a confirmed booking can still be acted on at ``now``.
+
+    Token-queue bookings have no clock time, so today's confirmed token remains
+    active. A slot appointment today is active only while its time is ahead.
+    This is the single predicate used by caller lookup and availability, so a
+    finished appointment cannot be greeted, cancelled, or rescheduled as future.
+    """
+    if token.status != "confirmed" or token.date < now.date():
+        return False
+    return not (
+        token.date == now.date()
+        and token.appointment_time is not None
+        and token.appointment_time <= now.time()
+    )
+
+
 def _outside_working_hours(doctor: Doctor, appointment_time: time) -> dict | None:
     """Failure dict when the time falls outside the doctor's working hours,
     else None. AM/PM confusion ("3" heard as 03:00) must die HERE — the last
@@ -408,17 +425,7 @@ async def check_availability(
         # An appointment that has ALREADY HAPPENED today cannot block a new one
         # (the 12:30 booking was surfaced at 6pm as the reason 7pm "wasn't
         # available"). Same-day: keep only what is still ahead.
-        existing = next(
-            (
-                t for t in rows
-                if not (
-                    booking_date == now.date()
-                    and t.appointment_time is not None
-                    and t.appointment_time <= now.time()
-                )
-            ),
-            None,
-        )
+        existing = next((t for t in rows if booking_is_upcoming(t, now)), None)
         if existing is not None:
             when = (
                 existing.appointment_time.strftime("%I:%M %p").lstrip("0")
@@ -1320,10 +1327,12 @@ async def confirm_booking(
         "booking_type": doctor.booking_type,
         "announce": "token_number" if is_token else "time_only",
         "instruction": (
-            "Token doctor — tell the patient their TOKEN NUMBER (queue place)."
+            "Token doctor — tell the patient their TOKEN NUMBER (queue place), "
+            "then add a natural equivalent of 'Please come on time.'"
             if is_token
             else "Appointment doctor — confirm only the DATE and TIME. Do NOT "
-            "say any token or queue number."
+            "say any token or queue number. Then add a natural equivalent of "
+            "'Please come on time.'"
         ),
     }
 
@@ -1350,7 +1359,8 @@ async def find_bookings_by_phone(
     if len(digits) < 10:
         return []
     last10 = digits[-10:]
-    today_local = (await _branch_now(branch_id, db)).date()
+    now_local = await _branch_now(branch_id, db)
+    today_local = now_local.date()
     rows = (
         await db.execute(
             select(Token, Doctor, Patient)
@@ -1370,7 +1380,7 @@ async def find_bookings_by_phone(
     return [
         (t, d, p)
         for t, d, p in rows
-        if (t.status == "confirmed" and t.date >= today_local)
+        if (t.status == "confirmed" and booking_is_upcoming(t, now_local))
         or t.status == "cancelled_by_clinic"
     ]
 

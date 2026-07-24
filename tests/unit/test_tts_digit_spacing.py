@@ -1,17 +1,17 @@
-"""#408 (Vinay 2026-07-19, real call): every digit the agent speaks is ENGLISH
-WORDS, always — phone one-by-one ("eight zero nine six…"), time "six thirty",
-age "forty eight" — never Telugu/Hindi number words, in ANY call language.
-Supersedes the #296/#333 digit-SPACING contract: spaced digits still came out
-in the session language ("ఎనిమిది సున్నా…"). Conversion is deterministic at the
-TTS boundary (tts_sanitizer.spoken_english_numbers), wired into BOTH the
-streaming tts_node (_space_digits_stream) and sanitize_for_tts (say() paths).
-Also #408: Hindi TTS clipped "डॉक्टर" to "doc" — phonetic "डाक्टर" speaks full.
-History: #296 "96 crores", #333 "ఒకటి మూడు" for 13 — both still guarded, now
-via English words."""
+"""Natural small numbers plus deterministic phone-digit speech.
+
+The legacy English-number helper remains unit-tested, while production
+sanitize/stream paths convert only phone-length runs. Soniox handles times,
+dates, ages, fees, and token numbers naturally in the active language.
+"""
 import asyncio
 
 from agent.livekit_minimal.agent import _space_digits_stream
-from agent.services.tts_sanitizer import sanitize_for_tts, spoken_english_numbers as eng
+from agent.services.tts_sanitizer import (
+    sanitize_for_tts,
+    spoken_english_numbers as eng,
+    spoken_phone_digits,
+)
 
 
 def _stream(chunks):
@@ -109,8 +109,15 @@ def test_empty():
     assert eng("") == ""
 
 
-def test_sanitize_for_tts_applies_english_numbers():
-    assert sanitize_for_tts("మీ టైమ్ 6:30, వయసు 48") == "మీ టైమ్ six thirty, వయసు forty eight"
+def test_sanitize_for_tts_leaves_small_numbers_for_soniox():
+    assert sanitize_for_tts("మీ టైమ్ 6:30, వయసు 48") == "మీ టైమ్ 6:30, వయసు 48"
+
+
+def test_production_phone_converter_changes_only_phone_length_runs():
+    assert spoken_phone_digits("టోకెన్ 23, టైమ్ 6:30") == "టోకెన్ 23, టైమ్ 6:30"
+    assert spoken_phone_digits("8096007554") == (
+        "eight zero nine six zero zero seven five five four"
+    )
 
 
 def test_chunk_split_phone_still_english():
@@ -118,14 +125,12 @@ def test_chunk_split_phone_still_english():
     assert "nine six six six four four four four two eight" in out
 
 
-def test_chunk_split_time_still_english():
-    # #415: the day-part word is carried WITH its digits across the chunk cut,
-    # so the meridiem survives streaming ("సాయంత్రం 6:30" → "six thirty P.M.").
-    assert _stream(["సాయంత్రం 10:", "00 కి"]) == "ten P.M. కి"
-    assert _stream(["సాయంత్రం 6:", "30 కి"]) == "six thirty P.M. కి"
-    assert _stream(["రేపు సాయంత్రం ", "5 గంటలకి రండి"]) == "రేపు five P.M. రండి"
+def test_chunk_split_times_remain_natural_for_soniox():
+    assert _stream(["సాయంత్రం 10:", "00 కి"]) == "సాయంత్రం 10:00 కి"
+    assert _stream(["సాయంత్రం 6:", "30 కి"]) == "సాయంత్రం 6:30 కి"
+    assert _stream(["రేపు సాయంత్రం ", "5 గంటలకి రండి"]) == "రేపు సాయంత్రం 5 గంటలకి రండి"
 
 
 def test_trailing_digits_flushed_at_stream_end():
-    assert _stream(["టోకెన్ 2", "3"]) == "టోకెన్ twenty three"
+    assert _stream(["టోకెన్ 2", "3"]) == "టోకెన్ 23"
     assert _stream(["8096007554"]) == "eight zero nine six zero zero seven five five four"

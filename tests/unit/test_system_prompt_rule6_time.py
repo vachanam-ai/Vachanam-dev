@@ -1,10 +1,4 @@
-"""Guard the time-speaking contract. History: RULE 6 originally banned Latin
-AM/PM AND clock digits (agent said "9:30 AM", TTS spelled it). #408 (Vinay
-2026-07-19, real call: time spoken as Telugu "ఆరున్నర") FLIPPED the digits
-half: the model now WRITES digits ("6:30") and the deterministic TTS-boundary
-converter (tts_sanitizer.spoken_english_numbers) speaks them as ENGLISH words
-("six thirty") in every language. AM/PM stays banned — the native day-part
-word (సాయంత్రం…) carries meridiem."""
+"""Guard natural time speech and deterministic phone-number rendering."""
 from agent.prompts.system_prompt import build_system_prompt
 
 
@@ -28,13 +22,10 @@ def test_prompt_never_sends_caller_back_to_clinic():
     assert "నేను డాక్టర్ గారిని అడిగి మీకు చెప్పిస్తాను" in p
 
 
-def test_prompt_requires_digit_times_english_speech():
+def test_prompt_keeps_times_natural_and_phone_digits_clear():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
-    # AM/PM still banned
-    assert '"AM"' in p and '"PM"' in p
-    # #408: digits required, native number words banned (freed to a compact rule
-    # 2026-07-24 — English one-by-one speech is the sanitizer's job, not the prompt)
+    compact = " ".join(p.split())
+    assert "Speak times, dates, ages, fees, and token numbers the natural way" in p
+    assert "day-part or AM/PM" in p
     assert "PLAIN DIGITS" in p
-    assert "ఆరున్నర" in p  # shown as the banned example
-    # day-part word stays native around the digits
-    assert "సాయంత్రం 6:30 కి" in p
+    assert "do not mechanically translate every number into English" in compact

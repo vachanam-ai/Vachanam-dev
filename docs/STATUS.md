@@ -1,5 +1,20 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-24 — VOICE PROMPT + APPOINTMENT-TRUTH RELEASE.** Rewrote the
+> production voice prompt around concrete audible
+> behaviour: calm baseline, optional/rare disfluency, one closed Soniox
+> expression allowlist, and no forced filler cadence. The TTS boundary now
+> strips invented expression tags and converts only phone-length digit runs;
+> times, dates, ages, fees, and tokens remain natural in the call language.
+> One shared branch-local `booking_is_upcoming` predicate now drives caller
+> context, lookup, availability, cancel, and reschedule, so a finished same-day
+> slot cannot be presented or mutated as future. Successful booking and
+> reschedule confirmations add the natural-language equivalent of "Please come
+> on time"; cancellation does not. Latency plan updated from the measured
+> 1.4s p50 / 2.5s p95 trace; next step is classify unaccounted/commit outliers
+> before provider tuning. Proof: 776 unit tests, 105 focused unit/integration
+> checks, Ruff, frontend lint + 6 Vitest tests + Vite production build green.
+
 > **2026-07-24 — LIVE-TEST FEEDBACK ROUND (#455, after v1.9.0 deploy).** Vinay's
 > Venkateshwara call: robotic tone, unwanted follow-up-consent question, ~3s
 > perceived latency. Shipped: humanized `<role>` (real Hyderabad receptionist —

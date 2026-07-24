@@ -10,9 +10,9 @@ def test_italic_markdown_stripped():
 
 
 def test_hash_number_converted():
-    # #8 loses the hash; #408 then speaks the digit as English ("eight")
+    # Markdown hash is removed; token number remains natural for Soniox.
     result = sanitize_for_tts("Token #8 confirmed")
-    assert result == "Token eight confirmed"
+    assert result == "Token 8 confirmed"
 
 
 def test_markdown_header_stripped():
@@ -46,10 +46,9 @@ def test_numbered_list_dot_stripped():
     assert "8." not in result
 
 
-def test_clean_text_digits_spoken_english():
-    # #408: even clean text has its digits spoken as English words
+def test_clean_small_numbers_remain_natural():
     result = sanitize_for_tts("Your token number is 5. Doctor will see you soon.")
-    assert result == "Your token number is five. Doctor will see you soon."
+    assert result == "Your token number is 5. Doctor will see you soon."
 
 
 def test_combined_markdown():

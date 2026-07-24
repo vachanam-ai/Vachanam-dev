@@ -114,7 +114,9 @@ from agent.services.tts_sanitizer import (  # noqa: E402
 )
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
+    _branch_now,
     assign_token,
+    booking_is_upcoming,
     check_availability,
     confirm_booking,
     find_bookings_by_phone,
@@ -295,7 +297,7 @@ def _protect_mutation(context) -> None:
         logger.warning("mutation_unprotected: %s", str(e)[:120])
 
 
-def _build_caller_context(rows, today) -> tuple[str | None, str]:
+def _build_caller_context(rows, now_local) -> tuple[str | None, str]:
     """Identify an inbound caller from their existing bookings (RULE 1 already
     applied — rows are branch-scoped via find_bookings_by_phone).
 
@@ -306,8 +308,13 @@ def _build_caller_context(rows, today) -> tuple[str | None, str]:
         prompt so the agent knows their FUTURE bookings up front and handles the
         "wants a new booking but already has one" case without a tool round-trip.
     """
+    # Older pure-function callers pass a date; production passes branch-local
+    # datetime so same-day clock appointments are classified precisely.
+    if isinstance(now_local, date_cls) and not isinstance(now_local, datetime_cls):
+        now_local = datetime_cls.combine(now_local, time_cls.min)
+    today = now_local.date()
     confirmed = [
-        (t, d, p) for (t, d, p) in rows if t.status == "confirmed" and t.date >= today
+        (t, d, p) for (t, d, p) in rows if booking_is_upcoming(t, now_local)
     ]
     if not confirmed:
         return None, ""  # new caller (or only clinic-cancelled) -> normal flow
@@ -423,29 +430,15 @@ def _phone_override_error(
     return None
 
 
-# #408 (supersedes the #296/#333 spacing rewrites): digits leave for TTS as
-# ENGLISH WORDS, deterministically — spaced digits still came out in the
-# session language ("ఎనిమిది సున్నా…", real call 2026-07-19). Conversion lives
-# in tts_sanitizer.spoken_english_numbers; this wrapper only handles stream
-# chunk-stitching.
-
-# Carry trailing digits AND colons so both a split phone ("96664"+"44428")
-# and a split clock ("10:"+"00") are stitched before the rewrites run.
-# #415: also carry a trailing day-part word (with any digits after it) —
-# "సాయంత్రం " + "6:30" must reach the converter TOGETHER or the am/pm
-# meridiem (which the day-part word proves) is lost to the earlier chunk.
-_TRAILING_DIGITS = re.compile(
-    r"(?:(?:ఉదయం|పొద్దున్నే|పొద్దున|మధ్యాహ్నం|సాయంత్రం|రాత్రి|सुबह|दोपहर|शाम|रात)\s*)?[\d:]*$"
-)
+# Carry a trailing digit run so a phone split across LLM chunks
+# ("96664" + "44428") is recognized as one number. Other numbers are left
+# untouched for Soniox to speak naturally in the active language.
+_TRAILING_DIGITS = re.compile(r"\d*$")
 
 
 async def _space_digits_stream(text):
-    """Chunk-stitching wrapper around the TTS digit rewrite
-    (spoken_english_numbers). A phone number cut across stream chunks
-    ("96664" + "44428") would be seen as two short runs and mis-convert;
-    holding each chunk's trailing digits until the next chunk arrives lets
-    the full run be converted as one."""
-    from agent.services.tts_sanitizer import spoken_english_numbers
+    """Chunk-stitch phone numbers, leaving times and small numbers natural."""
+    from agent.services.tts_sanitizer import spoken_phone_digits
 
     pend = ""
     async for chunk in text:
@@ -456,21 +449,76 @@ async def _space_digits_stream(text):
             pend = m.group()
             buf = buf[: m.start()]
         if buf:
-            yield spoken_english_numbers(buf)
+            yield spoken_phone_digits(buf)
     if pend:
-        yield spoken_english_numbers(pend)
+        yield spoken_phone_digits(pend)
 
 
-# Soniox expression tags ([Happy], [Excited], [Questioning], [Whisper]) — Soniox
-# speaks them expressively; the smallest.ai fallback must STRIP them so a literal
-# "[Happy]" never reaches a caller (RULE 6). Only [Letter…] tags are removed, so
-# a bracketed number ("[12]") is left untouched. Soniox is the primary and keeps
-# the tags — the strip lives ONLY in the smallest fallback classes.
+# Soniox expression control tokens. Keep a closed, production-tested vocabulary:
+# unknown stage directions are stripped before either TTS can read them aloud.
+# Smallest.ai does not support the controls, so its fallback strips every tag.
 _EXPR_TAG = re.compile(r"\[[A-Za-z][A-Za-z0-9 /_-]*\]\s*")
+SONIOX_EXPRESSION_TAGS = frozenset({
+    "[laughs]", "[giggles]", "[chuckles]", "[whispers]", "[softly]",
+    "[shouts]", "[angrily]", "[happily]", "[sadly]", "[crying]",
+    "[sighs]", "[takes a deep breath]", "[gasps]", "[nervously]",
+    "[excitedly]", "[confused]", "[surprised]", "[relieved]",
+    "[thinking]", "[hesitates]", "[pause]", "[long pause]",
+    "[clears throat]", "[coughs]", "[yawns]", "[sobs]", "[sniffs]",
+})
 
 
 def _strip_expression_tags(text: str) -> str:
     return _EXPR_TAG.sub("", text or "")
+
+
+def _filter_soniox_expression_tags(text: str) -> str:
+    """Keep exact supported controls; remove any invented bracketed control."""
+    return _EXPR_TAG.sub(
+        lambda match: match.group() if match.group().strip() in SONIOX_EXPRESSION_TAGS else "",
+        text or "",
+    )
+
+
+async def _filter_soniox_expression_stream(text):
+    """Chunk-safe expression filter without buffering an entire reply."""
+    pending = ""
+    async for chunk in text:
+        pending += chunk
+        while pending:
+            start = pending.find("[")
+            if start < 0:
+                yield pending
+                pending = ""
+                break
+            if start:
+                yield pending[:start]
+                pending = pending[start:]
+            end = pending.find("]", 1)
+            if end < 0:
+                # Expression controls are short. A longer open bracket is normal
+                # text, so release one character instead of delaying speech.
+                if len(pending) > 40:
+                    yield pending[0]
+                    pending = pending[1:]
+                    continue
+                break
+            tail = end + 1
+            while tail < len(pending) and pending[tail].isspace():
+                tail += 1
+            candidate = pending[:tail]
+            if _EXPR_TAG.fullmatch(candidate):
+                kept = _filter_soniox_expression_tags(candidate)
+                if kept:
+                    yield kept
+                pending = pending[tail:]
+            else:
+                yield pending[0]
+                pending = pending[1:]
+    if pending:
+        # Fail closed on an unfinished alphabetic stage direction.
+        if not re.fullmatch(r"\[[A-Za-z][A-Za-z0-9 /_-]*", pending):
+            yield pending
 
 
 _SPEECH_GUARD_CARRY = 24
@@ -1704,8 +1752,11 @@ class VachanamAgent(Agent):
                 yield chunk
 
         safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
+        expressive_text = _filter_soniox_expression_stream(safe_text)
         _first = True
-        async for frame in super().tts_node(_space_digits_stream(safe_text), model_settings):
+        async for frame in super().tts_node(
+            _space_digits_stream(expressive_text), model_settings
+        ):
             if _first and _trace is not None:
                 _trace.mark_tts_first_frame()  # first synthesized audio frame
                 _first = False
@@ -2817,6 +2868,19 @@ class VachanamAgent(Agent):
             )
             old_token = replacement
 
+        if not booking_is_upcoming(
+            old_token, await _branch_now(self._state.branch_id, self._db)
+        ):
+            return {
+                "success": False,
+                "error": "appointment_is_past",
+                "instruction": (
+                    "That appointment time has already passed. Do not describe "
+                    "it as upcoming and do not reschedule it. Offer a fresh "
+                    "booking if the caller still needs an appointment."
+                ),
+            }
+
         booking_date = self._parse_date(new_date)
         appt_time = self._parse_time(new_time)
         # ALREADY AT THAT TIME (torture #286): the caller repeated the time the
@@ -2950,7 +3014,8 @@ class VachanamAgent(Agent):
             "instruction": (
                 "The reschedule SUCCEEDED — the appointment is now on the new "
                 "date/time above and the old one is cancelled. Tell the caller "
-                "it is done, in one breath. Do NOT say it failed."
+                "it is done, in one breath, then add a natural equivalent of "
+                "'Please come on time.' Do NOT say it failed."
             ),
         }
 
@@ -3085,6 +3150,19 @@ class VachanamAgent(Agent):
                     ),
                 }
             return {"success": False, "error": f"not_cancellable_{token.status}"}
+
+        if not booking_is_upcoming(
+            token, await _branch_now(self._state.branch_id, self._db)
+        ):
+            return {
+                "success": False,
+                "error": "appointment_is_past",
+                "instruction": (
+                    "That appointment time has already passed. Do not describe "
+                    "it as upcoming and do not cancel it. Offer a fresh booking "
+                    "if the caller still needs an appointment."
+                ),
+            }
 
         # TD-020: the PATIENT is cancelling their own booking on the call —
         # distinct from a clinic cascade-cancel (doctor leave). Keeping them
@@ -3799,7 +3877,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             try:
                 _caller_rows, _known, inbound_followup = _caller_res
                 caller_greeting_name, caller_prompt_extra = _build_caller_context(
-                    _caller_rows, now_b.date()
+                    _caller_rows, now_b
                 )
                 # No active booking gave a name, but the caller may be a past
                 # patient — recognise them by their stored Patient record so a

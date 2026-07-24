@@ -462,18 +462,13 @@ def test_system_prompt_performance_prosody_rules():
     assert "MELODY" in prompt
 
 
-def test_phone_english_hard_rule_and_no_mechanics_leak():
-    """#295 (live 2026-07-08): agent read the phone number in Telugu and told the
-    patient 'you have to say different person' (internal mechanic leaked). Two
-    HARD RULES must be pinned: phones are always English digits (Telugu only on
-    explicit request), and internal tool params are never voiced."""
+def test_phone_digit_hard_rule_and_no_mechanics_leak():
+    """Phone runs stay deterministic; other numbers and tool mechanics do not."""
     prompt = _make_prompt()
-    # HARD RULE 7 — phones/times written as DIGITS, never native number words.
-    # The #408 converter (spoken_english_numbers, tested in test_tts_sanitizer)
-    # speaks them in English one-by-one — that's the deterministic boundary's job,
-    # freed from the prompt (Vinay 2026-07-24 "free up the system prompt").
+    compact = " ".join(prompt.split())
     assert "PLAIN DIGITS" in prompt
-    assert "native" in prompt  # never native/Telugu number words
+    assert "Times, dates, ages, fees" in prompt
+    assert "naturally" in prompt
     # HARD RULE 8 — never voice mechanics; different_person handled silently
     assert "NEVER voice your own internal mechanics" in prompt
     assert "different person" in prompt.lower()
@@ -486,8 +481,7 @@ def test_phone_english_hard_rule_and_no_mechanics_leak():
     # #296: friend booking must pass booking_for_other + never surface caller's own
     assert "pass booking_for_other=true to check_availability" in prompt
     assert "that is the caller's" in prompt.lower() or "it is the caller" in prompt.lower()
-    # phone native-number-words ban stays pinned (#408, freed wording 2026-07-24)
-    assert "native/Telugu number OR time words" in prompt
+    assert "Do not spell a phone number as a large cardinal" in compact
 
 
 def test_system_prompt_lead_in_rule():
@@ -496,8 +490,8 @@ def test_system_prompt_lead_in_rule():
     prompt = _make_prompt()
     compact = " ".join(prompt.split())
     assert "ANSWER DIRECTLY — DO NOT OPEN EVERY REPLY WITH A FILLER WORD" in compact
-    assert "roughly one reply in four" in compact
-    assert "NEVER two replies in a row" in compact
+    assert "An acknowledgement is optional, never scheduled" in compact
+    assert "Do not use the same acknowledgement in consecutive replies" in compact
     assert "Most replies must BEGIN WITH THE SUBSTANCE" in compact
     # verbose filler sentences stay banned — the cached checking-filler covers tools
     assert "ఒక్క నిమిషం" in prompt

@@ -18,7 +18,7 @@ from datetime import date, time, timedelta
 
 import pytest
 
-from agent.tools.booking_tools import check_availability
+from agent.tools.booking_tools import check_availability, find_bookings_by_phone
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 
 pytestmark = pytest.mark.asyncio
@@ -304,3 +304,23 @@ async def test_upcoming_booking_preferred_over_past_one(db, redis, monkeypatch):
     assert out.startswith("ALREADY_BOOKED")
     assert "4:30 PM" in out
     assert "12:01 AM" not in out
+
+
+async def test_caller_lookup_returns_only_actionable_same_day_slot(db, redis, monkeypatch):
+    """The greeting/find/cancel source must never return a finished slot."""
+    _freeze_now(monkeypatch, 13, 0)
+    _, br = await _org_branch(db, "lookup-now")
+    doc = await _slot_doctor(db, br)
+    pat, _ = await _seed_confirmed(
+        db, br, doc, CALLER, appt_time=time(12, 30)
+    )
+    future = Token(
+        branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
+        date=date.today(), status="confirmed", source="voice",
+        appointment_time=time(16, 30),
+    )
+    db.add(future)
+    await db.commit()
+
+    rows = await find_bookings_by_phone(br.id, CALLER, db)
+    assert [t.appointment_time for t, _, _ in rows] == [time(16, 30)]

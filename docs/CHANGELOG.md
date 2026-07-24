@@ -13,6 +13,30 @@ Format per session:
 
 ---
 
+## 2026-07-24 — Voice prompt, Soniox controls, and time-aware booking truth
+
+Replaced the open-ended expression and forced-filler instructions with a
+concrete voice-performance contract based on the LiveKit prompting guidance:
+calm baseline, rare situational pauses, most replies without a tag, at most one
+exact supported Soniox tag, and no laughter around pain or bad news. A
+chunk-safe TTS filter keeps the closed control vocabulary and strips invented
+bracketed directions before synthesis. Small numbers/times are again natural in
+the active language; only phone-length digit runs receive deterministic
+digit-by-digit English rendering.
+
+Booking state now has one branch-local clock predicate. It is reused by caller
+identification, booking lookup, availability, cancellation, and rescheduling,
+so a finished same-day slot is neither surfaced nor mutable as an upcoming
+appointment. Booking and rescheduling tool results plus the system prompt now
+require a natural equivalent of "Please come on time" after success only.
+
+The persistent-latency plan is updated to the latest 1.4s p50 / 2.5s p95 trace,
+176ms p50 / 836ms p95 unexplained remainder, and the observed 13-second commit
+outlier. Measurement/classification precedes any new provider or endpointing
+change. Regression proof: 776 unit tests, 105 focused unit/integration checks,
+Ruff, frontend lint, 6 Vitest tests, and the Vite production build passed. The
+unrestricted full repository suite remains the GitHub production gate.
+
 ## 2026-07-21 — Grounded call brain, speech firewall, demo latency, and offer pricing (#443)
 
 Production evidence separated four failures. Soniox produced `పని సమస్యలు`

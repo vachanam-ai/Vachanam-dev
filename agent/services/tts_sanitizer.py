@@ -62,6 +62,7 @@ def _cardinal(n: int) -> str:
 
 _TIME = re.compile(r"\b(\d{1,2}):([0-5]\d)\b")
 _LONG_RUN = re.compile(r"\d{5,}")
+_PHONE_RUN = re.compile(r"(?<!\d)\d{10,15}(?!\d)")
 _SHORT_NUM = re.compile(r"\d{1,4}")
 
 # ── #415 (Vinay 2026-07-19): times speak WITH am/pm — "5pm", "3:30pm", "10am"
@@ -158,6 +159,20 @@ def spoken_english_numbers(text: str) -> str:
     return text.replace("डॉक्टर", "डाक्टर")
 
 
+def spoken_phone_digits(text: str) -> str:
+    """Read only phone-length digit runs one digit at a time in English.
+
+    Times, dates, ages, fees, and token numbers remain untouched so the model
+    and Soniox can render them naturally in the call language. The old
+    ``spoken_english_numbers`` helper remains for compatibility, but is no
+    longer the production TTS boundary.
+    """
+    text = _PHONE_RUN.sub(
+        lambda m: " ".join(_ONES[int(c)] for c in m.group()), text or ""
+    )
+    return text.replace("डॉक्टर", "डाक्टर")
+
+
 def sanitize_for_tts(text: str) -> str:
     text = strip_internal_tool_speech(text)
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
@@ -168,7 +183,7 @@ def sanitize_for_tts(text: str) -> str:
     text = re.sub(r'^(\d+)\.\s+', r'\1 ', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*-\s+', '', text, flags=re.MULTILINE)
     text = _strip_emoji(text)
-    text = spoken_english_numbers(text)
+    text = spoken_phone_digits(text)
     text = re.sub(r'  +', ' ', text)
     return text.strip()
 

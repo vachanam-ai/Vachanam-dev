@@ -1,12 +1,7 @@
-"""Soniox expression tags (Vinay 2026-07-24). The LLM prefixes replies with a
-bracketed emotion tag ([Happy], [Excited], [Giggles], [Angry], [Whisper]…);
-Soniox acts them. The set is OPEN — the prompt gives examples and lets the LLM
-use any short emotion that fits (Vinay: "there are n expressions, don't limit").
-On the smallest.ai FALLBACK ANY such tag is STRIPPED — a literal "[Happy]" must
-never reach a caller (RULE 6) — so open-endedness is safe on the fallback.
-"""
+"""Closed Soniox expression controls and fallback safety."""
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from agent.livekit_minimal import agent as ag
@@ -32,8 +27,7 @@ def test_digit_bracket_not_stripped():
 
 
 def test_strip_handles_arbitrary_open_set_tags():
-    # the set is OPEN — the strip must remove ANY emotion tag, not a fixed list,
-    # so a novel/lowercase tag never leaks to the smallest fallback (RULE 6).
+    # Smallest strips every bracketed stage direction, supported or not.
     assert ag._strip_expression_tags("[giggles] హహ") == "హహ"
     assert ag._strip_expression_tags("[angrily] ఇది తప్పు") == "ఇది తప్పు"
     assert ag._strip_expression_tags("[Concerned] అయ్యో") == "అయ్యో"
@@ -68,16 +62,44 @@ def test_soniox_path_keeps_tags():
     assert "_strip_expression_tags" not in soniox
 
 
-def test_prompt_teaches_expressions_open_set_and_keeps_digit_rule():
+def test_closed_soniox_allowlist_is_exact():
+    expected = {
+        "[laughs]", "[giggles]", "[chuckles]", "[whispers]", "[softly]",
+        "[shouts]", "[angrily]", "[happily]", "[sadly]", "[crying]",
+        "[sighs]", "[takes a deep breath]", "[gasps]", "[nervously]",
+        "[excitedly]", "[confused]", "[surprised]", "[relieved]",
+        "[thinking]", "[hesitates]", "[pause]", "[long pause]",
+        "[clears throat]", "[coughs]", "[yawns]", "[sobs]", "[sniffs]",
+    }
+    assert ag.SONIOX_EXPRESSION_TAGS == expected
+
+
+def test_soniox_filter_keeps_exact_supported_and_strips_invented_tags():
+    assert ag._filter_soniox_expression_tags("[softly] hello") == "[softly] hello"
+    assert ag._filter_soniox_expression_tags("[Concerned] hello") == "hello"
+    assert ag._filter_soniox_expression_tags("[Happy] hello") == "hello"
+    assert ag._filter_soniox_expression_tags("token [12]") == "token [12]"
+
+
+def test_soniox_filter_is_chunk_split_safe():
+    async def source():
+        for chunk in ("[sof", "tly] hello [Con", "cerned] there"):
+            yield chunk
+
+    async def collect():
+        return "".join([c async for c in ag._filter_soniox_expression_stream(source())])
+
+    assert asyncio.run(collect()) == "[softly] hello there"
+
+
+def test_prompt_teaches_closed_optional_expressions_and_phone_digit_rule():
     p = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
-    # teaches the REAL Soniox vocabulary (lowercase, incl multi-word forms)…
     for tag in ("[happily]", "[excitedly]", "[whispers]", "[sighs]",
                 "[takes a deep breath]", "[long pause]"):
         assert tag in p, tag
-    # …explicitly OPEN (Vinay: don't limit), pushed toward human-ness,
-    # with the taste guard (never laugh at pain).
-    assert "NOT limited" in p
-    assert "SOUND HUMAN" in p
-    assert "pain or bad news" in p
-    # the load-bearing "write digits, not native number words" rule must survive
-    assert "DIGITS" in p
+    assert "CLOSED allowlist" in p
+    assert "only permitted non-spoken controls" in p
+    assert "Most replies use NO tag" in p
+    assert "at most ONE tag" in p
+    assert "Never use laughter for pain" in p
+    assert "PLAIN DIGITS" in p
