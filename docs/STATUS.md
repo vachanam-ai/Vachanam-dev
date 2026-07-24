@@ -19,6 +19,11 @@
 > • **Odia removed** — platform now 7 Indian languages (te/hi/ta/kn/ml/mr/bn) +
 >   English on request. get_lang('or')→Telugu, no migration. ⚠ CLAUDE.md pricing
 >   copy still says "all 8" — needs a Vinay marketing-copy update to "all 7".
+> • **Soniox expression tags** — LLM may prefix a reply with [Happy]/[Excited]/
+>   [Questioning]/[Whisper]; Soniox voices them, smallest fallback strips them
+>   (RULE 6). **Prompt freed** of the verbose number/time pronunciation rules —
+>   the deterministic English-digit sanitizer (#408) KEPT (still enforces + guards
+>   the fallback); only the LLM-facing pronunciation how-to was removed.
 > ⚠ NOT deployed: unit suite green locally, prod still on the pre-existing image.
 > Needs a live call to validate the Soniox voice, then push (CI auto-deploys).
 > The measured floor stands: latency is the Soniox STT Tokyo RTT, not the pipeline —
