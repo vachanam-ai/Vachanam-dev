@@ -16,7 +16,7 @@ google-auth>=2.0.0
 google-api-python-client>=2.0.0
 apscheduler>=3.10.0
 pytz>=2024.1
-openai>=1.30.0
+openai>=2.48.0
 # NEW Gemini SDK (`from google import genai`) — used by support_bot +
 # call_scoring. #330: the OLD google-generativeai pin satisfied nothing (code
 # never imports it) while the real dependency was missing in prod, so every
