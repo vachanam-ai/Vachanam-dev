@@ -1,8 +1,9 @@
 """Soniox expression tags (Vinay 2026-07-24). The LLM prefixes replies with a
-Soniox emotion tag ([Happy] [Excited] [Questioning] [Whisper]); Soniox speaks
-them expressively. On the smallest.ai FALLBACK the tags are STRIPPED — a literal
-"[Happy]" must never reach a caller (RULE 6). Only the confirmed tag set is
-allowed so an unsupported tag can't be spoken literally by Soniox.
+bracketed emotion tag ([Happy], [Excited], [Giggles], [Angry], [Whisper]…);
+Soniox acts them. The set is OPEN — the prompt gives examples and lets the LLM
+use any short emotion that fits (Vinay: "there are n expressions, don't limit").
+On the smallest.ai FALLBACK ANY such tag is STRIPPED — a literal "[Happy]" must
+never reach a caller (RULE 6) — so open-endedness is safe on the fallback.
 """
 from __future__ import annotations
 
@@ -30,6 +31,14 @@ def test_digit_bracket_not_stripped():
     assert ag._strip_expression_tags("token [12] okay") == "token [12] okay"
 
 
+def test_strip_handles_arbitrary_open_set_tags():
+    # the set is OPEN — the strip must remove ANY emotion tag, not a fixed list,
+    # so a novel/lowercase tag never leaks to the smallest fallback (RULE 6).
+    assert ag._strip_expression_tags("[Giggles] హహ") == "హహ"
+    assert ag._strip_expression_tags("[angry] ఇది తప్పు") == "ఇది తప్పు"
+    assert ag._strip_expression_tags("[Concerned] అయ్యో") == "అయ్యో"
+
+
 def test_both_smallest_paths_strip_tags():
     """Strip is wired into BOTH smallest entry points (streaming + REST fallback)
     so a Soniox outage never reads a tag aloud."""
@@ -45,9 +54,12 @@ def test_soniox_path_keeps_tags():
     assert "_strip_expression_tags" not in soniox
 
 
-def test_prompt_teaches_expressions_and_keeps_digit_rule():
+def test_prompt_teaches_expressions_open_set_and_keeps_digit_rule():
     p = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
-    for tag in ("[Happy]", "[Excited]", "[Questioning]", "[Whisper]"):
+    # gives concrete examples…
+    for tag in ("[Happy]", "[Excited]", "[Whisper]", "[Giggles]"):
         assert tag in p, tag
+    # …but explicitly OPEN, not a closed list (Vinay: don't limit)
+    assert "NOT limited" in p
     # the load-bearing "write digits, not native number words" rule must survive
     assert "DIGITS" in p
