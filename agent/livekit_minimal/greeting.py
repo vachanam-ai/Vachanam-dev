@@ -175,8 +175,8 @@ async def _synth_wavs_soniox(texts: list[str], voice_id: str, lang_code: str) ->
         voice=resolve_soniox_voice(voice_id),
         language=lang_code,
         sample_rate=settings.soniox_tts_sample_rate,
-        api_key=settings.soniox_api_key,
-        websocket_url=settings.soniox_tts_ws_url,
+        api_key=settings.soniox_jp_api_key,
+        websocket_url=settings.soniox_jp_tts_ws_url,
     )
     try:
         out: list[bytes] = []
@@ -184,7 +184,11 @@ async def _synth_wavs_soniox(texts: list[str], voice_id: str, lang_code: str) ->
             frames: list[bytes] = []
             sr = settings.soniox_tts_sample_rate
             ch = 1
-            async with asyncio.timeout(15):
+            # Cache warmers run outside Fly's low-latency Mumbai path and can
+            # legitimately take >15s for a long disclosure. A timeout here loses
+            # the cache and makes the next caller pay live synthesis, the worst
+            # possible fallback. Live session TTS has its own retry policy.
+            async with asyncio.timeout(30):
                 async for ev in tts.synthesize(sanitize_for_tts(text)):  # RULE 6
                     frame = getattr(ev, "frame", None)
                     if frame is not None:

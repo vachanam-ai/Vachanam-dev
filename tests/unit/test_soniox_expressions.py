@@ -45,18 +45,18 @@ def test_soniox_filter_is_chunk_split_safe():
     assert asyncio.run(collect()) == "[softly] hello there"
 
 
-def test_prompt_teaches_closed_optional_expressions_and_phone_digit_rule():
+def test_prompt_teaches_job_scoped_expressions_and_phone_digit_rule():
     p = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
-    for tag in ("[happily]", "[excitedly]", "[whispers]", "[sighs]",
-                "[takes a deep breath]", "[long pause]"):
+    for tag in ("[softly]", "[happily]", "[relieved]", "[thinking]",
+                "[hesitates]", "[confused]", "[sighs]", "[chuckles]",
+                "[pause]", "[long pause]"):
         assert tag in p, tag
-    assert "CLOSED allowlist" in p
-    assert "only permitted non-spoken controls" in p
-    assert "Most replies use NO tag" in p
-    assert "at most ONE tag" in p
-    assert "Never use laughter for pain" in p
+    assert "Only these are ever earned" in p
+    assert "No other tag is ever earned" in p
+    assert "most carry neither" in p
+    assert "Never two emotions in one reply" in p
+    assert "No laughter over pain" in p
     assert "PLAIN DIGITS" in p
-    assert "runtime supplies one natural hold line" in p
-    assert "runtime owns the routine slow-tool" in p
-    assert "do not duplicate it" in p
-    assert "exactly where the silence should happen" in p
+    assert "runtime already supplies the hold line" in p
+    assert "never generate" in p
+    assert "routine [long pause] yourself" in p

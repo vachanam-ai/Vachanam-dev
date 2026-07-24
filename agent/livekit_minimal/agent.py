@@ -931,8 +931,8 @@ def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
         voice=voice,
         language=tts_lang,
         sample_rate=settings.soniox_tts_sample_rate,
-        api_key=settings.soniox_api_key,
-        websocket_url=settings.soniox_tts_ws_url,
+        api_key=settings.soniox_jp_api_key,
+        websocket_url=settings.soniox_jp_tts_ws_url,
     )
     try:  # reuse the job's aiohttp session so the WS handshake skips TLS setup
         from livekit.agents import utils
@@ -961,8 +961,8 @@ def _build_session_tts(
     voice_id: str, tts_lang: str, prewarmed_soniox=None
 ) -> "soniox.TTS":
     """The sole session TTS. A missing Soniox key is a configuration error."""
-    if not settings.soniox_api_key:
-        raise RuntimeError("SONIOX_API_KEY is required: Soniox is the only TTS provider")
+    if not settings.soniox_jp_api_key:
+        raise RuntimeError("SONIOX_JP_API_KEY is required: Soniox is the only TTS provider")
     primary = (
         prewarmed_soniox
         if _soniox_prewarm_matches(prewarmed_soniox, voice_id, tts_lang)
@@ -983,7 +983,7 @@ def _prewarm_soniox_tts(proc) -> None:
     sync hook lacks. The actual connect fires in _build_session_tts (async
     entrypoint context), concurrent with call setup. Best-effort: the entrypoint
     rebuilds if this missed."""
-    if not settings.soniox_api_key:
+    if not settings.soniox_jp_api_key:
         logger.critical("soniox_tts_not_configured")
         return
     try:
@@ -1086,7 +1086,7 @@ def _build_stt(
     context_terms: list | None = None,
     finalize_controller: _SonioxFinalizeController | None = None,
 ):
-    """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_API_KEY
+    """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_JP_API_KEY
     is set (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu vs
     Sarvam), Sarvam Saaras v3 fallback otherwise so a missing/revoked Soniox
     key can never take the clinic offline (RULE 8).
@@ -1110,7 +1110,7 @@ def _build_stt(
     endpointing/latency risk.
     """
     provider = settings.stt_provider
-    use_soniox = provider != 'sarvam' and bool(settings.soniox_api_key)
+    use_soniox = provider != 'sarvam' and bool(settings.soniox_jp_api_key)
     if use_soniox:
         ctx = None
         terms = [t for t in (context_terms or []) if t and t.strip()]
@@ -1145,16 +1145,14 @@ def _build_stt(
         )
         return stt_type(
             **stt_kwargs,
-            api_key=settings.soniox_api_key,
+            api_key=settings.soniox_jp_api_key,
             # #406: region-configurable endpoint. Measured from the Fly bom
             # machine (2026-07-18): tcp connect 4ms to the JP edge vs 230ms US
             # / 254ms EU — every audio chunk and final token pays that round
             # trip inside transcription_delay (~0.75s). Soniox keys are
-            # REGION-SCOPED (US key → 401 on JP), so the switch is env-driven:
-            # once a JP key exists, set SONIOX_API_KEY + SONIOX_WS_URL
-            # (wss://stt-rt.jp.soniox.com/transcribe-websocket) on Fly. Same
-            # model, same accuracy — the #399 endpointing ban is untouched.
-            base_url=settings.soniox_ws_url,
+            # REGION-SCOPED (US key → 401 on JP). SONIOX_JP_API_KEY is the only
+            # accepted credential, preventing a silent region mismatch.
+            base_url=settings.soniox_jp_stt_ws_url,
             params=soniox.STTOptions(
                 model="stt-rt-v5",
                 language_hints=[lang_cfg.code],
@@ -3380,6 +3378,63 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # bad value can never break a live call (RULE 8).
     branch_lang_code = getattr(branch, "language", None) or "te"
     lang_code = branch_lang_code
+    # Start the cacheable branch greeting as soon as tenant resolution finishes.
+    # Returning-caller recognition, billing checks, roster reads, prompt assembly,
+    # and AgentSession startup all run behind this audio instead of in front of
+    # the first spoken word. The opening intentionally stays generic; caller
+    # recognition still feeds the prompt, but must never force live TTS.
+    _early_greeting_task: asyncio.Task | None = None
+    _early_greeting_texts: list[str] | None = None
+    _early_intro_texts: list[str] | None = None
+    _early_intro_cache_key: str | None = None
+    _recording_notice_handled = False
+    if not outbound_number:
+        _early_clinic = (
+            (getattr(branch, "name_spoken", None) or "").strip() or branch.name
+        )
+        _early_voice = _voice_for_lang(branch, branch_lang_code)
+        _early_intro_texts = inbound_greeting_texts(
+            branch_lang_code,
+            _early_clinic,
+            recording_active=False,
+        )
+        _early_intro_cache_key = _greeting_cache_key(
+            str(branch.id),
+            branch_lang_code,
+            _greeting_voice_key(_early_voice),
+            _early_intro_texts,
+        )
+        if _recording_active:
+            _early_notice = get_recording_notice(branch_lang_code)
+            _early_greeting_texts = [_early_notice, *_early_intro_texts]
+            _notice_cache_key = _greeting_cache_key(
+                "recording-notice",
+                branch_lang_code,
+                _greeting_voice_key(_early_voice),
+                [_early_notice],
+            )
+            _early_greeting_task = asyncio.create_task(
+                synth_and_play(
+                    ctx.room,
+                    [_early_notice],
+                    _early_voice,
+                    branch_lang_code,
+                    t_answer=_t_answer,
+                    cache_key=_notice_cache_key,
+                )
+            )
+        else:
+            _early_greeting_texts = list(_early_intro_texts)
+            _early_greeting_task = asyncio.create_task(
+                synth_and_play(
+                    ctx.room,
+                    _early_intro_texts,
+                    _early_voice,
+                    branch_lang_code,
+                    t_answer=_t_answer,
+                    cache_key=_early_intro_cache_key,
+                )
+            )
     # LATENCY (#390, real call 2026-07-17: lat_pre_session_build=4.66s → first
     # audio 5.81s): the three independent pre-call DB reads — per-caller
     # language, service gate, caller identification — used to run SERIALLY on
@@ -3543,6 +3598,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     blocked_reason, org_plan = _gate_res
 
     if blocked_reason:
+        # The fast generic opening may already be playing while the billing gate
+        # resolves. Stop it before the deterministic blocked-service line so two
+        # tracks can never overlap. A partial hello is preferable to dead air;
+        # the blocked line remains authoritative and is never recorded.
+        if _early_greeting_task is not None and not _early_greeting_task.done():
+            _early_greeting_task.cancel()
+            try:
+                await _early_greeting_task
+            except (asyncio.CancelledError, Exception):
+                pass
         logger.warning(
             "call_blocked reason=%s branch_id=%s did=...%s",
             blocked_reason,
@@ -3755,6 +3820,36 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _welcome_task = asyncio.create_task(
                     play_wavs(ctx.room, _out_greet["wavs"], t_answer=_t_answer)
                 )
+        elif _early_greeting_task is not None:
+            # Inbound fast path. For recorded admin test calls, only the notice
+            # runs before capture; once it finishes, start the normal intro while
+            # prompt/session setup continues. This preserves notice-before-
+            # recording without serializing the entire opening ahead of startup.
+            _greet_texts = _early_greeting_texts
+            if _recording_active:
+                try:
+                    _notice_ok = bool(await _early_greeting_task)
+                except Exception as _we:  # noqa: BLE001
+                    _notice_ok = False
+                    logger.warning("recording_notice_play_failed: %s", _we)
+                if _notice_ok:
+                    _recording_notice_handled = True
+                    logger.info("recording_notice_completed before_capture=True")
+                else:
+                    _recording_active = False
+                    _greet_texts = list(_early_intro_texts or [])
+                    logger.error("recording_fail_closed reason=notice_playback_failed")
+                _welcome_task = asyncio.create_task(
+                    synth_and_play(
+                        ctx.room,
+                        _early_intro_texts or [],
+                        _early_voice,
+                        branch_lang_code,
+                        cache_key=_early_intro_cache_key,
+                    )
+                )
+            else:
+                _welcome_task = _early_greeting_task
         elif branch_name:
             _fu_msg = (inbound_followup or {}).get("message") or None
             _greet_texts = inbound_greeting_texts(
@@ -3785,7 +3880,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # the notice BEFORE we build the prompt or start AgentSession capture.
         # A playback failure clears the mode and notice, so prompt, speech, and
         # the explicit record=False decision all remain consistent.
-        if _recording_active:
+        if _recording_active and not _recording_notice_handled:
             try:
                 _pre_greeted = bool(
                     _welcome_task is not None and await _welcome_task
@@ -4681,42 +4776,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
         )
 
-        # PRIME the session TTS connection now (concurrent with the clip + connect),
-        # so its cold "Connection error" + retries happen in the masked window and
-        # the first real response is hot. Best-effort — never blocks the call.
-        async def _warm_session_tts() -> None:
-            _t = _perf.monotonic()
-            try:
-                # #405: warm the STREAMING path (opens the WS pool connection and
-                # validates it end-to-end in the masked window, not on the
-                # first reply).
-                _ws = _session_tts.stream()
-                _ws.push_text("సరే")
-                _ws.end_input()
-                try:
-                    async for _ in _ws:
-                        break  # first frame = pipeline hot; discard audio
-                finally:
-                    await _ws.aclose()
-                logger.info("tts_warm_ok=%.2fs", _perf.monotonic() - _t)
-            except Exception as _e:  # noqa: BLE001
-                logger.warning("tts_warm_failed: %s", str(_e)[:100])
-
-        _tts_warm_task = asyncio.create_task(_warm_session_tts())
-        # Pre-render the lookup fillers in the clinic voice so the "okay అండి /
-        # ఒక్క నిమిషం" ack plays INSTANTLY when a slot lookup runs (Vinay
-        # 2026-07-06), no per-call TTS latency. Best-effort, never blocks.
-        _filler_cache_task = asyncio.create_task(
-            cache_filler_clips(session, lines.fillers, tts_voice, lang_code)
-        )
-        # #429: the slow-tool "ఒక్క నిమిషం అండి" waits, cached the same way so
-        # they start instantly the moment a slow tool fires.
-        _wait_cache_task = asyncio.create_task(
-            cache_filler_clips(
-                session, get_wait_fillers(lang_code), tts_voice, lang_code,
+        # Soniox enforces a low per-organization TTS concurrency limit. The old
+        # startup path opened THREE competing synth streams (throwaway warm-up,
+        # short fillers, wait fillers) while the greeting was still speaking;
+        # production returned 429 and delayed the first real reply. The greeting
+        # is the useful warm-up. Build filler banks sequentially in one background
+        # task so startup never competes with itself.
+        async def _cache_tool_fillers() -> None:
+            await cache_filler_clips(
+                session, lines.fillers, tts_voice, lang_code
+            )
+            await cache_filler_clips(
+                session,
+                get_wait_fillers(lang_code),
+                tts_voice,
+                lang_code,
                 key="wait_clips",
             )
-        )
+
+        _filler_cache_task = asyncio.create_task(_cache_tool_fillers())
         if _welcome_task is not None:
             # MIC GATE (#289, live 2026-07-08): the raw greeting clip is
             # uninterruptible, but session.start() often finishes WHILE the clip

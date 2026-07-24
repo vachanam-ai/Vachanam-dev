@@ -4,14 +4,11 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # AI
-    # STT — Soniox stt-rt-v5 primary when this key is set (Vinay 2026-07-10:
-    # better + cheaper, ~$0.12/hr real-time Telugu). Empty key = agent falls
-    # back to Sarvam Saaras so a missing/revoked key can never block calls.
-    soniox_api_key: str = ""
-    # #406: Soniox regional WS endpoint. Keys are REGION-SCOPED — pair a JP key
-    # with wss://stt-rt.jp.soniox.com/transcribe-websocket (4ms from Fly bom vs
-    # 230ms to the US default; big slice of transcription_delay).
-    soniox_ws_url: str = "wss://stt-rt.soniox.com/transcribe-websocket"
+    # Soniox keys are region-scoped. This application accepts only the Japan
+    # project key so a US credential cannot be paired with the JP endpoints.
+    soniox_jp_api_key: str = ""
+    # #406: Japan measured 4ms from Fly bom vs 230ms to the US endpoint.
+    soniox_jp_stt_ws_url: str = "wss://stt-rt.jp.soniox.com/transcribe-websocket"
     sarvam_api_key: str           # Sarvam Saaras v3 — STT fallback
     # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
     # conservative production canary; 0 restores Soniox's default behavior.
@@ -34,10 +31,10 @@ class Settings(BaseSettings):
     openai_api_key: str
     gemini_api_key: str
 
-    # TTS — Soniox tts-rt is the sole provider. The same key serves STT and TTS.
+    # TTS — Soniox tts-rt is the sole provider. The Japan key serves STT + TTS.
     # Legacy branch voice IDs safely resolve to soniox_tts_default_voice.
     soniox_tts_model: str = "tts-rt-v1"  # per Soniox RT-TTS docs; sandbox-validated
-    soniox_tts_ws_url: str = "wss://tts-rt.soniox.com/tts-websocket"
+    soniox_jp_tts_ws_url: str = "wss://tts-rt.jp.soniox.com/tts-websocket"
     soniox_tts_default_voice: str = "Priya"
     soniox_tts_sample_rate: int = 24000
 

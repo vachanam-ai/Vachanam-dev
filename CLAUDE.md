@@ -112,8 +112,8 @@ History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07
 
 | Layer | Tool |
 |---|---|
-| STT | Soniox stt-rt-v5 primary (Vinay 2026-07-10, real-time Telugu ~$0.12/hr) → Sarvam Saaras v3 fallback when SONIOX_API_KEY unset |
-| TTS | Sarvam Bulbul v3 (kavitha; Telugu script input, never romanized) |
+| STT | Soniox Japan stt-rt-v5 primary → Sarvam Saaras v3 fallback when SONIOX_JP_API_KEY is unset |
+| TTS | Soniox Japan tts-rt-v1 (Priya default; Telugu script input) |
 | LLM | Gemini 2.5 Flash primary → GPT-4o mini auto-fallback |
 | Voice pipeline | LiveKit Agents (chosen 2026-06-10 over Pipecat: outbound works, jitter buffer, scale) |
 | Telephony | Vobiz (Indian DID, SIP trunks, ₹0.65/min) |

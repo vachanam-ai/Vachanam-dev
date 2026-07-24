@@ -107,14 +107,14 @@ def test_vertex_mumbai_primary_404(tmp_path, monkeypatch):
 
 
 def test_soniox_region_configurable_406():
-    """#406: Soniox WS endpoint rides settings.soniox_ws_url (US default; JP is
+    """#406: Soniox WS endpoint rides the Japan-only regional setting.
     4ms from Fly bom vs 230ms US — measured 2026-07-18). Keys are region-scoped,
     so the flip is env-only. #442 changes endpoint controls independently."""
     from backend.config import settings as s
 
     stt = SRC.split("def _build_stt")[1][:6000]
-    assert "base_url=settings.soniox_ws_url" in stt
-    assert s.soniox_ws_url.startswith("wss://stt-rt")
+    assert "base_url=settings.soniox_jp_stt_ws_url" in stt
+    assert s.soniox_jp_stt_ws_url == "wss://stt-rt.jp.soniox.com/transcribe-websocket"
     assert "endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level" in stt
     assert "max_endpoint_delay_ms=settings.soniox_max_endpoint_delay_ms" in stt
     assert "endpoint_sensitivity=settings.soniox_endpoint_sensitivity" in stt

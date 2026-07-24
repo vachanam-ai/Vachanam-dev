@@ -13,7 +13,7 @@
 livekit-agents==1.6.6
 livekit-api>=1.1.1
 # STT: Soniox stt-rt-v5 primary (Vinay 2026-07-10), Sarvam Saaras v3 fallback
-# when SONIOX_API_KEY is unset — see _build_stt in agent.py.
+# when SONIOX_JP_API_KEY is unset — see _build_stt in agent.py.
 livekit-plugins-soniox==1.6.6
 livekit-plugins-sarvam==1.6.6
 livekit-plugins-google==1.6.6

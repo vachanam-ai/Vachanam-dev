@@ -1,5 +1,25 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-24 — P0 VOICE LATENCY CORRECTION (LOCAL, deployment pending).**
+> Production call evidence showed first audio at 14.36s, despite the caller
+> reporting roughly 7s, and ordinary reply gaps around 1.4–1.7s. Root causes
+> were concrete: returning-caller personalization forced uncached live greeting
+> synthesis; recording serialized the whole opening before capture/session
+> setup; startup opened a throwaway Soniox warm stream plus two filler synth
+> streams and hit the account's 429 concurrency limit; forced Sarvam STT added
+> 0.79–0.88s transcription delay. The inbound opening now starts from a stable
+> branch cache immediately after tenant resolution, while caller/billing/prompt
+> work runs behind it. Recorded admin calls isolate and finish only the notice
+> before capture, then overlap the cached intro with session startup. The
+> redundant TTS warm stream is deleted and filler banks synthesize sequentially.
+> Both production branches' Soniox intro/notice Redis entries are pre-warmed.
+> The new Japan-project key authenticated against both Japan endpoints and
+> returned real STT and Telugu TTS audio. Production switches from Sarvam to
+> Soniox Japan with this deploy. Honest acceptance gates: first audible
+> response p50 <0.5s after branch resolution; normal perceived turn gap p50
+> <1.0s and p95 <1.5s. A semantic answer <0.5s is not currently possible while
+> measured Soniox TTS TTFB alone is ~0.57–0.59s.
+
 > **2026-07-24 — TEMPORARY ADMIN-ONLY RECORDING + SONIOX-ONLY TTS (LOCAL,
 > deployment pending).** `RECORDING_ENABLED=true` can now record audio only when
 > the caller/callee exactly matches configured `ADMIN_PHONE`; every other

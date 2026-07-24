@@ -13,6 +13,25 @@ Format per session:
 
 ---
 
+## 2026-07-24 — P0 first-audio and conversational-latency correction
+
+Production traces disproved the perceived numbers in the optimistic direction:
+first audio reached the latest call at 14.36 seconds, and ordinary turns took
+roughly 1.4–1.7 seconds. Returning callers bypassed the greeting cache, recording
+waited for the entire opening before session setup, and four Soniox synthesis
+activities competed at startup; the latter produced a real 429 concurrency
+error. Sarvam STT separately consumed 0.79–0.88 seconds per finalized turn.
+
+The inbound opening is now generic/cache-stable and begins immediately after
+branch resolution, while caller recognition, billing, prompt construction, and
+session startup continue behind the audio. Admin recording plays only its notice
+before capture, then overlaps the main cached intro with setup. The redundant
+Soniox warm request was removed; tool-filler banks now build sequentially. Added
+`scripts/warm_soniox_greeting_cache.py` and warmed both production branches.
+Added source-order regressions in `test_first_audio_fast_path.py`. A live-key
+probe authenticated both Japan real-time endpoints and returned real STT and
+Telugu TTS audio, enabling removal of Sarvam's measured finalization floor.
+
 ## 2026-07-24 — Temporary admin recording and Soniox-only TTS
 
 Added a temporary production test recorder with an exact `ADMIN_PHONE`

@@ -38,9 +38,9 @@ def test_t3_prompt_prefix_cache_done_via_vertex_417():
 
 def test_t12_regional_stt_and_llm_done():
     """#12: LLM on Vertex Mumbai (asia-south1); STT endpoint region-configurable
-    (JP edge via SONIOX_WS_URL). TTS-region JP needs account enablement (documented)."""
+    (JP edge via SONIOX_JP_STT_WS_URL)."""
     assert 'location="asia-south1"' in SRC
-    assert "base_url=settings.soniox_ws_url" in SRC
+    assert "base_url=settings.soniox_jp_stt_ws_url" in SRC
 
 
 def test_t6_aec_warmup_is_na_no_dead_knob_added():

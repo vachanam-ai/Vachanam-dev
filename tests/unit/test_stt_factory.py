@@ -15,7 +15,7 @@ from agent.i18n.languages import get_lang
 
 
 def test_soniox_when_key_set():
-    with patch.object(ag.settings, "soniox_api_key", "sk-test"):
+    with patch.object(ag.settings, "soniox_jp_api_key", "sk-test"):
         stt = ag._build_stt(get_lang("te"))
     assert isinstance(stt, soniox.STT)
     opts = stt._params
@@ -23,11 +23,13 @@ def test_soniox_when_key_set():
     # strict ONE language per call — hints pinned to the branch language
     assert opts.language_hints == ["te"]
     assert opts.language_hints_strict is True
+    assert stt._base_url == "wss://stt-rt.jp.soniox.com/transcribe-websocket"
+    assert not hasattr(ag.settings, "soniox_api_key")
 
 
 def test_sarvam_fallback_when_key_empty():
     """RULE 8: no Soniox key ⇒ Sarvam, never a crash / never no-STT."""
-    with patch.object(ag.settings, "soniox_api_key", ""):
+    with patch.object(ag.settings, "soniox_jp_api_key", ""):
         stt = ag._build_stt(get_lang("te"))
     assert isinstance(stt, sarvam.STT)
 
@@ -35,7 +37,7 @@ def test_sarvam_fallback_when_key_empty():
 def test_language_switch_handoff_gets_new_language_hint():
     """switch_language handoff builds STT via the same factory — the NEW
     language must ride in the hints, not the old one."""
-    with patch.object(ag.settings, "soniox_api_key", "sk-test"):
+    with patch.object(ag.settings, "soniox_jp_api_key", "sk-test"):
         stt = ag._build_stt(get_lang("hi"))
     assert stt._params.language_hints == ["hi"]
 
@@ -43,7 +45,7 @@ def test_language_switch_handoff_gets_new_language_hint():
 def test_soniox_conservative_latency_profile_is_effective():
     with patch.multiple(
         ag.settings,
-        soniox_api_key="sk-test",
+        soniox_jp_api_key="sk-test",
         stt_provider="auto",
         soniox_endpoint_latency_level=1,
         soniox_max_endpoint_delay_ms=2000,
@@ -58,7 +60,7 @@ def test_soniox_conservative_latency_profile_is_effective():
 def test_sarvam_can_be_forced_without_removing_soniox_key():
     with patch.multiple(
         ag.settings,
-        soniox_api_key="sk-test",
+        soniox_jp_api_key="sk-test",
         stt_provider="sarvam",
     ):
         stt = ag._build_stt(get_lang("te"))
@@ -69,7 +71,7 @@ def test_delayed_finalize_wrapper_is_opt_in():
     controller = ag._SonioxFinalizeController(delay_ms=200)
     with patch.multiple(
         ag.settings,
-        soniox_api_key="sk-test",
+        soniox_jp_api_key="sk-test",
         stt_provider="soniox",
     ):
         stt = ag._build_stt(

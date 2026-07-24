@@ -15,7 +15,7 @@ GREETING_SRC = Path("agent/livekit_minimal/greeting.py").read_text(encoding="utf
 
 
 def test_session_tts_is_direct_soniox(monkeypatch):
-    monkeypatch.setattr(ag.settings, "soniox_api_key", "k-test")
+    monkeypatch.setattr(ag.settings, "soniox_jp_api_key", "k-test")
     tts = ag._build_session_tts("Meera", "te")
     assert "soniox" in type(tts).__module__
     assert tts.capabilities.streaming is True
@@ -23,14 +23,14 @@ def test_session_tts_is_direct_soniox(monkeypatch):
 
 
 def test_legacy_voice_uses_soniox_default(monkeypatch):
-    monkeypatch.setattr(ag.settings, "soniox_api_key", "k-test")
+    monkeypatch.setattr(ag.settings, "soniox_jp_api_key", "k-test")
     monkeypatch.setattr(ag.settings, "soniox_tts_default_voice", "Priya")
     tts = ag._build_session_tts("sravani", "te")
     assert tts._opts.voice == "Priya"
 
 
 def test_missing_soniox_key_fails_configuration(monkeypatch):
-    monkeypatch.setattr(ag.settings, "soniox_api_key", "")
+    monkeypatch.setattr(ag.settings, "soniox_jp_api_key", "")
     with pytest.raises(RuntimeError, match="only TTS provider"):
         ag._build_session_tts("Priya", "te")
 
@@ -45,7 +45,7 @@ def test_no_smallest_runtime_or_dependency_remains():
 
 
 def test_prewarmed_soniox_is_reused(monkeypatch):
-    monkeypatch.setattr(ag.settings, "soniox_api_key", "k-test")
+    monkeypatch.setattr(ag.settings, "soniox_jp_api_key", "k-test")
     warm = ag._build_soniox_tts("Priya", "te")
     monkeypatch.setattr(warm, "prewarm", lambda: None)
     assert ag._build_session_tts("Priya", "te", warm) is warm
@@ -88,3 +88,7 @@ def test_settings_voice_catalog_is_soniox_only():
     for voice in ("Priya", "Meera", "Arjun", "Rohan"):
         assert voice in source
     assert "smallest" not in section.lower()
+
+
+def test_soniox_tts_uses_japan_endpoint():
+    assert ag.settings.soniox_jp_tts_ws_url == "wss://tts-rt.jp.soniox.com/tts-websocket"
