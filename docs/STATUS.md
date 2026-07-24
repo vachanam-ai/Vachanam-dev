@@ -1,6 +1,6 @@
 # Vachanam — Status (single source of truth)
 
-> **2026-07-24 — P0 VOICE LATENCY CORRECTION (LOCAL, deployment pending).**
+> **2026-07-24 — P0 VOICE LATENCY CORRECTION (PRODUCTION — Fly v177).**
 > Production call evidence showed first audio at 14.36s, despite the caller
 > reporting roughly 7s, and ordinary reply gaps around 1.4–1.7s. Root causes
 > were concrete: returning-caller personalization forced uncached live greeting
@@ -14,14 +14,14 @@
 > redundant TTS warm stream is deleted and filler banks synthesize sequentially.
 > Both production branches' Soniox intro/notice Redis entries are pre-warmed.
 > The new Japan-project key authenticated against both Japan endpoints and
-> returned real STT and Telugu TTS audio. Production switches from Sarvam to
-> Soniox Japan with this deploy. Honest acceptance gates: first audible
+> returned real STT and Telugu TTS audio. Production now uses Soniox Japan for
+> STT and TTS. Honest acceptance gates: first audible
 > response p50 <0.5s after branch resolution; normal perceived turn gap p50
 > <1.0s and p95 <1.5s. A semantic answer <0.5s is not currently possible while
 > measured Soniox TTS TTFB alone is ~0.57–0.59s.
 
-> **2026-07-24 — TEMPORARY ADMIN-ONLY RECORDING + SONIOX-ONLY TTS (LOCAL,
-> deployment pending).** `RECORDING_ENABLED=true` can now record audio only when
+> **2026-07-24 — TEMPORARY ADMIN-ONLY RECORDING + SONIOX-ONLY TTS (PRODUCTION).**
+> `RECORDING_ENABLED=true` can now record audio only when
 > the caller/callee exactly matches configured `ADMIN_PHONE`; every other
 > LiveKit session explicitly starts with `record=False`. The localized recording
 > notice is the first segment and must finish before audio capture starts; a

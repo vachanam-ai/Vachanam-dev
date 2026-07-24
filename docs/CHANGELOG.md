@@ -31,6 +31,9 @@ Soniox warm request was removed; tool-filler banks now build sequentially. Added
 Added source-order regressions in `test_first_audio_fast_path.py`. A live-key
 probe authenticated both Japan real-time endpoints and returned real STT and
 Telugu TTS audio, enabling removal of Sarvam's measured finalization floor.
+Shipped as commit `9f0a2a8`, Fly machine version 177. The legacy
+`SONIOX_API_KEY` and `SONIOX_WS_URL` production secrets were removed; the final
+worker registered in LiveKit India West with only `SONIOX_JP_API_KEY` active.
 
 ## 2026-07-24 — Temporary admin recording and Soniox-only TTS
 
