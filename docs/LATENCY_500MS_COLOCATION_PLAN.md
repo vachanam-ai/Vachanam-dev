@@ -4,13 +4,16 @@ Updated: 2026-07-25
 
 ## Production deployment
 
-Deployed as commit `ec4e90f`, Fly version **178**, on 2026-07-25. Runtime logs
+Base colocation shipped as `ec4e90f`/Fly v178; clinic-wide cache and tool-turn
+changes shipped as commit `c280fb6`, Fly version **179**, on 2026-07-25. Runtime logs
 prove the active machine is in `bom`, LiveKit registered the worker in
 `India West`, Vertex is `asia-south1`, Soniox STT/TTS are `jp`, the local VAD
 signal is 60 ms, preemptive TTS is enabled, all six DID greeting routes loaded,
-and every job process prewarmed its persistent Soniox TTS socket. No process
-initialization errors occurred. The deployment is complete; the remaining gate
-is a real-call corpus of at least 30 Telugu turns.
+and every job process prewarmed its persistent Soniox TTS socket. Fly v179 also
+proved four Redis-shared Vertex cache hits and
+`prompt_cache_warm_complete clinics=2 requested=4 ready=4`; cache sizes are
+9,431–9,810 tokens. The deployment is complete; the remaining gate is a
+real-call corpus of at least 30 Telugu turns.
 
 ## Definition of the target
 
