@@ -1,5 +1,15 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-24 — LIVE-TEST FEEDBACK ROUND (#455, after v1.9.0 deploy).** Vinay's
+> Venkateshwara call: robotic tone, unwanted follow-up-consent question, ~3s
+> perceived latency. Shipped: humanized `<role>` (real Hyderabad receptionist —
+> reactive first words, mirror energy, no announce-then-act), `followup_consent`
+> defaulted True (never asked), and the #444/#446/#447/#449 per-turn ms trace
+> RESTORED from git history (voice_turn_latency lines → Redis `lat:turns`;
+> `scripts/analyze_voice_latency.py --redis` = the per-ms notes Vinay asked for).
+> Also live in v1.10.x: full Soniox expression vocabulary + sound-human prompt.
+> NEXT: Vinay re-calls → pull lat:turns → ms table → fix the measured stage only.
+
 > **2026-07-24 — SONIOX TTS SWITCH + FEASIBLE LATENCY TECHNIQUES + ODIA REMOVED
 > (built + unit-green LOCAL; NOT deployed).** Vinay: latency #1, keep Soniox
 > (better voice), smallest as fallback, drop Soniox cloning. Against the 12-technique

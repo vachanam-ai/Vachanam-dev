@@ -104,6 +104,10 @@ from agent.livekit_minimal.greeting import (  # noqa: E402
     synth_and_play,
     synth_wavs,
 )
+from agent.livekit_minimal.turn_trace import (  # noqa: E402
+    TurnLatencyTrace,
+    format_summary_line,
+)
 from agent.services.tts_sanitizer import (  # noqa: E402
     internal_trace_match,
     sanitize_for_tts,
@@ -1682,8 +1686,29 @@ class VachanamAgent(Agent):
         Short runs stay joined: dates/tokens/times like "13" must be spoken
         as one number word, not digit-by-digit (#333). Chunk splits are
         handled by _space_digits_stream's trailing-digit carry."""
-        safe_text = _guard_internal_speech_stream(text)
+        # #444/#449 trace: stamp first chunk INTO the guard, first safe chunk
+        # OUT (safety_buffer_ms), and the first synthesized audio frame.
+        # Trace is optional; absence changes nothing.
+        _trace = self.session.userdata.get("turn_trace")
+
+        async def _stamp_in(src):
+            async for chunk in src:
+                if _trace is not None:
+                    _trace.mark_guard_first_in()
+                yield chunk
+
+        async def _stamp_out(src):
+            async for chunk in src:
+                if _trace is not None:
+                    _trace.mark_guard_first_out()
+                yield chunk
+
+        safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
+        _first = True
         async for frame in super().tts_node(_space_digits_stream(safe_text), model_settings):
+            if _first and _trace is not None:
+                _trace.mark_tts_first_frame()  # first synthesized audio frame
+                _first = False
             yield frame
 
     async def on_enter(self) -> None:
@@ -2121,7 +2146,10 @@ class VachanamAgent(Agent):
         patient_name: str,
         complaint: str,
         booking_date: str,
-        followup_consent: bool,
+        # Vinay 2026-07-24: NEVER ask the patient "is follow-up okay" — the
+        # question sounded robotic and added a turn. Follow-up calls are part
+        # of the service; default True, LLM never collects it.
+        followup_consent: bool = True,
         patient_phone: str | None = None,
         appointment_time: str | None = None,
         patient_age: int | None = None,
@@ -4343,19 +4371,72 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # Optional vendor-compliant manual finalization. Re-arm only on a real
         # speaking->listening VAD edge; any resumed speech cancels the timer.
         # Delay validation enforces Soniox's >=200ms trailing-silence guidance.
+        # RESTORED 2026-07-24 (Vinay: "notes of each and every ms"): the #444
+        # per-turn trace + #446 staleness guard + #447 Redis mirror + #449
+        # exact-timestamp ladder — ONE correlated voice_turn_latency line per
+        # caller turn, durable in Redis lat:turns. Pure logging, RULE 8.
+        def _emit_turn_summary(s: dict) -> None:
+            line = format_summary_line(s)
+            logger.info(line)
+            # Fly's log buffer rotates within minutes — mirror every line to
+            # Redis (#432 durability pattern). Best-effort: telemetry must
+            # never touch the call.
+
+            async def _stash() -> None:
+                try:
+                    from backend.redis_client import get_redis
+
+                    _r = await get_redis()
+                    await _r.rpush("lat:turns", line)
+                    await _r.expire("lat:turns", 7 * 86400)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            asyncio.create_task(_stash())
+
+        _turn_trace = TurnLatencyTrace(ctx.room.name, emit=_emit_turn_summary)
+        _turn_trace.set_context(
+            language=lang_code, cache_hit=_cached_llm is not None
+        )
+        session.userdata["turn_trace"] = _turn_trace
+
+        @session.on("user_input_transcribed")
+        def _trace_transcript(ev) -> None:
+            if getattr(ev, "is_final", False):
+                _turn_trace.mark_final_transcript()
+            else:
+                # interim: tracks the caller's last recognizable sound so the
+                # VAD silence hangover (last word -> VAD end) is measurable.
+                _turn_trace.mark_interim()
+
+        @session.on("agent_state_changed")
+        def _trace_playout(ev) -> None:
+            if getattr(ev, "new_state", None) == "speaking":
+                _turn_trace.mark_playout_start()
+
+        @session.on("function_tools_executed")
+        def _trace_tools(ev) -> None:
+            calls = getattr(ev, "function_calls", None) or []
+            if calls:
+                # name only — never arguments (privacy allowlist).
+                _turn_trace.mark_tool(getattr(calls[0], "name", "unknown"))
+
         @session.on('user_state_changed')
         def _on_soniox_user_state(ev) -> None:
             old_state = getattr(ev, 'old_state', None)
             new_state = getattr(ev, 'new_state', None)
             if new_state == 'speaking':
                 _soniox_finalizer.cancel()
+                _turn_trace.mark_speech_start()
             elif old_state == 'speaking' and new_state == 'listening':
                 _soniox_finalizer.schedule(
                     lambda: getattr(session, 'user_state', None) != 'speaking'
                 )
+                _turn_trace.mark_speech_end()
 
         async def _cancel_soniox_finalize_on_shutdown() -> None:
             _soniox_finalizer.cancel()
+            _turn_trace.flush()  # last turn's summary must not die with the call
 
         ctx.add_shutdown_callback(_cancel_soniox_finalize_on_shutdown)
 
@@ -4379,10 +4460,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     getattr(m, "transcription_delay", 0.0),
                     getattr(m, "on_user_turn_completed_delay", 0.0),
                 )
+                _turn_trace.mark_turn_committed(
+                    eou_delay=getattr(m, "end_of_utterance_delay", None),
+                    transcription_delay=getattr(m, "transcription_delay", None),
+                )
             elif tn == "LLMMetrics":
                 logger.info("lat_llm ttft=%.2fs", getattr(m, "ttft", 0.0))
+                _turn_trace.mark_llm_run(
+                    getattr(m, "speech_id", "") or "",
+                    ttft=getattr(m, "ttft", 0.0),
+                )
             elif tn == "TTSMetrics":
                 logger.info("lat_tts ttfb=%.2fs", getattr(m, "ttfb", 0.0))
+                _turn_trace.mark_tts(
+                    getattr(m, "speech_id", "") or "",
+                    ttfb=getattr(m, "ttfb", 0.0),
+                )
             elif tn == "STTMetrics":
                 logger.info("lat_stt duration=%.2fs", getattr(m, "duration", 0.0))
 
