@@ -1095,19 +1095,59 @@ def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
     return soniox.TTS(**kw)
 
 
-def _build_session_tts(voice_id: str, tts_lang: str) -> lk_tts.FallbackAdapter:
+def _soniox_prewarm_matches(warm, voice_id: str, tts_lang: str) -> bool:
+    """#8: is the prewarmed Soniox TTS usable for this call? True when its voice
+    (after default substitution) and language match — the common case, since no
+    clinic has a non-default Soniox voice."""
+    if warm is None:
+        return False
+    resolved = voice_id if voice_id in _SONIOX_TTS_VOICES else settings.soniox_tts_default_voice
+    o = getattr(warm, "_opts", None)
+    return o is not None and o.voice == resolved and o.language == tts_lang
+
+
+def _build_session_tts(
+    voice_id: str, tts_lang: str, prewarmed_soniox=None
+) -> lk_tts.FallbackAdapter:
     """TTS for one voice/language pair. TTS_PROVIDER=soniox (default 2026-07-24,
     Vinay — better voice, native streaming) makes Soniox tts-rt the streaming
     primary with the smallest.ai chain as the RULE-8 fallback (Soniox down →
     smallest, the line never dies). TTS_PROVIDER=smallest is the instant rollback
-    path (no deploy). A missing Soniox key also falls to smallest-only."""
+    path (no deploy). A missing Soniox key also falls to smallest-only.
+    prewarmed_soniox (#8): the per-worker warm Soniox TTS, reused when its
+    (voice, language) match this call."""
     smallest = _smallest_tts_instances(voice_id, tts_lang)
     if settings.tts_provider == "soniox" and settings.soniox_api_key:
+        primary = (
+            prewarmed_soniox
+            if _soniox_prewarm_matches(prewarmed_soniox, voice_id, tts_lang)
+            else _build_soniox_tts(voice_id, tts_lang)
+        )
         return lk_tts.FallbackAdapter(
-            [_build_soniox_tts(voice_id, tts_lang), *smallest],
-            sample_rate=settings.smallest_sample_rate,
+            [primary, *smallest], sample_rate=settings.smallest_sample_rate
         )
     return lk_tts.FallbackAdapter(smallest, sample_rate=settings.smallest_sample_rate)
+
+
+def _prewarm_soniox_tts(proc) -> None:
+    """#8: build the default-voice Soniox TTS ONCE per worker so the WS/TLS
+    connect is off the caller's first turn. Stored on proc.userdata['tts_soniox']
+    and reused by _build_session_tts when the call's (voice, language) match —
+    the common case (Telugu default voice). Best-effort: the entrypoint rebuilds
+    if this missed."""
+    if not (settings.tts_provider == "soniox" and settings.soniox_api_key):
+        return
+    try:
+        proc.userdata["tts_soniox"] = _build_soniox_tts(
+            settings.soniox_tts_default_voice, DEFAULT_LANG
+        )
+        logger.info(
+            "soniox_tts_prewarmed voice=%s lang=%s",
+            settings.soniox_tts_default_voice,
+            DEFAULT_LANG,
+        )
+    except Exception as e:  # noqa: BLE001 — prewarm best-effort; entrypoint rebuilds
+        logger.warning("prewarm_soniox_tts_failed: %s", e)
 
 
 # #442 replaces the unsafe combined #394/#396 experiment with isolated,
@@ -3961,7 +4001,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     _stt_terms,
                     finalize_controller=_soniox_finalizer,
                 ),
-                tts=_build_session_tts(_voice_for_lang(branch, lc), cfg2.tts_code),
+                tts=_build_session_tts(
+                    _voice_for_lang(branch, lc),
+                    cfg2.tts_code,
+                    ctx.proc.userdata.get("tts_soniox"),
+                ),
             )
 
         # The instant greeting bypasses the session pipeline — seed it into the
@@ -4046,7 +4090,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # connect happen invisibly.
         # #405: WS-streaming primary (first audio ~0.2s vs ~1.1s REST) with the
         # raw-REST path as RULE 8 fallback inside the adapter.
-        _session_tts = _build_session_tts(tts_voice, lang_cfg.tts_code)
+        _session_tts = _build_session_tts(
+            tts_voice, lang_cfg.tts_code, ctx.proc.userdata.get("tts_soniox")
+        )
         _session_llm = ctx.proc.userdata.get("llm") or _build_fallback_llm()
 
         async def _prewarm_llm() -> None:
@@ -5052,6 +5098,11 @@ def _prewarm(proc) -> None:
         )
     except Exception as e:  # noqa: BLE001 — prewarm best-effort; entrypoint rebuilds
         logger.warning("prewarm_calendar_failed: %s", e)
+
+    # #8: warm the Soniox TTS WS/TLS connection once per worker so the cold
+    # connect (~450ms measured) is off the caller's first turn. Reused by
+    # _build_session_tts for calls on the default voice/language (the common case).
+    _prewarm_soniox_tts(proc)
 
     # (The welcome-TTS warmup went with the canned welcome clip — the instant
     # greeting synthesizes over raw REST per call; see greeting.py.)
