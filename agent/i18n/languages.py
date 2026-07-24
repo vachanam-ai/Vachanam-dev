@@ -4,9 +4,6 @@ Sarvam Saaras v3 (STT) and Bulbul v3 (TTS) both accept the *-IN language codes
 below. Bulbul speakers are language-agnostic — the SAME speaker (Branch.tts_voice)
 voices any target_language_code — so only the language code changes per clinic,
 not the speaker.
-
-NOTE on Odia: ISO code is "or" but Sarvam's API code is "od-IN". We key on "or"
-internally and emit "od-IN" to Sarvam.
 """
 from dataclasses import dataclass
 
@@ -24,7 +21,7 @@ class LangConfig:
     @property
     def tts_lang(self) -> str:
         """smallest.ai TTS language code. smallest uses the same short codes as
-        our internal keys (te/hi/ta/kn/ml/mr/bn/or), so this is just `code`."""
+        our internal keys (te/hi/ta/kn/ml/mr/bn), so this is just `code`."""
         return self.tts_code
 
 
@@ -34,7 +31,7 @@ class LangConfig:
 # Vinay 2026-07-18 — heard on smallest's playground; supersedes the 2026-07-08
 # padmaja pick; pro voices need model lightning_v3.1_pro — welcome_synth.
 # model_for_voice maps it). `padmaja` still covers the rest of the Dravidian
-# pool (ta/kn/ml); `niharika` covers hi/mr/bn/or. STT stays Sarvam Saaras
+# pool (ta/kn/ml); `niharika` covers hi/mr/bn. STT stays Sarvam Saaras
 # (the *-IN codes). Telugu first (reference/default).
 LANGUAGES: dict[str, LangConfig] = {
     "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "sravani"),
@@ -47,7 +44,6 @@ LANGUAGES: dict[str, LangConfig] = {
     "ml": LangConfig("ml", "Malayalam", "മലയാളം", "Malayalam", "ml-IN", "ml", "padmaja"),
     "mr": LangConfig("mr", "Marathi", "मराठी", "Devanagari", "mr-IN", "mr", "niharika"),
     "bn": LangConfig("bn", "Bengali", "বাংলা", "Bengali", "bn-IN", "bn", "niharika"),
-    "or": LangConfig("or", "Odia", "ଓଡ଼ିଆ", "Odia", "od-IN", "or", "niharika"),
 }
 
 DEFAULT_LANG = "te"

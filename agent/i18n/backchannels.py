@@ -42,8 +42,6 @@ _TOKENS: frozenset[str] = frozenset({
     "ഉം", "ആ", "ഓകെ", "ഹാ",
     # Bengali
     "হুম", "আচ্ছা", "হ্যাঁ", "ওকে",
-    # Odia
-    "ହଁ", "ଆଚ୍ଛା", "ଓକେ",
 })
 
 # Just the "hello" renderings from _TOKENS (line-check word across scripts) —

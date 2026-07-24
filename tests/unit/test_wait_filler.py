@@ -22,11 +22,11 @@ from agent.livekit_minimal.agent import (
 # ── the phrase itself ────────────────────────────────────────────────────────
 
 def test_wait_fillers_every_language_and_fallback():
-    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn", "or"):
+    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"):
         variants = get_wait_fillers(code)
         assert len(variants) >= 2, code       # not robotic on repeat
         assert all(v.strip() for v in variants), code
-    assert len(WAIT_FILLERS) == 9
+    assert len(WAIT_FILLERS) == 8
     assert get_wait_fillers("zz") == get_wait_fillers("te")
     assert get_wait_fillers(None) == get_wait_fillers("te")
 
@@ -45,7 +45,7 @@ def test_wait_phrase_never_narrates_a_wait():
     """The rejected wording must not come back in any language."""
     banned = ("ఒక్క నిమిషం", "ఒక్క సెకను", "One moment", "Just a second",
               "एक मिनट", "एक सेकंड", "checking", "चेक कर")
-    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn", "or"):
+    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"):
         for variant in get_wait_fillers(code):
             for bad in banned:
                 assert bad not in variant, (code, variant, bad)
@@ -53,7 +53,7 @@ def test_wait_phrase_never_narrates_a_wait():
 
 def test_wait_phrase_stays_short():
     # A filler that runs long defeats its purpose (it covers ~1-2s of dead air).
-    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn", "or"):
+    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"):
         for variant in get_wait_fillers(code):
             assert len(variant) <= 16, (code, variant)
 

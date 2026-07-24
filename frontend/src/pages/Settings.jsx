@@ -57,8 +57,7 @@ const LANGUAGES = [
   { code: "kn", name: "Kannada", native_name: "ಕನ್ನಡ" },
   { code: "ml", name: "Malayalam", native_name: "മലയാളം" },
   { code: "mr", name: "Marathi", native_name: "मराठी" },
-  { code: "bn", name: "Bengali", native_name: "বাংলা" },
-  { code: "or", name: "Odia", native_name: "ଓଡ଼ିଆ" }
+  { code: "bn", name: "Bengali", native_name: "বাংলা" }
 ];
 
 /* Setup checklist derived from live data — the owner's map through onboarding. */

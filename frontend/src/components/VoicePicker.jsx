@@ -10,8 +10,7 @@ export const LANGUAGES = [
   { code: "kn", native: "ಕನ್ನಡ", english: "Kannada" },
   { code: "ml", native: "മലയാളം", english: "Malayalam" },
   { code: "mr", native: "मराठी", english: "Marathi" },
-  { code: "bn", native: "বাংলা", english: "Bengali" },
-  { code: "or", native: "ଓଡ଼ିଆ", english: "Odia" }
+  { code: "bn", native: "বাংলা", english: "Bengali" }
 ];
 
 /** Language sample cards. Click play to hear the agent greet in that language. */

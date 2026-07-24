@@ -14,7 +14,7 @@ def test_pure_backchannels_detected_across_languages():
         "okay", "Okay.", "hmm", "aha", "acha", "haan", "ok ok",
         "ఓకే", "ఆ", "హా", "హ్మ్", "అచ్చా",
         "हाँ", "हम्म", "अच्छा", "ओके",
-        "ம்ம்", "ಹೂಂ", "ഉം", "হুম", "ହଁ",
+        "ம்ம்", "ಹೂಂ", "ഉം", "হুম",
         "uh huh", "mm-hm",
     ):
         assert is_backchannel(t), t

@@ -299,7 +299,7 @@ async def test_voice_cloning_included_on_every_plan(client, db):
     assert g.json()["voice_cloning_allowed"] is False
     # All languages on every plan (2026-07-12): Starter sees the full dropdown.
     codes = [o["code"] for o in g.json()["allowed_languages"]]
-    assert {"te", "hi", "en", "or"} <= set(codes) and len(codes) >= 8
+    assert {"te", "hi", "en"} <= set(codes) and len(codes) == 8  # Odia removed 2026-07-24
 
     r = await client.post(
         f"/branches/{bid}/cloned-voices", headers=_auth(owner),

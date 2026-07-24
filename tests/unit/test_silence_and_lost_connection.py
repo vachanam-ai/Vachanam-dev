@@ -64,9 +64,9 @@ def test_silence_config_matches_spec():
 # ── Feature 1: the line-check lines exist in every language ───────────────────
 
 def test_line_check_all_languages():
-    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn", "or"):
+    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"):
         assert get_line_check(code), code
-    assert len(LINE_CHECK) == 9
+    assert len(LINE_CHECK) == 8
     # Unknown/None fall back to Telugu, never crash.
     assert get_line_check("zz") == get_line_check("te")
     assert get_line_check(None) == get_line_check("te")
@@ -105,9 +105,9 @@ def test_is_lone_hello():
 
 
 def test_reconnect_all_languages():
-    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn", "or"):
+    for code in ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"):
         assert get_reconnect(code), code
-    assert len(RECONNECT) == 9
+    assert len(RECONNECT) == 8
     assert get_reconnect("zz") == get_reconnect("te")
 
 

@@ -363,7 +363,7 @@ export default function Landing() {
             Eight languages. One warm AI agent.
           </h2>
           <p data-item className="mt-3 max-w-2xl font-ui text-ink-soft">
-            Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali, Odia. Natural pace,
+            Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali. Natural pace,
             warm tone. Tap any to hear exactly what your patients will hear. Want your own
             voice? Clinics can clone it.
           </p>

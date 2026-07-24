@@ -38,7 +38,6 @@ _cache: dict[tuple[str, str], str] = {}
 _BLOCKS: tuple[tuple[int, int, str], ...] = (
     (0x0900, 0x097F, "hi-IN"),  # Devanagari (hi/mr)
     (0x0980, 0x09FF, "bn-IN"),  # Bengali
-    (0x0B00, 0x0B7F, "od-IN"),  # Oriya
     (0x0B80, 0x0BFF, "ta-IN"),  # Tamil
     (0x0C00, 0x0C7F, "te-IN"),  # Telugu
     (0x0C80, 0x0CFF, "kn-IN"),  # Kannada
@@ -92,7 +91,7 @@ async def spoken_text(text: str | None, lang_code: str | None) -> str:
         return text
     lang = get_lang(lang_code)
     src = _detect_script(text)
-    tgt = lang.stt_code if lang.code != "or" else "od-IN"
+    tgt = lang.stt_code
     if src == tgt or (src == "hi-IN" and tgt == "mr-IN"):
         return text  # already in the call's script (mr shares Devanagari)
 

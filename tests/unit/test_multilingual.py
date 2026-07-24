@@ -17,13 +17,12 @@ from agent.i18n import LANGUAGES, get_lang, get_lines
 from agent.i18n.lines import Lines
 from agent.prompts.system_prompt import DoctorContext, build_system_prompt
 
-EXPECTED = {"te", "en", "hi", "ta", "kn", "ml", "mr", "bn", "or"}
+EXPECTED = {"te", "en", "hi", "ta", "kn", "ml", "mr", "bn"}  # Odia removed 2026-07-24
 
 # Each internal code -> the Unicode script its letters must belong to.
 SCRIPT_OF = {
     "te": "TELUGU", "en": "LATIN", "hi": "DEVANAGARI", "ta": "TAMIL",
     "kn": "KANNADA", "ml": "MALAYALAM", "mr": "DEVANAGARI", "bn": "BENGALI",
-    "or": "ORIYA",
 }
 # Shared Indic punctuation/joiners allowed in any script.
 _SHARED = {0x0964, 0x0965, 0x200C, 0x200D}
@@ -34,12 +33,11 @@ def test_registry_covers_mvp_languages():
 
 
 def test_stt_tts_codes_correct():
-    # STT = Sarvam Saaras (*-IN, Odia is od-IN). TTS = smallest.ai (short codes,
-    # Odia is or). Each language also has a default smallest voice.
+    # STT = Sarvam Saaras (*-IN). TTS = smallest.ai (short codes). Each language
+    # also has a default smallest voice.
     assert get_lang("te").stt_code == "te-IN"
     assert get_lang("te").tts_code == "te"          # smallest short code
-    assert get_lang("or").stt_code == "od-IN"        # Sarvam Odia
-    assert get_lang("or").tts_code == "or"           # smallest Odia
+    assert get_lang("bn").stt_code == "bn-IN"
     assert get_lang("te").default_voice == "sravani"  # #405, Vinay 2026-07-18
     assert get_lang("hi").default_voice == "niharika"
 
