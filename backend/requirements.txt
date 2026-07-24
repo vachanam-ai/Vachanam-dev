@@ -37,4 +37,4 @@ bcrypt>=5.0.0
 # (no rtc/audio in the backend).
 # >=1.1.1: livekit-agents 1.6.5 (pulled in by livekit-plugins-soniox, #300)
 # requires livekit-api>=1.1.1 — the old ==1.1.0 pin broke the agent image build.
-livekit-api>=1.1.1,<2
+livekit-api>=1.2.0,<2
