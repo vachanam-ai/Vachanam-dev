@@ -15,11 +15,11 @@ def test_inbound_greeting_starts_before_optional_caller_reads_finish():
 
 def test_returning_caller_does_not_force_live_greeting_synthesis():
     """The early opening is generic and therefore has a stable cache key."""
-    block = SRC[SRC.index("# Start the cacheable branch greeting"):]
+    block = SRC[SRC.index("# A job process already loaded this public DID"):]
     block = block[: block.index("_pref_res, _gate_res, _caller_res")]
     assert "spk_caller" not in block
     assert "_early_intro_cache_key" in block
-    assert "cache_key=_early_intro_cache_key" in block
+    assert "cache_key=intro_key" in block
 
 
 def test_recording_notice_isolated_before_main_intro_and_capture():
@@ -34,9 +34,13 @@ def test_recording_notice_isolated_before_main_intro_and_capture():
 
 
 def test_startup_does_not_open_competing_soniox_warm_stream():
-    """The greeting is the warm-up; a throwaway stream caused production 429s."""
+    """Connection prewarm is safe; a throwaway synthesis caused production 429s."""
     assert "def _warm_session_tts" not in SRC
     assert "_tts_warm_task" not in SRC
+    early = SRC[SRC.index("# Open the persistent Soniox session socket"):]
+    early = early[: early.index("# A job process already loaded this public DID")]
+    assert ".prewarm()" in early
+    assert ".synthesize(" not in early
     assert "async def _cache_tool_fillers" in SRC
     filler = SRC[SRC.index("async def _cache_tool_fillers"):]
     filler = filler[: filler.index("_filler_cache_task =")]

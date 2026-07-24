@@ -133,6 +133,17 @@ logger = logging.getLogger("vachanam-agent")
 
 AGENT_NAME = "vachanam-agent"
 
+# The VAD must report a possible boundary quickly; it must not be the component
+# that decides a Telugu utterance is final. Soniox's cancellable 200 ms finalize
+# guard remains the quality gate. This gives us a <=60 ms local turn-detection
+# signal without committing normal mid-sentence pauses.
+VAD_TURN_DETECTION_S = 0.06
+
+
+def _load_vad():
+    return silero.VAD.load(min_silence_duration=VAD_TURN_DETECTION_S)
+
+
 # iter1 #11/#19: bounds at the confirm_booking tool boundary. The LLM-supplied
 # free-text fields are untrusted — mirror the walk-in desk Field max_lengths
 # (queue.py: name<=120, complaint<=500) and clamp the age range so a prompt-
@@ -926,6 +937,8 @@ def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
     words), same vendor/key as our STT. Legacy non-catalog stored voice IDs fall
     to the Soniox default. #8 prewarms the WS off the caller's first turn."""
     voice = _resolve_soniox_voice(voice_id)
+    from livekit.agents import tokenize as _tokenize
+
     kw = dict(
         model=settings.soniox_tts_model,
         voice=voice,
@@ -933,6 +946,15 @@ def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
         sample_rate=settings.soniox_tts_sample_rate,
         api_key=settings.soniox_jp_api_key,
         websocket_url=settings.soniox_jp_tts_ws_url,
+        # The plugin default merges a short first sentence (<20 chars) into the
+        # next sentence. Voice replies often begin with a natural short Telugu
+        # acknowledgement; emitting it at 8 chars avoids waiting for sentence 2
+        # while preserving sentence-boundary prosody and exact text.
+        tokenizer=_tokenize.blingfire.SentenceTokenizer(
+            min_sentence_len=8,
+            stream_context_len=4,
+            retain_format=True,
+        ),
     )
     try:  # reuse the job's aiohttp session so the WS handshake skips TLS setup
         from livekit.agents import utils
@@ -969,9 +991,14 @@ def _build_session_tts(
         else _build_soniox_tts(voice_id, tts_lang)
     )
     try:
-        primary.prewarm()
-    except Exception as e:  # noqa: BLE001 — a warmup must never break TTS build
-        logger.debug("soniox_tts_prewarm_call_failed: %s", e)
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # sync construction/tests: plugin prewarm requires an event loop
+    else:
+        try:
+            primary.prewarm()
+        except Exception as e:  # noqa: BLE001 — warmup never breaks TTS build
+            logger.debug("soniox_tts_prewarm_call_failed: %s", e)
     return primary
 
 
@@ -1257,22 +1284,28 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
 # is the only lever. Vertex REJECTS requests that carry tools/system alongside
 # cached_content (400) — the livekit google plugin suppresses both when a
 # cache is attached, so the TOOLS AND SYSTEM PROMPT ARE BAKED INTO THE CACHE.
-# Safety model: a session uses the cache ONLY when its composed instructions
-# are byte-identical to what was baked (no caller extras, no outbound tail) —
-# the model sees the exact same content either way, only the transport
-# differs. Anything else (miss, mismatch, create failure, no creds) rides the
-# plain path unchanged (RULE 8). One cache per (branch, lang, IST-day); the
-# day key retires yesterday's date table naturally; TTL 26h; storage cost
-# ~half a cent per branch-day.
-_PROMPT_CACHE: dict[tuple[str, str, str], tuple[str, str]] = {}  # key -> (name, baked_text)
-_PROMPT_CACHE_PENDING: set[tuple[str, str, str]] = set()
+# Safety model: a session uses the cache ONLY when its complete composed
+# instructions are byte-identical to what was baked. The key includes a prompt
+# digest, so recording disclosure, known-caller context, outbound tails, and a
+# prompt edit are isolated variants rather than disabling caching entirely.
+# Any miss/mismatch/create failure rides the plain path unchanged (RULE 8).
+_PROMPT_CACHE: dict[tuple[str, str, str, str], tuple[str, str]] = {}
+_PROMPT_CACHE_PENDING: set[tuple[str, str, str, str]] = set()
 
 
-def _prompt_cache_key(branch_id, lang_code: str) -> tuple[str, str, str]:
+def _prompt_cache_key(
+    branch_id, lang_code: str, instructions: str = ""
+) -> tuple[str, str, str, str]:
+    import hashlib
     from zoneinfo import ZoneInfo as _Z
 
-    return (str(branch_id), lang_code,
-            datetime_cls.now(_Z("Asia/Kolkata")).date().isoformat())
+    digest = hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:12]
+    return (
+        str(branch_id),
+        lang_code,
+        datetime_cls.now(_Z("Asia/Kolkata")).date().isoformat(),
+        digest,
+    )
 
 
 async def _create_prompt_cache(key, instructions: str, tools) -> None:
@@ -1297,7 +1330,7 @@ async def _create_prompt_cache(key, instructions: str, tools) -> None:
                 system_instruction=instructions,
                 tools=tools_cfg,
                 ttl="93600s",  # 26h — outlives the IST day key that retires it
-                display_name=f"vachanam-{key[0][:8]}-{key[1]}-{key[2]}",
+                display_name=f"vachanam-{key[0][:8]}-{key[1]}-{key[2]}-{key[3]}",
             ),
         )
         _PROMPT_CACHE[key] = (cache.name, instructions)
@@ -3290,6 +3323,92 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         _recording_active,
         (state.patient_phone or "")[-4:] or "????",
     )
+
+    # Open the persistent Soniox session socket while tenant/data reads run.
+    # This is a connection-only warmup (no synthesis stream, so no 429 race).
+    _warm_tts = ctx.proc.userdata.get("tts_soniox")
+    if _warm_tts is not None:
+        try:
+            _warm_tts.prewarm()
+        except Exception as exc:  # noqa: BLE001 -- later TTS build retries
+            logger.debug("early_soniox_prewarm_skipped: %s", exc)
+
+    # A job process already loaded this public DID->clinic greeting map before
+    # accepting work. Start the real clinic intro now, in parallel with the
+    # authoritative Neon lookup. Never use the configured-DID fallback here:
+    # without the actual SIP DID it is not safe in a multi-tenant deployment.
+    _early_greeting_task: asyncio.Task | None = None
+    _early_greeting_texts: list[str] | None = None
+    _early_intro_texts: list[str] | None = None
+    _early_intro_cache_key: str | None = None
+    _early_route_id: str | None = None
+    _early_voice: str | None = None
+    _recording_notice_handled = False
+
+    def _start_early_greeting(route: dict) -> None:
+        nonlocal _early_greeting_task, _early_greeting_texts
+        nonlocal _early_intro_texts, _early_intro_cache_key
+        nonlocal _early_route_id, _early_voice
+        route_lang = (route.get("language") or "te").strip()
+        route_clinic = (route.get("name_spoken") or "").strip() or route["name"]
+        route_voice = (route.get("tts_voice") or "").strip()
+        route_voice = route_voice or get_lang(route_lang).default_voice
+        route_id = str(route["id"])
+        intro = inbound_greeting_texts(
+            route_lang, route_clinic, recording_active=False
+        )
+        intro_key = _greeting_cache_key(
+            route_id,
+            route_lang,
+            _greeting_voice_key(route_voice),
+            intro,
+        )
+        _early_route_id = route_id
+        _early_voice = route_voice
+        _early_intro_texts = intro
+        _early_intro_cache_key = intro_key
+        if _recording_active:
+            notice = get_recording_notice(route_lang)
+            _early_greeting_texts = [notice, *intro]
+            notice_key = _greeting_cache_key(
+                "recording-notice",
+                route_lang,
+                _greeting_voice_key(route_voice),
+                [notice],
+            )
+            _early_greeting_task = asyncio.create_task(
+                synth_and_play(
+                    ctx.room,
+                    [notice],
+                    route_voice,
+                    route_lang,
+                    t_answer=_t_answer,
+                    cache_key=notice_key,
+                )
+            )
+        else:
+            _early_greeting_texts = list(intro)
+            _early_greeting_task = asyncio.create_task(
+                synth_and_play(
+                    ctx.room,
+                    intro,
+                    route_voice,
+                    route_lang,
+                    t_answer=_t_answer,
+                    cache_key=intro_key,
+                )
+            )
+
+    if not outbound_number and not did_from_fallback:
+        routes = ctx.proc.userdata.get("greeting_routes") or {}
+        cached_route = next(
+            (routes[key] for key in _did_route_keys(did) if key in routes),
+            None,
+        )
+        if cached_route is not None:
+            _start_early_greeting(cached_route)
+            logger.info("early_greeting_started source=prewarmed_route")
+
     state.call_type = "outbound" if outbound_number else "inbound_booking"
     state.call_start = datetime_cls.now(timezone_utc)
 
@@ -3378,63 +3497,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # bad value can never break a live call (RULE 8).
     branch_lang_code = getattr(branch, "language", None) or "te"
     lang_code = branch_lang_code
-    # Start the cacheable branch greeting as soon as tenant resolution finishes.
-    # Returning-caller recognition, billing checks, roster reads, prompt assembly,
-    # and AgentSession startup all run behind this audio instead of in front of
-    # the first spoken word. The opening intentionally stays generic; caller
-    # recognition still feeds the prompt, but must never force live TTS.
-    _early_greeting_task: asyncio.Task | None = None
-    _early_greeting_texts: list[str] | None = None
-    _early_intro_texts: list[str] | None = None
-    _early_intro_cache_key: str | None = None
-    _recording_notice_handled = False
-    if not outbound_number:
-        _early_clinic = (
-            (getattr(branch, "name_spoken", None) or "").strip() or branch.name
-        )
-        _early_voice = _voice_for_lang(branch, branch_lang_code)
-        _early_intro_texts = inbound_greeting_texts(
-            branch_lang_code,
-            _early_clinic,
-            recording_active=False,
-        )
-        _early_intro_cache_key = _greeting_cache_key(
-            str(branch.id),
-            branch_lang_code,
-            _greeting_voice_key(_early_voice),
-            _early_intro_texts,
-        )
-        if _recording_active:
-            _early_notice = get_recording_notice(branch_lang_code)
-            _early_greeting_texts = [_early_notice, *_early_intro_texts]
-            _notice_cache_key = _greeting_cache_key(
-                "recording-notice",
-                branch_lang_code,
-                _greeting_voice_key(_early_voice),
-                [_early_notice],
-            )
-            _early_greeting_task = asyncio.create_task(
-                synth_and_play(
-                    ctx.room,
-                    [_early_notice],
-                    _early_voice,
-                    branch_lang_code,
-                    t_answer=_t_answer,
-                    cache_key=_notice_cache_key,
-                )
-            )
-        else:
-            _early_greeting_texts = list(_early_intro_texts)
-            _early_greeting_task = asyncio.create_task(
-                synth_and_play(
-                    ctx.room,
-                    _early_intro_texts,
-                    _early_voice,
-                    branch_lang_code,
-                    t_answer=_t_answer,
-                    cache_key=_early_intro_cache_key,
-                )
-            )
+    # The prewarmed map is only an audio head start; this query is authoritative.
+    # Refuse a mismatched cached tenant before any later call logic can use it.
+    if _early_route_id is not None and _early_route_id != str(branch.id):
+        if _early_greeting_task is not None and not _early_greeting_task.done():
+            _early_greeting_task.cancel()
+            try:
+                await _early_greeting_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        _early_greeting_task = None
+        _early_route_id = None
+        logger.error("early_greeting_route_mismatch authoritative_lookup_won=True")
+
+    # Cache miss / safe fallback: start immediately after authoritative tenant
+    # resolution, preserving the old behavior.
+    if not outbound_number and _early_greeting_task is None:
+        _start_early_greeting({
+            "id": str(branch.id),
+            "name": branch.name,
+            "name_spoken": getattr(branch, "name_spoken", None),
+            "language": branch_lang_code,
+            "tts_voice": getattr(branch, "tts_voice", None),
+        })
     # LATENCY (#390, real call 2026-07-17: lat_pre_session_build=4.66s → first
     # audio 5.81s): the three independent pre-call DB reads — per-caller
     # language, service gate, caller identification — used to run SERIALLY on
@@ -3625,7 +3710,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 lang_cfg.tts_code,
                 ctx.proc.userdata.get("tts_soniox"),
             ),
-            vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
+            vad=ctx.proc.userdata.get("vad") or _load_vad(),
         )
         await gate_session.start(
             room=ctx.room,
@@ -4148,14 +4233,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         if _greet_texts and (_welcome_task is not None or _pre_greeted):
             _seed_ctx = ChatContext.empty()
             _seed_ctx.add_message(role="assistant", content=" ".join(_greet_texts))
-        # #417: cache-eligible = the composed instructions carry NO per-call
-        # extras — then they byte-match what the day's CachedContent baked and
-        # the Vertex primary can ride it (~0.2s off every LLM turn, measured).
-        _cache_eligible = (
-            not caller_prompt_extra and not extra_tail and not _recording_active
-        )
-        _cache_key = _prompt_cache_key(branch.id, lang_code)
-        _cached_llm = _cached_primary_llm(_cache_key, instructions) if _cache_eligible else None
+        # Cache the exact prompt variant. The digest isolates caller/recording/
+        # outbound context while byte equality below remains the final guard.
+        _cache_key = _prompt_cache_key(branch.id, lang_code, instructions)
+        _cached_llm = _cached_primary_llm(_cache_key, instructions)
         vachanam_agent = VachanamAgent(
             instructions=instructions,
             chat_ctx=_seed_ctx,
@@ -4171,8 +4252,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         if _cached_llm is not None:
             logger.info("llm_prompt_cache_hit key=%s", _cache_key)
-        elif _cache_eligible and _cache_key not in _PROMPT_CACHE_PENDING:
-            # Miss: bake today's cache in the background for the NEXT call.
+        elif _cache_key not in _PROMPT_CACHE_PENDING:
+            # Miss: bake this exact prompt variant for the next matching call.
             _PROMPT_CACHE_PENDING.add(_cache_key)
             asyncio.create_task(_create_prompt_cache(
                 _cache_key, instructions, vachanam_agent.tools))
@@ -4225,32 +4306,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         _session_llm = ctx.proc.userdata.get("llm") or _build_fallback_llm()
 
-        async def _prewarm_llm() -> None:
-            # First-turn Gemini ttft measured 3.35s vs ~1.3s on later turns
-            # (#390, real call 2026-07-17): the per-call connection/model warmup
-            # lands on the FIRST patient turn. One tiny request during the
-            # greeting cover window makes the first real turn hit a warm path.
-            # Best-effort — any failure is invisible to the call (RULE 8).
-            try:
-                # #393: prewarm with the REAL system prompt, not an empty
-                # context — measured 17:10Z call: empty-prompt prewarm left the
-                # first real turn at ttft 3.47s (vs ~1.3s warm turns) because
-                # Gemini's implicit prefix cache never saw the actual prompt.
-                _cc = ChatContext.empty()
-                _cc.add_message(role="system", content=instructions)
-                _cc.add_message(role="user", content="Ok")
-                async with asyncio.timeout(8):
-                    _stream = _session_llm.chat(chat_ctx=_cc)
-                    try:
-                        async for _ in _stream:
-                            break
-                    finally:
-                        await _stream.aclose()
-                logger.info("llm_prewarmed")
-            except Exception as e:  # noqa: BLE001
-                logger.debug("llm_prewarm_skipped: %s", e)
-
-        asyncio.create_task(_prewarm_llm())
+        # The old per-call dummy Gemini request no longer earns its keep:
+        # production first-turn TTFT p50 is 557 ms versus 561 ms later. It also
+        # competes with a fast caller's real request and can double generation.
+        # Persistent clients + explicit prompt caching provide useful warmth.
         session = AgentSession(
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
             # speaks the clinic's language (falls back to Telugu). filler_clips is
@@ -4277,7 +4336,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # TTS = Soniox tts-rt, the sole provider. The language is the clinic's
             # short te/hi/ta/... code and PCM streams directly to LiveKit.
             tts=_session_tts,
-            vad=ctx.proc.userdata.get("vad") or silero.VAD.load(),
+            vad=ctx.proc.userdata.get("vad") or _load_vad(),
             # LATENCY (biggest network-independent win): a SEMANTIC turn detector.
             # Without it, turn-end was decided by VAD silence alone, forcing a long
             # max_endpointing_delay so the patient isn't cut off mid-sentence. The
@@ -4291,10 +4350,32 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # start-up latency with ZERO benefit (turn-end falls to VAD anyway).
             # Skip it for unsupported languages; VAD + the 0.6s endpointing handle
             # turn-end. Keep it only where it actually works.
-            turn_detection=(
-                None if lang_cfg.stt_code in ("te-IN",) else MultilingualModel()
-            ),
-            preemptive_generation=True,
+            turn_handling={
+                "turn_detection": (
+                    None if lang_cfg.stt_code in ("te-IN",) else MultilingualModel()
+                ),
+                "endpointing": {
+                    "mode": "fixed",
+                    "min_delay": 0.05,
+                    "max_delay": 0.3,
+                },
+                # LiveKit normally starts only the LLM before turn confirmation.
+                # Starting Soniox TTS too overlaps the measured ~0.5s LLM TTFT
+                # and ~0.3-0.5s TTS TTFB. Audio is still held until the turn is
+                # confirmed, and discarded if the transcript changes, so answer
+                # quality is unchanged; only a cancelled synth may cost extra.
+                "preemptive_generation": {
+                    "enabled": True,
+                    "preemptive_tts": True,
+                    "max_speech_duration": 10.0,
+                    "max_retries": 2,
+                },
+                "interruption": {
+                    "min_duration": 0.4,
+                    "min_words": 2,
+                    "resume_false_interruption": True,
+                },
+            },
             # With the semantic turn detector backstopping, the silence timers can
             # shrink: the detector fires on a complete utterance; these only catch
             # the case where it's unsure. min 0.4->0.2, max 1.5->1.0.
@@ -4307,8 +4388,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Soniox already performs semantic endpointing and client VAD sends
             # a vendor-recommended finalize after 200ms. Do not add another
             # 200–600ms of silence on top of that finalized transcript.
-            min_endpointing_delay=0.05,
-            max_endpointing_delay=0.3,
             # BARGE-IN FIX (Vinay 2026-06-22: "when I interrupt mid-sentence the
             # agent skips the sentence it was supposed to say"). Telugu/Indian
             # callers backchannel constantly while the agent speaks ("haan",
@@ -4345,9 +4424,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Soniox interims arrive in ~0.1-0.3s, inside the false-interruption
             # window, so real multi-word interruptions still stop and stay
             # stopped.
-            min_interruption_duration=0.4,
-            min_interruption_words=2,
-            resume_false_interruption=True,
         )
         logger.info("lat_agentsession_ctor=%.2fs", _perf.monotonic() - _t_build)
 
@@ -5245,6 +5321,56 @@ def _start_watchdog_heartbeat() -> None:
     logger.info("watchdog_heartbeat_started interval=60s gated_on_lk_registration=true")
 
 
+def _did_route_keys(value: str | None) -> tuple[str, ...]:
+    """Stable exact + national-number keys for the prewarmed greeting map."""
+    raw = (value or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    keys = [raw] if raw else []
+    if digits:
+        keys.append(digits)
+        if len(digits) >= 10:
+            keys.append(digits[-10:])
+    return tuple(dict.fromkeys(keys))
+
+
+def _prewarm_greeting_routes(proc) -> None:
+    """Load the tiny DID->greeting map before this job process accepts a call.
+
+    The authoritative tenant query still runs on every call. This copy is used
+    only to start the public clinic opening while Neon's first TLS/query round
+    trip is in flight. It contains no patient data and cannot select tools or
+    booking state.
+    """
+    try:
+        import asyncpg
+
+        dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
+
+        async def _load() -> list:
+            conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl=True)
+            try:
+                return await conn.fetch(
+                    """
+                    SELECT id::text, did_number, name, name_spoken, language, tts_voice
+                    FROM branches
+                    WHERE did_number IS NOT NULL AND status = 'active'
+                    """
+                )
+            finally:
+                await conn.close()
+
+        routes: dict[str, dict] = {}
+        for row in asyncio.run(_load()):
+            payload = dict(row)
+            for key in _did_route_keys(payload.get("did_number")):
+                routes[key] = payload
+        proc.userdata["greeting_routes"] = routes
+        logger.info("greeting_routes_prewarmed count=%d", len(routes))
+    except Exception as exc:  # noqa: BLE001 -- authoritative query remains
+        proc.userdata["greeting_routes"] = {}
+        logger.warning("greeting_routes_prewarm_failed: %s", str(exc)[:140])
+
+
 
 
 def _prewarm(proc) -> None:
@@ -5273,6 +5399,7 @@ def _prewarm(proc) -> None:
     logger.info(
         "voice_runtime livekit_agents=%s soniox_plugin=%s "
         "endpoint_level=%d max_endpoint_ms=%d sensitivity=%s manual_finalize_ms=%d "
+        "vad_silence_ms=%d preemptive_tts=true "
         "recording_test_mode=%s recording_scope=admin_only",
         _pkg_version("livekit-agents"),
         _pkg_version("livekit-plugins-soniox"),
@@ -5280,9 +5407,16 @@ def _prewarm(proc) -> None:
         settings.soniox_max_endpoint_delay_ms,
         settings.soniox_endpoint_sensitivity,
         settings.soniox_manual_finalize_delay_ms,
+        round(VAD_TURN_DETECTION_S * 1000),
         settings.recording_allowed,
     )
-    proc.userdata["vad"] = silero.VAD.load()
+    logger.info(
+        "voice_topology worker_region=%s media_expected=india-west "
+        "llm=vertex-asia-south1 stt=soniox-jp tts=soniox-jp",
+        os.getenv("FLY_REGION", "local"),
+    )
+    proc.userdata["vad"] = _load_vad()
+    _prewarm_greeting_routes(proc)
     # The Gemini+GPT FallbackAdapter is clinic-agnostic — build it ONCE per
     # process and reuse, so its construction is off every call's pre-greeting
     # path (part of the ~3s lat_setup before the agent can speak).

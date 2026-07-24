@@ -21,32 +21,37 @@ def setup_function(_):
     _PROMPT_CACHE.clear()
 
 
-def test_key_is_branch_lang_ist_day():
-    k = _prompt_cache_key("b-123", "te")
+def test_key_is_branch_lang_ist_day_and_exact_prompt_digest():
+    k = _prompt_cache_key("b-123", "te", "PROMPT")
     assert k[0] == "b-123" and k[1] == "te"
     assert len(k[2]) == 10  # YYYY-MM-DD — retires yesterday's date table
+    assert len(k[3]) == 12
+    assert k[3] != _prompt_cache_key("b-123", "te", "OTHER")[3]
 
 
 def test_miss_returns_none():
-    assert _cached_primary_llm(("b", "te", "2026-07-19"), "PROMPT") is None
+    assert _cached_primary_llm(("b", "te", "2026-07-19", "abc"), "PROMPT") is None
 
 
 def test_byte_mismatch_returns_none():
     # A prompt edit deployed mid-day must NOT ride yesterday's baked text.
-    _PROMPT_CACHE[("b", "te", "2026-07-19")] = ("caches/x", "OLD PROMPT")
-    assert _cached_primary_llm(("b", "te", "2026-07-19"), "NEW PROMPT") is None
+    key = ("b", "te", "2026-07-19", "abc")
+    _PROMPT_CACHE[key] = ("caches/x", "OLD PROMPT")
+    assert _cached_primary_llm(key, "NEW PROMPT") is None
 
 
 def test_no_vertex_creds_returns_none(monkeypatch):
-    _PROMPT_CACHE[("b", "te", "2026-07-19")] = ("caches/x", "PROMPT")
+    key = ("b", "te", "2026-07-19", "abc")
+    _PROMPT_CACHE[key] = ("caches/x", "PROMPT")
     monkeypatch.setattr(agent_mod, "_vertex_credentials", lambda: None)
-    assert _cached_primary_llm(("b", "te", "2026-07-19"), "PROMPT") is None
+    assert _cached_primary_llm(key, "PROMPT") is None
 
 
 def test_hit_builds_adapter_with_cached_primary(monkeypatch):
-    _PROMPT_CACHE[("b", "te", "2026-07-19")] = ("caches/x", "PROMPT")
+    key = ("b", "te", "2026-07-19", "abc")
+    _PROMPT_CACHE[key] = ("caches/x", "PROMPT")
     monkeypatch.setattr(agent_mod, "_vertex_credentials", lambda: ("/tmp/sa.json", "proj"))
-    adapter = _cached_primary_llm(("b", "te", "2026-07-19"), "PROMPT")
+    adapter = _cached_primary_llm(key, "PROMPT")
     assert adapter is not None
     primary = adapter._llm_instances[0] if hasattr(adapter, "_llm_instances") else adapter._llms[0]
     # the Vertex primary carries the cache resource; fallbacks stay plain
@@ -54,17 +59,13 @@ def test_hit_builds_adapter_with_cached_primary(monkeypatch):
         "caches/x" in repr(vars(primary._opts))
 
 
-def test_eligibility_and_agent_ride_source_guard():
-    """The entrypoint must gate on NO per-call extras and put the cached LLM
-    on the AGENT (llm=...), never on the session — a language-switch handoff
-    (new agent, no llm override) then inherits the plain session LLM."""
+def test_exact_variant_and_agent_ride_source_guard():
+    """Every variant gets a digest and cached LLM rides the agent only."""
     src = inspect.getsource(agent_mod)
-    cache_guard = src.split("_cache_eligible =", 1)[1].split("_cache_key", 1)[0]
-    assert "not caller_prompt_extra" in cache_guard
-    assert "not extra_tail" in cache_guard
-    assert "not _recording_active" in cache_guard
+    assert "_cache_eligible" not in src
+    assert "_prompt_cache_key(branch.id, lang_code, instructions)" in src
     assert "llm=_cached_llm," in src
-    # background bake happens only on an eligible miss
+    # background bake happens on an exact-variant miss
     assert "_create_prompt_cache(" in src
 
 
@@ -74,5 +75,6 @@ def test_create_prompt_cache_never_raises(monkeypatch):
 
     monkeypatch.setattr(agent_mod, "_vertex_credentials",
                         lambda: (_ for _ in ()).throw(RuntimeError("boom")))
-    asyncio.run(agent_mod._create_prompt_cache(("b", "te", "d"), "P", []))
-    assert ("b", "te", "d") not in _PROMPT_CACHE
+    key = ("b", "te", "d", "abc")
+    asyncio.run(agent_mod._create_prompt_cache(key, "P", []))
+    assert key not in _PROMPT_CACHE

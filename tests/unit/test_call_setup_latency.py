@@ -6,7 +6,8 @@ structural fixes so a refactor can't silently re-serialize the setup path:
    caller identification) run in ONE asyncio.gather on their own sessions.
 2. The gate keeps its iter1 #23 fail-closed semantics inside the moved
    function (a DB hiccup must never grant service to a shut-off org).
-3. The session LLM is prewarmed during the greeting cover window.
+3. The no-op per-call LLM prewarm is removed; persistent clients plus explicit
+   prompt caching handle warmth without competing with the real first turn.
 """
 from pathlib import Path
 
@@ -42,15 +43,11 @@ def test_blocked_org_still_decided_before_greeting():
     )
 
 
-def test_llm_prewarm_fires_at_session_build():
-    assert "async def _prewarm_llm" in SRC
-    assert "asyncio.create_task(_prewarm_llm())" in SRC
-    fn = SRC.split("async def _prewarm_llm")[1][:2500]
-    assert "aclose()" in fn  # stream always closed, even on break
-    # #393: prewarm must carry the REAL system prompt — an empty-context
-    # prewarm leaves the first real turn at ttft ~3.5s (measured 17:10Z call)
-    # because Gemini's implicit prefix cache never sees the actual prompt.
-    assert 'role="system", content=instructions' in fn
+def test_dummy_llm_prewarm_removed_at_session_build():
+    assert "async def _prewarm_llm" not in SRC
+    assert "asyncio.create_task(_prewarm_llm())" not in SRC
+    assert "explicit prompt caching provide useful warmth" in SRC
+    assert '"preemptive_tts": True' in SRC
 
 
 def test_build_breakdown_instrumented():

@@ -19,7 +19,9 @@ SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 
 def test_t1_streaming_stt_preemptive_generation_done():
     """#1: the LLM fires on the STT partial (preemptive), not after commit."""
-    assert "preemptive_generation=True" in SRC
+    assert '"preemptive_generation": {' in SRC
+    assert '"enabled": True' in SRC
+    assert '"preemptive_tts": True' in SRC
 
 
 def test_t2_partial_llm_tokens_stream_to_tts_done():
