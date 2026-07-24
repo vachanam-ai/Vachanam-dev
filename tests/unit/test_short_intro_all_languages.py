@@ -47,7 +47,6 @@ def test_prompt_handles_garbled_switch_requests():
         clinic_name="C", doctors=[], emergency_contact="+911234567890",
         plan="clinic", language="te", faq=None,
     )
-    assert "GARBLED SWITCH REQUEST" in p
-    assert "POSSIBLE switch request" in p
-    assert "AGAIN in any following turn" in p  # 2nd mention → switch, no loop
-    assert "switch, do not keep asking" in p
+    assert "any explicit ask" in p
+    assert "TWO consecutive\nCOMPLETE utterances wholly in another supported language" in p
+    assert "switch_language(code) at once" in p

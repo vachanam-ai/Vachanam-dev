@@ -1,5 +1,19 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-25 — POML v17 + CLINIC-WIDE PROMPT CACHE (DEPLOYMENT IN PROGRESS).**
+> Vinay's updated prompt is 94,575 characters—4.5× the prior 21,039-character
+> prompt. The cache boundary is now the stable clinic prompt/roster/tools, not
+> the caller: patient identity, current time, bookings and outbound metadata
+> stay private per-call chat context. Every active clinic's used language and
+> recording-policy variants are proactively created in Vertex and their opaque
+> resource names shared across workers through Redis. Verified booking,
+> reschedule and cancellation outcomes bypass the redundant second LLM pass;
+> booking/reschedule end with “టైంకి రండి”. New traces split total LLM,
+> pre-tool, tool and post-tool time. Six complete v17 language packs are served;
+> legacy Bengali/Malayalam prompt selections safely fall back instead of
+> crashing a call or the cache warmer. Production/version/cache-hit proof is
+> pending the deployment below.
+
 > **2026-07-25 — 500MS COLOCATION PATH DEPLOYED (PRODUCTION — Fly v178).** The worker,
 > LiveKit dispatch, and Vertex LLM are already Mumbai/India-West; Soniox remains
 > on its closest supported Japan regional deployment. The measured warm median

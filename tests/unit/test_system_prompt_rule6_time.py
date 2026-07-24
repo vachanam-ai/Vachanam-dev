@@ -18,14 +18,14 @@ def test_prompt_never_sends_caller_back_to_clinic():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     assert "say they can confirm at the clinic" not in p
     assert "THIS call IS the clinic" in p
-    assert "log_clinic_question with the caller's question IN THE SAME TURN" in p
-    assert "నేను డాక్టర్ గారిని అడిగి మీకు చెప్పిస్తాను" in p
+    assert "log_clinic_question in the SAME turn" in p
+    assert "డాక్టర్ గారిని అడిగి చెప్పిస్తాను" in p
 
 
 def test_prompt_keeps_times_natural_and_phone_digits_clear():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     compact = " ".join(p.split())
-    assert "Speak times, dates, ages, fees, and token numbers the natural way" in p
-    assert "day-part or AM/PM" in p
+    assert "Times, dates, ages, fees, tokens: natural spoken numbers" in p
+    assert "Add a day-part when a time would be ambiguous" in p
     assert "PLAIN DIGITS" in p
-    assert "do not mechanically translate every number into English" in compact
+    assert "never English number words inside another language" in compact

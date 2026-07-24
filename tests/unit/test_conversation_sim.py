@@ -50,7 +50,7 @@ def test_build_live_agent_prompt_wraps_real_prompt_with_facts():
     assert "NO tools" in p and "KNOWN FACTS" in p
     assert "four hundred rupees" in p
     # The REAL receptionist prompt is included (natural times + phone digit rule).
-    assert "day-part or AM/PM" in p and "PLAIN DIGITS" in p
+    assert "Add a day-part when a time would be ambiguous" in p and "PLAIN DIGITS" in p
 
 
 def test_agent_first_inbound_order():

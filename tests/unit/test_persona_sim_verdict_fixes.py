@@ -24,25 +24,25 @@ def test_complaint_block_apology_first_and_logged():
     FIRST, get logged, then ONE open help question."""
     p = _prompt()
     assert "COMPLAINT ABOUT THE CLINIC" in p
-    assert "APOLOGISE FIRST" in p
+    assert "apologise first and specifically" in p
     assert "log_clinic_question" in p
-    assert "నేను మీకు ఎలా సహాయపడగలను అండి?" in p
-    assert "never repeat a sentence you already said verbatim" in p
+    assert "ఇప్పుడు నేను ఏం చేయగలనండి?" in p
+    assert "Never repeat a sentence verbatim" in p
 
 
 def test_offtask_redirect_excludes_clinic_complaints():
     """The rule-5 redirect ("అది నేను చెప్పలేను") is for chit-chat/injection —
     a complaint about THIS clinic is on-task and must never get it."""
     p = _prompt()
-    assert "a complaint about THIS clinic" in p.lower() or "complaint about THIS clinic" in p
-    assert "NEVER use this redirect line for it" in p
+    assert "COMPLAINT ABOUT THE CLINIC" in p
+    assert "It is never off-topic; never use the redirect line" in p
 
 
 def test_anxious_caller_gets_calm_line_no_medical_opinion():
     """anxious_mother R7=1: booked efficiently, never acknowledged the worry.
     One కంగారు పడకండి line, care-reassurance only, worry acknowledged at close."""
     p = _prompt()
-    assert "WORRIED / ANXIOUS" in p
+    assert "WORRIED:" in p
     assert "కంగారు పడకండి" in p
     assert "ZERO medical opinion" in p
 
@@ -67,14 +67,14 @@ def test_daypart_mismatch_is_acknowledged():
     """Asked "రేపు మధ్యాహ్నం", got an evening slot with no acknowledgement.
     Nothing free in the asked day-part → say so first, then nearest outside."""
     p = _prompt()
-    assert "DAY-PART" in p
+    assert "For a day-part, stay in it" in p
     assert "మధ్యాహ్నం ఖాళీ లేదండి" in p
 
 
 def test_age_question_is_short():
     """"వాళ్ళ వయసు ఎంత ఉంటదండి?" → simply "వయసు ఎంతండి?"."""
     p = _prompt()
-    assert 'simply "వయసు ఎంతండి?"' in p
+    assert "వయసు ఎంతండి?" in p
 
 
 def test_phone_confirm_folded_into_single_readback():
@@ -92,28 +92,24 @@ def test_message_leaver_insistence_routes_to_human_transfer():
     persistent insistence follows the HUMAN TRANSFER rule — which since #350
     caps deflection at two offers (third ask always transfers)."""
     p = _prompt()
-    assert "INSIST on speaking" in p  # playbook still routes insisters
-    assert "that is the HUMAN\n  TRANSFER rule" in p.replace("\r\n", "\n") or \
-        "HUMAN TRANSFER" in p
-    assert "AT MOST TWICE" in p  # #350 ceiling
+    assert "Calm\ndoctor request → offer help at most TWICE; the 3rd ask transfers" in p
 
 
 def test_trailing_off_fragment_is_not_a_turn():
     """"పది గంటలకి... కుదరదేమో." — agent jumped in; the caller was mid-thought
     and finished with the time themselves. Trailing-off = keep listening."""
     p = _prompt()
-    assert "TRAILING-OFF" in p
-    assert "కుదరదేమో" in p
+    assert "Fragments and trailing-off thoughts are not turns" in p
 
 
 def test_step0_duplicate_sentence_removed():
     p = _prompt()
-    assert p.count("The patient's first reply states what they need.") == 1
+    assert p.count("Their first\nreply states the need") == 1
 
 
 def test_warmth_applies_to_every_reply():
     p = _prompt()
-    assert "WARMTH IN EVERY REPLY" in p
+    assert "WARMTH IS ACKNOWLEDGEMENT, NOT VOLUME" in p
 
 
 def test_te_greeting_trimmed_disclosure_intact():
@@ -128,9 +124,9 @@ def test_queue_status_prompt_block():
     """Gap B (2026-07-04): caller asks "నా టోకెన్ ఎప్పుడు?" → get_queue_status,
     answer in token positions only — never promise minutes."""
     p = _prompt()
-    assert "QUEUE STATUS" in p
+    assert "QUEUE: get_queue_status" in p
     assert "get_queue_status" in p
-    assert "NEVER promise minutes" in p
+    assert "Never promise minutes" in p
 
 
 def test_sim_fake_tools_carry_announce_contract():

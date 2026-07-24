@@ -69,9 +69,12 @@ References:
 4. **No fake LLM warm request.** Production showed first-turn LLM p50 of 557 ms
    versus 561 ms later. The dummy request had no measurable benefit and could
    compete with a fast caller's real request, so it was removed.
-5. **Exact-variant Vertex prompt caching.** Recording, known-caller, and outbound
-   prompts now receive separate digest-keyed cache variants. The byte-equality
-   check remains the final safety gate.
+5. **Clinic-wide Vertex prompt caching.** The stable clinic prompt, roster and
+   tool schemas are cached once per clinic/language/recording-policy digest and
+   proactively warmed before callers arrive. Redis shares the opaque Vertex
+   cache resource name across worker processes. Caller identity, the live clock,
+   bookings and outbound metadata remain private per-call chat context and are
+   never placed in shared cache. The byte-equality check remains the final gate.
 6. **Connection warmup moved earlier.** The persistent Japan Soniox TTS socket
    opens while tenant and caller data are loading, not after the 4.22-second
    build path.
@@ -79,6 +82,14 @@ References:
    a small, non-patient DID-to-public-clinic-greeting map before accepting a job.
    The real opening begins from this map while the authoritative database query
    runs. A mismatch cancels the cached route; fallback-DID calls never use it.
+8. **No second LLM after a verified mutation.** Successful booking,
+   rescheduling and cancellation results use short deterministic localized
+   speech, then stop the redundant post-tool generation. Booking/rescheduling
+   closes include “టైంకి రండి”; cancellation deliberately does not.
+9. **The remaining gap is named.** Per-turn traces now separate total LLM time,
+   pre-tool model time, tool execution, and post-tool time. Multi-pass tool
+   turns can therefore be optimized from evidence instead of the previous
+   200–650 ms “unaccounted” bucket.
 
 LiveKit documents preemptive TTS as its lowest-latency pipeline option:
 https://docs.livekit.io/agents/multimodality/audio/#preemptive-speech-generation

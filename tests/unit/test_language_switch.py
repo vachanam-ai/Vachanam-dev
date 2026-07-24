@@ -41,11 +41,11 @@ def test_prompt_carries_switch_directive_in_all_languages():
         )
         assert "switch_language" in p
         # Explicit-ask only — never speech auto-detect (2026-06-17 decision).
-        assert "EXPLICITLY" in p
-        assert "NEVER because" in p
+        assert "any explicit ask" in p
+        assert "DOES NOT SWITCH YOU: caller code-mixing" in p
         # Live test 2026-07-03: the LLM spoke its own ack alongside the tool
         # call (double-voice) — the switch turn must be silent.
-        assert "SILENTLY" in p
+        assert "no permission, no confirming first, no announcing it" in p
 
 
 def test_solo_cap_copy_says_ten_minutes():
@@ -54,7 +54,7 @@ def test_solo_cap_copy_says_ten_minutes():
         clinic_name="Test", doctors=[], emergency_contact="9",
         plan="solo", language="te",
     )
-    assert "10 minutes" in p
+    assert "Solo call ends at 10 min" in p
     assert "4 minutes" not in p
 
 

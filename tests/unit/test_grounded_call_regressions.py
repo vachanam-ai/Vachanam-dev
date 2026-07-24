@@ -28,15 +28,15 @@ def _prompt():
 
 def test_current_symptom_replaces_previous_route_in_prompt():
     p = _prompt()
-    assert "CURRENT TURN WINS" in p
-    assert "Never answer “throat” from an earlier\n“skin” route" in p
+    assert "Only the latest COMPLETE utterance sets the need" in p
+    assert "A new symptom replaces the old one" in p
     assert "never reuse the prior doctor" in p
 
 
 def test_prompt_requires_panti_pani_contrastive_repair():
     p = _prompt()
     assert "పంటి సమస్యా, పని సమస్యా?" in p
-    assert "A correction invalidates the wrong transcript" in p
+    assert "A correction\nvoids the old route" in p
 
 
 def test_reminder_prompt_has_no_speakable_tool_signature():

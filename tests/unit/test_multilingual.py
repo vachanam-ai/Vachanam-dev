@@ -103,17 +103,16 @@ def _docs():
 def test_telugu_prompt_has_no_directive():
     p = build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language="te")
     assert not p.startswith("PRIMARY LANGUAGE")
-    assert "You speak Telugu." in p
+    assert "ACTIVE: Telugu" in p
 
 
-@pytest.mark.parametrize("code,name", [("hi", "Hindi"), ("ta", "Tamil"), ("bn", "Bengali")])
+@pytest.mark.parametrize("code,name", [("hi", "Hindi"), ("ta", "Tamil"), ("mr", "Marathi")])
 def test_non_telugu_prompt_has_primary_language_directive(code, name):
     p = build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language=code)
-    assert p.startswith("PRIMARY LANGUAGE")
-    assert f"You speak {name}." in p
+    assert f"ACTIVE: {name}" in p
 
 
-def test_unknown_prompt_language_equals_telugu():
-    te = build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language="te")
-    zz = build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language="zz")
-    assert zz == te
+@pytest.mark.parametrize("code", ["bn", "ml", "zz"])
+def test_language_without_grounded_prompt_pack_is_rejected(code):
+    with pytest.raises(ValueError, match="not serviceable"):
+        build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language=code)

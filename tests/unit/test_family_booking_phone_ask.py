@@ -15,18 +15,17 @@ def _prompt():
 
 def test_whose_number_question_exists_for_family_bookings():
     p = _prompt()
-    assert "WHOSE NUMBER" in p
-    assert "only when the booking is for someone else" in p
+    assert 'Ask "this number or theirs" ONLY for someone else\'s booking' in p
 
 
 def test_self_bookings_never_get_the_question():
     p = _prompt()
-    assert "Self-bookings NEVER get this question" in p
+    assert 'Ask "this number or theirs" ONLY for someone else\'s booking' in p
 
 
 def test_one_confirmation_rule_carves_out_the_exception():
     p = _prompt()
-    assert "WHOSE NUMBER question of step 5" in p
+    assert "whose-number ask and the dictated digit" in p
     # the single-confirmation principle itself must survive
     assert "EXACTLY ONE yes-question" in p
 
@@ -35,5 +34,4 @@ def test_dictated_number_still_hard_gated():
     # a different number given for the patient must go through the digit
     # read-back gate — the whose-number rule defers to PHONE NUMBER RULES
     p = _prompt()
-    assert "PHONE NUMBER RULES" in p
-    assert "NEVER call confirm_booking with a dictated number" in p
+    assert "no\n   confirm_booking on a dictated number until they said yes" in p

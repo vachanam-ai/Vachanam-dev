@@ -21,8 +21,8 @@ def test_prompt_teaches_fragment_patience():
     """Transcript 16:42Z: caller fragments ("तो मुझे।", "हम्म।") each triggered a
     full re-prompt — caller felt talked over. Fragments are not turns."""
     p = _prompt()
-    assert "INCOMPLETE UTTERANCES" in p
-    assert "do NOT repeat your full question" in p
+    assert "Fragments and trailing-off thoughts are not turns" in p
+    assert "do NOT repeat\nyour full question" in p
 
 
 def test_prompt_teaches_language_gap_recovery():
@@ -30,7 +30,7 @@ def test_prompt_teaches_language_gap_recovery():
     English question re-asked into the gap for 75s. After an unintelligible
     streak the agent must offer a language switch once."""
     p = _prompt()
-    assert "UNINTELLIGIBLE STREAK" in p
+    assert "2–3 unintelligible turns" in p
     assert "switch_language" in p
 
 
@@ -49,11 +49,11 @@ def test_receptionist_playbook_block_present():
     R6/R8 + role research): booking close-with-what-next, messy openings
     (noise / silent caller / wrong number), and message-taking discipline."""
     p = _prompt()
-    assert "RECEPTIONIST PLAYBOOK" in p
+    assert "<escalation>" in p
     # The offer exists, but the 2026-07-21 repetition fix makes it optional once.
-    assert "OFFER MORE HELP BEFORE CLOSING" in p
-    assert "SILENT CALLER" in p
-    assert "BACKGROUND NOISE" in p
+    assert "Offer more help ONCE per call" in p
+    assert "SILENT → one check" in p
+    assert "NOISE or several voices" in p
     assert "WRONG NUMBER" in p
-    assert "MESSAGE FOR THE DOCTOR/CLINIC" in p
+    assert "MESSAGE: confirm once, take_message" in p
     assert "log_clinic_question" in p

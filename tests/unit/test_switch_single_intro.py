@@ -38,7 +38,7 @@ def test_switch_turn_says_at_most_ok():
         clinic_name="T", doctors=[], emergency_contact="9",
         plan="clinic", language="te",
     )
-    assert "AT MOST the single word 'Ok.'" in p
+    assert 'old language or a bare "Ok" is a failure' in p
 
 
 def test_date_context_speak_check_and_correct_wednesday():
@@ -60,6 +60,6 @@ def test_prompt_has_failure_recovery_and_fragment_tool_gate():
         clinic_name="T", doctors=[], emergency_contact="9",
         plan="clinic", language="te",
     )
-    assert "FAILURE RECOVERY" in p
+    assert "A TOOL THAT FAILS, TIMES OUT, OR RETURNS NOTHING GIVES YOU NO FACT" in p
     assert "NO TOOLS ON FRAGMENTS" in p
-    assert "INTERRUPTED CONFIRMATIONS" in p
+    assert "Interrupted confirmation → restate only the unheard detail" in p

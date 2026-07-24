@@ -30,8 +30,7 @@ def test_r2_prompt_forbids_fake_cancel_claims():
         plan="clinic", language="te",
     )
     low = prompt.lower()
-    assert "cancel_booking returned success=true" in low
-    assert "reschedule_booking returned success=true" in low
+    assert "never claim a booking, cancel, or reschedule until that tool returned success=true" in low
 
 
 def test_r4_te_inbound_greeting_splittable_and_name_prefix():

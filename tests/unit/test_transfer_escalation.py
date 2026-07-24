@@ -22,21 +22,21 @@ def _prompt():
 def test_prompt_urgent_transfers_immediately():
     p = _prompt()
     assert "URGENT NOW" in p
-    assert "RIGHT AWAY" in p
+    assert 'request_human_transfer(reason="urgent") immediately' in p
     # RULE 7: intent-based, never keyword triage.
     assert "never a keyword list" in p
 
 
 def test_prompt_third_ask_always_transfers():
     p = _prompt()
-    assert "AT MOST TWICE" in p
+    assert "offer help at most TWICE" in p
     assert "3rd ask" in p
-    assert "NEVER deflect a" in p  # ...caller a third time
+    assert "3rd ask transfers" in p
 
 
 def test_prompt_booking_rule_defers_to_urgent():
     p = _prompt()
-    assert "UNLESS it sounds URGENT NOW" in p
+    assert "new appointment → BOOKING (unless URGENT NOW)" in p
 
 
 def _agent(transfer_to, room=None):

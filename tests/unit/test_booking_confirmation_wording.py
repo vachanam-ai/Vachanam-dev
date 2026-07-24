@@ -18,5 +18,6 @@ def test_reschedule_tool_requires_come_on_time_message():
 def test_prompt_says_punctuality_message_only_after_booking_or_reschedule():
     prompt = build_system_prompt("Clinic", [], "", "clinic")
     flow = prompt.split("<flow>", 1)[1].split("</flow>", 1)[0]
-    assert flow.count('"టైంకి రండి"') == 2
-    assert "after a cancellation don't" in flow
+    assert 'On success' in flow and 'close with "టైంకి రండి"' in flow
+    assert "RESCHEDULE:" in flow and 'Then "టైంకి రండి"' in flow
+    assert "AFTER:" in flow and 'no "టైంకి రండి"' in flow

@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     # doctor-routing call in parallel with the reply LLM on a dedicated session.
     # Kill switch — set false to disable instantly if it misbehaves.
     voice_tool_prefetch: bool = True
+    # Successful booking/reschedule/cancel writes have a fully known outcome.
+    # Speak that outcome directly and skip the otherwise redundant second LLM
+    # pass. Set false for an instant rollback to LLM-written confirmations.
+    voice_deterministic_confirm: bool = True
 
     # WhatsApp (Meta Cloud API — spec 2026-07-13). meta_phone_number_id is the
     # WABA test number for dev; per-clinic numbers live on Branch.wa_phone_number_id.

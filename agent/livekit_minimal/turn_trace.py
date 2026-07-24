@@ -26,7 +26,8 @@ SUMMARY_ALLOWED_KEYS = frozenset({
     "session", "turn", "kind", "language", "provider", "cache_hit",
     "total_ms", "stt_finalize_ms", "commit_ms", "eou_delay_ms",
     "transcription_delay_ms", "llm_ttft_ms", "llm_runs", "safety_buffer_ms",
-    "tts_ttfb_ms", "tool", "tool_ms", "unaccounted_ms",
+    "llm_total_ms", "tts_ttfb_ms", "tool", "tool_ms", "pre_tool_ms",
+    "post_tool_ms", "unaccounted_ms",
     # exact-timestamp ladder (2026-07-22): split the parts total_ms hid
     "speak_dur_ms", "vad_hangover_ms", "tts_synth_ms", "playout_gap_ms",
     "from_last_word_ms",
@@ -92,6 +93,9 @@ class TurnLatencyTrace:
         self._turn = {
             "t_speech_end": self._clock(),
             "llm_runs": 0,
+            "llm_total_s": 0.0,
+            "tool_starts": {},
+            "tool_s": 0.0,
             "t_speech_start": self._pending_speech_start,
             "t_first_interim": self._pending_first_interim,
             "t_last_interim": self._pending_last_interim,
@@ -126,12 +130,16 @@ class TurnLatencyTrace:
         self._turn["eou_delay"] = eou_delay
         self._turn["transcription_delay"] = transcription_delay
 
-    def mark_llm_run(self, speech_id: str, ttft: float) -> None:
+    def mark_llm_run(
+        self, speech_id: str, ttft: float, duration: float | None = None
+    ) -> None:
         if self._turn is None or speech_id in self._stale_ids:
             return
         self._speech_ids.add(speech_id)
         self._turn["llm_runs"] += 1
         self._turn["ttft"] = ttft  # last run = the one that played
+        if duration is not None:
+            self._turn["llm_total_s"] += max(0.0, duration)
 
     def mark_guard_first_in(self) -> None:
         if self._turn is not None and "t_guard_in" not in self._turn:
@@ -151,7 +159,24 @@ class TurnLatencyTrace:
         if self._turn is not None:
             self._turn["tool"] = name
             if duration is not None:
-                self._turn["tool_s"] = duration
+                self._turn["tool_s"] += max(0.0, duration)
+
+    def mark_tool_started(self, call_id: str, name: str) -> None:
+        if self._turn is None:
+            return
+        now = self._clock()
+        self._turn["tool"] = name
+        self._turn["tool_starts"][call_id] = now
+        self._turn.setdefault("t_first_tool_start", now)
+
+    def mark_tool_ended(self, call_id: str) -> None:
+        if self._turn is None:
+            return
+        now = self._clock()
+        started = self._turn["tool_starts"].pop(call_id, None)
+        if started is not None:
+            self._turn["tool_s"] += max(0.0, now - started)
+        self._turn["t_last_tool_end"] = now
 
     def mark_playout_start(self) -> None:
         if self._turn is not None and "t_playout" not in self._turn:
@@ -172,8 +197,10 @@ class TurnLatencyTrace:
         commit = _ms(t.get("t_final_transcript"), t.get("t_committed"))
         guard = _ms(t.get("t_guard_in"), t.get("t_guard_out"))
         ttft_ms = None if "ttft" not in t else round(t["ttft"] * 1000, 1)
+        llm_total_ms = round(t.get("llm_total_s", 0.0) * 1000, 1)
         ttfb_ms = None if "ttfb" not in t else round(t["ttfb"] * 1000, 1)
-        known = sum(v for v in (stt_final, commit, ttft_ms, guard, ttfb_ms)
+        tool_ms = round(t.get("tool_s", 0.0) * 1000, 1)
+        known = sum(v for v in (stt_final, commit, ttft_ms, guard, ttfb_ms, tool_ms)
                     if v is not None)
         summary = {
             "session": self._session,
@@ -189,6 +216,7 @@ class TurnLatencyTrace:
             else round(t["transcription_delay"] * 1000, 1),
             "llm_ttft_ms": ttft_ms,
             "llm_runs": t["llm_runs"],
+            "llm_total_ms": llm_total_ms,
             "safety_buffer_ms": guard,
             "tts_ttfb_ms": ttfb_ms,
             "unaccounted_ms": None if total is None
@@ -204,8 +232,13 @@ class TurnLatencyTrace:
         summary["from_last_word_ms"] = _ms(t.get("t_last_interim"), t["t_playout"])
         if "tool" in t:
             summary["tool"] = t["tool"]
-            if "tool_s" in t:
-                summary["tool_ms"] = round(t["tool_s"] * 1000, 1)
+            summary["tool_ms"] = tool_ms
+            summary["pre_tool_ms"] = _ms(
+                t.get("t_committed"), t.get("t_first_tool_start")
+            )
+            summary["post_tool_ms"] = _ms(
+                t.get("t_last_tool_end"), t.get("t_playout")
+            )
         self._emit(summary)
 
 

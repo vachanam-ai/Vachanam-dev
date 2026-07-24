@@ -31,10 +31,10 @@ def _prompt(code: str) -> str:
 
 def test_non_telugu_prompt_has_absolute_output_language_rule_no_mirroring():
     # The live failure was the POST-SWITCH English agent drifting to Telugu.
-    for code in ("en", "hi", "bn"):
+    for code in ("en", "hi", "ta"):
         prompt = _prompt(code)
-        assert "OUTPUT LANGUAGE — ABSOLUTE" in prompt
-        assert "mirror them" not in prompt
+        assert "Everything you say is in\nthe ACTIVE LANGUAGE" in prompt
+        assert "Never mirror a language you\nweren't switched into" in prompt
 
 
 def test_telugu_prompt_switches_only_via_tool_never_text_mirroring():
@@ -46,8 +46,8 @@ def test_telugu_prompt_switches_only_via_tool_never_text_mirroring():
     prompt = _prompt("te")
     assert "mirror them" not in prompt
     assert "MATCH THE CALLER" not in prompt
-    assert "switch_language('en')" in prompt
-    assert "TENGLISH IS TELUGU" in prompt  # code-mixing must still never switch
+    assert "switch_language(code) at once" in prompt
+    assert "caller code-mixing or English words" in prompt
 
 
 def test_switch_fence_and_no_revert_rule_every_language():
@@ -58,6 +58,6 @@ def test_switch_fence_and_no_revert_rule_every_language():
         prompt = _prompt(code)
         # "Words alone switch NOTHING" is unique to the switch fence (the
         # take_message fence shares the FORBIDDEN date marker).
-        assert "Words alone switch NOTHING" in prompt
+        assert "switch_language(code) at once" in prompt
         assert "AFTER A SWITCH" in prompt
         assert "Mirror the patient's language" not in prompt

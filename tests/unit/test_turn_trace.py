@@ -167,6 +167,37 @@ def test_tool_turn_kind_and_no_tool_args_leak(trace_and_out):
     assert s["tool_ms"] == pytest.approx(1200, abs=1)
 
 
+def test_tool_lifecycle_attributes_pre_tool_tool_and_post_tool(trace_and_out):
+    tr, out, clock = trace_and_out
+    tr.mark_speech_end()
+    clock.advance(0.2)
+    tr.mark_final_transcript()
+    clock.advance(0.05)
+    tr.mark_turn_committed()
+    clock.advance(0.3)
+    tr.mark_tool_started("call-1", "reschedule_booking")
+    clock.advance(0.6)
+    tr.mark_tool_ended("call-1")
+    clock.advance(0.4)
+    tr.mark_playout_start()
+    tr.flush()
+    (summary,) = out
+    assert summary["pre_tool_ms"] == pytest.approx(300, abs=1)
+    assert summary["tool_ms"] == pytest.approx(600, abs=1)
+    assert summary["post_tool_ms"] == pytest.approx(400, abs=1)
+
+
+def test_llm_total_records_all_generations(trace_and_out):
+    tr, out, clock = trace_and_out
+    tr.mark_speech_end()
+    tr.mark_llm_run("one", ttft=0.2, duration=0.45)
+    tr.mark_llm_run("two", ttft=0.3, duration=0.55)
+    clock.advance(1.2)
+    tr.mark_playout_start()
+    tr.flush()
+    assert out[0]["llm_total_ms"] == pytest.approx(1000, abs=1)
+
+
 def test_no_emission_without_a_user_turn(trace_and_out):
     tr, out, clock = trace_and_out
     tr.mark_playout_start()  # greeting playback — no caller turn open

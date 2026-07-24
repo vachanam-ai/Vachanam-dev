@@ -47,7 +47,7 @@ def test_prompt_gates_dictated_numbers_behind_readback():
         plan="clinic", language="te",
     )
     assert "HARD GATE" in p
-    assert "SAID YES" in p
+    assert "until they said yes to its digit readback" in p
 
 
 def test_known_caller_extra_warns_flag_is_mandatory():

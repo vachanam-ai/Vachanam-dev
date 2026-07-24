@@ -21,7 +21,8 @@ _KV = re.compile(r"(\w+)=(\S+)")
 _STAGES = (
     "total_ms", "from_last_word_ms", "vad_hangover_ms", "speak_dur_ms",
     "stt_finalize_ms", "commit_ms", "llm_ttft_ms", "tts_synth_ms",
-    "safety_buffer_ms", "tts_ttfb_ms", "playout_gap_ms", "tool_ms",
+    "llm_total_ms", "safety_buffer_ms", "tts_ttfb_ms", "playout_gap_ms",
+    "tool_ms", "pre_tool_ms", "post_tool_ms",
     "unaccounted_ms",
 )
 
