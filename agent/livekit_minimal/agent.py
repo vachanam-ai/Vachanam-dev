@@ -713,12 +713,14 @@ _GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"
 # is off: the model knows the number is an existing patient's but must NOT state
 # or assume a name, and must verify identity before touching a booking.
 KNOWN_CALLER_NO_NAME_EXTRA = (
-    "\n\nCALLER IDENTIFICATION: this number belongs to an EXISTING patient, but "
-    "do NOT state or assume their name — the greeting did not use it. Greet them "
-    "warmly as a returning caller and ask how you can help. If they want to check "
-    "or change an existing appointment, you MUST first confirm the name the "
-    "booking is under and call verify_caller_identity before reading out or "
-    "changing anything."
+    "\n\nRETURNING CALLER: this number belongs to a patient the clinic already "
+    "knows, but the greeting did NOT use their name — so do NOT state, guess, or "
+    "hint at it. Welcome them warmly, like a regular you're glad to hear from, "
+    "and ask how you can help. If they want to check or change an existing "
+    "appointment, first — naturally, as if pulling up the right file — ask whose "
+    "name the booking is under (e.g. 'so I can pull up the right record, whose "
+    "name is it under?'), never as a challenge, and call verify_caller_identity "
+    "before reading out or changing anything."
 )
 
 REBOOK_PROMPT_EXTRA = (
@@ -2458,17 +2460,22 @@ class VachanamAgent(Agent):
             return {
                 "verified": True,
                 "instruction": (
-                    "Identity confirmed. Continue with what they asked — you may "
-                    "now read back or change their booking."
+                    "The name matches the record on file. Do NOT announce any check "
+                    "or say things like 'identity confirmed' or 'verified' — just warmly "
+                    "continue as if you simply found their file, and carry on with what "
+                    "they asked; you may now read back or change their booking."
                 ),
             }
         return {
             "verified": False,
             "instruction": (
-                "That name does not match our record for this number. Ask once "
-                "more for the exact full name the appointment is under. If it "
+                "The name did not match the record on this number — but do NOT "
+                "treat the caller as a suspect or say 'that does not match our "
+                "records'. Warmly, like a receptionist double-checking a spelling, "
+                "say you couldn't find it under that name and gently ask once more "
+                "for the exact full name the appointment is booked under. If it "
                 "still does not match, do NOT read out or change any booking — "
-                "offer to take a message for the clinic instead."
+                "warmly offer to take a message for the clinic to follow up instead."
             ),
         }
 
@@ -2492,10 +2499,13 @@ class VachanamAgent(Agent):
             return {
                 "needs_verification": True,
                 "instruction": (
-                    "Do NOT reveal any appointment details yet. Ask for the full "
-                    "name the appointment is booked under, then call "
-                    "verify_caller_identity with that name. Only after it succeeds "
-                    "may you read back or change a booking."
+                    "Do NOT reveal anything about any booking yet. First, the way a "
+                    "receptionist naturally pulls up the right file, warmly ask whose "
+                    "name the appointment is under — e.g. 'so I can pull up the right "
+                    "record, whose name is it booked under?' — framed as help, never as "
+                    "a challenge or security check. Then call verify_caller_identity "
+                    "with that name. Only after it succeeds may you read back or change "
+                    "a booking."
                 ),
             }
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
@@ -2545,8 +2555,10 @@ class VachanamAgent(Agent):
             return {
                 "needs_verification": True,
                 "instruction": (
-                    "Do NOT reveal any booking or queue detail yet. Ask for the "
-                    "full name the appointment is booked under, then call "
+                    "Do NOT reveal any booking or queue detail yet. First, the way a "
+                    "receptionist pulls up the right file, warmly ask whose name the "
+                    "appointment is under — e.g. 'so I can find the right token, whose "
+                    "name is it booked under?' — never as a challenge. Then call "
                     "verify_caller_identity with that name first."
                 ),
             }
@@ -2843,9 +2855,11 @@ class VachanamAgent(Agent):
                 "success": False,
                 "error": "identity_not_verified",
                 "instruction": (
-                    "Confirm who you are speaking to first: ask for the name the "
-                    "appointment is under and call verify_caller_identity before "
-                    "rescheduling anything."
+                    "Before moving anything, gently make sure you have the right file: "
+                    "warmly ask whose name the appointment is under — e.g. 'sure, I can "
+                    "help with that — whose name is it booked under?' — never as a "
+                    "challenge, and call verify_caller_identity before rescheduling "
+                    "anything."
                 ),
             }
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
@@ -3108,9 +3122,11 @@ class VachanamAgent(Agent):
                 "success": False,
                 "error": "identity_not_verified",
                 "instruction": (
-                    "Confirm who you are speaking to first: ask for the name the "
-                    "appointment is under and call verify_caller_identity before "
-                    "cancelling anything."
+                    "Before changing anything, gently make sure you have the right file: "
+                    "warmly ask whose name the appointment is under — e.g. 'sure, I can "
+                    "help with that — whose name is it booked under?' — never as a "
+                    "challenge, and call verify_caller_identity before cancelling "
+                    "anything."
                 ),
             }
         # HARD GUARD: a reschedule may only cancel after the replacement is
