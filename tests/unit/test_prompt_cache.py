@@ -13,6 +13,7 @@ import asyncio
 import agent.livekit_minimal.agent as agent_mod
 from agent.livekit_minimal.agent import (
     _PROMPT_CACHE,
+    _cached_content_tool_dicts,
     _cached_primary_llm,
     _decode_branch_faq,
     _prompt_cache_redis_key,
@@ -90,6 +91,28 @@ def test_create_prompt_cache_never_raises(monkeypatch):
     key = ("b", "te", "d", "abc")
     asyncio.run(agent_mod._create_prompt_cache(key, "P", []))
     assert key not in _PROMPT_CACHE
+
+
+def test_cached_content_tools_are_plain_vertex_dicts():
+    """Production google-genai must not receive LiveKit/Pydantic tool objects."""
+    from agent.livekit_minimal.agent import VachanamAgent
+    from agent.services.meta_stub import MetaService
+    from agent.session_state import SessionState
+
+    schema_agent = VachanamAgent(
+        instructions="schema",
+        state=SessionState(),
+        db=None,
+        room=None,
+        calendar_service=None,
+        meta_service=MetaService(),
+        transfer_to="",
+    )
+    tools = _cached_content_tool_dicts(schema_agent.tools)
+    assert tools and all(isinstance(tool, dict) for tool in tools)
+    declarations = tools[0]["function_declarations"]
+    confirm = next(item for item in declarations if item["name"] == "confirm_booking")
+    assert "patient_phone" not in confirm["parameters"]["properties"]
 
 
 def test_proactive_warmer_covers_active_clinics_and_saved_languages():

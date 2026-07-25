@@ -1325,6 +1325,20 @@ _PROMPT_CACHE_PENDING: set[tuple[str, str, str, str]] = set()
 _PROMPT_CACHE_REDIS_TTL_S = 25 * 60 * 60
 
 
+def _cached_content_tool_dicts(tools) -> list[dict]:
+    """Convert LiveKit tools to plain Vertex declarations for cache creation.
+
+    The live google-genai validator rejected the plugin's Pydantic Tool objects
+    after a schema change, even though ordinary live requests accepted them.
+    Plain dictionaries are stable across those compatible package versions.
+    """
+    from livekit.agents.llm import ToolContext
+    from livekit.plugins.google.utils import create_tools_config
+
+    configured = create_tools_config(ToolContext(list(tools)))
+    return [tool.model_dump(mode="json", exclude_none=True) for tool in configured]
+
+
 def _prompt_cache_key(
     branch_id, lang_code: str, instructions: str = ""
 ) -> tuple[str, str, str, str]:
@@ -1398,10 +1412,7 @@ async def _create_prompt_cache(key, instructions: str, tools) -> bool:
         _, project = vertex
         from google import genai
         from google.genai import types as gt
-        from livekit.agents.llm import ToolContext
-        from livekit.plugins.google.utils import create_tools_config
-
-        tools_cfg = create_tools_config(ToolContext(list(tools)))
+        tools_cfg = _cached_content_tool_dicts(tools)
         client = genai.Client(vertexai=True, project=project, location="asia-south1")
         cache = await client.aio.caches.create(
             model="gemini-2.5-flash",
