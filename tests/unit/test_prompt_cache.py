@@ -14,6 +14,7 @@ import agent.livekit_minimal.agent as agent_mod
 from agent.livekit_minimal.agent import (
     _PROMPT_CACHE,
     _cached_content_tool_dicts,
+    _flatten_cached_content_tools,
     _cached_primary_llm,
     _decode_branch_faq,
     _prompt_cache_redis_key,
@@ -113,6 +114,20 @@ def test_cached_content_tools_are_plain_vertex_dicts():
     declarations = tools[0]["function_declarations"]
     confirm = next(item for item in declarations if item["name"] == "confirm_booking")
     assert "patient_phone" not in confirm["parameters"]["properties"]
+
+
+def test_cached_content_tool_normalizer_accepts_nested_plugin_shape():
+    class FakeTool:
+        def model_dump(self, **_):
+            return {"function_declarations": [{"name": "confirm_booking"}]}
+
+    class FakeToolConfig:
+        def model_dump(self, **_):
+            return {"function_calling_config": {"mode": "AUTO"}}
+
+    assert _flatten_cached_content_tools([[FakeTool()], FakeToolConfig()]) == [
+        {"function_declarations": [{"name": "confirm_booking"}]}
+    ]
 
 
 def test_proactive_warmer_covers_active_clinics_and_saved_languages():

@@ -1325,6 +1325,26 @@ _PROMPT_CACHE_PENDING: set[tuple[str, str, str, str]] = set()
 _PROMPT_CACHE_REDIS_TTL_S = 25 * 60 * 60
 
 
+def _flatten_cached_content_tools(configured) -> list[dict]:
+    """Flatten plugin-version tool containers into Vertex declaration dicts."""
+    out: list[dict] = []
+    for item in configured if isinstance(configured, (list, tuple)) else [configured]:
+        if isinstance(item, (list, tuple)):
+            out.extend(_flatten_cached_content_tools(item))
+            continue
+        if isinstance(item, dict):
+            dumped = item
+        elif hasattr(item, "model_dump"):
+            dumped = item.model_dump(mode="json", exclude_none=True)
+        else:
+            continue
+        # This agent has function tools only. Ignore a sibling ToolConfig that
+        # older plugin builds may return beside the list of Tool objects.
+        if dumped.get("function_declarations"):
+            out.append(dumped)
+    return out
+
+
 def _cached_content_tool_dicts(tools) -> list[dict]:
     """Convert LiveKit tools to plain Vertex declarations for cache creation.
 
@@ -1336,7 +1356,7 @@ def _cached_content_tool_dicts(tools) -> list[dict]:
     from livekit.plugins.google.utils import create_tools_config
 
     configured = create_tools_config(ToolContext(list(tools)))
-    return [tool.model_dump(mode="json", exclude_none=True) for tool in configured]
+    return _flatten_cached_content_tools(configured)
 
 
 def _prompt_cache_key(
