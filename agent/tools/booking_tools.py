@@ -1496,6 +1496,53 @@ async def recognize_caller_name(
     return next(iter(distinct)) if len(distinct) == 1 else None
 
 
+def _normalize_name(name: str | None) -> str:
+    """Lowercase, strip honorifics/particles, collapse whitespace — so a spoken
+    name matches the stored one across STT/politeness noise ('Mr. Ravi Kumar
+    garu' → 'ravi kumar')."""
+    n = " ".join((name or "").lower().split())
+    for token in ("mr", "mrs", "ms", "dr", "sri", "smt", "garu", "gaaru", "ji", "sir", "madam"):
+        n = n.replace(f"{token} ", " ").replace(f" {token}", " ")
+    return " ".join(n.split())
+
+
+async def caller_name_matches(
+    branch_id: UUID, phone: str | None, spoken_name: str | None, db: AsyncSession
+) -> bool:
+    """True if the caller's spoken name matches a patient stored on THIS number.
+
+    The second factor for the caller-ID (ANI) trust gap: the inbound SIP number
+    is spoofable, so before any booking readback or cancel/reschedule the caller
+    must name the patient on file. Matched against EVERY patient on the number
+    (branch-scoped, RULE 1) so a legitimate family member on a shared phone
+    passes with their own name. A too-short spoken name (< 2 chars) never
+    matches. Bidirectional containment tolerates the caller giving a first name
+    only vs. a full stored name.
+    """
+    digits = _phone_digits(phone)
+    spoken = _normalize_name(spoken_name)
+    if len(digits) < 10 or len(spoken) < 2:
+        return False
+    last10 = digits[-10:]
+    rows = (
+        await db.execute(
+            select(Patient.name).where(
+                and_(Patient.branch_id == branch_id, Patient.phone.like(f"%{last10}"))
+            )
+        )
+    ).all()
+    for (stored_raw,) in rows:
+        stored = _normalize_name(stored_raw)
+        if not stored:
+            continue
+        if spoken == stored or spoken in stored or stored in spoken:
+            return True
+        # token overlap: any shared name-part (handles word-order / partial STT)
+        if set(spoken.split()) & set(stored.split()):
+            return True
+    return False
+
+
 async def get_preferred_language(
     branch_id: UUID, phone: str | None, db: AsyncSession
 ) -> str | None:

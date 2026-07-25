@@ -51,6 +51,33 @@ def _contains_pii_key(metadata: dict | None, action: str) -> str | None:
     return None
 
 
+def _contains_pii_value(metadata: dict | None, action: str) -> str | None:
+    """Return the offending key if any string VALUE carries detectable PII.
+
+    The key denylist above stops PII in metadata KEYS but never inspected the
+    values, so a benign key ({"detail": "call 9666444428, priya@x.com"}) could
+    persist a phone/email/age straight into the append-only AuditLog and the
+    structlog JSON. This closes that gap with the same fail-loud contract.
+
+    Detects phone / email / age via the existing de-identify regexes; the noisy
+    5+-digit run is deliberately IGNORED so alphanumeric IDs with a digit run
+    (Razorpay pay_/order_ ids) are not false-flagged. login.failure's "email"
+    value stays allowed (spec §8.2 forensic exception).
+    """
+    if not metadata:
+        return None
+    from backend.services import deidentify
+
+    for key, value in metadata.items():
+        if not isinstance(value, str):
+            continue
+        if action == "user.login.failure" and key.lower() == "email":
+            continue
+        if any(k != "long_digits" for k in deidentify.find_pii(value)):
+            return key
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Core write helper
 # ---------------------------------------------------------------------------
@@ -87,6 +114,12 @@ async def write_audit_row(
         raise ValueError(
             f"PII denylist violation: metadata key '{offending}' is forbidden "
             f"for action='{action}' (contains banned word from PII_DENYLIST)"
+        )
+    offending_value = _contains_pii_value(metadata, action)
+    if offending_value:
+        raise ValueError(
+            f"PII denylist violation: metadata value under key '{offending_value}' "
+            f"contains detectable PII (phone/email/age) for action='{action}'"
         )
 
     try:

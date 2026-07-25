@@ -119,6 +119,7 @@ from agent.tools.booking_tools import (  # noqa: E402
     _branch_now,
     assign_token,
     booking_is_upcoming,
+    caller_name_matches,
     check_availability,
     confirm_booking,
     find_bookings_by_phone,
@@ -699,6 +700,25 @@ KNOWN_CALLER_BOOKING_EXTRA = (
     "Never ask for, accept, repeat, or pass another phone number. Multiple "
     "family members may have separate appointments on this same caller number "
     "on the same day."
+)
+
+# SEC (ANI spoofing): by default the cold-open greeting does NOT speak a
+# recognised caller's stored name — the inbound caller ID is spoofable, and a
+# free name disclosure both leaks PII to a spoofer and would hand them the
+# second factor that verify_caller_identity relies on. Set VOICE_GREET_BY_NAME=1
+# to restore greet-by-name (accepting that residual risk knowingly).
+_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"
+
+# Name-free counterpart to KNOWN_CALLER_BOOKING_EXTRA, used when greet-by-name
+# is off: the model knows the number is an existing patient's but must NOT state
+# or assume a name, and must verify identity before touching a booking.
+KNOWN_CALLER_NO_NAME_EXTRA = (
+    "\n\nCALLER IDENTIFICATION: this number belongs to an EXISTING patient, but "
+    "do NOT state or assume their name — the greeting did not use it. Greet them "
+    "warmly as a returning caller and ask how you can help. If they want to check "
+    "or change an existing appointment, you MUST first confirm the name the "
+    "booking is under and call verify_caller_identity before reading out or "
+    "changing anything."
 )
 
 REBOOK_PROMPT_EXTRA = (
@@ -2420,6 +2440,39 @@ class VachanamAgent(Agent):
         }
 
     @function_tool()
+    async def verify_caller_identity(self, context: RunContext, name: str) -> dict:
+        """Confirm WHO you are speaking to before any existing-booking action.
+        Call this with the name the caller gives when you ask who the
+        appointment is under. The inbound caller ID by itself is NOT proof of
+        identity (it can be spoofed), so find_my_bookings, get_queue_status,
+        reschedule and cancel stay locked until this succeeds. On a match,
+        continue warmly with what they asked. On a mismatch, ask once more for
+        the exact name on the booking; if it still does not match, offer to take
+        a message — never read out or change a booking for an unverified caller."""
+        _require_caller_phone(self._state)  # no caller ID → cannot verify
+        matched = await caller_name_matches(
+            self._state.branch_id, self._state.patient_phone, name, self._db
+        )
+        if matched:
+            self._state.identity_verified = True
+            return {
+                "verified": True,
+                "instruction": (
+                    "Identity confirmed. Continue with what they asked — you may "
+                    "now read back or change their booking."
+                ),
+            }
+        return {
+            "verified": False,
+            "instruction": (
+                "That name does not match our record for this number. Ask once "
+                "more for the exact full name the appointment is under. If it "
+                "still does not match, do NOT read out or change any booking — "
+                "offer to take a message for the clinic instead."
+            ),
+        }
+
+    @function_tool()
     async def find_my_bookings(self, context: RunContext) -> dict:
         """Look up the caller's bookings: upcoming confirmed ones AND recently
         clinic-cancelled ones (doctor leave). Matches by the number they are
@@ -2430,12 +2483,26 @@ class VachanamAgent(Agent):
         calls are about — never tell such a patient they have no booking;
         offer to rebook it instead."""
         _guard_human_booking(self._state)
+        phone, _ = _require_caller_phone(self._state)
+        # SEC (ANI spoofing): the caller ID is not proof of identity. Do not
+        # disclose any booking until the caller has named the patient on file
+        # (verify_caller_identity). The greeting no longer speaks that name, so
+        # it stays a genuine second factor.
+        if not self._state.identity_verified:
+            return {
+                "needs_verification": True,
+                "instruction": (
+                    "Do NOT reveal any appointment details yet. Ask for the full "
+                    "name the appointment is booked under, then call "
+                    "verify_caller_identity with that name. Only after it succeeds "
+                    "may you read back or change a booking."
+                ),
+            }
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
         # the #279 upfront existing-booking surface so it doesn't flag the very
         # booking being moved (FIXLOG #281).
         _say_wait_filler(context)  # slow: booking lookup (#361 dead air; silent-minute 07-20)
         self._state.existing_booking_intent = True
-        phone, _ = _require_caller_phone(self._state)
         rows = await find_bookings_by_phone(self._state.branch_id, phone, self._db)
         confirmed_rows = [r for r in rows if r[0].status == "confirmed"]
         if len(confirmed_rows) == 1:
@@ -2472,6 +2539,17 @@ class VachanamAgent(Agent):
         Token-queue doctors only — for a slot-doctor booking just restate
         their appointment time from find_my_bookings instead."""
         _guard_human_booking(self._state)
+        # SEC (ANI spoofing): queue position discloses the patient's name — gate
+        # it behind identity verification, same as find_my_bookings.
+        if not self._state.identity_verified:
+            return {
+                "needs_verification": True,
+                "instruction": (
+                    "Do NOT reveal any booking or queue detail yet. Ask for the "
+                    "full name the appointment is booked under, then call "
+                    "verify_caller_identity with that name first."
+                ),
+            }
         result = await queue_position_by_phone(
             self._state.branch_id, self._state.patient_phone, self._db
         )
@@ -2756,6 +2834,20 @@ class VachanamAgent(Agent):
         this instead of manual assign/confirm/cancel for every reschedule.
         new_time (HH:MM) required only for schedule (appointment) doctors."""
         _guard_human_booking(self._state)
+        # SEC (ANI spoofing): never move an unverified caller's booking — the
+        # caller ID is spoofable, so a spoofer could silently deny care. Require
+        # verify_caller_identity first (find_my_bookings already forces it before
+        # the caller could learn a token_id, this is the belt-and-braces gate).
+        if not self._state.identity_verified:
+            return {
+                "success": False,
+                "error": "identity_not_verified",
+                "instruction": (
+                    "Confirm who you are speaking to first: ask for the name the "
+                    "appointment is under and call verify_caller_identity before "
+                    "rescheduling anything."
+                ),
+            }
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
@@ -3009,6 +3101,18 @@ class VachanamAgent(Agent):
         cancel manually for a reschedule, the NEW booking must already be
         confirmed."""
         _guard_human_booking(self._state)
+        # SEC (ANI spoofing): never cancel an unverified caller's booking —
+        # denial-of-care via spoofed caller ID. Require verify_caller_identity.
+        if not self._state.identity_verified:
+            return {
+                "success": False,
+                "error": "identity_not_verified",
+                "instruction": (
+                    "Confirm who you are speaking to first: ask for the name the "
+                    "appointment is under and call verify_caller_identity before "
+                    "cancelling anything."
+                ),
+            }
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
         # the old appointment, and left the patient with nothing.
@@ -4024,10 +4128,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # asked "who are you?". Only when nothing ambiguous is on file.
                 if caller_greeting_name is None and not caller_prompt_extra:
                     if _known:
-                        caller_greeting_name = _known
-                        caller_prompt_extra = KNOWN_CALLER_BOOKING_EXTRA.format(
-                            name=_known
-                        )
+                        if _GREET_BY_NAME:
+                            caller_greeting_name = _known
+                            caller_prompt_extra = KNOWN_CALLER_BOOKING_EXTRA.format(
+                                name=_known
+                            )
+                        else:
+                            # SEC: recognise them but keep the name unspoken.
+                            caller_prompt_extra = KNOWN_CALLER_NO_NAME_EXTRA
+                # SEC (ANI spoofing): unless greet-by-name is explicitly enabled,
+                # never speak a recognised INBOUND caller's stored name in the
+                # cold open — it is a free PII disclosure to a caller-ID spoofer
+                # and would leak the name that verify_caller_identity checks.
+                if not _GREET_BY_NAME:
+                    caller_greeting_name = None
                 # MISSED-CALL CALLBACK: if this caller has a pending follow-up the
                 # doctor scheduled, the agent proactively raises the doctor's question
                 # + offers the booking (instead of a plain inbound). Booking marks the

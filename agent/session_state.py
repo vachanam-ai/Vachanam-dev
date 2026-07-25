@@ -82,6 +82,14 @@ class SessionState:
     # (FIXLOG #281, live call 2026-07-06).
     existing_booking_intent: bool = False
 
+    # Caller identity verification (SEC: ANI/caller-ID spoofing). The inbound
+    # SIP caller ID alone is NOT proof of identity — Indian PSTN has no
+    # STIR/SHAKEN, so it is spoofable. Before reading back any booking detail or
+    # cancelling/rescheduling, the caller must confirm the patient name on file
+    # (verify_caller_identity), which flips this True. The cold-open greeting no
+    # longer speaks the stored name, so the name stays a real second factor.
+    identity_verified: bool = False
+
     # Set when the caller is booking for someone else (friend/family). Like the
     # flag above, it suppresses the caller's own ALREADY_BOOKED surface — a
     # friend's slot has nothing to do with the caller's own booking that day

@@ -213,9 +213,12 @@ async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
 
 
 class DeleteAccountRequest(BaseModel):
-    # Password for password accounts; Google-only accounts type DELETE instead.
+    # Password for password accounts; Google-only accounts must re-verify a
+    # FRESH Google ID token (id_token) AND type DELETE — a stolen session alone
+    # must not suffice to destroy the clinic (parity with the password step-up).
     password: str | None = None
     confirm: str | None = None
+    id_token: str | None = None  # Google re-verification for password-less accounts
 
 
 @router.post("/delete-account", dependencies=[Depends(default_limit)])
@@ -249,8 +252,29 @@ async def delete_account(
             if not (body.password and _verify_password(body.password, me.password_hash)):
                 await record_failed_login(client_ip)
                 raise HTTPException(status_code=401, detail="Password incorrect")
-        elif (body.confirm or "").strip().upper() != "DELETE":
-            raise HTTPException(status_code=422, detail='Type DELETE to confirm')
+        else:
+            # Google-only account (no password): the typed DELETE is a UI guard,
+            # not authentication. Re-verify a FRESH Google ID token so a stolen
+            # session cannot destroy the clinic on its own (SEC: parity with the
+            # password step-up — the old code trusted the session + a constant).
+            if (body.confirm or "").strip().upper() != "DELETE":
+                raise HTTPException(status_code=422, detail='Type DELETE to confirm')
+            if not settings.google_oauth_client_id:
+                raise HTTPException(status_code=401, detail="OAuth not configured")
+            if not body.id_token:
+                raise HTTPException(
+                    status_code=401, detail="Google re-verification required to delete"
+                )
+            try:
+                info = google_id_token.verify_oauth2_token(
+                    body.id_token, google_requests.Request(), settings.google_oauth_client_id
+                )
+            except ValueError:
+                await record_failed_login(client_ip)
+                raise HTTPException(status_code=401, detail="Invalid Google token")
+            if (info.get("email") or "").lower() != (me.email or "").lower():
+                await record_failed_login(client_ip)
+                raise HTTPException(status_code=401, detail="Google account does not match")
 
         org = (
             await db.execute(select(_Org).where(_Org.id == uuid_mod.UUID(current_user.org_id)))

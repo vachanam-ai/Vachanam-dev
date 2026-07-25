@@ -452,24 +452,29 @@ async def health() -> dict:
     return out
 
 
-def _diag_guard(request: Request) -> None:
+async def _diag_guard(request: Request) -> None:
     """SEC #7/#11: the detailed diagnostics below leak recon (live-call volume,
     the exact resolved rate-limit key + CF headers = an oracle for crafting a
     spoofed IP, Redis reachability). Harmless in dev, but in PRODUCTION they
-    must require an admin JWT. Non-prod stays open for easy debugging."""
+    must require an admin JWT. Non-prod stays open for easy debugging.
+
+    Routes through get_current_user (not a bare jwt.decode) so a LOGGED-OUT or
+    password-reset admin token is rejected here too — the inline decode skipped
+    the Redis revocation set and the token_version check, so a revoked admin
+    bearer kept working on these endpoints until its natural 8h exp."""
     if settings.app_env != "production":
         return
-    import jwt
-    from jwt import PyJWTError as JWTError
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from backend.middleware.auth_middleware import get_current_user
 
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Admin token required")
-    try:
-        payload = jwt.decode(auth[7:], settings.jwt_secret, algorithms=["HS256"])
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    if not (payload.get("is_admin") or payload.get("role") == "super_admin"):
+    user = await get_current_user(
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth[7:])
+    )
+    if not (user.is_admin or user.role == "super_admin"):
         raise HTTPException(status_code=403, detail="Admin only")
 
 
