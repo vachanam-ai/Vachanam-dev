@@ -12,7 +12,14 @@
 > DID's static Soniox intro is now proactively cached alongside its clinic
 > prompt, removing the less-used-number cold greeting. Proof: 43 focused unit,
 > 10 affected integration, and the complete 786-test unit suite passed.
-> Production deployment and startup cache evidence are pending.
+> Commits `472bbe4`, `af97738`, and `4748bcd` are on `origin/master`; Fly v182
+> is started in `bom`. Production startup reported
+> `greeting_cache_warm_complete clinics=2 requested=4 ready=4`, created all
+> four 9,583–9,962-token Vertex caches, and reported
+> `prompt_cache_warm_complete clinics=2 requested=4 ready=4`. Inference and
+> voice subprocesses initialized successfully; runtime topology is Fly `bom`,
+> LiveKit `india-west`, Vertex `asia-south1`, and Soniox STT/TTS `jp`, with no
+> v182 startup, prompt-cache, or traceback errors.
 
 > **2026-07-25 — POML v17 + CLINIC-WIDE PROMPT CACHE (PRODUCTION — Fly v179).**
 > Vinay's updated prompt is 94,575 characters—4.5× the prior 21,039-character
