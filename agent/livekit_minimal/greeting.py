@@ -327,6 +327,21 @@ async def _greeting_cache_set(key: str, wavs: list[bytes]) -> None:
         logger.warning("greeting_cache_write_failed", error=str(e)[:120])
 
 
+async def warm_greeting_cache(
+    key: str, texts: list[str], voice_id: str, lang_code: str
+) -> bool:
+    """Ensure one static greeting is synthesized before a caller needs it."""
+    if await _greeting_cache_get(key) is not None:
+        return True
+    try:
+        wavs = await synth_wavs(texts, voice_id, lang_code)
+        await _greeting_cache_set(key, wavs)
+        return True
+    except Exception as e:  # noqa: BLE001 — background warm never breaks calls
+        logger.warning("greeting_cache_warm_failed", key=key, error=str(e)[:160])
+        return False
+
+
 async def synth_and_play(
     room: rtc.Room, texts: list[str], voice_id: str, lang_code: str,
     t_answer: float | None = None, cache_key: str | None = None,

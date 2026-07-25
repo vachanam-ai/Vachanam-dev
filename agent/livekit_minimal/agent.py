@@ -103,6 +103,7 @@ from agent.livekit_minimal.greeting import (  # noqa: E402
     play_wavs,
     synth_and_play,
     synth_wavs,
+    warm_greeting_cache,
 )
 from agent.livekit_minimal.turn_trace import (  # noqa: E402
     TurnLatencyTrace,
@@ -111,6 +112,7 @@ from agent.livekit_minimal.turn_trace import (  # noqa: E402
 from agent.services.tts_sanitizer import (  # noqa: E402
     internal_trace_match,
     sanitize_for_tts,
+    strip_model_control_tokens,
 )
 from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
@@ -157,7 +159,6 @@ MAX_PATIENT_NAME_LEN = 120
 MAX_COMPLAINT_LEN = 500
 MIN_PATIENT_AGE = 0
 MAX_PATIENT_AGE = 120
-MAX_DIFFERENT_PERSON_BOOKINGS_PER_CALL = 2
 
 # Spoken hardcoded lines (greetings, fillers, service-blocked, reminder/rebook,
 # caps) now live per-language in agent/i18n/lines.py and are resolved per call
@@ -429,31 +430,6 @@ def _silence_action(elapsed: float, prompts_sent: int) -> str | None:
     return "prompt" if prompts_sent < due else None
 
 
-def _phone_override_error(
-    caller_phone: str | None, patient_phone: str | None, different_person: bool
-) -> str | None:
-    """Vinay 2026-07-03 live test: a DICTATED different number sent with
-    different_person=false was silently discarded (iter1 #11 keeps a caller's
-    own booking on their caller-ID) and the booking landed on the caller's own
-    number. That combination is always a mistake — return the LLM-facing error
-    so the tool fails loudly and the model self-corrects with
-    different_person=true. None = combination is fine."""
-    if not patient_phone or different_person:
-        return None
-    caller_d = "".join(ch for ch in (caller_phone or "") if ch.isdigit())[-10:]
-    given_d = "".join(ch for ch in patient_phone if ch.isdigit())[-10:]
-    if caller_d and given_d and given_d != caller_d:
-        return (
-            "You passed a phone number DIFFERENT from the caller's own "
-            "number, but different_person=false. A caller's own booking "
-            "always uses the number they are calling from. If this "
-            "booking is for SOMEONE ELSE (a family member), call "
-            "confirm_booking again with different_person=true, that "
-            "person's name and age, and this patient_phone."
-        )
-    return None
-
-
 # Carry a trailing digit run so a phone split across LLM chunks
 # ("96664" + "44428") is recognized as one number. Other numbers are left
 # untouched for Soniox to speak naturally in the active language.
@@ -555,6 +531,7 @@ async def _guard_internal_speech_stream(text):
     dropping = False
     async for chunk in text:
         pending += chunk
+        pending = strip_model_control_tokens(pending)
         while pending:
             if dropping:
                 boundary = _SPEECH_BOUNDARY.search(pending)
@@ -576,6 +553,7 @@ async def _guard_internal_speech_stream(text):
                 break
             yield pending[:-_SPEECH_GUARD_CARRY]
             pending = pending[-_SPEECH_GUARD_CARRY:]
+    pending = strip_model_control_tokens(pending)
     if pending and not dropping and not internal_trace_match(pending):
         yield pending
 
@@ -628,6 +606,49 @@ def _availability_caller_phone(state) -> str | None:
     return state.patient_phone
 
 
+def _require_caller_phone(state: SessionState) -> tuple[str, str]:
+    """Return the verified SIP caller ID and its canonical last ten digits."""
+    phone = state.patient_phone or ""
+    digits = "".join(ch for ch in phone if ch.isdigit())
+    if len(digits) < 10:
+        raise ToolError(
+            "Caller ID is unavailable, so appointments cannot be read or changed "
+            "on this call. Ask the caller to call again without hiding caller ID."
+        )
+    return phone, digits[-10:]
+
+
+_PEER_AGENT_IDENTITIES = (
+    "ai assistant",
+    "ఏఐ అసిస్టెంట్",
+    "ai అసిస్టెంట్",
+    "ai असिस्टेंट",
+    "एआई असिस्टेंट",
+)
+_PEER_AGENT_HELP_ASKS = (
+    "how can i help",
+    "నేను మీకు ఎలా హెల్ప్",
+    "मैं आपकी क्या मदद",
+    "क्या मदद करूँ",
+)
+
+
+def _looks_like_peer_voice_agent(text: str) -> bool:
+    """Recognize our own receptionist opening when another agent is on the line."""
+    normalized = " ".join((text or "").casefold().split())
+    return any(x in normalized for x in _PEER_AGENT_IDENTITIES) and any(
+        x in normalized for x in _PEER_AGENT_HELP_ASKS
+    )
+
+
+def _guard_human_booking(state: SessionState) -> None:
+    if state.peer_agent_detected:
+        raise ToolError(
+            "Another automated clinic assistant is speaking on this line. Stay in "
+            "the receptionist role and do not access or change any appointments."
+        )
+
+
 def _voice_for_lang(branch, lang_code: str) -> str:
     """The TTS voice_id to speak `lang_code` for this branch: the clinic's chosen
     tts_voice, else the language's catalog default (RULE 8 — a language the
@@ -672,17 +693,12 @@ KNOWN_CALLER_BOOKING_EXTRA = (
     "them as {name}. Take only the concern (route_to_doctor) and their "
     "preferred time, then confirm_booking with patient_name='{name}' and "
     "different_person=false.\n"
-    "- FOR SOMEONE ELSE: take that person's NAME and AGE. Then ask ONE "
-    "question about the number: should the booking be on THIS number they are "
-    "calling from, or on that person's own number? (e.g. 'ఈ నంబర్ మీదే బుక్ "
-    "చేయమంటారా, లేక వాళ్ళ నంబర్ వేరే ఉందా?'). If they say this number (or have "
-    "no other), omit patient_phone — it defaults to the caller's number. If "
-    "they give a different number, apply the PHONE NUMBER RULES (exactly 10 "
-    "digits; read it back in English digits and get a YES before booking) and "
-    "pass it as patient_phone. confirm_booking MUST then be called with "
-    "different_person=true — with different_person=false the other number is "
-    "REJECTED and the booking fails. Then confirm_booking with that person's "
-    "name and age and different_person=true."
+    "- FOR SOMEONE ELSE: take that person's NAME and AGE, then call "
+    "confirm_booking with different_person=true. Every booking, including every family "
+    "member's booking, ALWAYS uses the verified number this call came from. "
+    "Never ask for, accept, repeat, or pass another phone number. Multiple "
+    "family members may have separate appointments on this same caller number "
+    "on the same day."
 )
 
 REBOOK_PROMPT_EXTRA = (
@@ -2054,6 +2070,7 @@ class VachanamAgent(Agent):
         """Atomically reserve the next token for doctor+date. Call only after
         check_availability confirms capacity AND the patient agrees to the date.
         appointment_time (HH:MM) only for slot-type doctors."""
+        _guard_human_booking(self._state)
         # assign_token is a Redis INCR — fast; a filler here is just noise (#429).
         result = await assign_token(
             doctor_id=await self._resolve_doctor_id(doctor_id),
@@ -2105,7 +2122,6 @@ class VachanamAgent(Agent):
         # question sounded robotic and added a turn. Follow-up calls are part
         # of the service; default True, LLM never collects it.
         followup_consent: bool = True,
-        patient_phone: str | None = None,
         appointment_time: str | None = None,
         patient_age: int | None = None,
         patient_gender: str | None = None,
@@ -2119,10 +2135,10 @@ class VachanamAgent(Agent):
         """Finalize the booking AFTER the patient explicitly confirms. Writes the
         token to the database and creates the calendar event. patient_name is the
         PATIENT being seen (may differ from the caller — family bookings);
-        patient_phone defaults to the caller's number when omitted.
+        The verified incoming caller number is always used; no override exists.
         patient_gender: 'male' | 'female' | 'other' if known.
-        different_person: True ONLY when the caller explicitly books for a
-        DIFFERENT family member who already has a booking that day."""
+        different_person: True when the caller books for a different family
+        member; several family members may book on the same caller number."""
         # Booking touches the DB + writes the calendar (the slowest step) — cover
         # that beat with a spoken filler so the patient never hears dead air mid-
         # booking. Non-blocking + fully guarded (never affects the booking).
@@ -2153,42 +2169,10 @@ class VachanamAgent(Agent):
                 f"patient_age out of range ({MIN_PATIENT_AGE}-{MAX_PATIENT_AGE})."
             )
 
-        # iter1 #11: phone defaults to the VERIFIED caller-ID. Only honor an
-        # LLM-passed override when different_person=True (an explicit family
-        # booking for someone else); a caller's own booking is ALWAYS attributed
-        # to the number they dialed from, never an LLM-asserted phone.
-        #
-        # Vinay 2026-07-03 live test: the caller DICTATED a different number for
-        # a family member but the LLM sent different_person=false — the override
-        # was silently discarded and the booking landed on the caller's own
-        # number/record. A dictated-different number with different_person=false
-        # is ALWAYS a mistake, so fail loudly and let the LLM self-correct
-        # instead of booking the wrong phone.
-        _override_err = _phone_override_error(
-            self._state.patient_phone, patient_phone, different_person
-        )
-        if _override_err:
-            raise ToolError(_override_err)
-        if different_person and patient_phone:
-            phone = patient_phone
-        else:
-            phone = self._state.patient_phone
-
-        # iter1 #11: cap family bookings per call so a hijacked/looping model
-        # can't mass-book different people under one caller-ID.
-        if different_person and (
-            self._state.different_person_bookings
-            >= MAX_DIFFERENT_PERSON_BOOKINGS_PER_CALL
-        ):
-            logger.warning(
-                "different_person_booking_cap_hit count=%d session=%s",
-                self._state.different_person_bookings,
-                self._state.session_id,
-            )
-            raise ToolError(
-                "Too many separate family bookings on one call. Please call "
-                "again for additional family members."
-            )
+        # Caller ID is the authorization boundary. Family members remain
+        # separate patient rows but share the verified incoming phone number.
+        _guard_human_booking(self._state)
+        phone, _ = _require_caller_phone(self._state)
 
         resolved = await self._resolve_doctor_id(doctor_id)
         parsed_date = self._parse_date(booking_date)
@@ -2305,9 +2289,6 @@ class VachanamAgent(Agent):
             # blocked by ALREADY_BOOKED on the booking just made (Vinay
             # 2026-07-07, FIXLOG #284).
             self._state.existing_booking_intent = True
-            if different_person:
-                # iter1 #11: count only CONFIRMED family bookings toward the cap.
-                self._state.different_person_bookings += 1
             if self._state.followup_task_id:
                 # Cascade-rebook call achieved its goal — stop the retry loop.
                 await self._complete_followup_task("rebooked_on_call")
@@ -2408,26 +2389,22 @@ class VachanamAgent(Agent):
         }
 
     @function_tool()
-    async def find_my_bookings(
-        self, context: RunContext, phone_number: str | None = None
-    ) -> dict:
+    async def find_my_bookings(self, context: RunContext) -> dict:
         """Look up the caller's bookings: upcoming confirmed ones AND recently
         clinic-cancelled ones (doctor leave). Matches by the number they are
-        calling from automatically — do NOT ask for their number first. Only
-        pass phone_number if the search came back empty AND the patient says
-        the booking was made with a different number. Use when the patient
+        calling from automatically — do NOT ask for or accept another number.
+        Use when the patient
         wants to reschedule, cancel, or asks about an existing/previous
         appointment. status='cancelled_by_clinic' bookings are what rebook
         calls are about — never tell such a patient they have no booking;
         offer to rebook it instead."""
+        _guard_human_booking(self._state)
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
         # the #279 upfront existing-booking surface so it doesn't flag the very
         # booking being moved (FIXLOG #281).
         _say_wait_filler(context)  # slow: booking lookup (#361 dead air; silent-minute 07-20)
         self._state.existing_booking_intent = True
-        phone = phone_number or self._state.patient_phone
-        if not phone:
-            return {"bookings": [], "note": "caller number unknown — ask for the booking phone number"}
+        phone, _ = _require_caller_phone(self._state)
         rows = await find_bookings_by_phone(self._state.branch_id, phone, self._db)
         confirmed_rows = [r for r in rows if r[0].status == "confirmed"]
         if len(confirmed_rows) == 1:
@@ -2463,6 +2440,7 @@ class VachanamAgent(Agent):
         "ఎన్నో నంబర్ నడుస్తోంది?"). Matches the number they are calling from.
         Token-queue doctors only — for a slot-doctor booking just restate
         their appointment time from find_my_bookings instead."""
+        _guard_human_booking(self._state)
         result = await queue_position_by_phone(
             self._state.branch_id, self._state.patient_phone, self._db
         )
@@ -2746,6 +2724,7 @@ class VachanamAgent(Agent):
         and only after the new booking is confirmed cancels the old one. Use
         this instead of manual assign/confirm/cancel for every reschedule.
         new_time (HH:MM) required only for schedule (appointment) doctors."""
+        _guard_human_booking(self._state)
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
@@ -2769,6 +2748,8 @@ class VachanamAgent(Agent):
     ) -> dict:
         from backend.models.schema import Token
 
+        _, caller_last10 = _require_caller_phone(self._state)
+
         try:
             old_uuid = UUID(old_token_id)
         except ValueError:
@@ -2783,6 +2764,7 @@ class VachanamAgent(Agent):
                     and_(
                         Token.id == old_uuid,
                         Token.branch_id == self._state.branch_id,  # RULE 1
+                        _PatientModel.phone.like(f"%{caller_last10}"),
                     )
                 )
             )
@@ -2995,6 +2977,7 @@ class VachanamAgent(Agent):
         for reschedules PREFER the reschedule_booking tool (atomic). If you do
         cancel manually for a reschedule, the NEW booking must already be
         confirmed."""
+        _guard_human_booking(self._state)
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
         # the old appointment, and left the patient with nothing.
@@ -3055,7 +3038,9 @@ class VachanamAgent(Agent):
         reschedule_booking after their preconditions hold."""
         from sqlalchemy import and_ as _and
 
-        from backend.models.schema import Token
+        from backend.models.schema import Patient, Token
+
+        _, caller_last10 = _require_caller_phone(self._state)
 
         try:
             token_uuid = UUID(token_id)
@@ -3065,8 +3050,14 @@ class VachanamAgent(Agent):
                 "reminder metadata."
             ) from None
         result = await self._db.execute(
-            select(Token).where(
-                _and(Token.id == token_uuid, Token.branch_id == self._state.branch_id)
+            select(Token)
+            .join(Patient, Token.patient_id == Patient.id)
+            .where(
+                _and(
+                    Token.id == token_uuid,
+                    Token.branch_id == self._state.branch_id,
+                    Patient.phone.like(f"%{caller_last10}"),
+                )
             )
         )
         token = result.scalar_one_or_none()
@@ -4678,6 +4669,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         def _trace_transcript(ev) -> None:
             if getattr(ev, "is_final", False):
                 _turn_trace.mark_final_transcript()
+                transcript = getattr(ev, "transcript", "") or ""
+                if _looks_like_peer_voice_agent(transcript):
+                    state.peer_agent_detected = True
+                    logger.warning(
+                        "peer_voice_agent_detected session=%s mutations_blocked=true",
+                        state.session_id,
+                    )
             else:
                 # interim: tracks the caller's last recognizable sound so the
                 # VAD silence hangover (last word -> VAD end) is measurable.
@@ -5622,7 +5620,7 @@ async def _warm_all_clinic_prompt_caches() -> None:
     try:
         branches = await conn.fetch(
             """
-            SELECT b.id::text, b.name, b.name_spoken, b.language, b.address,
+            SELECT b.id::text, b.name, b.name_spoken, b.language, b.tts_voice, b.address,
                    b.faq, b.emergency_contact, COALESCE(o.plan, 'clinic') AS plan
             FROM branches b
             JOIN organizations o ON o.id = b.org_id
@@ -5674,6 +5672,41 @@ async def _warm_all_clinic_prompt_caches() -> None:
         if code in serviceable:
             languages_by_branch.setdefault(row["branch_id"], set()).add(code)
 
+    # First-audio cache has priority over the larger Vertex prompt warm. A new
+    # deployment may accept a call while this background loop is still running.
+    greeting_requested = 0
+    greeting_ready = 0
+    for row in branches:
+        language = row["language"] if row["language"] in serviceable else DEFAULT_LANG
+        voice = (row["tts_voice"] or "").strip() or get_lang(language).default_voice
+        clinic_name = (row["name_spoken"] or row["name"] or "").strip()
+        intro = inbound_greeting_texts(language, clinic_name, recording_active=False)
+        intro_key = _greeting_cache_key(
+            row["id"], language, _greeting_voice_key(voice), intro
+        )
+        greeting_requested += 1
+        greeting_ready += int(
+            await warm_greeting_cache(intro_key, intro, voice, language)
+        )
+        if settings.recording_allowed:
+            notice = get_recording_notice(language)
+            notice_key = _greeting_cache_key(
+                "recording-notice",
+                language,
+                _greeting_voice_key(voice),
+                [notice],
+            )
+            greeting_requested += 1
+            greeting_ready += int(
+                await warm_greeting_cache(notice_key, [notice], voice, language)
+            )
+    logger.info(
+        "greeting_cache_warm_complete clinics=%d requested=%d ready=%d",
+        len(branches),
+        greeting_requested,
+        greeting_ready,
+    )
+
     schema_agent = VachanamAgent(
         instructions="prompt-cache tool schema",
         state=SessionState(),
@@ -5717,7 +5750,6 @@ async def _warm_all_clinic_prompt_caches() -> None:
         requested,
         ready,
     )
-
 
 def _start_prompt_cache_warmer() -> None:
     """Warm immediately and refresh before the daily/digest cache rolls over."""

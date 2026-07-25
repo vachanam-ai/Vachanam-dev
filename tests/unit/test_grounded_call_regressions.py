@@ -52,6 +52,11 @@ def test_whole_text_sanitizer_removes_tool_trace_but_keeps_safe_sentence():
     assert "సరే" in out and "మీ అపాయింట్‌మెంట్ మారింది" in out
 
 
+def test_whole_text_sanitizer_removes_response_control_labels():
+    assert sanitize_for_tts("response_start సరే అండి.") == "సరే అండి."
+    assert sanitize_for_tts("[response_end]") == ""
+
+
 @pytest.mark.asyncio
 async def test_stream_guard_catches_marker_split_across_chunks():
     async def chunks():
@@ -61,6 +66,16 @@ async def test_stream_guard_catches_marker_split_across_chunks():
     out = "".join([part async for part in _guard_internal_speech_stream(chunks())])
     assert "Executing" not in out and "calendar" not in out and "new_date" not in out
     assert "సరే" in out and "మార్చాను" in out
+
+
+@pytest.mark.asyncio
+async def test_stream_guard_strips_split_response_start_but_keeps_reply():
+    async def chunks():
+        for chunk in ("respon", "se_sta", "rt\n", "సరే అండి."):
+            yield chunk
+
+    out = "".join([part async for part in _guard_internal_speech_stream(chunks())])
+    assert out == "సరే అండి."
 
 
 def test_soniox_context_includes_specialties_and_medical_terms():

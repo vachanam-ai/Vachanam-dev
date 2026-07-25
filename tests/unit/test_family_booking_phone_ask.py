@@ -1,8 +1,4 @@
-"""#365 (Vinay real call 2026-07-14): "book for my father tomorrow" booked to
-the CALLER's number with no ask. For different-person bookings the agent must
-ask ONE whose-number question before the final readback; self-bookings never
-get that question.
-"""
+"""Family bookings always share the verified incoming caller number."""
 from agent.prompts.system_prompt import build_system_prompt
 
 
@@ -13,25 +9,22 @@ def _prompt():
     )
 
 
-def test_whose_number_question_exists_for_family_bookings():
+def test_family_booking_never_asks_for_another_number():
     p = _prompt()
-    assert 'Ask "this number or theirs" ONLY for someone else\'s booking' in p
+    assert "ALWAYS the verified incoming" in p
+    assert "Never ask for, accept, read back, or pass another number" in p
 
 
-def test_self_bookings_never_get_the_question():
+def test_no_whose_number_question_remains():
     p = _prompt()
-    assert 'Ask "this number or theirs" ONLY for someone else\'s booking' in p
+    assert 'Ask "this number or theirs"' not in p
 
 
-def test_one_confirmation_rule_carves_out_the_exception():
+def test_one_confirmation_rule_survives():
     p = _prompt()
-    assert "whose-number ask and the dictated digit" in p
-    # the single-confirmation principle itself must survive
     assert "EXACTLY ONE yes-question" in p
 
 
-def test_dictated_number_still_hard_gated():
-    # a different number given for the patient must go through the digit
-    # read-back gate — the whose-number rule defers to PHONE NUMBER RULES
+def test_multiple_family_members_explicitly_allowed():
     p = _prompt()
-    assert "no\n   confirm_booking on a dictated number until they said yes" in p
+    assert "Multiple family members may book separate same-day appointments" in p

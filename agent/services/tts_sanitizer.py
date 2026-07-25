@@ -13,6 +13,18 @@ _INTERNAL_TRACE = re.compile(
     r"route_to_doctor|assign_token|find_my_bookings|get_queue_status)\b)"
 )
 
+# Model/provider transport labels are not speech.  Some Gemini routes emitted
+# this exact token before otherwise valid replies; strip only the label so the
+# patient-facing sentence is preserved (unlike the fail-closed tool guard).
+_MODEL_CONTROL_TOKEN = re.compile(
+    r"(?i)(?:<|\[)?\s*response_(?:start|end)\s*(?:>|\])?\s*:?[ \t\r\n]*"
+)
+
+
+def strip_model_control_tokens(text: str) -> str:
+    """Remove non-spoken response boundary labels from model output."""
+    return _MODEL_CONTROL_TOKEN.sub("", text or "")
+
 
 def internal_trace_match(text: str):
     """Return the first private-execution marker in speech, if present."""
@@ -174,6 +186,7 @@ def spoken_phone_digits(text: str) -> str:
 
 
 def sanitize_for_tts(text: str) -> str:
+    text = strip_model_control_tokens(text)
     text = strip_internal_tool_speech(text)
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)

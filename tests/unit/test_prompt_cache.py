@@ -99,6 +99,8 @@ def test_proactive_warmer_covers_active_clinics_and_saved_languages():
     assert "supported_codes" in src
     assert "recording_variants" in src
     assert "_create_prompt_cache" in src
+    assert "warm_greeting_cache" in src
+    assert "tts_voice" in src
 
 
 def test_raw_database_faq_is_normalized_without_breaking_warmup():

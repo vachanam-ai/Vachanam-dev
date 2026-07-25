@@ -1,9 +1,8 @@
 """iter1 #11 + #19: confirm_booking must not blindly trust the LLM.
 
 Guards proven here (all at the VachanamAgent.confirm_booking tool boundary):
-  - patient_phone defaults to the VERIFIED caller-ID; an LLM-passed phone is only
-    honored when different_person=True.
-  - a 3rd different_person (family) booking on one call is refused (cap = 2).
+  - patient_phone is not in the tool schema; every booking uses caller-ID.
+  - multiple family members can book on one call and share caller-ID.
   - oversized patient_name / complaint and out-of-range patient_age are rejected.
 """
 from datetime import date, timedelta
@@ -94,39 +93,11 @@ def _state(branch_id):
     return s
 
 
-async def test_phone_override_without_flag_is_rejected_loudly(clinic, db, redis):
-    """#11 + FIXLOG #240: a same-person booking may NEVER be re-attributed to an
-    LLM-passed phone. Previously the override was DISCARDED SILENTLY and the
-    booking landed on the caller-ID — Vinay's 2026-07-03 live test showed that
-    silently swallows a real 'book on a different number' request (the family
-    number the caller dictated vanished). Now the mismatch fails LOUDLY with a
-    ToolError telling the model to retry with different_person=true; no booking
-    and no forged-phone patient row are created either way."""
-    import pytest as _pytest
-    from livekit.agents.llm import ToolError
+async def test_phone_override_is_absent_from_tool_schema(clinic, db, redis):
+    import inspect
 
-    branch, doc = clinic["branch"], clinic["doc"]
-    state = _state(branch.id)
-    agent = _agent(state, db)
-
-    with _pytest.raises(ToolError, match="different_person=true"):
-        await agent.confirm_booking(
-            context=None,
-            doctor_id=str(doc.id),
-            patient_name="Caller Self",
-            complaint="fever",
-            booking_date=_tomorrow().isoformat(),
-            token_number=1,
-            followup_consent=False,
-            patient_phone="+910000000000",  # LLM-asserted, different_person False
-            patient_age=30,
-            different_person=False,
-        )
-    # the forged LLM phone must NOT have created a patient
-    forged = (
-        await db.execute(select(Patient).where(Patient.phone == "+910000000000"))
-    ).scalar_one_or_none()
-    assert forged is None
+    agent = _agent(_state(clinic["branch"].id), db)
+    assert "patient_phone" not in inspect.signature(agent.confirm_booking).parameters
 
 
 async def test_confirm_sets_existing_booking_intent_for_same_call_change(clinic, db, redis):
@@ -151,7 +122,6 @@ async def test_confirm_sets_existing_booking_intent_for_same_call_change(clinic,
         booking_date=_tomorrow().isoformat(),
         token_number=1,
         followup_consent=False,
-        patient_phone=None,  # defaults to caller-ID
         patient_age=30,
     )
     assert r.get("success"), r
@@ -160,16 +130,13 @@ async def test_confirm_sets_existing_booking_intent_for_same_call_change(clinic,
     assert _availability_caller_phone(state) is None
 
 
-async def test_third_different_person_booking_refused(clinic, db, redis):
-    """#11: the 3rd family booking on one call is refused (cap = 2)."""
-    from livekit.agents.llm import ToolError
-
+async def test_three_family_bookings_share_verified_caller_id(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     state = _state(branch.id)
     agent = _agent(state, db)
     day = _tomorrow().isoformat()
 
-    for i in range(2):
+    for i in range(3):
         # fresh hold each booking
         state.token_held = False
         r = await agent.confirm_booking(
@@ -180,26 +147,15 @@ async def test_third_different_person_booking_refused(clinic, db, redis):
             booking_date=day,
             token_number=1,
             followup_consent=False,
-            patient_phone="+919000000001",
             patient_age=20 + i,
             different_person=True,
         )
         assert r.get("success"), r
-
-    state.token_held = False
-    with pytest.raises(ToolError):
-        await agent.confirm_booking(
-            context=None,
-            doctor_id=str(doc.id),
-            patient_name="Family 3",
-            complaint="fever",
-            booking_date=day,
-            token_number=1,
-            followup_consent=False,
-            patient_phone="+919000000001",
-            patient_age=40,
-            different_person=True,
-        )
+    patients = (
+        await db.execute(select(Patient).where(Patient.branch_id == branch.id))
+    ).scalars().all()
+    assert {p.name for p in patients} == {"Family 0", "Family 1", "Family 2"}
+    assert {p.phone for p in patients} == {state.patient_phone}
 
 
 async def test_oversized_name_rejected(clinic, db, redis):

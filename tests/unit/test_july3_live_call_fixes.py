@@ -10,7 +10,6 @@ from agent.livekit_minimal.agent import (
     KNOWN_CALLER_BOOKING_EXTRA,
     VachanamAgent,
     _availability_caller_phone,
-    _phone_override_error,
 )
 from agent.prompts.system_prompt import build_system_prompt
 from agent.session_state import SessionState
@@ -18,41 +17,28 @@ from agent.session_state import SessionState
 CALLER = "+918096007554"
 
 
-# ── Fix A: dictated different number + different_person=false must FAIL LOUDLY ──
+# ── Caller ID is now the only booking phone ──
 
-def test_different_number_without_flag_is_rejected():
-    err = _phone_override_error(CALLER, "+919666444428", different_person=False)
-    assert err is not None
-    assert "different_person=true" in err
+def test_confirm_booking_schema_has_no_phone_override():
+    import inspect
 
-
-def test_same_number_or_flagged_passes():
-    # Caller's own number restated -> fine.
-    assert _phone_override_error(CALLER, CALLER, False) is None
-    # Same last-10 in a different format -> fine.
-    assert _phone_override_error(CALLER, "8096007554", False) is None
-    # No phone passed -> fine (defaults to caller).
-    assert _phone_override_error(CALLER, None, False) is None
-    # Family booking with the flag -> the override is honored, no error.
-    assert _phone_override_error(CALLER, "+919666444428", True) is None
-    # No caller-ID (rare) -> nothing to compare, don't block.
-    assert _phone_override_error(None, "+919666444428", False) is None
+    assert "patient_phone" not in inspect.signature(VachanamAgent.confirm_booking).parameters
 
 
 # ── Fix B: read-back hard gate in the prompt ──
 
-def test_prompt_gates_dictated_numbers_behind_readback():
+def test_prompt_forbids_dictated_booking_numbers():
     p = build_system_prompt(
         clinic_name="Test", doctors=[], emergency_contact="9",
         plan="clinic", language="te",
     )
-    assert "HARD GATE" in p
-    assert "until they said yes to its digit readback" in p
+    assert "Never ask for, accept, read back, or pass another number" in p
 
 
 def test_known_caller_extra_warns_flag_is_mandatory():
     low = KNOWN_CALLER_BOOKING_EXTRA.format(name="Ravi").lower()
-    assert "different_person=false the other number is rejected" in low
+    assert "always uses the verified number this call came from" in low
+    assert "never ask for, accept, repeat, or pass another phone number" in low
 
 
 # ── Fix C: language-switch handoff carries the conversation history ──

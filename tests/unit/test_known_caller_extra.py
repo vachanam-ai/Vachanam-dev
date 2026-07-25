@@ -22,12 +22,8 @@ def test_extra_relation_word_skips_the_question():
     assert "do not ask" in low.replace("n't", "not") or "not ask" in low
 
 
-def test_extra_asks_this_number_or_new_number():
-    """Vinay 2026-07-03 case 1: for a family booking, ask ONE question — book on
-    the calling number or the person's own number; a given number follows the
-    10-digit read-back rules and is passed as patient_phone."""
+def test_extra_forces_verified_caller_number_for_family():
     low = KNOWN_CALLER_BOOKING_EXTRA.format(name="Ravi").lower()
-    assert "own number" in low
-    assert "patient_phone" in low
-    assert "phone number rules" in low
-    assert "10" in low  # exactly 10 digits rule referenced
+    assert "always uses the verified number this call came from" in low
+    assert "never ask for, accept, repeat, or pass another phone number" in low
+    assert "same caller number on the same day" in low

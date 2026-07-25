@@ -1,5 +1,19 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-25 — CALLER-ID PRIVACY + ROLE LOCK + ALL-DID FIRST-AUDIO FIX.**
+> Appointment authorization is now the verified incoming SIP number end to
+> end: booking and lookup tool schemas accept no alternate phone, and
+> reschedule/cancel require the token's patient phone to match the caller.
+> Separate family patients may share that number and book the same day with no
+> per-call cap. Another Vachanam-style receptionist opening permanently locks
+> private appointment reads and mutations for that call and the prompt keeps
+> the agent in the receptionist role. `response_start`/`response_end` are
+> stripped at both whole-text and chunked-stream TTS boundaries. Every active
+> DID's static Soniox intro is now proactively cached alongside its clinic
+> prompt, removing the less-used-number cold greeting. Proof: 43 focused unit,
+> 10 affected integration, and the complete 786-test unit suite passed.
+> Production deployment and startup cache evidence are pending.
+
 > **2026-07-25 — POML v17 + CLINIC-WIDE PROMPT CACHE (PRODUCTION — Fly v179).**
 > Vinay's updated prompt is 94,575 characters—4.5× the prior 21,039-character
 > prompt. The cache boundary is now the stable clinic prompt/roster/tools, not

@@ -93,3 +93,24 @@ async def test_no_cache_key_uses_live_path(monkeypatch):
     # httpx client path — just ensure the cache was never consulted.
     await g.synth_and_play(None, [], "v", "te", cache_key=None)
     assert touched["get"] == 0
+
+
+@pytest.mark.asyncio
+async def test_proactive_warm_synthesizes_and_stores_before_call(monkeypatch):
+    stored = {}
+
+    async def fake_get(key):
+        return None
+
+    async def fake_synth(texts, voice, lang):
+        return [b"WARM"]
+
+    async def fake_set(key, wavs):
+        stored[key] = wavs
+
+    monkeypatch.setattr(g, "_greeting_cache_get", fake_get)
+    monkeypatch.setattr(g, "synth_wavs", fake_synth)
+    monkeypatch.setattr(g, "_greeting_cache_set", fake_set)
+
+    assert await g.warm_greeting_cache("other-did", ["hi"], "Priya", "te")
+    assert stored == {"other-did": [b"WARM"]}
