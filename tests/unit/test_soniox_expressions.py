@@ -51,11 +51,12 @@ def test_prompt_teaches_job_scoped_expressions_and_phone_digit_rule():
                 "[hesitates]", "[confused]", "[sighs]", "[chuckles]",
                 "[pause]", "[long pause]"):
         assert tag in p, tag
-    assert "only these are ever earned" in p
-    assert "No other tag exists in this job" in p
-    assert "most replies carry neither instrument" in p
+    # v19 reworded the expressions block; the constraints survive verbatim below.
+    assert "only these:" in p                        # the closed tag allowlist
+    assert "No other tag exists" in p                # (was "...in this job")
+    assert "replies carry neither" in p              # (was "...neither instrument")
     assert "Never two emotions in one reply" in p
-    assert "No laughter over pain" in p or "NEVER LAUGH over pain" in p
+    assert "[chuckles] only if they" in p and "laughed first" in p  # no laughter over pain
     assert "PLAIN DIGITS" in p
     assert "runtime supplies the hold line" in p
     assert "never generate" in p
