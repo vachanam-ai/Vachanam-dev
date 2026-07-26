@@ -107,6 +107,20 @@ def test_switch_drift_guard_appends_new_language_lock():
     assert "do not copy" in text.lower()       # neutralises the old turns
 
 
+def test_telugu_style_turns_flag_wired():
+    """#465: VOICE_TELUGU_STYLE_TURNS=1 drops the semantic turn detector for ALL
+    languages (VAD + endpoint only, like Telugu) — a reversible latency experiment
+    for non-native English/Hindi where the native-trained model extends the wait."""
+    import inspect
+
+    import agent.livekit_minimal.agent as ag
+
+    assert hasattr(ag, "_TELUGU_STYLE_TURNS")
+    ep = inspect.getsource(ag.entrypoint)
+    # the flag OR the te-IN check both force turn_detection=None
+    assert "_TELUGU_STYLE_TURNS or lang_cfg.stt_code" in ep
+
+
 def test_switch_ack_preclip_wired():
     """#464: the switch ack is pre-synthesized once per worker (default voice) and
     replayed on switch, instead of a ~2.3s live cold-connect synth every switch."""

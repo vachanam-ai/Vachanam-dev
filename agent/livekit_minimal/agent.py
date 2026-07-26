@@ -739,6 +739,15 @@ _GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"
 # it instantly (no redeploy) if a live call shows it hurting more than helping.
 _SWITCH_DRIFT_GUARD = os.getenv("VOICE_SWITCH_DRIFT_GUARD", "1") != "0"
 
+# Turn detection: normally the LiveKit semantic end-of-turn model runs for the
+# languages it supports (English/Hindi) and Telugu/Tamil/Kannada/Marathi fall to
+# VAD + endpoint. VOICE_TELUGU_STYLE_TURNS=1 forces the Telugu behaviour on EVERY
+# language — drop the semantic model, decide turn-end from VAD + endpoint alone.
+# Hypothesis (Vinay 2026-07-26): the model, trained on native speakers, extends
+# the wait on the clinic's non-native English, so VAD-only may be faster for our
+# callers. Reversible env flip; measure lat_eou + cutoffs before making it default.
+_TELUGU_STYLE_TURNS = os.getenv("VOICE_TELUGU_STYLE_TURNS", "0") == "1"
+
 # Name-free counterpart to KNOWN_CALLER_BOOKING_EXTRA, used when greet-by-name
 # is off: the model knows the number is an existing patient's but must NOT state
 # or assume a name, and must verify identity before touching a booking.
@@ -4833,7 +4842,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # turn-end. Keep it only where it actually works.
             turn_handling={
                 "turn_detection": (
-                    None if lang_cfg.stt_code in ("te-IN",) else MultilingualModel()
+                    None
+                    if (_TELUGU_STYLE_TURNS or lang_cfg.stt_code in ("te-IN",))
+                    else MultilingualModel()
                 ),
                 "endpointing": {
                     "mode": "fixed",
@@ -6087,7 +6098,7 @@ def _prewarm(proc) -> None:
     logger.info(
         "voice_runtime livekit_agents=%s soniox_plugin=%s "
         "endpoint_level=%d max_endpoint_ms=%d sensitivity=%s manual_finalize_ms=%d "
-        "vad_silence_ms=%d preemptive_tts=true "
+        "vad_silence_ms=%d preemptive_tts=true turn_detection=%s "
         "recording_test_mode=%s recording_scope=admin_only",
         _pkg_version("livekit-agents"),
         _pkg_version("livekit-plugins-soniox"),
@@ -6096,6 +6107,7 @@ def _prewarm(proc) -> None:
         settings.soniox_endpoint_sensitivity,
         settings.soniox_manual_finalize_delay_ms,
         round(VAD_TURN_DETECTION_S * 1000),
+        "vad_only_all_langs" if _TELUGU_STYLE_TURNS else "semantic_where_supported",
         settings.recording_allowed,
     )
     logger.info(
