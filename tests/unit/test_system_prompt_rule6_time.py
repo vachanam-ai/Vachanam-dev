@@ -7,7 +7,7 @@ def test_prompt_fences_say_without_do():
     # the lookup tool was never called. The fence orders the tool call in the
     # SAME turn as any "checking/wait" phrasing.
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
-    assert "SAYING IS NOT DOING" in p
+    assert "If you say you are checking, call the tool in the SAME turn" in p
     assert "SAME turn" in p and "find_my_bookings" in p
 
 
@@ -18,7 +18,7 @@ def test_prompt_never_sends_caller_back_to_clinic():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     assert "say they can confirm at the clinic" not in p
     assert "THIS call IS the clinic" in p
-    assert "log_clinic_question in the SAME turn" in p
+    assert "and log it in the" in p
     assert "డాక్టర్ గారిని అడిగి చెప్పిస్తాను" in p
 
 

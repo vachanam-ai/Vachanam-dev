@@ -130,5 +130,5 @@ def test_prompt_pins_listed_name_rule():
             routing_keywords=["skin"], booking_type="appointment", is_default=True)],
         emergency_contact="x", plan="clinic", language="te",
     )
-    assert "TOOL CALLS TAKE THE LISTED NAME" in p
+    assert "the listed name or ID exactly" in p
     assert "NEVER" in p and "native-script" in p

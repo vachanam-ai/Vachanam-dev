@@ -29,14 +29,14 @@ def _prompt():
 def test_current_symptom_replaces_previous_route_in_prompt():
     p = _prompt()
     assert "Only the latest COMPLETE utterance sets the need" in p
-    assert "A new symptom replaces the old one" in p
+    assert "A new symptom replaces the old" in p
     assert "never reuse the prior doctor" in p
 
 
 def test_prompt_requires_panti_pani_contrastive_repair():
     p = _prompt()
     assert "పంటి సమస్యా, పని సమస్యా?" in p
-    assert "A correction\nvoids the old route" in p
+    assert "A correction voids the old" in p
 
 
 def test_reminder_prompt_has_no_speakable_tool_signature():

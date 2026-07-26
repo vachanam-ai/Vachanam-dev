@@ -48,5 +48,5 @@ def test_prompt_handles_garbled_switch_requests():
         plan="clinic", language="te", faq=None,
     )
     assert "any explicit ask" in p
-    assert "TWO consecutive\nCOMPLETE utterances wholly in another supported language" in p
+    assert "TWO consecutive COMPLETE utterances wholly in another supported language" in p
     assert "switch_language(code) at once" in p

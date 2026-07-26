@@ -42,10 +42,10 @@ def test_prompt_carries_switch_directive_in_all_languages():
         assert "switch_language" in p
         # Explicit-ask only — never speech auto-detect (2026-06-17 decision).
         assert "any explicit ask" in p
-        assert "DOES NOT SWITCH YOU: caller code-mixing" in p
+        assert "DOES NOT SWITCH YOU: code-mixing" in p
         # Live test 2026-07-03: the LLM spoke its own ack alongside the tool
         # call (double-voice) — the switch turn must be silent.
-        assert "no permission, no confirming first, no announcing it" in p
+        assert "no permission, no announcing" in p
 
 
 def test_solo_cap_copy_says_ten_minutes():

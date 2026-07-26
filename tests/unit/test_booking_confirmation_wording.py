@@ -19,5 +19,5 @@ def test_prompt_says_punctuality_message_only_after_booking_or_reschedule():
     prompt = build_system_prompt("Clinic", [], "", "clinic")
     flow = prompt.split("<flow>", 1)[1].split("</flow>", 1)[0]
     assert 'On success' in flow and 'close with "టైంకి రండి"' in flow
-    assert "RESCHEDULE:" in flow and 'Then "టైంకి రండి"' in flow
-    assert "AFTER:" in flow and 'no "టైంకి రండి"' in flow
+    assert "RESCHEDULE:" in flow and "టైంకి రండి" in flow.split("RESCHEDULE:", 1)[1].split("CANCEL", 1)[0]
+    assert "After:" in flow and 'no "టైంకి రండి"' in flow

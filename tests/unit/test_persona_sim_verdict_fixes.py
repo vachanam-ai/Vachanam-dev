@@ -59,7 +59,7 @@ def test_taken_slot_offers_nearest_not_full_windows():
     """Asked 2 PM (taken, inside hours) → agent recited the full working-hour
     table. Inside hours: offer the NEAREST free time; windows only outside."""
     p = _prompt()
-    assert "NEAREST free time" in p
+    assert "nearest free time" in p
     assert "రెండున్నరకి ఉంది" in p
 
 

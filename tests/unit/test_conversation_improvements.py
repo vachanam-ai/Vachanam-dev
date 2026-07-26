@@ -22,7 +22,7 @@ def test_prompt_teaches_fragment_patience():
     full re-prompt — caller felt talked over. Fragments are not turns."""
     p = _prompt()
     assert "Fragments and trailing-off thoughts are not turns" in p
-    assert "do NOT repeat\nyour full question" in p
+    assert "don't repeat your full question" in p
 
 
 def test_prompt_teaches_language_gap_recovery():

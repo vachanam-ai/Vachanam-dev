@@ -117,4 +117,4 @@ def test_t3_prompt_has_faq_gap_fallback():
     assert "log_clinic_question" in prompt
     # #418 rewording: the agent itself checks with the doctor and the clinic
     # calls back — never "confirm at the clinic".
-    assert "check with the doctor and the clinic will get back" in prompt
+    assert "డాక్టర్ గారిని అడిగి చెప్పిస్తాను" in prompt

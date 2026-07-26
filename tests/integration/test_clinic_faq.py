@@ -107,11 +107,11 @@ def test_prompt_injects_answered_faq_only():
             {"q": "Sunday open?", "a": ""},          # unanswered -> skipped
         ],
     )
-    assert "CLINIC FAQ" in prompt
+    assert "clinic_faq" in prompt
     assert "Rs 300" in prompt
     assert "Sunday open?" not in prompt
     # grounding directive present
-    assert "Never contradict or extend" in prompt
+    assert "never contradict or extend" in prompt
 
 
 def test_prompt_no_faq_no_block():
