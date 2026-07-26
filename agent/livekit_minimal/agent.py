@@ -650,6 +650,30 @@ def _guard_human_booking(state: SessionState) -> None:
         )
 
 
+def _append_switch_drift_guard(chat_ctx, code: str) -> None:
+    """Append a recency-salient language-lock as the LAST item of the history a
+    language switch carries across the handoff.
+
+    The switch itself works, but the carried history is entirely old-language
+    turns; by recency they outweigh the system prompt's anti-drift rule and the
+    model reverts within 1-2 turns (Vinay live 2026-07-26; the drift is a known,
+    documented failure — see the module docstring). A directive placed at the
+    very end of the context is the last thing read before the next generation,
+    so it fights the old turns on their own recency footing. No-op on a missing
+    context (a switch without history still beats no switch)."""
+    if chat_ctx is None:
+        return
+    name = get_lang(code).name
+    chat_ctx.add_message(
+        role="user",
+        content=(
+            f"[The caller asked to continue in {name}. Every reply from here is "
+            f"in {name} only. The turns above are earlier history in another "
+            f"language — do not copy their language, script, or phrasing.]"
+        ),
+    )
+
+
 def _voice_for_lang(branch, lang_code: str) -> str:
     """The TTS voice_id to speak `lang_code` for this branch: the clinic's chosen
     tts_voice, else the language's catalog default (RULE 8 — a language the
@@ -708,6 +732,12 @@ KNOWN_CALLER_BOOKING_EXTRA = (
 # second factor that verify_caller_identity relies on. Set VOICE_GREET_BY_NAME=1
 # to restore greet-by-name (accepting that residual risk knowingly).
 _GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"
+
+# On a language switch, append a recency-salient language-lock to the carried
+# history so the old-language turns cannot pull the model back (see
+# _append_switch_drift_guard). On by default; VOICE_SWITCH_DRIFT_GUARD=0 disables
+# it instantly (no redeploy) if a live call shows it hurting more than helping.
+_SWITCH_DRIFT_GUARD = os.getenv("VOICE_SWITCH_DRIFT_GUARD", "1") != "0"
 
 # Name-free counterpart to KNOWN_CALLER_BOOKING_EXTRA, used when greet-by-name
 # is off: the model knows the number is an existing patient's but must NOT state
@@ -2775,6 +2805,17 @@ class VachanamAgent(Agent):
         except Exception as e:  # noqa: BLE001 — a switch without history still beats no switch
             logger.warning("chat_ctx_copy_failed: %s", e)
             _cc = None
+        # DRIFT GUARD (Vinay live report 2026-07-26: the switch fires, then the
+        # agent reverts to the OLD language within 1-2 turns). The carried history
+        # is entirely old-language turns; by recency it outweighs the system
+        # prompt's anti-drift rule (a known, documented failure — see the module
+        # docstring). Counter it with a recency-salient directive as the LAST ctx
+        # item so the very next generation reads it immediately before answering.
+        if _SWITCH_DRIFT_GUARD:
+            try:
+                _append_switch_drift_guard(_cc, code)
+            except Exception:  # noqa: BLE001 — reminder is best-effort, switch anyway
+                pass
         new_agent = self._agent_factory(code, chat_ctx=_cc)
         # PRE-SYNTHESIZE THE FULL ACK before the handoff (upgraded from the
         # old "ok" prime, FIXLOG #362 — Vinay 2026-07-14: audible gap between

@@ -80,3 +80,38 @@ def test_voice_for_lang_ignores_legacy_cloned_voices():
     ])
     assert _voice_for_lang(b, "te") == "padmaja"
     assert _voice_for_lang(b, "en") == "padmaja"
+
+
+def _last_text(chat_ctx):
+    c = chat_ctx.items[-1].content
+    return c if isinstance(c, str) else " ".join(c)
+
+
+def test_switch_drift_guard_appends_new_language_lock():
+    """Vinay live 2026-07-26: switch fires then reverts to the old language in
+    1-2 turns. The carried history (old language) is countered by a recency-
+    salient lock appended as the LAST ctx item, naming the NEW language."""
+    from livekit.agents.llm import ChatContext
+    from agent.livekit_minimal.agent import _append_switch_drift_guard
+
+    cc = ChatContext.empty()
+    cc.add_message(role="assistant", content="పంటి సమస్యా అండి? సరే.")  # old (te) turn
+    cc.add_message(role="user", content="can you speak in english")
+    _append_switch_drift_guard(cc, "en")
+
+    last = cc.items[-1]
+    text = _last_text(cc)
+    assert last.role == "user"                 # rides as the freshest turn
+    assert "English" in text                   # names the NEW language
+    assert "only" in text.lower()              # a hard lock, not a hint
+    assert "do not copy" in text.lower()       # neutralises the old turns
+
+
+def test_switch_drift_guard_uses_target_language_name_and_is_noop_on_none():
+    from livekit.agents.llm import ChatContext
+    from agent.livekit_minimal.agent import _append_switch_drift_guard
+
+    cc = ChatContext.empty()
+    _append_switch_drift_guard(cc, "hi")
+    assert get_lang("hi").name in _last_text(cc)   # "Hindi", not a code
+    _append_switch_drift_guard(None, "hi")         # missing ctx must not raise
