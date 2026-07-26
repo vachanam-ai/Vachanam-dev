@@ -2757,6 +2757,11 @@ class VachanamAgent(Agent):
                 "Language switching is not available on this call. Apologise "
                 "and continue in the current language."
             )
+        # #463 switch-latency instrumentation: stage timing → lat:last_switch
+        # (Redis 24h) + a log line, so a slow switch names its culprit stage
+        # instead of being guess-tuned (per the latency guardrails).
+        import time as _perf
+        _t0 = _perf.monotonic()
         # Persist the mapping FIRST (survives even if the handoff has trouble):
         # all patient rows on this phone, branch-scoped. 0 rows = caller not on
         # record yet — state.preferred_language makes confirm_booking stamp it
@@ -2774,6 +2779,7 @@ class VachanamAgent(Agent):
                 pass
         self._state.preferred_language = code
         self._state.language = code
+        _t_db = _perf.monotonic()
         # Spoken fillers must match the new language immediately. The CACHED
         # PCM clips are still the OLD language's audio — drop them NOW or
         # _say_lookup_filler keeps replaying Telugu "సరే అండి…" after a switch
@@ -2817,6 +2823,7 @@ class VachanamAgent(Agent):
             except Exception:  # noqa: BLE001 — reminder is best-effort, switch anyway
                 pass
         new_agent = self._agent_factory(code, chat_ctx=_cc)
+        _t_build = _perf.monotonic()
         # PRE-SYNTHESIZE THE FULL ACK before the handoff (upgraded from the
         # old "ok" prime, FIXLOG #362 — Vinay 2026-07-14: audible gap between
         # switch and the new voice). Same cold-connect absorption as before,
@@ -2866,6 +2873,31 @@ class VachanamAgent(Agent):
                 sp.interrupt()
         except Exception:  # noqa: BLE001
             pass
+        # #463: stage breakdown so a slow switch names its culprit. db =
+        # set_preferred_language write, build = _agent_for_lang (compose + STT +
+        # TTS + LLM-cache lookup), synth = ack pre-synthesis + interrupt.
+        _t_end = _perf.monotonic()
+        logger.info(
+            "lat_switch total=%.2fs db=%.2fs build=%.2fs synth=%.2fs to=%s",
+            _t_end - _t0, _t_db - _t0, _t_build - _t_db, _t_end - _t_build, code,
+        )
+
+        async def _stash_switch_lat() -> None:
+            try:
+                from backend.redis_client import get_redis
+
+                _r = await get_redis()
+                await _r.set("lat:last_switch", json.dumps({
+                    "total": round(_t_end - _t0, 2),
+                    "db": round(_t_db - _t0, 2),
+                    "build": round(_t_build - _t_db, 2),
+                    "synth": round(_t_end - _t_build, 2),
+                    "to": code,
+                }), ex=86400)
+            except Exception:  # noqa: BLE001 — telemetry must never touch the call
+                pass
+
+        asyncio.create_task(_stash_switch_lat())
         # Return the Agent ALONE (no result payload): livekit generates a
         # post-tool reply only when the tool returned an output
         # (generation.make_tool_output: reply_required = fnc_out is not None).
