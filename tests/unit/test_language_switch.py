@@ -107,6 +107,24 @@ def test_switch_drift_guard_appends_new_language_lock():
     assert "do not copy" in text.lower()       # neutralises the old turns
 
 
+def test_switch_ack_preclip_wired():
+    """#464: the switch ack is pre-synthesized once per worker (default voice) and
+    replayed on switch, instead of a ~2.3s live cold-connect synth every switch."""
+    import inspect
+
+    import agent.livekit_minimal.agent as ag
+
+    assert hasattr(ag, "_prewarm_switch_ack_clips")
+    assert isinstance(ag._SWITCH_ACK_CLIPS, dict)
+    sw = inspect.getsource(ag.VachanamAgent.__dict__["switch_language"])
+    assert "_SWITCH_ACK_CLIPS.get(code)" in sw          # cache lookup on switch
+    assert "_switch_ack_frames = _cached_ack" in sw     # replay cached frames
+    # the live pre-synth is now gated on the cache miss
+    assert '_switch_ack_frames", None) is None' in sw
+    ep = inspect.getsource(ag.entrypoint)
+    assert "_prewarm_switch_ack_clips()" in ep and "_switch_ack_clips_started" in ep
+
+
 def test_switch_drift_guard_uses_target_language_name_and_is_noop_on_none():
     from livekit.agents.llm import ChatContext
     from agent.livekit_minimal.agent import _append_switch_drift_guard

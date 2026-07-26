@@ -1109,6 +1109,40 @@ def _prewarm_soniox_tts(proc) -> None:
         logger.warning("prewarm_soniox_tts_failed: %s", e)
 
 
+# #464 (Vinay live 2026-07-26: switch felt ~5s; lat_switch showed synth=2.33s).
+# The switch-language ACK is a FIXED sentence per language, yet we synthesized its
+# full ~2s of audio LIVE on a cold Soniox connection on the switch critical path.
+# Pre-synthesize the acks ONCE per worker (default voice) and replay the frames on
+# switch — instant, and still smooth (the #362 reason the pre-synth exists). A
+# custom-voice clinic (none today) simply falls back to live synth.
+_SWITCH_ACK_CLIPS: dict[str, list] = {}
+_switch_ack_clips_started = False
+
+
+async def _prewarm_switch_ack_clips() -> None:
+    """Synthesize + cache the switch-ack audio for every serviceable language in
+    the default voice. Best-effort: any failure leaves that language to live-synth."""
+    for lc in supported_codes():
+        if lc in _SWITCH_ACK_CLIPS:
+            continue
+        try:
+            text = sanitize_for_tts(get_switch_ack(lc) or "")
+            if not text:
+                continue
+            tts = _build_soniox_tts(settings.soniox_tts_default_voice, get_lang(lc).tts_code)
+            frames: list = []
+            async with asyncio.timeout(15):
+                async for ev in tts.synthesize(text):
+                    f = getattr(ev, "frame", None)
+                    if f is not None:
+                        frames.append(f)
+            if frames:
+                _SWITCH_ACK_CLIPS[lc] = frames
+        except Exception as e:  # noqa: BLE001 — best-effort; live-synth is the fallback
+            logger.warning("switch_ack_preclip_failed lang=%s: %s", lc, str(e)[:120])
+    logger.info("switch_ack_clips_ready langs=%s", list(_SWITCH_ACK_CLIPS))
+
+
 # #442 replaces the unsafe combined #394/#396 experiment with isolated,
 # reversible controls. Production starts at semantic latency level 1 only;
 # sensitivity stays unset; the 200ms silence-gated manual-finalize path is the
@@ -2824,6 +2858,14 @@ class VachanamAgent(Agent):
                 pass
         new_agent = self._agent_factory(code, chat_ctx=_cc)
         _t_build = _perf.monotonic()
+        # #464: replay the pre-cached ack (default voice ≈ every clinic) instead
+        # of the ~2.3s live cold-connect synth below. A custom-voice clinic's TTS
+        # voice won't match, so it falls through to the live pre-synth.
+        _cached_ack = _SWITCH_ACK_CLIPS.get(code)
+        _cache_tts = getattr(new_agent, "_tts_override", None)
+        if _cached_ack and getattr(getattr(_cache_tts, "_opts", None), "voice", None) == \
+                _resolve_soniox_voice(settings.soniox_tts_default_voice):
+            new_agent._switch_ack_frames = _cached_ack
         # PRE-SYNTHESIZE THE FULL ACK before the handoff (upgraded from the
         # old "ok" prime, FIXLOG #362 — Vinay 2026-07-14: audible gap between
         # switch and the new voice). Same cold-connect absorption as before,
@@ -2833,7 +2875,7 @@ class VachanamAgent(Agent):
         try:
             _new_tts = getattr(new_agent, "_tts_override", None)
             _ack_text = sanitize_for_tts(getattr(new_agent, "_switch_ack", "") or "")
-            if _new_tts is not None and _ack_text:
+            if getattr(new_agent, "_switch_ack_frames", None) is None and _new_tts is not None and _ack_text:
                 frames = []
                 async with asyncio.timeout(8):
                     async for ev in _new_tts.synthesize(_ack_text):
@@ -3622,6 +3664,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     _greet_prep_task = (
         asyncio.create_task(_outbound_greet_prep()) if outbound_number else None
     )
+
+    # #464: warm the switch-ack clips once per worker (background) so a later
+    # language switch replays them instead of a ~2.3s live cold-connect synth.
+    global _switch_ack_clips_started
+    if not _switch_ack_clips_started:
+        _switch_ack_clips_started = True
+        asyncio.create_task(_prewarm_switch_ack_clips())
 
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
