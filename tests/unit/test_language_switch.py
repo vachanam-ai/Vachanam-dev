@@ -141,6 +141,21 @@ def test_switch_ack_preclip_wired():
     assert "_prewarm_switch_ack_clips()" in ep and "_switch_ack_clips_started" in ep
 
 
+def test_switch_drift_guard_trims_long_history():
+    """#466: a long old-language history is trimmed to a recent window on switch
+    so it can't out-vote the new language; the lock is still the last item."""
+    from livekit.agents.llm import ChatContext
+    from agent.livekit_minimal.agent import _append_switch_drift_guard, _SWITCH_CTX_KEEP
+
+    cc = ChatContext.empty()
+    for i in range(30):
+        cc.add_message(role="assistant", content=f"పంటి {i}")  # 30 old (te) turns
+    _append_switch_drift_guard(cc, "en")
+    # kept window + the appended lock
+    assert len(cc.items) <= _SWITCH_CTX_KEEP + 1
+    assert "English" in _last_text(cc)  # lock is last
+
+
 def test_switch_drift_guard_uses_target_language_name_and_is_noop_on_none():
     from livekit.agents.llm import ChatContext
     from agent.livekit_minimal.agent import _append_switch_drift_guard

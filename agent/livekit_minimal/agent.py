@@ -663,6 +663,17 @@ def _append_switch_drift_guard(chat_ctx, code: str) -> None:
     context (a switch without history still beats no switch)."""
     if chat_ctx is None:
         return
+    # #466: the appended lock alone lost to a LONG old-language history (Vinay
+    # 2026-07-26: English calls broke back into Telugu). Also TRIM the carried
+    # turns to a recent window so the old-language mass can't out-vote the new
+    # language — the booking flow survives on SessionState (doctor/slot/name/step),
+    # so only stale conversational turns are cut, and the recent window keeps the
+    # pending question + last exchange intact.
+    try:
+        if len(chat_ctx.items) > _SWITCH_CTX_KEEP:
+            chat_ctx.truncate(max_items=_SWITCH_CTX_KEEP)
+    except Exception:  # noqa: BLE001 — trimming is best-effort
+        pass
     name = get_lang(code).name
     chat_ctx.add_message(
         role="user",
@@ -747,6 +758,11 @@ _SWITCH_DRIFT_GUARD = os.getenv("VOICE_SWITCH_DRIFT_GUARD", "1") != "0"
 # the wait on the clinic's non-native English, so VAD-only may be faster for our
 # callers. Reversible env flip; measure lat_eou + cutoffs before making it default.
 _TELUGU_STYLE_TURNS = os.getenv("VOICE_TELUGU_STYLE_TURNS", "0") == "1"
+
+# On a language switch, keep only the most recent this-many conversation turns in
+# the carried history (the rest is old-language mass that drags the model back —
+# #466). Tunable via env without a redeploy.
+_SWITCH_CTX_KEEP = int(os.getenv("VOICE_SWITCH_CTX_KEEP", "8"))
 
 # Name-free counterpart to KNOWN_CALLER_BOOKING_EXTRA, used when greet-by-name
 # is off: the model knows the number is an existing patient's but must NOT state
