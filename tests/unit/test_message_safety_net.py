@@ -34,7 +34,9 @@ def test_teardown_net_present_and_guarded():
 
 
 def test_prompt_forbids_promise_before_tool():
-    assert "SAYING IS NOT DOING" in PROMPT_SRC
+    # v19 dropped the "SAYING IS NOT DOING" label; the rule now reads
+    # "Never send or promise ... from speech" + "claim delivery only after success".
+    assert "Never send or promise" in PROMPT_SRC and "from speech" in PROMPT_SRC
     assert "take_message" in PROMPT_SRC
     assert "claim delivery only after success" in PROMPT_SRC
 

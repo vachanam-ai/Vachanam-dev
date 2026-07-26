@@ -117,16 +117,38 @@ async def test_delete_clinic_requires_password_then_erases_everything(client, db
 
 
 @pytest.mark.asyncio
-async def test_delete_clinic_staff_forbidden_and_google_needs_DELETE(client, db):
+async def test_delete_clinic_staff_forbidden_and_google_needs_DELETE(client, db, monkeypatch):
     org, b, owner, staffu, doc = await _seed(db, password=None)  # Google-only owner
+    org_id, owner_email = org.id, owner.email  # capture before commit expiry
     staff_tok = _jwt("doctor", org.id, b.id, staffu.id)
     r = await client.post("/auth/delete-account", headers=_auth(staff_tok),
                           json={"confirm": "DELETE"})
     assert r.status_code == 403  # only the owner
 
+    monkeypatch.setattr(settings, "google_oauth_client_id", "test-client-id")
     own_tok = _jwt("org_admin", org.id, b.id, owner.id)
     r2 = await client.post("/auth/delete-account", headers=_auth(own_tok), json={})
     assert r2.status_code == 422  # must type DELETE
+
+    # SEC (d133c40): typing DELETE is only a UI guard — a Google-only owner must
+    # ALSO re-verify a FRESH Google ID token, so a stolen session cannot destroy
+    # the clinic on its own. No token -> 401.
     r3 = await client.post("/auth/delete-account", headers=_auth(own_tok),
                            json={"confirm": "delete"})
-    assert r3.status_code == 200, r3.text  # case-insensitive confirm
+    assert r3.status_code == 401  # reauth required
+
+    # A token for a DIFFERENT Google account is rejected (email must match).
+    monkeypatch.setattr("backend.routers.auth.google_id_token.verify_oauth2_token",
+                        lambda *a, **k: {"email": "attacker@t.test"})
+    r4 = await client.post("/auth/delete-account", headers=_auth(own_tok),
+                           json={"confirm": "DELETE", "id_token": "x"})
+    assert r4.status_code == 401
+
+    # Fresh Google ID token matching the owner email -> erases the clinic.
+    monkeypatch.setattr("backend.routers.auth.google_id_token.verify_oauth2_token",
+                        lambda *a, **k: {"email": owner_email})
+    r5 = await client.post("/auth/delete-account", headers=_auth(own_tok),
+                           json={"confirm": "delete", "id_token": "good"})
+    assert r5.status_code == 200, r5.text
+    assert (await db.execute(
+        select(Organization).where(Organization.id == org_id))).scalar_one_or_none() is None

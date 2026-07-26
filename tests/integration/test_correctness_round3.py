@@ -168,6 +168,7 @@ async def test_b1_failed_reschedule_confirm_leaves_no_phantom_row(clinic, db, re
 
     state = SessionState(session_id="b1")
     state.branch_id = branch_id
+    state.patient_phone = "+919666444428"  # caller owns the booking (472bbe4 gate)
     agent = _agent(clinic, db, state, calendar=FlakyCalendar(failures=2))
 
     result = await agent._do_reschedule(confirmed["token_id"], day.isoformat(), "11:00")
@@ -241,6 +242,7 @@ async def test_b1_retry_after_failed_reschedule_is_not_poisoned(clinic, db, redi
 
     state = SessionState(session_id="b1r")
     state.branch_id = branch.id
+    state.patient_phone = "+919666444428"  # caller owns the booking (472bbe4 gate)
     flaky = FlakyCalendar(failures=2)  # both attempts of try #1 fail; try #2 works
     agent = _agent(clinic, db, state, calendar=flaky)
 
