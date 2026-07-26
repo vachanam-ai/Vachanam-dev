@@ -64,6 +64,32 @@ async def lifespan(app: FastAPI):
     logger.info("vachanam_starting", env=settings.app_env, base_url=settings.base_url)
     await init_rate_limiter()
 
+    # NEON WARM-KEEPER — UNCONDITIONAL, per-instance (#435; ungated 2026-07-26).
+    # A SELECT 1 every 240s (< Neon's 5-min scale-to-zero) keeps the SAME compute
+    # warm so the first call after idle skips the ~2-4s cold wake. It runs on
+    # EVERY instance, NOT only the scheduler leader: during a rolling Render
+    # redeploy the new instance is not leader yet (it retries every 60s while the
+    # old one drains), and that no-leader gap let Neon suspend → the next call
+    # paid the cold wake (Vinay live 2026-07-26, ~5s first reply). Ungated, a
+    # fresh instance warms Neon immediately at boot and every 240s regardless of
+    # leadership. Cost is unchanged — #435 already authorized 24/7 compute; a
+    # brief two-instance overlap during a deploy just pings the same compute
+    # twice. (The agent-side keepalive stays REMOVED — #299 outage.)
+    async def _neon_warm_loop() -> None:
+        from sqlalchemy import text as _text
+
+        from backend.database import AsyncSessionLocal as _SL
+
+        while True:
+            try:
+                async with _SL() as _s:
+                    await _s.execute(_text("SELECT 1"))
+            except Exception as e:  # noqa: BLE001 — a warm-ping failure is harmless
+                logger.warning("neon_warm_ping_failed", error=str(e)[:120])
+            await asyncio.sleep(240)
+
+    neon_warm_task = asyncio.create_task(_neon_warm_loop())
+
     # LEADER ELECTION (bug-bounty M1): every uvicorn worker / Render instance
     # runs its own lifespan, so without a guard N schedulers fire the SAME tick
     # and double-dispatch reminder/rebook calls and calendar writes. A Postgres
@@ -216,33 +242,10 @@ async def lifespan(app: FastAPI):
             run_watchdog_tick, IntervalTrigger(seconds=60),
             id="watchdog_tick", replace_existing=True,
         )
-        # #435 (Vinay 2026-07-20: "very very serious about latency, fix it at
-        # any cost"). The 14s call-start was Neon's scale-to-zero cold wake on
-        # the agent's branch-resolve (#299 let it sleep after 5 idle min to save
-        # cost; a sporadically-ringing clinic paid the wake on almost every
-        # call). A trivial SELECT 1 every 4 min (< the 5-min sleep threshold)
-        # keeps the SAME Neon compute warm, so branch-resolve is fast. This
-        # DELIBERATELY reverses the #299 cost saving — Vinay authorized the
-        # 24/7 compute cost for the latency. Leader-locked (one warmer). To undo:
-        # remove this job and Neon resumes sleeping.
-        async def _keep_neon_warm() -> None:
-            from sqlalchemy import text as _text
-
-            from backend.database import AsyncSessionLocal as _SL
-
-            try:
-                async with _SL() as _s:
-                    await _s.execute(_text("SELECT 1"))
-            except Exception as e:  # noqa: BLE001 — a warm-ping failure is harmless
-                logger.warning("neon_warm_ping_failed", error=str(e)[:120])
-
-        from datetime import datetime as _dt, timezone as _tz
-
-        scheduler.add_job(
-            _keep_neon_warm, IntervalTrigger(seconds=240),
-            id="keep_neon_warm", replace_existing=True,
-            next_run_time=_dt.now(_tz.utc),  # warm immediately on boot
-        )
+        # (Neon warm-keeper moved OUT of the leader scheduler 2026-07-26 — it now
+        # runs unconditionally per-instance in the lifespan startup above, so a
+        # rolling Render redeploy's no-leader window can no longer let Neon
+        # suspend. See _neon_warm_loop.)
         scheduler.start()
         return scheduler
 
@@ -280,6 +283,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    neon_warm_task.cancel()
     if lead["retry"] is not None:
         lead["retry"].cancel()
     if lead["scheduler"] is not None:

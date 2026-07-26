@@ -5717,7 +5717,13 @@ def _start_watchdog_heartbeat() -> None:
             # SELECT 1 every 4th tick (~240s, under Neon's 300s scale-to-zero)
             # holds the compute warm so branch-resolve on the NEXT call is fast.
             _neon_tick += 1
-            if _neon_tick % 4 == 0:
+            # Warm on the FIRST tick (immediately after a restart) AND every 4th
+            # (~240s) after. Without the first-tick ping a freshly-deployed agent
+            # waited up to 240s before warming Neon; a master push redeploys the
+            # agent AND the Render API together, so during that combined window
+            # neither warmer ran and Neon suspended → the next call paid the
+            # ~2-4s cold wake (Vinay live 2026-07-26, ~5s first reply).
+            if _neon_tick == 1 or _neon_tick % 4 == 0:
                 try:
                     import asyncio as _aio
 
