@@ -117,7 +117,9 @@ def test_telugu_style_turns_flag_wired():
 
     assert hasattr(ag, "_TELUGU_STYLE_TURNS")
     ep = inspect.getsource(ag.entrypoint)
-    # the flag OR the te-IN check both force turn_detection=None
+    # English + Telugu are VAD-only by default (proven eou win); Hindi keeps the
+    # semantic model (VAD-only answered partial Hindi). The flag forces all langs.
+    assert '("te-IN", "en-IN")' in ep
     assert "_TELUGU_STYLE_TURNS or lang_cfg.stt_code" in ep
 
 

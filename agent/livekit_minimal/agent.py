@@ -4841,9 +4841,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Skip it for unsupported languages; VAD + the 0.6s endpointing handle
             # turn-end. Keep it only where it actually works.
             turn_handling={
+                # VAD-only turn-end for Telugu AND English: the semantic model
+                # is trained on native speakers and extended the wait on the
+                # clinic's non-native English — dropping it cut eou 1.35s → 0.28s
+                # (Vinay live 2026-07-26, #465). Hindi KEEPS the model: VAD-only
+                # committed before Hindi finished transcribing and the LLM answered
+                # a partial ("namaskar…"). VOICE_TELUGU_STYLE_TURNS=1 forces
+                # VAD-only on every language (revert lever / further experiments).
                 "turn_detection": (
                     None
-                    if (_TELUGU_STYLE_TURNS or lang_cfg.stt_code in ("te-IN",))
+                    if (_TELUGU_STYLE_TURNS or lang_cfg.stt_code in ("te-IN", "en-IN"))
                     else MultilingualModel()
                 ),
                 "endpointing": {
