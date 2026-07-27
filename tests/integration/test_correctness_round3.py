@@ -15,7 +15,7 @@ import pytest_asyncio
 from sqlalchemy import and_, func, select
 
 from agent.session_state import SessionState
-from agent.tools.booking_tools import assign_token, confirm_booking
+from agent.tools.booking_tools import assign_token, check_availability, confirm_booking
 from backend.models.schema import Branch, Doctor, Organization, Token
 
 pytestmark = pytest.mark.asyncio
@@ -367,6 +367,87 @@ async def test_b2_confirm_with_different_free_time_rebooks_cleanly(clinic, db, r
     assert rows[0].appointment_time == time(15, 0)
     # stale 16:00 hold released; patient does not block a slot they left
     assert int(await redis.get(f"slot:{doc.id}:{branch.id}:{day}:1600") or 0) == 0
+
+
+async def test_repeated_assign_reuses_same_call_hold(clinic, db, redis):
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    state = SessionState(session_id="repeat-hold")
+    state.branch_id = branch.id
+    state.patient_phone = "+919666444488"
+    agent = _agent(clinic, db, state)
+
+    first = await agent.assign_token(
+        context=None,
+        doctor_id=str(doc.id),
+        booking_date=day.isoformat(),
+        appointment_time="15:00",
+    )
+    second = await agent.assign_token(
+        context=None,
+        doctor_id=str(doc.id),
+        booking_date=day.isoformat(),
+        appointment_time="15:00",
+    )
+
+    key = f"slot:{doc.id}:{branch.id}:{day}:1500"
+    assert first["success"] and second["success"]
+    assert second["already_held"] is True
+    assert int(await redis.get(key) or 0) == 1
+
+
+async def test_changed_assign_releases_previous_slot(clinic, db, redis):
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    state = SessionState(session_id="changed-hold")
+    state.branch_id = branch.id
+    state.patient_phone = "+919666444487"
+    agent = _agent(clinic, db, state)
+
+    await agent.assign_token(
+        context=None,
+        doctor_id=str(doc.id),
+        booking_date=day.isoformat(),
+        appointment_time="14:00",
+    )
+    changed = await agent.assign_token(
+        context=None,
+        doctor_id=str(doc.id),
+        booking_date=day.isoformat(),
+        appointment_time="14:30",
+    )
+
+    assert changed["success"] is True
+    assert int(await redis.get(f"slot:{doc.id}:{branch.id}:{day}:1400") or 0) == 0
+    assert int(await redis.get(f"slot:{doc.id}:{branch.id}:{day}:1430") or 0) == 1
+
+
+async def test_availability_does_not_count_callers_own_hold(clinic, db, redis):
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    key = f"slot:{doc.id}:{branch.id}:{day}:1300"
+    await redis.incr(key)
+
+    ordinary = await check_availability(
+        doc.id,
+        branch.id,
+        day,
+        db,
+        query_start=time(13, 0),
+        query_end=time(13, 30),
+    )
+    owner = await check_availability(
+        doc.id,
+        branch.id,
+        day,
+        db,
+        query_start=time(13, 0),
+        query_end=time(13, 30),
+        held_slot_key=key,
+    )
+
+    assert "NOT free" in ordinary
+    assert "NOT free" not in owner
 
 
 # ── B4: a NEW hold must clear token_confirmed ────────────────────────────────

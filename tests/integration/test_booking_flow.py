@@ -123,3 +123,47 @@ async def test_token_full_does_not_advance_counter(seeded_clinic, db, redis):
     assert result["success"] is False and result["reason"] == "full"
     counter_after = int(await redis.get(key) or 0)
     assert counter_after == counter_before  # counter never moved
+
+
+async def test_token_sequence_never_reuses_cancelled_number_after_redis_loss(
+    seeded_clinic, db, redis
+):
+    """Capacity uses confirmed count, but sequence recovery must use the
+    highest number ever issued across every status."""
+    from backend.models.schema import Patient, Token
+
+    branch = seeded_clinic["branch"]
+    doctor = seeded_clinic["doctor"]
+    day = date.today() + timedelta(days=4)
+    patient = Patient(
+        branch_id=branch.id, name="Sequence", phone="+919666444499", age=30
+    )
+    db.add(patient)
+    await db.flush()
+    db.add_all([
+        Token(
+            branch_id=branch.id,
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            date=day,
+            token_number=3,
+            status="confirmed",
+            source="voice",
+        ),
+        Token(
+            branch_id=branch.id,
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            date=day,
+            token_number=7,
+            status="cancelled_by_patient",
+            source="voice",
+        ),
+    ])
+    await db.commit()
+    key = f"token:{doctor.id}:{branch.id}:{day}"
+    await redis.delete(key)
+
+    result = await assign_token(doctor.id, branch.id, day, db)
+    assert result["success"] is True
+    assert result["token_number"] == 8

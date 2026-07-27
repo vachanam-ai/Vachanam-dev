@@ -529,6 +529,23 @@ async def create_walkin(
                 status_code=409,
                 detail=f"{patient.name} already has a booking with this doctor today",
             )
+        if appt_time is not None:
+            clash = (
+                await db.execute(
+                    select(Token.id).where(
+                        Token.branch_id == branch_uuid,
+                        Token.patient_id == patient.id,
+                        Token.date == today,
+                        Token.appointment_time == appt_time,
+                        Token.status == "confirmed",
+                    )
+                )
+            ).first()
+            if clash is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{patient.name} already has an appointment at this time",
+                )
 
     assignment = await _assign_token(
         doctor_id=doctor_uuid,

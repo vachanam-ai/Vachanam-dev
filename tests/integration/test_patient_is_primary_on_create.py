@@ -9,7 +9,7 @@ so each booking here first calls assign_token to obtain a real token_number
 before confirm_booking persists the row — the same setup the working booking
 tests use (tests/integration/test_booking_flow.py).
 """
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 import pytest
 import pytest_asyncio
@@ -142,3 +142,67 @@ async def test_family_member_is_not_primary(clinic, db, redis):
     }
     assert rows["Ravi"].is_primary is True
     assert rows["Sita"].is_primary is False
+
+
+async def test_family_members_share_phone_without_sharing_conflict_scope(
+    clinic, db, redis
+):
+    branch = clinic["branch"]
+    day = _tomorrow()
+    doc_a = Doctor(
+        branch_id=branch.id,
+        name="Dr. Family A",
+        booking_type="appointment",
+        working_hours_start=time(9, 0),
+        working_hours_end=time(12, 0),
+        available_weekdays=[0, 1, 2, 3, 4, 5, 6],
+        slot_duration_minutes=30,
+        max_concurrent_per_slot=2,
+        status="active",
+    )
+    doc_b = Doctor(
+        branch_id=branch.id,
+        name="Dr. Family B",
+        booking_type="appointment",
+        working_hours_start=time(9, 0),
+        working_hours_end=time(12, 0),
+        available_weekdays=[0, 1, 2, 3, 4, 5, 6],
+        slot_duration_minutes=30,
+        max_concurrent_per_slot=2,
+        status="active",
+    )
+    db.add_all([doc_a, doc_b])
+    await db.commit()
+    phone = "+919000000099"
+
+    async def book(doc, name, *, other):
+        hold = await assign_token(
+            doc.id, branch.id, day, db, appointment_time=time(10, 0)
+        )
+        assert hold["success"], hold
+        return await confirm_booking(
+            doctor_id=doc.id,
+            branch_id=branch.id,
+            patient_name=name,
+            patient_phone=phone,
+            complaint="consultation",
+            booking_date=day,
+            token_number=hold["token_number"],
+            followup_consent=False,
+            appointment_time=time(10, 0),
+            source="voice",
+            db=db,
+            calendar_service=StubCalendar(),
+            meta_service=StubMeta(),
+            patient_age=30,
+            different_person=other,
+        )
+
+    ravi = await book(doc_a, "Ravi", other=False)
+    sita = await book(doc_a, "Sita", other=True)
+    assert ravi["success"] and sita["success"]
+
+    # The same family member still cannot be in two doctors' rooms at once.
+    sita_again = await book(doc_b, "Sita", other=True)
+    assert sita_again["success"] is False
+    assert sita_again["reason"] == "time_clash"

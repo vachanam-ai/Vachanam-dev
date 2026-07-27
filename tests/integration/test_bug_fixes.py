@@ -27,8 +27,14 @@ from sqlalchemy import and_, func, select
 
 from agent.session_state import SessionState
 from agent.tools.booking_tools import assign_token, confirm_booking
-from backend.models.schema import Branch, Doctor, Organization, Patient, Token
-
+from backend.models.schema import (
+    Branch,
+    CalendarWriteTask,
+    Doctor,
+    Organization,
+    Patient,
+    Token,
+)
 
 
 class FlakyCalendar:
@@ -46,6 +52,11 @@ class FlakyCalendar:
 
     async def delete_event(self, calendar_id, event_id) -> None:
         return None
+
+
+class DeleteFailsCalendar(FlakyCalendar):
+    async def delete_event(self, calendar_id, event_id) -> None:
+        raise RuntimeError("calendar delete unavailable")
 
 
 class NullMeta:
@@ -318,6 +329,79 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
     confirmed_rows = [r for r in rows if r.status == "confirmed"]
     assert len(confirmed_rows) == 1  # exactly one live booking
     assert confirmed_rows[0].appointment_time == time(11, 0)
+
+
+async def test_reschedule_old_cancel_failure_compensates_replacement(
+    clinic, db, redis, monkeypatch
+):
+    """A move is not successful unless the original row is cancelled."""
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(
+        doc.id, branch.id, day, db, appointment_time=time(10, 0)
+    )
+    confirmed = await confirm_booking(
+        doctor_id=doc.id,
+        branch_id=branch.id,
+        patient_name="Compensation Proof",
+        patient_phone="+919666444427",
+        complaint="skin",
+        booking_date=day,
+        token_number=assigned["token_number"],
+        followup_consent=False,
+        patient_age=30,
+        appointment_time=time(10, 0),
+        source="voice",
+        db=db,
+        calendar_service=FlakyCalendar(failures=0),
+        meta_service=NullMeta(),
+    )
+    assert confirmed["success"]
+
+    state = SessionState(session_id="reschedule-compensation")
+    state.branch_id = branch.id
+    state.patient_phone = "+919666444427"
+    agent = VachanamAgent(
+        instructions="t",
+        state=state,
+        db=db,
+        room=None,
+        calendar_service=FlakyCalendar(failures=0),
+        meta_service=NullMeta(),
+        transfer_to="",
+    )
+    real_cancel = agent._do_cancel
+    calls = 0
+
+    async def _fail_old_once(token_id, reason="cancel"):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"success": False, "error": "cancellation_failed"}
+        return await real_cancel(token_id, reason)
+
+    monkeypatch.setattr(agent, "_do_cancel", _fail_old_once)
+    result = await agent._do_reschedule(
+        confirmed["token_id"], day.isoformat(), "11:00"
+    )
+    assert result["success"] is False
+    assert result["error"] == "old_booking_not_cancelled"
+
+    rows = (
+        await db.execute(
+            select(Token.appointment_time, Token.status).where(
+                and_(
+                    Token.doctor_id == doc.id,
+                    Token.branch_id == branch.id,
+                    Token.date == day,
+                )
+            )
+        )
+    ).all()
+    live = [row for row in rows if row.status == "confirmed"]
+    assert live == [(time(10, 0), "confirmed")]
 
 
 async def test_reschedule_twice_in_one_call_with_stale_token(clinic, db, redis):
@@ -1017,3 +1101,60 @@ def test_analytics_excludes_rescheduled():
     src = inspect.getsource(analytics)
     assert 'reason == "rescheduled"' in src
     assert "moved, not lost" in src
+
+
+async def test_cancel_commits_and_queues_calendar_cleanup_on_delete_failure(
+    clinic, db, redis
+):
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    branch.google_calendar_id = "clinic-calendar@test"
+    await db.commit()
+    day = _tomorrow()
+    assigned = await assign_token(
+        doc.id, branch.id, day, db, appointment_time=time(15, 30)
+    )
+    confirmed = await confirm_booking(
+        doctor_id=doc.id,
+        branch_id=branch.id,
+        patient_name="Calendar Retry",
+        patient_phone="+919666444477",
+        complaint="skin",
+        booking_date=day,
+        token_number=assigned["token_number"],
+        followup_consent=False,
+        appointment_time=time(15, 30),
+        source="voice",
+        db=db,
+        calendar_service=DeleteFailsCalendar(failures=0),
+        meta_service=NullMeta(),
+        patient_age=30,
+    )
+    state = SessionState(session_id="cancel-calendar-retry")
+    state.branch_id = branch.id
+    state.patient_phone = "+919666444477"
+    agent = VachanamAgent(
+        instructions="t",
+        state=state,
+        db=db,
+        room=None,
+        calendar_service=DeleteFailsCalendar(failures=0),
+        meta_service=NullMeta(),
+        transfer_to="",
+    )
+
+    result = await agent._do_cancel(confirmed["token_id"])
+    assert result["success"] is True
+    token = await db.get(Token, uuid.UUID(confirmed["token_id"]))
+    assert token.status == "cancelled_by_patient"
+    task = (
+        await db.execute(
+            select(CalendarWriteTask).where(
+                CalendarWriteTask.token_id == token.id,
+                CalendarWriteTask.operation == "delete",
+            )
+        )
+    ).scalar_one()
+    assert task.status == "pending"
+    assert task.google_event_id == token.google_calendar_event_id

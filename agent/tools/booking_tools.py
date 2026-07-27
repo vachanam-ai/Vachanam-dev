@@ -30,7 +30,9 @@ SLOT_HOLD_TTL_SECONDS = 900
 # B5: atomic "seed the token counter forward to the DB floor, then increment".
 # Runs server-side in ONE step so concurrent assigns after a Redis eviction can
 # never both read a stale value and hand out the same number. ARGV[1] = the DB
-# confirmed count (the floor); returns the newly-assigned token number.
+# highest token number ever issued (the floor); returns the newly-assigned
+# token number. Capacity is a separate confirmed-row count: cancelled numbers
+# free a seat but are never reused.
 _TOKEN_SEED_INCR_LUA = """
 local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
 local floor = tonumber(ARGV[1])
@@ -145,11 +147,16 @@ async def doctor_bookable(
         return (
             f"{doctor.name} has finished for today "
             f"({doctor.working_hours_end.strftime('%I:%M %p').lstrip('0')}). "
-            "Offer tomorrow or a later day."
+            "Ask for another date and check it before promising availability."
         )
 
     weekdays = doctor.available_weekdays or []
-    if weekdays and booking_date.weekday() not in weekdays:
+    if not weekdays:
+        return (
+            f"{doctor.name}'s working days are not configured. "
+            "Ask the clinic to correct the schedule before booking."
+        )
+    if booking_date.weekday() not in weekdays:
         names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         sits = ", ".join(names[d] for d in sorted(weekdays))
         return (
@@ -174,7 +181,10 @@ async def doctor_bookable(
         and booking_date == today
         and doctor.walkins_closed_today_date == today
     ):
-        return f"{doctor.name} has closed bookings for today. Offer tomorrow."
+        return (
+            f"{doctor.name} has closed bookings for today. "
+            "Ask for another date and check it before promising availability."
+        )
 
     return None
 
@@ -364,6 +374,7 @@ async def check_availability(
     query_start: time | None = None,
     query_end: time | None = None,
     caller_phone: str | None = None,
+    held_slot_key: str | None = None,
 ) -> str:
     """Check whether the selected doctor has capacity on the given date.
 
@@ -379,7 +390,13 @@ async def check_availability(
         Human-readable availability string in the patient's language.
     """
     result = await db.execute(
-        select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
+        select(Doctor).where(
+            and_(
+                Doctor.id == doctor_id,
+                Doctor.branch_id == branch_id,
+                Doctor.status == "active",
+            )
+        )
     )
     doctor = result.scalar_one_or_none()
     if not doctor:
@@ -472,6 +489,18 @@ async def check_availability(
                 )
             )
         ).scalar_one()
+        db_max_number = (
+            await db.execute(
+                select(func.max(Token.token_number)).where(
+                    and_(
+                        Token.branch_id == branch_id,
+                        Token.doctor_id == doctor_id,
+                        Token.date == booking_date,
+                        Token.appointment_time.is_(None),
+                    )
+                )
+            )
+        ).scalar_one_or_none() or 0
         limit = doctor.daily_token_limit or 50
         # CAPACITY = CONFIRMED seats, not the monotonic counter. A token that was
         # cancelled or rescheduled away frees its SEAT (the day can be rebooked),
@@ -480,11 +509,13 @@ async def check_availability(
         # cancellation permanently eat a seat, so a clinic with a few reschedules
         # showed "fully booked" while seats were actually free.
         if db_confirmed >= limit:
-            next_day = booking_date + timedelta(days=1)
-            return _ret(f"Doctor is fully booked on {booking_date.strftime('%d %B')}. Next available date is {next_day.strftime('%d %B')}.")
+            return _ret(
+                f"Doctor is fully booked on {booking_date.strftime('%d %B')}. "
+                "Ask for another date and check that date before promising it."
+            )
         # The NEXT queue number is the monotonic counter+1 (unique, never reused);
         # it can sit above the seat count after cancellations — that is correct.
-        next_number = max(redis_current, db_confirmed) + 1
+        next_number = max(redis_current, db_max_number) + 1
         return _ret(
             f"Doctor has {db_confirmed} patients booked on {booking_date.strftime('%d %B')}. "
             f"You will be token number {next_number}."
@@ -526,7 +557,10 @@ async def check_availability(
     async with _redis() as r:
         for slot in all_slots:
             key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
-            booked = max(int(await r.get(key) or 0), db_counts.get(slot, 0))
+            reserved = int(await r.get(key) or 0)
+            if key == held_slot_key and reserved > 0:
+                reserved -= 1
+            booked = max(reserved, db_counts.get(slot, 0))
             if booked < (doctor.max_concurrent_per_slot or 1):
                 available.append(slot)
 
@@ -603,7 +637,13 @@ async def assign_token(
         {"success": False, "reason": "full"|"doctor_not_found"|"appointment_time_required"}
     """
     result = await db.execute(
-        select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
+        select(Doctor).where(
+            and_(
+                Doctor.id == doctor_id,
+                Doctor.branch_id == branch_id,
+                Doctor.status == "active",
+            )
+        )
     )
     doctor = result.scalar_one_or_none()
     if not doctor:
@@ -643,6 +683,18 @@ async def assign_token(
                 )
             )
         ).scalar_one()
+        db_max_number = (
+            await db.execute(
+                select(func.max(Token.token_number)).where(
+                    and_(
+                        Token.branch_id == branch_id,
+                        Token.doctor_id == doctor_id,
+                        Token.date == booking_date,
+                        Token.appointment_time.is_(None),
+                    )
+                )
+            )
+        ).scalar_one_or_none() or 0
 
         # CAPACITY is measured by CONFIRMED seats, NOT the monotonic counter.
         # A cancelled/rescheduled token frees its seat (the day can be rebooked)
@@ -669,7 +721,7 @@ async def assign_token(
         # index remain the backstop.
         async with _redis() as r:
             token_number = int(
-                await r.eval(_TOKEN_SEED_INCR_LUA, 1, redis_key, str(db_confirmed))
+                await r.eval(_TOKEN_SEED_INCR_LUA, 1, redis_key, str(db_max_number))
             )
             await r.expire(redis_key, max(ttl_seconds, 7200))
 
@@ -927,7 +979,13 @@ async def confirm_booking(
     # passes confirm_booking its own copy of the time — a spoken "3" became a
     # stored 03:00 and a 3 AM calendar event.
     result = await db.execute(
-        select(Doctor).where(and_(Doctor.id == doctor_id, Doctor.branch_id == branch_id))
+        select(Doctor).where(
+            and_(
+                Doctor.id == doctor_id,
+                Doctor.branch_id == branch_id,
+                Doctor.status == "active",
+            )
+        )
     )
     doctor = result.scalar_one_or_none()
     if doctor is None:
@@ -1029,10 +1087,10 @@ async def confirm_booking(
     if preferred_language and getattr(patient, "preferred_language", None) != preferred_language:
         patient.preferred_language = preferred_language
 
-    # 1b. Duplicate guard at PHONE level: same phone + doctor + date already
-    # confirmed. Name-level matching alone failed (STT spells the same name
-    # differently across calls). different_person=True lets a family member
-    # sharing the phone book the same doctor the same day.
+    # 1b. Duplicate guard at PATIENT level. Resolution above already collapses
+    # STT variants onto the primary patient and keeps family members distinct.
+    # Phone-level filtering made one family member block another on a shared
+    # number.
     dup_filters = [
         Token.branch_id == branch_id,
         Token.doctor_id == doctor_id,
@@ -1041,16 +1099,7 @@ async def confirm_booking(
     ]
     if exclude_token_id is not None:
         dup_filters.append(Token.id != exclude_token_id)
-    if patient_phone and not different_person:
-        dup_filters.append(
-            Token.patient_id.in_(
-                select(Patient.id).where(
-                    and_(Patient.branch_id == branch_id, Patient.phone == patient_phone)
-                )
-            )
-        )
-    else:
-        dup_filters.append(Token.patient_id == patient.id)
+    dup_filters.append(Token.patient_id == patient.id)
     dup = await db.execute(select(Token).where(and_(*dup_filters)))
     existing = dup.scalars().first()
     if existing is not None:
@@ -1084,18 +1133,14 @@ async def confirm_booking(
     # with both Dr.Lakshmi and Dr.Srinivas). A confirmed slot for THIS phone at
     # the same date+time under any OTHER doctor is a physical impossibility.
     # Family members (different_person) genuinely can share a time, so exempt.
-    if appointment_time is not None and patient_phone and not different_person:
+    if appointment_time is not None:
         clash_filters = [
             Token.branch_id == branch_id,
             Token.date == booking_date,
             Token.appointment_time == appointment_time,
             Token.status == "confirmed",
             Token.doctor_id != doctor_id,
-            Token.patient_id.in_(
-                select(Patient.id).where(
-                    and_(Patient.branch_id == branch_id, Patient.phone == patient_phone)
-                )
-            ),
+            Token.patient_id == patient.id,
         ]
         if exclude_token_id is not None:
             clash_filters.append(Token.id != exclude_token_id)
@@ -1661,7 +1706,7 @@ def _generate_slots(start: time, end: time, duration_minutes: int) -> list[time]
     current = datetime.combine(date.today(), start)
     end_dt = datetime.combine(date.today(), end)
     delta = timedelta(minutes=duration_minutes)
-    while current < end_dt:
+    while current + delta <= end_dt:
         slots.append(current.time())
         current += delta
     return slots

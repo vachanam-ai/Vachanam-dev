@@ -1,5 +1,16 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-27 - BOOKING/CANCELLATION/RESCHEDULE INTEGRITY AUDIT.**
+> Fixed false unavailable answers caused by caller history and self-held Redis
+> capacity; made repeated and changed holds idempotent; restored distinct family
+> members sharing one phone while preventing the same patient from overlapping
+> across doctors; recovered token numbering from the historical high-water mark;
+> validated active doctors and schedule shapes; locked cancellation rows; queued
+> failed Google Calendar deletes; mapped stale reschedule IDs exactly; and
+> compensated a replacement unless the original cancellation is proven. Voice
+> appointment access now consistently uses branch plus verified incoming number,
+> with no spoken-name/STT gate. See FIXLOG #470 for test proof and deployment.
+
 > **2026-07-25 — CALLER-ID PRIVACY + ROLE LOCK + ALL-DID FIRST-AUDIO FIX.**
 > Appointment authorization is now the verified incoming SIP number end to
 > end: booking and lookup tool schemas accept no alternate phone, and

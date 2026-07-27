@@ -775,18 +775,15 @@ _TELUGU_STYLE_TURNS = os.getenv("VOICE_TELUGU_STYLE_TURNS", "0") == "1"
 # #466). Tunable via env without a redeploy.
 _SWITCH_CTX_KEEP = int(os.getenv("VOICE_SWITCH_CTX_KEEP", "8"))
 
-# Name-free counterpart to KNOWN_CALLER_BOOKING_EXTRA, used when greet-by-name
-# is off: the model knows the number is an existing patient's but must NOT state
-# or assume a name, and must verify identity before touching a booking.
+# The verified incoming number is the appointment authorization boundary.
+# Names only disambiguate family members who share that phone number.
 KNOWN_CALLER_NO_NAME_EXTRA = (
     "\n\nRETURNING CALLER: this number belongs to a patient the clinic already "
-    "knows, but the greeting did NOT use their name — so do NOT state, guess, or "
-    "hint at it. Welcome them warmly, like a regular you're glad to hear from, "
-    "and ask how you can help. If they want to check or change an existing "
-    "appointment, first — naturally, as if pulling up the right file — ask whose "
-    "name the booking is under (e.g. 'so I can pull up the right record, whose "
-    "name is it under?'), never as a challenge, and call verify_caller_identity "
-    "before reading out or changing anything."
+    "knows, but the greeting did not use their name. Welcome them warmly and "
+    "ask how you can help. For an existing appointment, call find_my_bookings "
+    "immediately. Never ask for another phone number. If multiple family "
+    "members have appointments on this number, ask which listed patient and "
+    "appointment they want to change before mutating anything."
 )
 
 REBOOK_PROMPT_EXTRA = (
@@ -2208,7 +2205,17 @@ class VachanamAgent(Agent):
             db=self._db,
             query_start=self._parse_time(query_start),
             query_end=self._parse_time(query_end),
-            caller_phone=_availability_caller_phone(self._state),
+            # Availability is capacity only. Existing bookings are fetched by
+            # find_my_bookings; mixing them into this answer made a family
+            # member's booking sound like the requested doctor/time was full.
+            caller_phone=None,
+            held_slot_key=(
+                self._state.token_redis_key
+                if self._state.token_held
+                and not self._state.token_confirmed
+                and (self._state.token_redis_key or "").startswith("slot:")
+                else None
+            ),
         )
         return {"availability": availability}
 
@@ -2225,17 +2232,47 @@ class VachanamAgent(Agent):
         appointment_time (HH:MM) only for slot-type doctors."""
         _guard_human_booking(self._state)
         # assign_token is a Redis INCR — fast; a filler here is just noise (#429).
+        resolved = await self._resolve_doctor_id(doctor_id)
+        parsed_date = self._parse_date(booking_date)
+        parsed_time = self._parse_time(appointment_time)
+
+        # Tool retries and mid-flow time changes must be idempotent. Previously
+        # a repeated assign INCRed the same slot twice, saw its own first hold as
+        # "full", and overwrote the only key shutdown knew how to release.
+        held_key = self._state.token_redis_key or ""
+        target_key = (
+            f"slot:{resolved}:{self._state.branch_id}:{parsed_date}:"
+            f"{parsed_time.strftime('%H%M')}"
+            if parsed_time is not None
+            else f"token:{resolved}:{self._state.branch_id}:{parsed_date}"
+        )
+        if self._state.token_held and not self._state.token_confirmed and held_key:
+            if held_key == target_key:
+                is_slot = held_key.startswith("slot:")
+                return {
+                    "success": True,
+                    "booking_type": "appointment" if is_slot else "token",
+                    "appointment_time": parsed_time.strftime("%H:%M") if is_slot else None,
+                    "token_number": None if is_slot else self._state.token_number,
+                    "announce": "time_only" if is_slot else "token_number",
+                    "already_held": True,
+                    "instruction": "This exact reservation is already held for this call; continue to confirmation.",
+                }
+            await self._release_hold({"redis_key": held_key})
+            self._clear_hold()
+
         result = await assign_token(
-            doctor_id=await self._resolve_doctor_id(doctor_id),
+            doctor_id=resolved,
             branch_id=self._state.branch_id,
-            booking_date=self._parse_date(booking_date),
+            booking_date=parsed_date,
             db=self._db,
-            appointment_time=self._parse_time(appointment_time),
+            appointment_time=parsed_time,
         )
         if result.get("success"):
             self._state.token_held = True
             self._state.token_number = result["token_number"]
             self._state.token_redis_key = result["redis_key"]
+            self._state.appointment_time = result.get("appointment_time")
             # B4: token_confirmed is a per-BOOKING latch, not a per-call one. A
             # single call can hold several sequential bookings (family cap = 2,
             # plus reschedules). If a prior booking left it True, this NEW hold
@@ -2550,14 +2587,11 @@ class VachanamAgent(Agent):
 
     @function_tool()
     async def verify_caller_identity(self, context: RunContext, name: str) -> dict:
-        """Confirm WHO you are speaking to before any existing-booking action.
-        Call this with the name the caller gives when you ask who the
-        appointment is under. The inbound caller ID by itself is NOT proof of
-        identity (it can be spoofed), so find_my_bookings, get_queue_status,
-        reschedule and cancel stay locked until this succeeds. On a match,
-        continue warmly with what they asked. On a mismatch, ask once more for
-        the exact name on the booking; if it still does not match, offer to take
-        a message — never read out or change a booking for an unverified caller."""
+        """Optionally match a spoken name to disambiguate family members.
+
+        Appointment authorization comes from the verified incoming SIP number;
+        name transcription must never be treated as an authentication factor.
+        """
         _require_caller_phone(self._state)  # no caller ID → cannot verify
         matched = await caller_name_matches(
             self._state.branch_id, self._state.patient_phone, name, self._db
@@ -2598,23 +2632,6 @@ class VachanamAgent(Agent):
         offer to rebook it instead."""
         _guard_human_booking(self._state)
         phone, _ = _require_caller_phone(self._state)
-        # SEC (ANI spoofing): the caller ID is not proof of identity. Do not
-        # disclose any booking until the caller has named the patient on file
-        # (verify_caller_identity). The greeting no longer speaks that name, so
-        # it stays a genuine second factor.
-        if not self._state.identity_verified:
-            return {
-                "needs_verification": True,
-                "instruction": (
-                    "Do NOT reveal anything about any booking yet. First, the way a "
-                    "receptionist naturally pulls up the right file, warmly ask whose "
-                    "name the appointment is under — e.g. 'so I can pull up the right "
-                    "record, whose name is it booked under?' — framed as help, never as "
-                    "a challenge or security check. Then call verify_caller_identity "
-                    "with that name. Only after it succeeds may you read back or change "
-                    "a booking."
-                ),
-            }
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
         # the #279 upfront existing-booking surface so it doesn't flag the very
         # booking being moved (FIXLOG #281).
@@ -2656,19 +2673,6 @@ class VachanamAgent(Agent):
         Token-queue doctors only — for a slot-doctor booking just restate
         their appointment time from find_my_bookings instead."""
         _guard_human_booking(self._state)
-        # SEC (ANI spoofing): queue position discloses the patient's name — gate
-        # it behind identity verification, same as find_my_bookings.
-        if not self._state.identity_verified:
-            return {
-                "needs_verification": True,
-                "instruction": (
-                    "Do NOT reveal any booking or queue detail yet. First, the way a "
-                    "receptionist pulls up the right file, warmly ask whose name the "
-                    "appointment is under — e.g. 'so I can find the right token, whose "
-                    "name is it booked under?' — never as a challenge. Then call "
-                    "verify_caller_identity with that name first."
-                ),
-            }
         result = await queue_position_by_phone(
             self._state.branch_id, self._state.patient_phone, self._db
         )
@@ -3004,22 +3008,6 @@ class VachanamAgent(Agent):
         this instead of manual assign/confirm/cancel for every reschedule.
         new_time (HH:MM) required only for schedule (appointment) doctors."""
         _guard_human_booking(self._state)
-        # SEC (ANI spoofing): never move an unverified caller's booking — the
-        # caller ID is spoofable, so a spoofer could silently deny care. Require
-        # verify_caller_identity first (find_my_bookings already forces it before
-        # the caller could learn a token_id, this is the belt-and-braces gate).
-        if not self._state.identity_verified:
-            return {
-                "success": False,
-                "error": "identity_not_verified",
-                "instruction": (
-                    "Before moving anything, gently make sure you have the right file: "
-                    "warmly ask whose name the appointment is under — e.g. 'sure, I can "
-                    "help with that — whose name is it booked under?' — never as a "
-                    "challenge, and call verify_caller_identity before rescheduling "
-                    "anything."
-                ),
-            }
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
@@ -3062,12 +3050,24 @@ class VachanamAgent(Agent):
                         _PatientModel.phone.like(f"%{caller_last10}"),
                     )
                 )
+                .with_for_update(of=Token)
             )
         ).first()
         if row is None:
             return {"success": False, "error": "booking_not_found"}
         old_token, patient = row
         if old_token.status != "confirmed":
+            mapped_id = self._state.booking_replacements.get(str(old_token.id))
+            if mapped_id is None:
+                return {
+                    "success": False,
+                    "error": f"not_reschedulable_{old_token.status}",
+                    "instruction": (
+                        "That booking id is no longer current. Run find_my_bookings "
+                        "again and use the confirmed booking it returns; never guess "
+                        "which of the caller's other appointments should move."
+                    ),
+                }
             # The passed token is STALE — a prior reschedule in THIS same call
             # already moved it (that reschedule cancels the old token and creates
             # a NEW confirmed one), but the LLM still holds the ORIGINAL id from
@@ -3081,6 +3081,7 @@ class VachanamAgent(Agent):
                     select(Token)
                     .where(
                         and_(
+                            Token.id == UUID(mapped_id),
                             Token.branch_id == self._state.branch_id,
                             Token.doctor_id == old_token.doctor_id,
                             Token.patient_id == old_token.patient_id,
@@ -3237,7 +3238,60 @@ class VachanamAgent(Agent):
         # New booking exists — NOW it is safe to drop the old one.
         # "rescheduled" (Vinay 2026-07-14): analytics must NOT count a moved
         # booking as a cancellation — the patient still comes, on a new row.
-        cancelled = await self._do_cancel(str(old_token.id), reason="rescheduled")
+        try:
+            cancelled = await self._do_cancel(
+                str(old_token.id), reason="rescheduled"
+            )
+        except Exception as cancel_error:  # noqa: BLE001
+            logger.error("reschedule_old_cancel_failed: %s", cancel_error)
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            cancelled = {"success": False, "error": "cancellation_failed"}
+        old_is_gone = cancelled.get("success") or cancelled.get("error") == "already_cancelled"
+        if not old_is_gone:
+            # The replacement is already committed. Compensate it so a failed
+            # old-row cancellation never leaves two live appointments while we
+            # claim the move succeeded.
+            compensated = await self._do_cancel(
+                confirmed["token_id"], reason="reschedule_compensation"
+            )
+            compensation_done = (
+                compensated.get("success")
+                or compensated.get("error") == "already_cancelled"
+            )
+            if not compensation_done:
+                logger.critical(
+                    "reschedule_compensation_failed old=%s new=%s result=%s",
+                    str(old_token.id),
+                    confirmed["token_id"],
+                    compensated.get("error"),
+                )
+                return {
+                    "success": False,
+                    "step": "compensate_new",
+                    "error": "manual_reconciliation_required",
+                    "instruction": (
+                        "Do not claim the appointment was moved or rolled back. "
+                        "Connect the caller to the clinic because both records "
+                        "require immediate reconciliation."
+                    ),
+                }
+            return {
+                "success": False,
+                "step": "cancel_old",
+                "error": "old_booking_not_cancelled",
+                "instruction": (
+                    "The move did not complete, and the replacement was rolled "
+                    "back. The original appointment remains authoritative."
+                ),
+            }
+        new_id = confirmed["token_id"]
+        for stale_id, current_id in list(self._state.booking_replacements.items()):
+            if current_id == str(old_token.id):
+                self._state.booking_replacements[stale_id] = new_id
+        self._state.booking_replacements[str(old_token.id)] = new_id
         # Live call 2026-07-03 16:55Z: a reschedule that SUCCEEDED (DB showed the
         # moved booking) was announced as "unable to reschedule" — the model
         # misread the result. Log it (evidence for next time) and make success
@@ -3246,7 +3300,7 @@ class VachanamAgent(Agent):
             "reschedule_done new_date=%s new_time=%s old_cancelled=%s branch_id=%s",
             booking_date.isoformat(),
             assigned.get("appointment_time"),
-            bool(cancelled.get("success")),
+            bool(old_is_gone),
             str(self._state.branch_id),
         )
         return {
@@ -3254,7 +3308,7 @@ class VachanamAgent(Agent):
             "new_token_number": assigned["token_number"],
             "new_date": booking_date.isoformat(),
             "new_time": assigned.get("appointment_time"),
-            "old_cancelled": bool(cancelled.get("success")),
+            "old_cancelled": bool(old_is_gone),
             "instruction": (
                 "The reschedule SUCCEEDED — the appointment is now on the new "
                 "date/time above and the old one is cancelled. Tell the caller "
@@ -3273,20 +3327,6 @@ class VachanamAgent(Agent):
         cancel manually for a reschedule, the NEW booking must already be
         confirmed."""
         _guard_human_booking(self._state)
-        # SEC (ANI spoofing): never cancel an unverified caller's booking —
-        # denial-of-care via spoofed caller ID. Require verify_caller_identity.
-        if not self._state.identity_verified:
-            return {
-                "success": False,
-                "error": "identity_not_verified",
-                "instruction": (
-                    "Before changing anything, gently make sure you have the right file: "
-                    "warmly ask whose name the appointment is under — e.g. 'sure, I can "
-                    "help with that — whose name is it booked under?' — never as a "
-                    "challenge, and call verify_caller_identity before cancelling "
-                    "anything."
-                ),
-            }
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
         # the old appointment, and left the patient with nothing.
@@ -3317,6 +3357,7 @@ class VachanamAgent(Agent):
         self._state.token_held = False
         self._state.token_redis_key = None
         self._state.token_number = None
+        self._state.appointment_time = None
 
     @staticmethod
     async def _release_hold(assigned: dict) -> None:
@@ -3368,6 +3409,7 @@ class VachanamAgent(Agent):
                     Patient.phone.like(f"%{caller_last10}"),
                 )
             )
+            .with_for_update(of=Token)
         )
         token = result.scalar_one_or_none()
         if token is None:
@@ -3386,6 +3428,17 @@ class VachanamAgent(Agent):
                     ),
                 }
             if token.status == "cancelled_by_patient":
+                mapped_id = self._state.booking_replacements.get(str(token.id))
+                if mapped_id is None:
+                    return {
+                        "success": False,
+                        "error": "already_cancelled",
+                        "instruction": (
+                            "This booking is already cancelled. Run "
+                            "find_my_bookings again before cancelling anything "
+                            "else; never guess which appointment replaced it."
+                        ),
+                    }
                 # STALE id (torture #287): a reschedule earlier in THIS call
                 # cancelled this token and created a replacement, but the LLM
                 # still holds the original id ("11:00కి మార్చండి... అసలు వద్దు,
@@ -3399,6 +3452,7 @@ class VachanamAgent(Agent):
                         select(Token)
                         .where(
                             _and(
+                                Token.id == UUID(mapped_id),
                                 Token.branch_id == self._state.branch_id,
                                 Token.doctor_id == token.doctor_id,
                                 Token.patient_id == token.patient_id,
@@ -3445,7 +3499,19 @@ class VachanamAgent(Agent):
         # cancelled_by_clinic only).
         token.status = "cancelled_by_patient"
         token.cancellation_reason = reason
-        await self._db.commit()
+        try:
+            await self._db.commit()
+        except Exception as commit_error:  # noqa: BLE001
+            await self._db.rollback()
+            logger.error("cancel_db_commit_failed: %s", commit_error)
+            return {
+                "success": False,
+                "error": "cancellation_failed",
+                "instruction": (
+                    "The cancellation did not commit. Do not claim success; "
+                    "ask the caller to retry or contact the clinic."
+                ),
+            }
 
         # Release capacity — SLOT doctors only. Token counters must NEVER be
         # decremented: the counter IS the queue-number sequence, so a DECR
@@ -3469,6 +3535,7 @@ class VachanamAgent(Agent):
             except Exception as e:
                 logger.warning("cancel_redis_release_failed: %s", e)
 
+        cal_id = None
         if token.google_calendar_event_id and self._calendar is not None:
             try:
                 # Delete from the SAME calendar create used: doctor's personal
@@ -3488,6 +3555,8 @@ class VachanamAgent(Agent):
                     )
                 ).scalar_one_or_none()
                 cal_id = doc_cal or branch_cal
+                if not cal_id:
+                    raise RuntimeError("calendar id no longer configured")
                 if cal_id:
                     # HARD CAP (live 2026-07-03 18:18Z): this delete's retry
                     # backoff blocked _do_cancel for 36s — the caller heard
@@ -3501,6 +3570,36 @@ class VachanamAgent(Agent):
                         )
             except Exception as e:
                 logger.warning("cancel_calendar_delete_failed: %s", e)
+                # DB cancellation is already committed, so retry only the
+                # external cleanup. Without this queue entry a transient Google
+                # failure leaves a ghost appointment on the doctor's calendar.
+                try:
+                    from backend.models.schema import CalendarWriteTask
+
+                    self._db.add(
+                        CalendarWriteTask(
+                            branch_id=token.branch_id,
+                            token_id=token.id,
+                            operation="delete",
+                            payload_json={"calendar_id": cal_id},
+                            google_event_id=token.google_calendar_event_id,
+                            status="pending",
+                            attempts=0,
+                            next_attempt_at=datetime_cls.now(timezone_utc),
+                        )
+                    )
+                    await self._db.commit()
+                    from backend.jobs import wake_gate
+
+                    await wake_gate.clear_next_at("calendar")
+                except Exception as queue_error:  # noqa: BLE001
+                    try:
+                        await self._db.rollback()
+                    except Exception:
+                        pass
+                    logger.error(
+                        "cancel_calendar_retry_enqueue_failed: %s", queue_error
+                    )
 
         logger.info(
             "booking_cancelled token=%s branch_id=%s",

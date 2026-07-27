@@ -153,30 +153,28 @@ def test_verify_caller_identity_sets_flag_on_match():
     assert "self._state.identity_verified = True" in src
 
 
-def test_find_my_bookings_gated_on_verification():
+def test_find_my_bookings_uses_verified_inbound_number_without_name_gate():
     src = _method_src("find_my_bookings")
-    assert "if not self._state.identity_verified" in src
-    assert "needs_verification" in src
-    # the gate is BEFORE the DB lookup — no detail leaks pre-verification
-    assert src.index("identity_verified") < src.index("find_bookings_by_phone(")
+    assert "identity_verified" not in src
+    assert "find_bookings_by_phone(" in src
 
 
-def test_get_queue_status_gated_on_verification():
+def test_get_queue_status_uses_verified_inbound_number_without_name_gate():
     src = _method_src("get_queue_status")
-    assert "if not self._state.identity_verified" in src
-    assert src.index("identity_verified") < src.index("queue_position_by_phone(")
+    assert "identity_verified" not in src
+    assert "queue_position_by_phone(" in src
 
 
-def test_reschedule_booking_gated_on_verification():
+def test_reschedule_booking_has_no_spoken_name_gate():
     src = _method_src("reschedule_booking")
-    assert "identity_not_verified" in src
-    assert src.index("identity_verified") < src.index("_do_reschedule(")
+    assert "identity_not_verified" not in src
+    assert "_do_reschedule(" in src
 
 
-def test_cancel_booking_gated_on_verification():
+def test_cancel_booking_has_no_spoken_name_gate():
     src = _method_src("cancel_booking")
-    assert "identity_not_verified" in src
-    assert src.index("identity_verified") < src.index("_do_cancel(")
+    assert "identity_not_verified" not in src
+    assert "_do_cancel(" in src
 
 
 def test_cold_open_greeting_does_not_speak_stored_name_by_default():
@@ -186,10 +184,10 @@ def test_cold_open_greeting_does_not_speak_stored_name_by_default():
     assert "if not _GREET_BY_NAME:\n                    caller_greeting_name = None" in src
 
 
-def test_session_state_has_identity_verified_defaulting_false():
+def test_session_state_uses_verified_inbound_number_by_default():
     from agent.session_state import SessionState
 
-    assert SessionState().identity_verified is False
+    assert SessionState().identity_verified is True
 
 
 # ── Fix #2: owner analytics denies non-org_admin (deny path is pure) ──────────

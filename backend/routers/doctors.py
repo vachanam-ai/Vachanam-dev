@@ -199,6 +199,38 @@ def _parse_time(value: Optional[str], field_name: str) -> Optional[time]:
         )
 
 
+def _validate_schedule(doc: Doctor) -> None:
+    """Reject schedule shapes that would otherwise look "fully booked"."""
+    weekdays = doc.available_weekdays
+    if not weekdays:
+        raise HTTPException(status_code=422, detail="Select at least one working weekday.")
+    start, end = doc.working_hours_start, doc.working_hours_end
+    if (start is None) != (end is None):
+        raise HTTPException(
+            status_code=422,
+            detail="Working-hours start and end must both be set.",
+        )
+    if start is not None and end is not None and start >= end:
+        raise HTTPException(
+            status_code=422,
+            detail="Working-hours end must be later than start.",
+        )
+    if doc.booking_type == "appointment":
+        if start is None or end is None or not doc.slot_duration_minutes:
+            raise HTTPException(
+                status_code=422,
+                detail="Appointment doctors require working hours and slot duration.",
+            )
+        window_minutes = (end.hour * 60 + end.minute) - (
+            start.hour * 60 + start.minute
+        )
+        if doc.slot_duration_minutes > window_minutes:
+            raise HTTPException(
+                status_code=422,
+                detail="Slot duration must fit inside the working-hours window.",
+            )
+
+
 async def _assert_calendar_available(
     db: AsyncSession,
     branch: Branch,
@@ -493,6 +525,7 @@ async def create_doctor(
         is_default_doctor=body.is_default_doctor or False,
         status="active",
     )
+    _validate_schedule(doc)
     db.add(doc)
     await db.flush()
     # G8: at most ONE default doctor per branch — the agent's out-of-scope
@@ -598,6 +631,8 @@ async def update_doctor(
             doc.working_hours_end = _parse_time(value, "working_hours_end")
         else:
             setattr(doc, field, value)
+
+    _validate_schedule(doc)
 
     # G8: promoting this doctor to default demotes every other in the branch.
     if changed.get("is_default_doctor") is True:
