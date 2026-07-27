@@ -20,6 +20,7 @@ from agent.i18n.lines import (
 )
 from agent.livekit_minimal.agent import (
     LOST_HELLO_COUNT,
+    SILENCE_CLOSING_END_S,
     SILENCE_END_S,
     SILENCE_PROMPT_EVERY_S,
     VachanamAgent,
@@ -59,6 +60,20 @@ def test_silence_action_never_prompts_past_the_end():
 def test_silence_config_matches_spec():
     assert SILENCE_PROMPT_EVERY_S == 10.0
     assert SILENCE_END_S == 30.0
+
+
+def test_silence_closing_ends_fast_after_terminal_action():
+    """WRAP-UP (prod 2026-07-27): once closing is armed (cancel/reschedule done
+    and caller quiet), the call ends after the SHORT window, not the full 30s."""
+    # Not closing → the normal window still applies (no early end).
+    assert _silence_action(SILENCE_CLOSING_END_S, 0, closing=False) is None
+    assert _silence_action(29, 2, closing=False) is None
+    # Closing → end the moment the short window is reached.
+    assert _silence_action(SILENCE_CLOSING_END_S, 0, closing=True) == "end"
+    assert _silence_action(SILENCE_CLOSING_END_S + 5, 1, closing=True) == "end"
+    # Still below the short window → not yet (a gentle check may still fire).
+    assert _silence_action(SILENCE_CLOSING_END_S - 0.1, 0, closing=True) != "end"
+    assert SILENCE_CLOSING_END_S < SILENCE_END_S
 
 
 # ── Feature 1: the line-check lines exist in every language ───────────────────

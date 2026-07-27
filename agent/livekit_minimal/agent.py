@@ -414,17 +414,28 @@ def _cancel_on_shutdown(task):
 SILENCE_PROMPT_EVERY_S = 10.0
 SILENCE_END_S = 30.0
 SILENCE_POLL_S = 0.5
+# WRAP-UP end (prod 2026-07-27): once a terminal action (cancel/reschedule) is
+# done and the caller has gone quiet, end after this SHORT silence with ONE
+# gentle check instead of the full 30s — the call is over. Cleared the instant
+# the caller speaks, so a caller who raises something new gets the full window.
+SILENCE_CLOSING_END_S = 8.0
 # Consecutive lone-"hello" turns that mean the caller cannot hear us (#lost).
 LOST_HELLO_COUNT = 3
 
 
-def _silence_action(elapsed: float, prompts_sent: int) -> str | None:
+def _silence_action(elapsed: float, prompts_sent: int, closing: bool = False) -> str | None:
     """Pure decision for the silence watchdog. Returns 'end', 'prompt', or None.
 
     Prompts fall on each SILENCE_PROMPT_EVERY_S boundary strictly BEFORE
     SILENCE_END_S; at/after SILENCE_END_S the call ends. Split out so the timing
-    is unit-tested without a live session."""
+    is unit-tested without a live session.
+
+    closing=True means a terminal action already completed and the caller went
+    quiet — end after SILENCE_CLOSING_END_S (one gentle check first), rather than
+    holding the line the full SILENCE_END_S."""
     if elapsed >= SILENCE_END_S:
+        return "end"
+    if closing and elapsed >= SILENCE_CLOSING_END_S:
         return "end"
     max_prompts = int(SILENCE_END_S // SILENCE_PROMPT_EVERY_S) - 1
     due = min(int(elapsed // SILENCE_PROMPT_EVERY_S), max_prompts)
@@ -2477,6 +2488,13 @@ class VachanamAgent(Agent):
             if not text:
                 return False
             sess.say(sanitize_for_tts(text))
+            # WRAP-UP: cancel/reschedule are terminal — the caller rang to do
+            # exactly this. After the confirm line, a short silence should end
+            # the call instead of the full 30s "are you there?" cycle. A NEW
+            # booking is NOT terminal (the flow offers "anything else?"), so it
+            # never arms closing.
+            if kind in ("cancelled", "resched_slot", "resched_token"):
+                self._state.closing = True
             logger.info("deterministic_confirm_spoken kind=%s lang=%s", kind, lang)
             return True
         except Exception as exc:  # noqa: BLE001 — booking result still wins
@@ -5592,10 +5610,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         @session.on("user_state_changed")
         def _on_user_state(ev) -> None:
-            # Caller started talking → reset the silence clock + escalation.
+            # Caller started talking → reset the silence clock + escalation, and
+            # cancel wrap-up: they re-engaged, so restore the full silence window.
             if getattr(ev, "new_state", None) == "speaking":
                 _sil["last_user"] = _perf.monotonic()
                 _sil["prompts"] = 0
+                state.closing = False
 
         async def _silence_watchdog() -> None:
             try:
@@ -5618,7 +5638,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         _sil["last_user"] = now
                         _sil["prompts"] = 0
                         continue
-                    action = _silence_action(now - _sil["last_user"], _sil["prompts"])
+                    action = _silence_action(
+                        now - _sil["last_user"], _sil["prompts"],
+                        closing=bool(getattr(state, "closing", False)),
+                    )
                     if action == "end":
                         cur = get_lines(state.language or lang_code)
                         try:

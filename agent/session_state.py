@@ -100,3 +100,13 @@ class SessionState:
     # Durable metering: CallLog row inserted at call start (TD-027/F6) so a
     # killed worker that never runs the shutdown callback still leaves a record.
     call_log_id: UUID | None = None
+
+    # WRAP-UP (prod 2026-07-27, Vinay: "at the end of call it is staying
+    # end_of_turn"): the LLM finishes a terminal action (cancel/reschedule) and
+    # says goodbye but does NOT call end_call, so the line sat open until the
+    # 30s silence watchdog or the caller hung up — dead air after the call was
+    # clearly done. Set True on a terminal confirm; the silence watchdog then
+    # hangs up after a SHORT silence instead of the full 30s. Cleared the moment
+    # the caller speaks again, so a caller who raises something new gets the full
+    # window back (they are not done after all).
+    closing: bool = False

@@ -1506,6 +1506,43 @@ def _normalize_name(name: str | None) -> str:
     return " ".join(n.split())
 
 
+def _names_overlap(a: str, b: str) -> bool:
+    """Bidirectional containment + shared-name-part overlap of two ALREADY
+    normalized names. Tolerates a first-name-only vs full name, and word-order
+    / partial-STT differences."""
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+    return bool(set(a.split()) & set(b.split()))
+
+
+_romanize_cache: dict[str, str] = {}
+
+
+async def _romanize_name(name: str | None) -> str:
+    """Best-effort Latin romanization of a possibly Indic-script name, for
+    CROSS-SCRIPT identity comparison. A pure-Latin (or empty) name returns
+    unchanged; an Indic name is transliterated to Latin via Sarvam (the key
+    already configured for STT). On any failure returns the input (RULE 8) so
+    the caller is no worse off than before this bridge existed. Cached in-proc
+    (the Fly agent is long-lived), so repeat lookups for the same name are free."""
+    n = (name or "").strip()
+    if not n:
+        return ""
+    if n in _romanize_cache:
+        return _romanize_cache[n]
+    from agent.i18n.transliterate import _detect_script, _sarvam_hop
+
+    src = _detect_script(n)
+    if src == "en-IN":
+        _romanize_cache[n] = n  # already Latin/other — nothing to romanize
+        return n
+    out = (await _sarvam_hop(n, src, "en-IN")) or n
+    _romanize_cache[n] = out
+    return out
+
+
 async def caller_name_matches(
     branch_id: UUID, phone: str | None, spoken_name: str | None, db: AsyncSession
 ) -> bool:
@@ -1518,7 +1555,20 @@ async def caller_name_matches(
     passes with their own name. A too-short spoken name (< 2 chars) never
     matches. Bidirectional containment tolerates the caller giving a first name
     only vs. a full stored name.
+
+    CROSS-SCRIPT (prod 2026-07-27, Vinay: "unable to cancel"): STT renders the
+    caller's spoken name in the CALL's script — a Telugu call yields "వినయ్" —
+    but the patient record may hold the Latin "Vinay" (or vice-versa). The plain
+    compare below can't bridge scripts, so the identity gate (added v183) locked
+    legitimate callers out of cancel/reschedule/find_my_bookings entirely. When
+    the fast local compare misses AND the scripts differ, romanize both sides to
+    Latin and re-compare. This preserves the name as a real second factor (a
+    spoofer still needs the right name) while accepting a cross-script spelling.
+    Note _names_match (booking dedup) already fails OPEN across scripts, so this
+    only brings the identity gate in line with the rest of the name matching.
     """
+    from agent.i18n.transliterate import _detect_script
+
     digits = _phone_digits(phone)
     spoken = _normalize_name(spoken_name)
     if len(digits) < 10 or len(spoken) < 2:
@@ -1531,14 +1581,28 @@ async def caller_name_matches(
             )
         )
     ).all()
-    for (stored_raw,) in rows:
-        stored = _normalize_name(stored_raw)
-        if not stored:
-            continue
-        if spoken == stored or spoken in stored or stored in spoken:
+    stored_raws = [r[0] for r in rows if r[0] and _normalize_name(r[0])]
+
+    # Fast local path — same-script names match with NO network hop (the common
+    # case: English call, or a Telugu name against a Telugu record).
+    for stored_raw in stored_raws:
+        if _names_overlap(spoken, _normalize_name(stored_raw)):
             return True
-        # token overlap: any shared name-part (handles word-order / partial STT)
-        if set(spoken.split()) & set(stored.split()):
+
+    # Cross-script fallback — only when at least one stored name is in a
+    # DIFFERENT script than what the caller spoke (else there is nothing a
+    # romanization could bridge, and we skip the Sarvam call entirely).
+    spoken_is_latin = _detect_script(spoken_name or "") == "en-IN"
+    if not any(
+        (_detect_script(sr) == "en-IN") != spoken_is_latin for sr in stored_raws
+    ):
+        return False
+    spoken_roman = _normalize_name(await _romanize_name(spoken_name))
+    if len(spoken_roman) < 2:
+        return False
+    for stored_raw in stored_raws:
+        stored_roman = _normalize_name(await _romanize_name(stored_raw))
+        if _names_overlap(spoken_roman, stored_roman):
             return True
     return False
 
