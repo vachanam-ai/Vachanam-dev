@@ -75,5 +75,64 @@ async def test_successful_dispatch_marks_reminder_sent(db, monkeypatch, redis):
     assert tok.reminder_sent is True
 
 
+# ── prod 2026-07-27: a reminder marked sent on agent-JOIN but whose outbound
+#    DIAL then failed (callee BUSY on another clinic's simultaneous reminder to
+#    the same number) was never retried. On dial failure we now reset
+#    reminder_sent=False (bounded) so the next tick re-dials. ─────────────────
+
+@pytest.mark.asyncio
+async def test_failed_dial_requeues_reminder(db, redis):
+    from agent.livekit_minimal.agent import _reminder_retry_on_dial_fail
+
+    tok = await _seed_in_window(db)
+    tok.reminder_sent = True  # the job flips this on agent-join, before the dial
+    await db.commit()
+
+    await _reminder_retry_on_dial_fail({"call_type": "reminder", "token_id": str(tok.id)})
+
+    await db.refresh(tok)
+    assert tok.reminder_sent is False  # requeued → the next tick re-dials
+
+
+@pytest.mark.asyncio
+async def test_dial_retry_is_bounded_by_attempt_cap(db, redis):
+    from agent.livekit_minimal.agent import (
+        _REMINDER_MAX_DIAL_ATTEMPTS,
+        _reminder_retry_on_dial_fail,
+    )
+
+    tok = await _seed_in_window(db)
+    meta = {"call_type": "reminder", "token_id": str(tok.id)}
+
+    for _ in range(_REMINDER_MAX_DIAL_ATTEMPTS):  # attempts 1..cap → requeued
+        tok.reminder_sent = True
+        await db.commit()
+        await _reminder_retry_on_dial_fail(meta)
+        await db.refresh(tok)
+        assert tok.reminder_sent is False
+
+    tok.reminder_sent = True  # one past the cap → give up (a phone off all day)
+    await db.commit()
+    await _reminder_retry_on_dial_fail(meta)
+    await db.refresh(tok)
+    assert tok.reminder_sent is True  # exhausted → NOT reset again
+
+
+@pytest.mark.asyncio
+async def test_non_reminder_call_never_touches_token(db, redis):
+    from agent.livekit_minimal.agent import _reminder_retry_on_dial_fail
+
+    tok = await _seed_in_window(db)
+    tok.reminder_sent = True
+    await db.commit()
+
+    # followups self-heal via task status — this path is reminder-only.
+    await _reminder_retry_on_dial_fail({"call_type": "followup", "task_id": "x"})
+    await _reminder_retry_on_dial_fail({"call_type": "reminder"})  # no token_id
+
+    await db.refresh(tok)
+    assert tok.reminder_sent is True  # untouched
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

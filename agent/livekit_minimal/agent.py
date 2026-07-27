@@ -3601,6 +3601,60 @@ class VachanamAgent(Agent):
                             "to also take a message with take_message."}
 
 
+# A reminder's `reminder_sent` is flipped True the moment the AGENT JOINS THE
+# ROOM (dispatch_verify.verify_or_cleanup), BEFORE the outbound leg is dialed.
+# So a dial that then FAILS — the callee is BUSY (a second clinic's simultaneous
+# reminder to the same number), no-answer, or a network blip — used to leave the
+# reminder marked "sent" and NEVER retried (prod 2026-07-27, Vinay: never
+# received sri reminders — his number was busy on venkat's simultaneous call, and
+# both showed reminder_sent=True). Fix: on a real dial failure, RESET
+# reminder_sent=False and re-arm the reminders wake-gate so the next scheduler
+# tick re-dials — bounded by a small Redis attempt cap so a phone that is off all
+# day is not dialed forever. Followups already self-heal (task stays 'pending'),
+# so only the reminder path needs this.
+_REMINDER_MAX_DIAL_ATTEMPTS = 3
+
+
+async def _reminder_retry_on_dial_fail(meta: dict) -> None:
+    token_id = meta.get("token_id")
+    if meta.get("call_type") != "reminder" or not token_id:
+        return
+    try:
+        async with aioredis.from_url(settings.redis_url, decode_responses=True) as r:
+            attempts = await r.incr(f"rem_retry:{token_id}")
+            await r.expire(f"rem_retry:{token_id}", 86400)  # RULE 9: same-day
+        if attempts > _REMINDER_MAX_DIAL_ATTEMPTS:
+            logger.warning(
+                "reminder_retry_exhausted token=%s attempts=%d", str(token_id)[-8:], attempts
+            )
+            return
+        from sqlalchemy import update as _update
+
+        from backend.models.schema import Token as _Token
+
+        async with AsyncSessionLocal() as _db:
+            await _db.execute(
+                _update(_Token)
+                .where(_Token.id == UUID(str(token_id)))
+                .values(reminder_sent=False)
+            )
+            await _db.commit()
+        # The scheduler parked itself until the NEXT pending reminder after it
+        # dispatched this one; clear the gate so the coming tick runs the DB pass
+        # and re-dials THIS token while it is still inside the reminder window.
+        try:
+            from backend.jobs import wake_gate
+
+            await wake_gate.clear_next_at("reminders")
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info(
+            "reminder_dial_failed_requeued token=%s attempt=%d", str(token_id)[-8:], attempts
+        )
+    except Exception as e:  # noqa: BLE001 — best-effort; never crash teardown
+        logger.warning("reminder_retry_reset_failed: %s", e)
+
+
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
     logger.info("Joined room: %s", ctx.room.name)
@@ -3733,6 +3787,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
         except api.TwirpError as e:
             logger.error("Outbound dial failed: %s %s", e.code, e.message)
+            # RULE: a reminder whose dial FAILED was never delivered — requeue it
+            # (bounded) instead of leaving it falsely marked sent.
+            await _reminder_retry_on_dial_fail(meta)
             ctx.shutdown()
             return
 
