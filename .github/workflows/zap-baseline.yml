@@ -127,6 +127,7 @@ jobs:
             zap-baseline.py \
               -t http://localhost:8000 \
               -r zap-report.html \
+              -J zap-report.json \
               -I
 
       - name: Upload ZAP report
@@ -134,22 +135,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zap-baseline-report
-          path: zap/zap-report.html
+          path: zap/zap-report.*
           retention-days: 90
 
       - name: Fail on high-risk findings
         if: always()
         run: |
-          if [ -f zap/zap-report.html ]; then
-            if grep -q 'risk-3' zap/zap-report.html; then
-              echo "::error::ZAP found HIGH-RISK findings. Check the uploaded report."
-              exit 1
-            fi
-            echo "No high-risk findings detected."
-          else
+          if [ ! -f zap/zap-report.html ] || [ ! -f zap/zap-report.json ]; then
             echo "::error::ZAP report not found — the scan did not complete."
             exit 1
           fi
+          python -c 'import json,sys; d=json.load(open(sys.argv[1])); high=[a for s in d.get("site",[]) for a in s.get("alerts",[]) if str(a.get("riskcode"))=="3"]; print(f"High-risk alerts: {len(high)}"); raise SystemExit(bool(high))' zap/zap-report.json
 
       - name: Stop backend
         if: always()
