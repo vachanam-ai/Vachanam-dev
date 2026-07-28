@@ -33,6 +33,15 @@ def test_current_symptom_replaces_previous_route_in_prompt():
     assert "never reuse the prior doctor" in p
 
 
+def test_prompt_keeps_role_and_database_truth_under_ragebait():
+    p = _prompt()
+    assert '<poml version="20">' in p
+    assert "ragebait" in p
+    assert "Never act as the patient" in p
+    assert "RETRIEVE, THEN SPEAK" in p
+    assert "tool returning success=true" in p
+
+
 def test_prompt_requires_panti_pani_contrastive_repair():
     p = _prompt()
     assert "పంటి సమస్యా, పని సమస్యా?" in p

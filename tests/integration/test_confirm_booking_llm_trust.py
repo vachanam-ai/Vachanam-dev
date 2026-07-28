@@ -5,7 +5,7 @@ Guards proven here (all at the VachanamAgent.confirm_booking tool boundary):
   - multiple family members can book on one call and share caller-ID.
   - oversized patient_name / complaint and out-of-range patient_age are rejected.
 """
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from agent.livekit_minimal.agent import VachanamAgent
 from agent.session_state import SessionState
-from backend.models.schema import Branch, Doctor, Organization, Patient
+from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 
 pytestmark = pytest.mark.asyncio
 
@@ -130,6 +130,72 @@ async def test_confirm_sets_existing_booking_intent_for_same_call_change(clinic,
     # After confirming, further "change it" must NOT be blocked by ALREADY_BOOKED.
     assert state.existing_booking_intent is True
     assert _availability_caller_phone(state) is None
+
+
+async def test_lost_commit_ack_is_reconciled_before_agent_speaks(
+    clinic, db, redis, monkeypatch
+):
+    """A committed booking plus a lost response must be reported as success,
+    never first as failure and then corrected."""
+    import agent.livekit_minimal.agent as agent_module
+
+    branch, doc = clinic["branch"], clinic["doc"]
+    state = _state(branch.id)
+    state.call_start = datetime.now(timezone.utc) - timedelta(seconds=1)
+    agent = _agent(state, db)
+    real_confirm = agent_module.confirm_booking
+
+    async def commit_then_lose_ack(**kwargs):
+        result = await real_confirm(**kwargs)
+        assert result["success"]
+        raise ConnectionError("commit acknowledgement lost")
+
+    monkeypatch.setattr(agent_module, "confirm_booking", commit_then_lose_ack)
+    result = await agent.confirm_booking(
+        context=None,
+        doctor_id=str(doc.id),
+        patient_name="Ack Lost",
+        complaint="fever",
+        booking_date=_tomorrow().isoformat(),
+        followup_consent=False,
+        patient_age=30,
+    )
+    assert result["success"] is True
+    row = await db.get(Token, __import__("uuid").UUID(result["token_id"]))
+    assert row is not None and row.status == "confirmed"
+
+
+async def test_cancel_uses_database_readback_when_tool_result_is_lost(
+    clinic, db, redis, monkeypatch
+):
+    branch, doc = clinic["branch"], clinic["doc"]
+    state = _state(branch.id)
+    state.call_start = datetime.now(timezone.utc) - timedelta(seconds=1)
+    agent = _agent(state, db)
+    booked = await agent.confirm_booking(
+        context=None,
+        doctor_id=str(doc.id),
+        patient_name="Cancel Ack Lost",
+        complaint="fever",
+        booking_date=_tomorrow().isoformat(),
+        followup_consent=False,
+        patient_age=30,
+    )
+    assert booked["success"]
+    real_cancel = agent._do_cancel
+
+    async def cancel_then_lose_result(token_id, reason="ignored"):
+        committed = await real_cancel(token_id, reason=reason)
+        assert committed["success"]
+        return {"success": False, "error": "connection_lost"}
+
+    monkeypatch.setattr(agent, "_do_cancel", cancel_then_lose_result)
+    result = await agent.cancel_booking(
+        context=None, token_id=booked["token_id"], reason="cancel"
+    )
+    assert result["success"] is True
+    row = await db.get(Token, __import__("uuid").UUID(booked["token_id"]))
+    assert row.status == "cancelled_by_patient"
 
 
 async def test_three_family_bookings_share_verified_caller_id(clinic, db, redis):

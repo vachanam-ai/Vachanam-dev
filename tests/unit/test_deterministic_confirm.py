@@ -3,6 +3,7 @@ from datetime import date, time
 from pathlib import Path
 
 from agent.i18n.lines import LINES
+from agent.i18n.languages import LANGUAGES
 from agent.livekit_minimal.confirm_speech import build_confirm_text
 
 D = date(2026, 7, 25)
@@ -44,6 +45,14 @@ def test_every_defined_template_formats_without_placeholders():
                 assert "{" not in template.format(**values)
 
 
+def test_every_supported_language_has_deterministic_success_fallback():
+    for lang in LANGUAGES:
+        assert build_confirm_text(lang, "booked_token", token=12, date_=D)
+        assert build_confirm_text(lang, "booked_slot", date_=D, time_=T)
+        assert build_confirm_text(lang, "resched_slot", date_=D, time_=T)
+        assert build_confirm_text(lang, "cancelled")
+
+
 def test_agent_wiring_is_success_gated_and_reversible():
     src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
     helper = src.split("def _speak_deterministic_confirm", 1)[1][:2200]
@@ -51,4 +60,3 @@ def test_agent_wiring_is_success_gated_and_reversible():
     assert "isinstance(sess, AgentSession)" in helper
     assert "sanitize_for_tts" in helper
     assert src.count("raise StopResponse()") >= 3
-

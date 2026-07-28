@@ -5,7 +5,7 @@ Wires together:
 - Middleware stack (outermost-first):
     1. SecurityHeadersMiddleware — CSP, HSTS, X-Frame, etc. on EVERY response
     2. CORSMiddleware — exact-origin allowlist (no wildcard)
-- Static: mounts /static and serves landing page mirror at /
+- Root: returns API service metadata; the UI is hosted separately
 - Lifespan: structlog config, scheduler/Calendar/jobs (Phase 6 will add)
 - Health: /health for UptimeRobot + Render + Fly probes
 
@@ -20,15 +20,13 @@ including CORS preflight 204s — carries the security headers.
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from agent.logging_config import configure_structlog
 from backend.config import settings
@@ -400,32 +398,12 @@ app.include_router(support_router.router, prefix="/support", tags=["support"])
 # WhatsApp webhook — public (Meta calls it); HMAC-verified inside (WA T5).
 app.include_router(whatsapp_webhook_router.router)
 
-# Landing page (Vachanam marketing mirror + Razorpay test target).
-# Static files served from backend/static/ — landing index.html at /,
-# everything else under /static/<path>.
-_STATIC = Path(__file__).parent / "static"
-if _STATIC.exists():
-    app.mount("/static", StaticFiles(directory=_STATIC), name="static")
-
-
-@app.get("/", response_class=HTMLResponse, include_in_schema=False, response_model=None)
-async def landing():
-    """Serve the Vachanam landing page with canonical Solo/Clinic/Multi pricing."""
-    index = _STATIC / "index.html"
-    if index.exists():
-        return FileResponse(index)
-    return HTMLResponse("<h1>Vachanam</h1><p>Landing page not found.</p>", status_code=404)
-
-
-@app.get("/dev/test", response_class=HTMLResponse, include_in_schema=False, response_model=None)
-async def dev_razorpay_test():
-    """Developer-only Razorpay test page (single button, any amount)."""
-    if _is_prod:
-        return HTMLResponse("Not found", status_code=404)
-    page = _STATIC / "razorpay-test.html"
-    if page.exists():
-        return FileResponse(page)
-    return HTMLResponse("Dev test page not found", status_code=404)
+# The browser application is hosted separately. Keeping this origin API-only
+# removes duplicate third-party scripts and payment surfaces.
+@app.get("/", include_in_schema=False)
+async def service_root() -> dict:
+    """Identify the API without exposing a duplicate browser application."""
+    return {"service": "vachanam-api", "health": "/health"}
 
 
 @app.get("/health", tags=["health"])

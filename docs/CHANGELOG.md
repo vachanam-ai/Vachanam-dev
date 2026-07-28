@@ -13,6 +13,32 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Database-grounded voice outcomes and warning-zero API surface
+
+Made Postgres—not model interpretation—the final authority for every voice
+mutation. Booking success is read back by token ID, branch, caller number,
+doctor, date, and time before speech. Lost commit acknowledgements reconcile
+only against exact same-call voice rows. Cancellation rechecks the requested
+row; rescheduling proves both sides: the old row is cancelled and the exact
+replacement row is confirmed. Inconclusive reads fail closed and never permit
+the agent to claim either success or failure.
+
+Verified mutation confirmations are deterministic in every configured language
+(native templates where reviewed; deterministic English safety fallback
+elsewhere), removing the post-tool LLM contradiction path. Calendar creation is
+compensated if the following Postgres commit fails. POML v20 keeps hostile,
+ragebait, and roleplay speech non-authoritative and forbids adopting a patient
+or another agent's role.
+
+The obsolete backend-hosted copy of the marketing/payment page is gone. `/`
+now returns API metadata, while strict CSP, COEP, COOP, CORP, and default
+`Cache-Control: no-store` remove the seven ZAP advisory classes at their common
+root. No `frontend/**` file was changed.
+
+Focused proof: unit/security groups 16 + 12 + 7 passed; booking readback suite
+9 passed; booking/cancellation/reschedule saga suite 31 passed; Calendar
+rollback compensation passed; Ruff, compile, and diff checks are green.
+
 ## 2026-07-29 — Monochrome UI redesign ("clinic desk"), teal removed
 
 Reskinned the entire frontend from teal/cream to the monochrome BizLink

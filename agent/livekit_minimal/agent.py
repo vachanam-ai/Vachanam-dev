@@ -133,6 +133,7 @@ from backend.config import settings  # noqa: E402
 from backend.database import AsyncSessionLocal, get_loop_engine  # noqa: E402
 from backend.models.schema import Branch, Doctor  # noqa: E402
 from backend.models.schema import Patient as _PatientModel  # noqa: E402
+from backend.models.schema import Token as _TokenModel  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vachanam-agent")
@@ -2465,11 +2466,73 @@ class VachanamAgent(Agent):
                 await self._db.rollback()
             except Exception:
                 pass
-            return {"success": False, "error": "booking_failed"}
+            try:
+                recovered = await self._find_confirmed_caller_booking(
+                    doctor_id=resolved,
+                    booking_date=parsed_date,
+                    appointment_time=parsed_time,
+                    patient_name=patient_name,
+                )
+            except Exception as verify_error:  # noqa: BLE001
+                logger.error("booking_reconcile_read_failed: %s", verify_error)
+                recovered = None
+            if recovered is None:
+                return {
+                    "success": False,
+                    "error": "booking_outcome_unverified",
+                    "instruction": (
+                        "The database did not verify success. Do not say the booking "
+                        "succeeded or failed. Say only that its status could not be "
+                        "verified, then run find_my_bookings before retrying."
+                    ),
+                }
+            logger.warning(
+                "booking_outcome_reconciled token=%s branch_id=%s",
+                str(recovered.id)[-8:],
+                str(self._state.branch_id),
+            )
+            result = {
+                "success": True,
+                "token_id": str(recovered.id),
+                "booking_type": (
+                    "token" if recovered.appointment_time is None else "appointment"
+                ),
+                "announce": (
+                    "token_number"
+                    if recovered.appointment_time is None
+                    else "time_only"
+                ),
+            }
         if result.get("success"):
+            try:
+                verified = await self._load_caller_booking(result.get("token_id"))
+            except Exception as verify_error:  # noqa: BLE001
+                logger.error("booking_success_readback_failed: %s", verify_error)
+                verified = None
+            if (
+                verified is None
+                or verified.status != "confirmed"
+                or verified.doctor_id != resolved
+                or verified.date != parsed_date
+                or verified.appointment_time != parsed_time
+            ):
+                logger.critical(
+                    "booking_success_readback_mismatch branch_id=%s",
+                    str(self._state.branch_id),
+                )
+                return {
+                    "success": False,
+                    "error": "booking_outcome_unverified",
+                    "instruction": (
+                        "Do not claim success or failure. The database readback did "
+                        "not verify the requested booking; run find_my_bookings now."
+                    ),
+                }
+            token_number = verified.token_number
+            parsed_time = verified.appointment_time
             self._state.token_confirmed = True
             try:  # audit #9: doctor-scoped completion for follow-up teardown
-                self._state.confirmed_doctor_ids.append(str(doctor_id))
+                self._state.confirmed_doctor_ids.append(str(resolved))
             except Exception:  # noqa: BLE001
                 pass
             self._state.patient_name = patient_name
@@ -2537,6 +2600,65 @@ class VachanamAgent(Agent):
         except Exception as exc:  # noqa: BLE001 — booking result still wins
             logger.warning("deterministic_confirm_failed kind=%s: %s", kind, exc)
             return False
+
+    async def _load_caller_booking(self, token_id: str):
+        """Read one booking through the caller-ID authorization boundary."""
+        try:
+            token_uuid = UUID(token_id)
+        except (TypeError, ValueError):
+            return None
+        _, caller_last10 = _require_caller_phone(self._state)
+        return (
+            await self._db.execute(
+                select(_TokenModel)
+                .join(_PatientModel, _TokenModel.patient_id == _PatientModel.id)
+                .where(
+                    and_(
+                        _TokenModel.id == token_uuid,
+                        _TokenModel.branch_id == self._state.branch_id,
+                        _PatientModel.phone.like(f"%{caller_last10}"),
+                    )
+                )
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+
+    async def _find_confirmed_caller_booking(
+        self,
+        *,
+        doctor_id,
+        booking_date,
+        appointment_time,
+        patient_name: str | None = None,
+        patient_id=None,
+    ):
+        """Recover an acknowledged-lost write from authoritative Postgres state."""
+        if self._state.call_start is None:
+            return None
+        _, caller_last10 = _require_caller_phone(self._state)
+        filters = [
+            _TokenModel.branch_id == self._state.branch_id,
+            _TokenModel.doctor_id == doctor_id,
+            _TokenModel.date == booking_date,
+            _TokenModel.appointment_time == appointment_time,
+            _TokenModel.status == "confirmed",
+            _TokenModel.source == "voice",
+            _PatientModel.phone.like(f"%{caller_last10}"),
+        ]
+        if patient_id is not None:
+            filters.append(_TokenModel.patient_id == patient_id)
+        elif patient_name:
+            filters.append(_PatientModel.name == patient_name)
+        filters.append(_TokenModel.confirmed_at >= self._state.call_start)
+        return (
+            await self._db.execute(
+                select(_TokenModel)
+                .join(_PatientModel, _TokenModel.patient_id == _PatientModel.id)
+                .where(and_(*filters))
+                .order_by(_TokenModel.confirmed_at.desc())
+                .execution_options(populate_existing=True)
+            )
+        ).scalars().first()
 
     async def _complete_followup_task(self, summary: str) -> bool:
         """Mark this call's FollowupTask completed (stops the outbound retry
@@ -3013,8 +3135,101 @@ class VachanamAgent(Agent):
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB + calendar move
-        result = await self._do_reschedule(old_token_id, new_date, new_time)
+        requested_date = self._parse_date(new_date)
+        requested_time = self._parse_time(new_time)
+        original = await self._load_caller_booking(old_token_id)
+        try:
+            result = await self._do_reschedule(old_token_id, new_date, new_time)
+        except ToolError:
+            raise
+        except Exception as error:  # noqa: BLE001
+            logger.error("reschedule_tool_failed: %s", error)
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            result = {"success": False, "error": "reschedule_outcome_unverified"}
+
+        # A connection can lose the commit acknowledgement after Postgres has
+        # completed the move. Re-read both sides before reporting a failure.
+        if not result.get("success") and original is not None:
+            try:
+                old_readback = await self._load_caller_booking(old_token_id)
+                recovered = await self._find_confirmed_caller_booking(
+                    doctor_id=original.doctor_id,
+                    booking_date=requested_date,
+                    appointment_time=requested_time,
+                    patient_id=original.patient_id,
+                )
+            except Exception as verify_error:  # noqa: BLE001
+                logger.error("reschedule_outcome_reconcile_failed: %s", verify_error)
+                old_readback = recovered = None
+            if (
+                old_readback is not None
+                and old_readback.status in ("cancelled_by_patient", "cancelled_by_clinic")
+                and recovered is not None
+            ):
+                logger.warning(
+                    "reschedule_outcome_reconciled old=%s new=%s branch_id=%s",
+                    old_token_id[-8:],
+                    str(recovered.id)[-8:],
+                    str(self._state.branch_id),
+                )
+                result = {
+                    "success": True,
+                    "new_token_id": str(recovered.id),
+                    "new_token_number": recovered.token_number,
+                    "new_date": recovered.date.isoformat(),
+                    "new_time": (
+                        recovered.appointment_time.strftime("%H:%M")
+                        if recovered.appointment_time else None
+                    ),
+                    "old_cancelled": True,
+                }
         if result.get("success"):
+            try:
+                old_readback = await self._load_caller_booking(old_token_id)
+                new_readback = await self._load_caller_booking(result.get("new_token_id"))
+            except Exception as verify_error:  # noqa: BLE001
+                logger.error("reschedule_success_readback_failed: %s", verify_error)
+                old_readback = new_readback = None
+            no_op = bool(result.get("already_at_requested_time"))
+            verified = (
+                old_readback is not None
+                and new_readback is not None
+                and new_readback.status == "confirmed"
+                and new_readback.date == requested_date
+                and new_readback.appointment_time == requested_time
+                and (
+                    (
+                        no_op
+                        and (
+                            old_readback.id == new_readback.id
+                            or old_readback.status
+                            in ("cancelled_by_patient", "cancelled_by_clinic")
+                        )
+                    )
+                    or (
+                        not no_op
+                        and old_readback.status
+                        in ("cancelled_by_patient", "cancelled_by_clinic")
+                    )
+                )
+            )
+            if not verified:
+                logger.critical(
+                    "reschedule_success_readback_mismatch old=%s branch_id=%s",
+                    old_token_id[-8:],
+                    str(self._state.branch_id),
+                )
+                return {
+                    "success": False,
+                    "error": "reschedule_outcome_unverified",
+                    "instruction": (
+                        "Do not say the reschedule succeeded or failed. The "
+                        "database readback was inconclusive; transfer to the clinic."
+                    ),
+                }
             resolved_time = self._parse_time(result.get("new_time"))
             if self._speak_deterministic_confirm(
                 context,
@@ -3143,6 +3358,7 @@ class VachanamAgent(Agent):
         ):
             return {
                 "success": True,
+                "new_token_id": str(old_token.id),
                 "new_token_number": old_token.token_number,
                 "new_date": booking_date.isoformat(),
                 "new_time": (
@@ -3214,9 +3430,38 @@ class VachanamAgent(Agent):
                 await self._db.rollback()
             except Exception:
                 pass
-            await self._release_hold(assigned)  # RULE 3: don't leak the new hold
-            self._clear_hold()  # so shutdown cleanup doesn't DECR it a 2nd time
-            return {"success": False, "step": "confirm", "error": "booking_failed"}
+            try:
+                recovered = await self._find_confirmed_caller_booking(
+                    doctor_id=old_token.doctor_id,
+                    booking_date=booking_date,
+                    appointment_time=appt_time,
+                    patient_id=old_token.patient_id,
+                )
+            except Exception as verify_error:  # noqa: BLE001
+                logger.error("reschedule_confirm_reconcile_failed: %s", verify_error)
+                recovered = None
+            if recovered is None:
+                await self._release_hold(assigned)  # RULE 3: don't leak the new hold
+                self._clear_hold()  # shutdown cleanup must not DECR it twice
+                return {
+                    "success": False,
+                    "step": "confirm",
+                    "error": "reschedule_outcome_unverified",
+                    "instruction": (
+                        "Do not claim success or failure. Re-read the caller's "
+                        "bookings before retrying this reschedule."
+                    ),
+                }
+            confirmed = {
+                "success": True,
+                "token_id": str(recovered.id),
+                "token_number": recovered.token_number,
+            }
+            logger.warning(
+                "reschedule_booking_reconciled token=%s branch_id=%s",
+                str(recovered.id)[-8:],
+                str(self._state.branch_id),
+            )
         if not confirmed.get("success"):
             # B1: an in-band failure path (dup guard / capacity) may return
             # after the core flushed the Token. Roll back so no half-written row
@@ -3228,6 +3473,35 @@ class VachanamAgent(Agent):
             await self._release_hold(assigned)  # RULE 3: dup guard / capacity etc.
             self._clear_hold()
             return {"success": False, "step": "confirm", **confirmed}
+        try:
+            verified_new = await self._load_caller_booking(confirmed.get("token_id"))
+        except Exception as verify_error:  # noqa: BLE001
+            logger.error("reschedule_new_readback_failed: %s", verify_error)
+            verified_new = None
+        if (
+            verified_new is None
+            or verified_new.status != "confirmed"
+            or verified_new.patient_id != old_token.patient_id
+            or verified_new.doctor_id != old_token.doctor_id
+            or verified_new.date != booking_date
+            or verified_new.appointment_time != appt_time
+        ):
+            logger.critical(
+                "reschedule_new_readback_mismatch old=%s branch_id=%s",
+                str(old_token.id)[-8:],
+                str(self._state.branch_id),
+            )
+            return {
+                "success": False,
+                "step": "verify_new",
+                "error": "manual_reconciliation_required",
+                "instruction": (
+                    "Do not claim that the appointment moved or failed. Connect "
+                    "the caller to the clinic because the database readback is "
+                    "not conclusive."
+                ),
+            }
+        confirmed["token_number"] = verified_new.token_number
         self._state.token_confirmed = True
         try:  # audit #9: doctor-scoped completion for follow-up teardown
             self._state.confirmed_doctor_ids.append(str(old_token.doctor_id))
@@ -3305,7 +3579,8 @@ class VachanamAgent(Agent):
         )
         return {
             "success": True,
-            "new_token_number": assigned["token_number"],
+            "new_token_id": new_id,
+            "new_token_number": confirmed.get("token_number"),
             "new_date": booking_date.isoformat(),
             "new_time": assigned.get("appointment_time"),
             "old_cancelled": bool(old_is_gone),
@@ -3342,7 +3617,47 @@ class VachanamAgent(Agent):
         # pinned so barge-in can't discard the completed cancel (FIXLOG #361).
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB + calendar delete
-        result = await self._do_cancel(token_id)
+        try:
+            result = await self._do_cancel(token_id)
+        except ToolError:
+            raise
+        except Exception as error:  # noqa: BLE001
+            logger.error("cancel_tool_failed: %s", error)
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
+            result = {"success": False, "error": "cancellation_outcome_unverified"}
+        try:
+            readback = await self._load_caller_booking(token_id)
+        except Exception as verify_error:  # noqa: BLE001
+            logger.error("cancel_outcome_readback_failed: %s", verify_error)
+            readback = None
+        if readback is not None and readback.status in (
+            "cancelled_by_patient",
+            "cancelled_by_clinic",
+        ):
+            if not result.get("success"):
+                logger.warning(
+                    "cancel_outcome_reconciled token=%s branch_id=%s",
+                    token_id[-8:],
+                    str(self._state.branch_id),
+                )
+            result = {"success": True, "already_cancelled": True}
+        elif result.get("success"):
+            logger.critical(
+                "cancel_success_readback_mismatch token=%s branch_id=%s",
+                token_id[-8:],
+                str(self._state.branch_id),
+            )
+            return {
+                "success": False,
+                "error": "cancellation_outcome_unverified",
+                "instruction": (
+                    "Do not say cancelled or not cancelled. The database "
+                    "readback was inconclusive; transfer to the clinic."
+                ),
+            }
         if (
             result.get("success")
             and reason == "cancel"

@@ -19,7 +19,7 @@ Bug 1: LLM-orchestrated reschedules kept cancelling without booking (or
        old booking untouched.
 """
 import uuid
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -57,6 +57,15 @@ class FlakyCalendar:
 class DeleteFailsCalendar(FlakyCalendar):
     async def delete_event(self, calendar_id, event_id) -> None:
         raise RuntimeError("calendar delete unavailable")
+
+
+class TrackingCalendar(FlakyCalendar):
+    def __init__(self):
+        super().__init__(failures=0)
+        self.deleted = []
+
+    async def delete_event(self, calendar_id, event_id) -> None:
+        self.deleted.append((calendar_id, event_id))
 
 
 class NullMeta:
@@ -173,6 +182,41 @@ async def test_confirm_booking_transient_calendar_failure_single_row(clinic, db,
     assert result["success"], result
     assert cal.calls == 2  # one failure + one successful retry (calendar step only)
     assert await _count_tokens(db, doc.id, branch.id, day) == 1  # ONE row, not one-per-retry
+
+
+async def test_failed_database_commit_removes_calendar_event(
+    clinic, db, redis, monkeypatch
+):
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    branch_id, doctor_id = branch.id, doc.id
+    day = _tomorrow()
+    appt = time(10, 0)
+    assigned = await assign_token(doc.id, branch.id, day, db, appointment_time=appt)
+    cal = TrackingCalendar()
+
+    async def fail_commit():
+        raise RuntimeError("database commit failed")
+
+    monkeypatch.setattr(db, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="database commit failed"):
+        await confirm_booking(
+            doctor_id=doc.id,
+            branch_id=branch.id,
+            patient_name="Commit Failure",
+            patient_phone="+919666444429",
+            complaint="skin",
+            booking_date=day,
+            token_number=assigned["token_number"],
+            followup_consent=False,
+            patient_age=30,
+            appointment_time=appt,
+            source="voice",
+            db=db,
+            calendar_service=cal,
+            meta_service=NullMeta(),
+        )
+    assert cal.deleted == [(None, "evt-1")]
+    assert await _count_tokens(db, doctor_id, branch_id, day) == 0
 
 
 # â”€â”€ Bug 3: cancelled token numbers are never reissued â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -309,6 +353,7 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
     state = SessionState(session_id="t2")
     state.branch_id = branch.id
     state.patient_phone = "+919666444428"  # caller owns the booking (472bbe4 gate)
+    state.call_start = datetime.now(timezone.utc) - timedelta(seconds=1)
     agent = VachanamAgent(
         instructions="t",
         state=state,
@@ -318,9 +363,15 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
         meta_service=NullMeta(),
         transfer_to="",
     )
-    result = await agent._do_reschedule(confirmed["token_id"], day.isoformat(), "11:00")
+    result = await agent.reschedule_booking(
+        context=None,
+        old_token_id=confirmed["token_id"],
+        new_date=day.isoformat(),
+        new_time="11:00",
+    )
     assert result["success"], result
     assert result["old_cancelled"] is True
+    assert result["new_token_id"]
 
     rows = (
         await db.execute(

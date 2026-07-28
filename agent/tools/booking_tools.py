@@ -1345,7 +1345,27 @@ async def confirm_booking(
         event_id = await asyncio.wait_for(_calendar_write(), timeout=8.0)
         token.google_calendar_event_id = event_id
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # Calendar is written before Postgres by design. If the database commit
+        # fails, compensate the external write so a failed booking cannot leave
+        # a ghost appointment on the doctor's calendar.
+        await db.rollback()
+        if event_id:
+            try:
+                async with asyncio.timeout(5):
+                    await calendar_service.delete_event(
+                        doctor_calendar_id or branch_calendar_id, event_id
+                    )
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.critical(
+                    "booking_commit_calendar_compensation_failed",
+                    error=str(cleanup_error)[:160],
+                    branch_id=str(branch_id),
+                    doctor_id=str(doctor_id),
+                )
+        raise
 
     logger.info(
         "booking_confirmed",

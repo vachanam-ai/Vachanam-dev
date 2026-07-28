@@ -53,7 +53,11 @@ def build_confirm_text(
         return None
     template = getattr(get_lines(lang_code), field, "")
     if not template:
-        return None
+        # A verified write must never fall back to a creative LLM outcome.
+        # Until a native-reviewed template exists, deterministic English is
+        # safer than a fluent contradiction such as "I couldn't book" after a
+        # successful commit.
+        template = getattr(get_lines("en"), field, "")
 
     values: dict[str, str] = {}
     if "{token}" in template:

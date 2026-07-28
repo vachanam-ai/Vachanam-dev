@@ -1,5 +1,16 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-29 — DATABASE-VERIFIED VOICE MUTATIONS + API SECURITY HARDENING.**
+> Booking, cancellation, and rescheduling outcomes are now read back through
+> the branch plus verified caller-number boundary before the agent can announce
+> them. Lost commit acknowledgements are reconciled from exact same-call
+> Postgres rows, verified successes bypass the LLM in every supported language,
+> and a failed booking commit compensates an already-created Calendar event.
+> POML v20 treats ragebait, roleplay, threats, and claimed staff or developer
+> authority as caller content, never instructions. The API root no longer
+> serves duplicate marketing/payment HTML; strict CSP, COEP/COOP/CORP, and
+> no-store address the seven advisory ZAP classes without changing frontend.
+
 > **2026-07-29 — FRESH-DATABASE MIGRATIONS + ZAP GATE REPAIRED.**
 > Closed the historical Alembic bootstrap collision: revision `8559268c0c44`
 > now applies only its intended audit table, 15 FK delete rules, and 15 FK

@@ -1,7 +1,7 @@
 """RED/GREEN tests for Phase 4.5 Task 8 -- security headers on every response.
 
 Verifies that SecurityHeadersMiddleware (backend/middleware/security_headers.py)
-injects the 6 required security headers on every response, regardless of route,
+injects the required security headers on every response, regardless of route,
 status code, or authentication state.
 
 Per spec section 10.5 (2026-05-22-security-hardening-design.md):
@@ -10,7 +10,9 @@ Per spec section 10.5 (2026-05-22-security-hardening-design.md):
   - X-Frame-Options: DENY
   - Referrer-Policy: strict-origin-when-cross-origin
   - Permissions-Policy: geolocation=(), microphone=(), camera=()
-  - Content-Security-Policy: default-src 'self'; ... (Razorpay + Google whitelisted)
+  - Content-Security-Policy: deny browser resources on the API origin
+  - Cross-Origin-Embedder/Opener/Resource-Policy: isolate API documents
+  - Cache-Control: no-store unless a route sets an explicit policy
 
 These tests should be GREEN immediately (Task 3 already implemented the
 middleware). If any are RED, the middleware is broken or not wired.
@@ -33,7 +35,7 @@ from backend.config import settings
 # Test infrastructure
 # ======================================================================
 
-# The 6 security headers we require on EVERY response per spec section 10.5.
+# Security headers required on EVERY API response.
 REQUIRED_HEADERS = {
     "strict-transport-security",
     "x-content-type-options",
@@ -41,6 +43,10 @@ REQUIRED_HEADERS = {
     "referrer-policy",
     "permissions-policy",
     "content-security-policy",
+    "cross-origin-embedder-policy",
+    "cross-origin-opener-policy",
+    "cross-origin-resource-policy",
+    "cache-control",
 }
 
 
@@ -66,7 +72,7 @@ def _make_jwt(
 
 
 def _assert_security_headers_present(response: httpx.Response, context: str) -> None:
-    """Assert all 6 required security headers are present on the response.
+    """Assert all required security headers are present on the response.
 
     Raises AssertionError with a clear message identifying which headers
     are missing and in what context (endpoint + status code).
@@ -75,7 +81,7 @@ def _assert_security_headers_present(response: httpx.Response, context: str) -> 
     missing = REQUIRED_HEADERS - response_header_keys
     assert not missing, (
         f"Missing security headers on {context}: {missing}. "
-        f"SecurityHeadersMiddleware must inject all 6 headers on EVERY response. "
+        f"SecurityHeadersMiddleware must inject all headers on EVERY response. "
         f"Headers present: {sorted(response_header_keys)}"
     )
 
@@ -112,9 +118,11 @@ async def test_health_endpoint_has_all_security_headers(client):
 
 
 async def test_landing_page_has_all_security_headers(client):
-    """GET / (landing page, unauthenticated) must carry all 6 headers."""
+    """GET / identifies the API and must carry all security headers."""
     r = await client.get("/")
-    # Landing page returns 200 if index.html exists, 404 if not -- both are fine
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json() == {"service": "vachanam-api", "health": "/health"}
     _assert_security_headers_present(r, f"GET / ({r.status_code})")
 
 
@@ -218,21 +226,18 @@ async def test_csp_contains_required_directives(client):
     assert "default-src" in csp, (
         f"CSP must contain default-src directive. Got: {csp!r}"
     )
-    assert "'self'" in csp, (
-        f"CSP default-src must include 'self'. Got: {csp!r}"
-    )
-    assert "checkout.razorpay.com" in csp, (
-        f"CSP script-src must allow Razorpay checkout. Got: {csp!r}"
-    )
-    assert "accounts.google.com" in csp, (
-        f"CSP must allow Google accounts (OAuth). Got: {csp!r}"
-    )
+    assert "default-src 'none'" in csp
+    assert "unsafe-inline" not in csp and "https:" not in csp
     assert "object-src 'none'" in csp, (
         f"CSP must block object/embed (object-src 'none'). Got: {csp!r}"
     )
-    assert "base-uri 'self'" in csp, (
-        f"CSP must restrict base-uri to 'self'. Got: {csp!r}"
+    assert "base-uri 'none'" in csp, (
+        f"CSP must disable base-uri. Got: {csp!r}"
     )
+    assert r.headers["cross-origin-embedder-policy"] == "require-corp"
+    assert r.headers["cross-origin-opener-policy"] == "same-origin"
+    assert r.headers["cross-origin-resource-policy"] == "same-origin"
+    assert r.headers["cache-control"] == "no-store"
 
 
 # ======================================================================

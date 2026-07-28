@@ -12,9 +12,9 @@ Header explanations (one line each):
   - X-Frame-Options: Block embedding in iframes (clickjacking defense).
   - Referrer-Policy: Do not leak our URLs to third-party sites via Referer.
   - Permissions-Policy: Explicitly deny geolocation, microphone, camera access.
-  - Content-Security-Policy: Whitelist script/frame/connect/img/style/font origins;
-      block inline scripts; Razorpay + Google OAuth explicitly allowed.
-      Any XSS attempt fails because a malicious script cannot load from 'evil.com'.
+  - Content-Security-Policy: Deny browser resources on this API-only origin.
+  - Cross-Origin-* policies: Isolate API documents and resources.
+  - Cache-Control: Do not retain patient-facing API responses.
 """
 
 import structlog
@@ -24,27 +24,13 @@ from starlette.responses import Response
 
 logger = structlog.get_logger()
 
-# Content Security Policy — each directive on its own line for readability.
-# Keep this list in sync with the security spec §10.5 whenever new external
-# domains are added (e.g. Sarvam, LiveKit, etc.).
+# The frontend is hosted separately; API/legal responses execute no scripts.
 _CSP_DIRECTIVE = (
-    "default-src 'self'; "
-    "script-src 'self' https://checkout.razorpay.com https://accounts.google.com; "
-    "frame-src https://api.razorpay.com https://accounts.google.com; "
-    "connect-src 'self' https://api.razorpay.com; "
-    "img-src 'self' data: https:; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; "
+    "default-src 'none'; "
     "object-src 'none'; "
-    "base-uri 'self'; "
-    # frame-ancestors blocks framing at the CSP level (modern equivalent of
-    # X-Frame-Options, which some browsers now ignore). upgrade-insecure-requests
-    # rewrites any stray http:// sub-resource to https. Both are pure additions —
-    # no legitimate request is blocked (G15 partial; the stricter img-src/style-src
-    # tightening is deferred pending a frontend render check — see docs/GO_LIVE.md).
+    "base-uri 'none'; "
     "frame-ancestors 'none'; "
-    "upgrade-insecure-requests; "
-    "form-action 'self'"
+    "form-action 'none'"
 )
 
 
@@ -85,5 +71,13 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
         # Full CSP directive from spec §10.5.
         response.headers["Content-Security-Policy"] = _CSP_DIRECTIVE
+
+        response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+
+        # Preserve deliberate route-specific caching (for example public legal
+        # documents); patient-facing API responses default to never cached.
+        response.headers.setdefault("Cache-Control", "no-store")
 
         return response
