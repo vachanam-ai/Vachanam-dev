@@ -12,7 +12,6 @@ import {
   updateDoctor
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { fetchUpcoming } from "../api/patients.js";
 import { revealStagger } from "../lib/motion.js";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 0-6
@@ -37,6 +36,11 @@ const localISO = (value) => {
   return new Date(d.getTime() - offset).toISOString().slice(0, 10);
 };
 
+const initials = (name) => {
+  const parts = (name ?? "").replace(/^dr\.?\s*/i, "").trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "Dr";
+};
+
 const scheduleForForm = (doctor) => {
   if (doctor?.recurring_schedule && Object.keys(doctor.recurring_schedule).length) {
     return doctor.recurring_schedule;
@@ -46,6 +50,16 @@ const scheduleForForm = (doctor) => {
   const end = doctor?.working_hours_end?.slice(0, 5) ?? "17:00";
   return Object.fromEntries(days.map((day) => [String(day), [{ start, end }]]));
 };
+
+function Chevron({ open }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden
+      className={`shrink-0 text-slate transition-transform duration-200 ${open ? "rotate-180" : ""}`}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
 
 function SessionsEditor({ sessions, onChange }) {
   const update = (index, key, value) =>
@@ -121,20 +135,27 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not save doctor")
   });
 
+  // Segmented control cell — selected = accent border + pill fill (monochrome).
+  const seg = (active) =>
+    `flex-1 rounded-xl border px-4 py-2.5 font-ui text-sm font-medium transition ${
+      active ? "border-accent bg-pill text-ink" : "border-hairline bg-surface text-ink-soft hover:border-line2"
+    }`;
+
   return (
     <form
-      className="card grid gap-4 p-6 sm:grid-cols-2"
+      className="grid gap-4 sm:grid-cols-2"
       onSubmit={(e) => {
         e.preventDefault();
         create.mutate();
       }}
     >
-      <div className="sm:col-span-2">
-        <h2 className="font-display text-lg font-semibold">{isEdit ? `Edit ${f.name || "doctor"}` : "Add a doctor"}</h2>
-        <p className="font-ui text-sm text-slate">
-          Token queue = numbered walk-in line (high-volume). Appointments = fixed time slots.
-        </p>
-      </div>
+      {!isEdit && (
+        <div className="sm:col-span-2">
+          <p className="font-ui text-sm text-slate">
+            Token queue = numbered walk-in line (high-volume). Appointments = fixed time slots.
+          </p>
+        </div>
+      )}
       <div>
         <label className="label">Doctor name</label>
         <input className="field" required value={f.name} onChange={set("name")} placeholder="Dr. Srinivas" />
@@ -148,11 +169,7 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
         <div className="flex gap-2">
           {[["token", "Token queue"], ["appointment", "Time slots"]].map(([v, l]) => (
             <button type="button" key={v} onClick={() => setF((s) => ({ ...s, booking_type: v }))}
-              className={`flex-1 rounded-xl border px-4 py-2.5 font-ui text-sm font-medium transition ${
-                f.booking_type === v
-                  ? v === "token" ? "border-teal bg-teal-mint" : "border-gold bg-gold-soft"
-                  : "border-hairline bg-surface hover:border-teal-light/60"
-              }`}>
+              className={seg(f.booking_type === v)}>
               {l}
             </button>
           ))}
@@ -164,16 +181,14 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
           {[["recurring", "Repeats weekly"], ["date_specific", "Different every date"]].map(([value, label]) => (
             <button type="button" key={value}
               onClick={() => setF((s) => ({ ...s, schedule_mode: value }))}
-              className={`flex-1 rounded-xl border px-4 py-2.5 font-ui text-sm font-medium ${
-                f.schedule_mode === value ? "border-teal bg-teal-mint" : "border-hairline bg-surface"
-              }`}>
+              className={seg(f.schedule_mode === value)}>
               {label}
             </button>
           ))}
         </div>
       </div>
       {f.schedule_mode === "recurring" ? (
-        <div className="sm:col-span-2 space-y-4">
+        <div className="sm:col-span-2 space-y-3">
           <p className="font-ui text-xs text-slate">Each weekday can have several separate sessions. Breaks remain unavailable.</p>
           {WEEKDAYS.map((label, day) => {
             const sessions = f.recurring_schedule?.[String(day)] ?? [];
@@ -202,7 +217,7 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
           })}
         </div>
       ) : (
-        <div className="sm:col-span-2 rounded-xl border border-gold/40 bg-gold-soft p-4 font-ui text-sm text-slate">
+        <div className="sm:col-span-2 rounded-xl border border-hairline bg-band/60 p-4 font-ui text-sm text-ink-soft">
           No schedule is assumed. Publish every exact date below; until then the voice agent says “timing not confirmed yet” and refuses bookings.
         </div>
       )}
@@ -234,7 +249,7 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
         <button className="btn-primary flex-1" disabled={create.isPending}>
           {create.isPending ? "Saving…" : isEdit ? "Save changes" : "Add doctor"}
         </button>
-        {isEdit && (
+        {onCancel && (
           <button type="button" className="btn-ghost" onClick={onCancel}>
             Cancel
           </button>
@@ -278,10 +293,13 @@ function DateSchedulePublisher({ branchId, doctor }) {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not publish schedule")
   });
 
+  const fmtDay = (iso) =>
+    new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" });
+
   return (
-    <div className="mt-5 border-t border-hairline pt-5">
+    <div>
       <div className="mb-3">
-        <h3 className="font-display text-lg font-semibold">Publish an exact date</h3>
+        <h3 className="section-title">Publish an exact date</h3>
         <p className="font-ui text-xs text-slate">This exact-date entry overrides any weekly pattern. Empty sessions explicitly mark the doctor unavailable.</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -302,7 +320,7 @@ function DateSchedulePublisher({ branchId, doctor }) {
           {sessions.length ? (
             <SessionsEditor sessions={sessions} onChange={setSessions} />
           ) : (
-            <p className="rounded-lg bg-gold-soft p-3 font-ui text-sm">No sessions: this publishes the doctor as unavailable.</p>
+            <p className="rounded-lg bg-band p-3 font-ui text-sm text-ink-soft">No sessions: this publishes the doctor as unavailable.</p>
           )}
           <button type="button" className="btn-ghost mt-2 px-3 py-1.5 text-sm"
             onClick={() => setSessions(sessions.length ? [] : [{ start: "09:00", end: "12:00" }])}>
@@ -319,29 +337,125 @@ function DateSchedulePublisher({ branchId, doctor }) {
         {publish.isPending ? "Publishing…" : "Publish exact schedule"}
       </button>
 
-      <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {dates.map((entry) => (
-          <button key={entry.date} type="button" onClick={() => {
-            setSelectedDate(entry.date);
-            if (entry.is_published) {
-              setSessions(entry.sessions);
-              setTokenLimit(entry.token_limit ?? doctor.daily_token_limit ?? 50);
-              setNotes(entry.notes ?? "");
-            }
-          }} className="rounded-xl border border-hairline p-3 text-left">
-            <p className="font-ui text-xs font-semibold uppercase tracking-wide text-slate">{entry.date}</p>
-            <p className={`mt-1 font-ui text-sm ${entry.status === "unpublished" ? "text-gold-deep" : "text-ink"}`}>
-              {entry.status === "unpublished"
-                ? "Not published"
-                : entry.sessions.length
-                  ? entry.sessions.map((s) => `${s.start}–${s.end}`).join(" · ")
-                  : entry.source === "leave" ? "On leave" : "Unavailable"}
-            </p>
-            <p className="mt-1 font-ui text-[11px] text-slate">{entry.source.replace("_", " ")}</p>
-          </button>
-        ))}
+      {/* Next 15 days — compact chips, click to load that date into the form. */}
+      <div className="mt-5">
+        <p className="label">Next 15 days</p>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {dates.map((entry) => {
+            const published = entry.status !== "unpublished";
+            const busy = published && entry.sessions.length > 0;
+            return (
+              <button key={entry.date} type="button"
+                onClick={() => {
+                  setSelectedDate(entry.date);
+                  if (entry.is_published) {
+                    setSessions(entry.sessions);
+                    setTokenLimit(entry.token_limit ?? doctor.daily_token_limit ?? 50);
+                    setNotes(entry.notes ?? "");
+                  }
+                }}
+                className={`rounded-xl border p-3 text-left transition hover:border-line2 ${
+                  selectedDate === entry.date ? "border-accent bg-pill" : "border-hairline"
+                }`}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="font-ui text-xs font-semibold text-ink">{fmtDay(entry.date)}</p>
+                  <span className={busy ? "tag tag-good" : published ? "tag tag-warn" : "tag tag-crit"}>
+                    {busy ? "open" : entry.source === "leave" ? "leave" : published ? "closed" : "—"}
+                  </span>
+                </div>
+                <p className="mt-1 font-ui text-sm text-ink-soft">
+                  {!published
+                    ? "Not published"
+                    : entry.sessions.length
+                      ? entry.sessions.map((s) => `${s.start}–${s.end}`).join(" · ")
+                      : entry.source === "leave" ? "On leave" : "Unavailable"}
+                </p>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
+  );
+}
+
+/** One doctor as a collapsed summary row that expands to reveal the editor +
+ *  exact-date publisher. Only the header renders until opened — this is what
+ *  keeps the page short (it was ~6700px with every publisher always open). */
+function DoctorAccordion({ doctor, id, waiting, role, branchId, onChanged }) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+
+  const stop = useMutation({
+    mutationFn: () => stopWalkinsToday(id, branchId),
+    onSuccess: () => { toast.success("Walk-ins closed for today"); onChanged(); },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not close walk-ins")
+  });
+  const remove = useMutation({
+    mutationFn: () => deleteDoctor(branchId, id),
+    onSuccess: () => { toast.success("Doctor removed (bookings history is kept)"); onChanged(); },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove doctor")
+  });
+
+  return (
+    <section data-reveal className="card overflow-hidden">
+      <button type="button" onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-pill/50">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-line2 bg-pill font-ui text-sm font-semibold text-ink-soft">
+          {initials(doctor.name)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-ui text-base font-semibold text-ink">{doctor.name}</p>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className={doctor.booking_type === "token" ? "chip-token" : "chip-slot"}>
+              {doctor.booking_type === "token" ? "token queue" : "appointments"}
+            </span>
+            {doctor.specialization && <span className="font-ui text-xs text-slate">{doctor.specialization}</span>}
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="numeral text-2xl text-ink">{waiting}</p>
+          <p className="font-ui text-[10px] uppercase tracking-[0.12em] text-slate">waiting</p>
+        </div>
+        <Chevron open={open} />
+      </button>
+
+      {open && (
+        <div className="space-y-5 border-t border-hairline p-4 sm:p-6">
+          {role === "org_admin" && (
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => setEditing((e) => !e)}>
+                {editing ? "Close editor" : "Edit details"}
+              </button>
+              {doctor.booking_type === "token" && (
+                <button onClick={() => stop.mutate()} disabled={stop.isPending} className="btn-gold px-3 py-1.5 text-sm">
+                  Stop walk-ins today
+                </button>
+              )}
+              <button className="btn-danger px-3 py-1.5 text-sm" disabled={remove.isPending}
+                onClick={() => {
+                  if (window.confirm(`Remove ${doctor.name}? Patients can no longer be booked with them; past bookings stay.`)) {
+                    remove.mutate();
+                  }
+                }}>
+                Remove
+              </button>
+            </div>
+          )}
+
+          {editing && (
+            <div className="rounded-2xl border border-hairline bg-pill/40 p-4 sm:p-5">
+              <AddDoctorForm branchId={branchId} doctorId={id} initial={doctor}
+                onCancel={() => setEditing(false)}
+                onDone={() => { setEditing(false); qc.invalidateQueries({ queryKey: ["doctors", branchId] }); }} />
+            </div>
+          )}
+
+          <DateSchedulePublisher branchId={branchId} doctor={doctor} />
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -349,7 +463,7 @@ export default function DoctorSchedule() {
   const { branchId, user, role } = useAuth();
   const qc = useQueryClient();
   const pageRef = useRef(null);
-  const [editingId, setEditingId] = useState(null);
+  const [adding, setAdding] = useState(false);
 
   const { data: doctorsRaw } = useQuery({
     queryKey: ["doctors", branchId],
@@ -364,181 +478,54 @@ export default function DoctorSchedule() {
   });
 
   const doctors = Array.isArray(doctorsRaw) ? doctorsRaw : doctorsRaw?.doctors ?? [];
-  // A doctor user sees their own card (matched by linked user) or all if unmatched
-  const mine =
-    doctors.filter((d) => d.user_id === user?.user_id || d.invited_email === user?.email);
+  const mine = doctors.filter((d) => d.user_id === user?.user_id || d.invited_email === user?.email);
   const visible = mine.length ? mine : doctors;
 
   useEffect(() => {
     if (doctors.length) revealStagger(pageRef.current);
   }, [doctors.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const stop = useMutation({
-    mutationFn: (doctorId) => stopWalkinsToday(doctorId, branchId),
-    onSuccess: () => {
-      toast.success("Walk-ins closed for today");
-      qc.invalidateQueries({ queryKey: ["doctors", branchId] });
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not close walk-ins")
-  });
-
-  const remove = useMutation({
-    mutationFn: (doctorId) => deleteDoctor(branchId, doctorId),
-    onSuccess: () => {
-      toast.success("Doctor removed (bookings history is kept)");
-      qc.invalidateQueries({ queryKey: ["doctors", branchId] });
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove doctor")
-  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["doctors", branchId] });
 
   return (
-    <div ref={pageRef} className="space-y-6">
-      <div data-reveal>
-        <p className="eyebrow">Doctor</p>
-        <h1 className="section-title text-2xl">My schedule</h1>
+    <div ref={pageRef} className="space-y-5">
+      <div data-reveal className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="eyebrow">{role === "doctor" ? "Doctor" : "Team"}</p>
+          <h1 className="section-title text-2xl">{role === "doctor" ? "My schedule" : "Doctors & schedules"}</h1>
+          <p className="mt-1 font-ui text-sm text-slate">
+            {visible.length} {visible.length === 1 ? "doctor" : "doctors"} · tap a card to publish dates or edit
+          </p>
+        </div>
+        {role === "org_admin" && (
+          <button className="btn-primary" onClick={() => setAdding((a) => !a)}>
+            {adding ? "Close" : "+ Add doctor"}
+          </button>
+        )}
       </div>
+
+      {adding && role === "org_admin" && (
+        <div data-reveal className="card p-5 sm:p-6">
+          <h2 className="section-title mb-4">Add a doctor</h2>
+          <AddDoctorForm branchId={branchId}
+            onCancel={() => setAdding(false)}
+            onDone={() => { setAdding(false); invalidate(); }} />
+        </div>
+      )}
 
       {visible.map((d) => {
         const id = d.id ?? d.doctor_id;
         const todayEntry = queue?.doctors?.find((q) => q.doctor_id === id);
         const waiting = todayEntry?.patients?.filter((p) => p.status === "confirmed").length ?? 0;
         return (
-          <section key={id} data-reveal className="card p-6">
-            <div className="flex flex-wrap items-start gap-4">
-              <div className="min-w-0 flex-1">
-                <h2 className="font-display text-xl font-semibold">{d.name}</h2>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <span className={d.booking_type === "token" ? "chip-token" : "chip-slot"}>
-                    {d.booking_type === "token" ? "token queue" : "appointments"}
-                  </span>
-                  <span className="font-ui text-xs text-slate">
-                    {d.schedule_mode === "date_specific" ? "Exact-date schedules" : "Recurring multi-session schedule"}
-                  </span>
-                </div>
-              </div>
-              <div className="text-center">
-                <p className="numeral text-5xl text-teal-deep">{waiting}</p>
-                <p className="font-ui text-xs uppercase tracking-[0.14em] text-slate">waiting now</p>
-              </div>
-            </div>
-
-            {role === "org_admin" && (
-              <div className="mt-4 flex gap-2 border-t border-hairline pt-4">
-                <button
-                  className="btn-ghost px-3 py-1.5 text-sm"
-                  onClick={() => setEditingId(editingId === id ? null : id)}
-                >
-                  {editingId === id ? "Close editor" : "Edit"}
-                </button>
-                <button
-                  className="btn-danger px-3 py-1.5 text-sm"
-                  disabled={remove.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Remove ${d.name}? Patients can no longer be booked with them; past bookings stay.`)) {
-                      remove.mutate(id);
-                    }
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            )}
-
-            {editingId === id && (
-              <div className="mt-4">
-                <AddDoctorForm
-                  branchId={branchId}
-                  doctorId={id}
-                  initial={d}
-                  onCancel={() => setEditingId(null)}
-                  onDone={() => {
-                    setEditingId(null);
-                    qc.invalidateQueries({ queryKey: ["doctors", branchId] });
-                  }}
-                />
-              </div>
-            )}
-
-            <DateSchedulePublisher branchId={branchId} doctor={d} />
-
-            {d.booking_type === "token" && (
-              <div className="mt-5 border-t border-hairline pt-4">
-                <button
-                  onClick={() => stop.mutate(id)}
-                  disabled={stop.isPending}
-                  className="btn-gold"
-                >
-                  Stop walk-ins for today
-                </button>
-                <p className="mt-2 font-ui text-xs text-slate">
-                  Patients already holding tokens keep them; the desk can&rsquo;t add new walk-ins.
-                </p>
-              </div>
-            )}
-          </section>
+          <DoctorAccordion key={id} doctor={d} id={id} waiting={waiting} role={role}
+            branchId={branchId} onChanged={invalidate} />
         );
       })}
 
       {visible.length === 0 && role !== "org_admin" && (
         <p className="font-ui text-sm text-slate">No doctor profile linked to your account yet.</p>
       )}
-
-      {role === "org_admin" && (
-        <AddDoctorForm
-          branchId={branchId}
-          onDone={() => qc.invalidateQueries({ queryKey: ["doctors", branchId] })}
-        />
-      )}
     </div>
-  );
-}
-
-
-function MyUpcomingPatients({ branchId }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["my-upcoming", branchId],
-    queryFn: () => fetchUpcoming(branchId, { days: 30 }),
-    enabled: Boolean(branchId)
-  });
-  const appts = data?.appointments ?? [];
-  return (
-    <section data-reveal className="card overflow-hidden">
-      <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
-        <h2 className="font-display text-lg font-semibold">My patients · next 30 days</h2>
-        <span className="chip-muted">{appts.length}</span>
-      </header>
-      {isLoading ? (
-        <p className="px-4 py-6 font-ui text-sm text-slate">Loading…</p>
-      ) : appts.length === 0 ? (
-        <p className="px-4 py-6 font-ui text-sm text-slate">No upcoming patients.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full font-ui text-sm">
-            <thead>
-              <tr className="text-left text-slate">
-                <th className="px-4 py-2 font-medium">Date</th>
-                <th className="px-4 py-2 font-medium">Time / Token</th>
-                <th className="px-4 py-2 font-medium">Patient</th>
-              </tr>
-            </thead>
-            <tbody>
-              {appts.map((a, i) => (
-                <tr key={i} className="border-t border-hairline">
-                  <td className="whitespace-nowrap px-4 py-2 numeral tabular-nums">
-                    {new Date(a.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-2">
-                    {a.time
-                      ? new Date(`2000-01-01T${a.time}`).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })
-                      : `Token ${a.token_number ?? "—"}`}
-                  </td>
-                  <td className="px-4 py-2 font-medium">{a.patient_name}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }

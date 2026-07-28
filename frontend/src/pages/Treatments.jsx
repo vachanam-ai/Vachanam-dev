@@ -492,7 +492,7 @@ export default function Treatments() {
                     </span>
                     {hasUnread && (
                       <span
-                        className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-teal px-1.5 font-ui text-xs font-semibold text-white"
+                        className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-accent px-1.5 font-ui text-xs font-semibold text-accent-ink"
                         aria-label={`${p.unread_messages} unread message${p.unread_messages === 1 ? "" : "s"}`}
                       >
                         {p.unread_messages}

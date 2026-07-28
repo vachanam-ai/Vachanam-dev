@@ -15,7 +15,7 @@ function Bubble({ side, tone, children }) {
   return (
     <div className={side === "right" ? "text-right" : "text-left"}>
       <span className={"inline-block max-w-[85%] rounded-2xl px-3 py-2 text-sm " +
-        (tone === "user" ? "bg-teal text-white" :
+        (tone === "user" ? "bg-accent text-accent-ink" :
          tone === "bot" ? "bg-teal-pale text-teal-deep" : "bg-teal-mint text-ink")}>
         {children}
       </span>

@@ -57,11 +57,11 @@ export default function SupportWidget() {
       {/* Chat panel */}
       {open && (
         <div className="fixed bottom-24 right-4 z-50 flex h-[30rem] w-[22rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-hairline bg-surface shadow-card">
-          <div className="flex items-center gap-2 bg-teal px-4 py-3 text-white">
-            <div className="grid h-8 w-8 place-items-center rounded-full bg-white/20 font-brand">V</div>
+          <div className="flex items-center gap-2 bg-accent px-4 py-3 text-accent-ink">
+            <div className="grid h-8 w-8 place-items-center rounded-full bg-accent-ink/20 font-brand">V</div>
             <div className="leading-tight">
               <p className="text-sm font-semibold">Vachanam Assistant</p>
-              <p className="text-[11px] text-white/80">Usually replies instantly</p>
+              <p className="text-[11px] text-accent-ink/80">Usually replies instantly</p>
             </div>
             <button className="ml-auto text-white/90 hover:text-white" aria-label="Close chat"
               onClick={() => setOpen(false)}>
@@ -77,7 +77,7 @@ export default function SupportWidget() {
             {msgs.map((m, i) => (
               <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
                 <span className={"inline-block max-w-[85%] rounded-2xl px-3 py-2 text-sm " +
-                  (m.role === "user" ? "bg-teal text-white" : "bg-teal-mint text-ink")}>
+                  (m.role === "user" ? "bg-accent text-accent-ink" : "bg-teal-mint text-ink")}>
                   {m.role === "bot" ? (
                     <TypedText text={m.content} done={m.typed !== false}
                       onTick={() => scrollToEnd(false)} onDone={() => markTyped(i)} />
@@ -100,7 +100,7 @@ export default function SupportWidget() {
             <input className="input flex-1" placeholder="Type your question…" value={q}
               onChange={(e) => setQ(e.target.value)} />
             <button
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-teal text-white transition hover:brightness-110 disabled:opacity-40"
+              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent text-accent-ink transition hover:brightness-110 disabled:opacity-40"
               disabled={busy || !q.trim() || (needCaptcha && !captcha)} aria-label="Send"
             >
               {busy ? (
@@ -123,7 +123,7 @@ export default function SupportWidget() {
       <button
         aria-label={open ? "Close support chat" : "Open support chat"}
         onClick={() => setOpen((o) => !o)}
-        className="fixed bottom-6 right-6 z-50 grid h-14 w-14 place-items-center rounded-full bg-teal text-white shadow-card transition hover:brightness-110">
+        className="fixed bottom-6 right-6 z-50 grid h-14 w-14 place-items-center rounded-full bg-accent text-accent-ink shadow-card transition hover:brightness-110">
         {open ? (
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             strokeWidth="2" strokeLinecap="round"><polyline points="6 9 12 15 18 9" /></svg>

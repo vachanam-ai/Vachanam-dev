@@ -171,28 +171,21 @@ export default function Login() {
   return (
     <div ref={pageRef} className="min-h-dvh grid lg:grid-cols-[1.1fr_1fr]">
       <ThemeToggle float />
-      <section className="relative hidden overflow-hidden bg-[#0e4a49] text-white lg:flex lg:flex-col lg:justify-between lg:p-12">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-[0.12]"
-          style={{
-            backgroundImage:
-              "radial-gradient(700px 420px at 80% 10%, #80CBC4, transparent 60%), radial-gradient(500px 380px at 10% 90%, #008F8F, transparent 55%)"
-          }}
-        />
-        <Link to="/" data-reveal className="font-brand text-3xl">Vachanam</Link>
+      <section className="relative hidden overflow-hidden bg-sel text-sel-ink lg:flex lg:flex-col lg:justify-between lg:p-12">
+        <Link to="/" data-reveal className="font-brand text-2xl font-semibold tracking-[-0.02em]">Vachanam</Link>
         <div className="relative">
           <p data-reveal className="eyebrow !text-gold">Clinic console</p>
           <h1 data-reveal className="mt-3 font-display text-5xl font-semibold leading-[1.08] tracking-tight">
             Healing starts
             <br />
-            with being <em className="font-normal italic text-gold">heard.</em>
+            with being <span className="text-gold">heard.</span>
           </h1>
-          <p data-reveal className="mt-6 max-w-md font-ui text-[#cfe8e5]/90">
+          <p data-reveal className="mt-6 max-w-md font-ui text-sel-muted">
             Every call answered. Every token accounted for. Your front desk, your doctors,
             and your day — on one calm ledger.
           </p>
         </div>
-        <p data-reveal className="relative font-ui text-xs text-[#cfe8e5]/60">
+        <p data-reveal className="relative font-ui text-xs text-sel-muted">
           vachanam.in · India
         </p>
       </section>
@@ -200,7 +193,7 @@ export default function Login() {
       <section className="grid place-items-center p-6 sm:p-8">
         <div className="w-full max-w-sm">
           <Link to="/" data-reveal className="mb-8 block lg:hidden">
-            <span className="font-brand text-3xl text-teal">Vachanam</span>
+            <span className="font-brand text-3xl text-ink">Vachanam</span>
           </Link>
 
           <p data-reveal className="eyebrow">Sign in</p>
@@ -220,7 +213,7 @@ export default function Login() {
                   <label className="label">Password</label>
                   <button type="button"
                     onClick={() => { setForgotOpen(true); setFpStage("request"); }}
-                    className="font-ui text-xs text-teal underline-offset-4 hover:underline">
+                    className="font-ui text-xs text-ink underline-offset-4 hover:underline">
                     Forgot password?
                   </button>
                 </div>
@@ -252,7 +245,7 @@ export default function Login() {
                       <span className="font-ui text-xs text-slate">Didn&rsquo;t get it? Check spam.</span>
                       <button type="button" onClick={resendCode}
                         disabled={resendLeft > 0 || fpBusy || (TURNSTILE_ON && !ts)}
-                        className="font-ui text-xs text-teal underline-offset-4 hover:underline disabled:text-slate disabled:no-underline">
+                        className="font-ui text-xs text-ink underline-offset-4 hover:underline disabled:text-slate disabled:no-underline">
                         {resendLeft > 0 ? `Resend in ${fmt(resendLeft)}` : "Resend code"}
                       </button>
                     </div>
@@ -298,7 +291,7 @@ export default function Login() {
 
           <p data-reveal className="mt-8 text-center font-ui text-sm text-slate">
             New clinic?{" "}
-            <Link to="/register" className="font-medium text-teal underline-offset-4 hover:underline">
+            <Link to="/register" className="font-medium text-ink underline-offset-4 hover:underline">
               {trialAvailable ? "Start your 14-day free trial" : "Create your clinic"}
             </Link>
           </p>

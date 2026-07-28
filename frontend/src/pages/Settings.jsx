@@ -205,7 +205,7 @@ export default function Settings() {
           name: "Vachanam",
           description: `${PLAN_LABELS[planKey]} subscription`,
           prefill: { email: user?.email ?? "" },
-          theme: { color: "#0f766e" },
+          theme: { color: "#1b1b1a" },
           modal: { ondismiss: () => reject(new Error("Payment window closed")) },
           handler: async (resp) => {
             try {
@@ -354,7 +354,7 @@ export default function Settings() {
                   ? "border-teal-pale bg-teal-mint text-teal-deep"
                   : "border-hairline bg-surface text-slate hover:border-teal-light/50"
               }`}>
-              <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${s.done ? "bg-teal text-white" : "bg-slate-light/30"}`}>
+              <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${s.done ? "bg-accent text-accent-ink" : "bg-slate-light/30"}`}>
                 {s.done ? "✓" : i + 1}
               </span>
               {s.label}

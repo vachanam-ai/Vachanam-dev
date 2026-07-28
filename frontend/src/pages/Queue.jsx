@@ -21,9 +21,9 @@ function SummaryStat({ label, value, gold }) {
 }
 
 function StatusChip({ status, isUrgent }) {
-  if (isUrgent) return <span className="chip-danger">urgent</span>;
-  if (status === "attended") return <span className="chip-token">attended</span>;
-  if (status === "no_show") return <span className="chip-danger">no-show</span>;
+  if (isUrgent) return <span className="tag tag-crit">urgent</span>;
+  if (status === "attended") return <span className="tag tag-good">attended</span>;
+  if (status === "no_show") return <span className="tag tag-crit">no-show</span>;
   return <span className="chip-muted">waiting</span>;
 }
 

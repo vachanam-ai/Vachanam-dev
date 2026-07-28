@@ -53,8 +53,8 @@ function LifetimeBand({ lifetime }) {
     ["minutes", "Voice minutes", lifetime?.minutes],
   ];
   return (
-    <div ref={ref} data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-[#0e4a49] px-6 py-4 text-white shadow-lift">
-      <p className="eyebrow !text-[#cfe8e5]/80">Since day one</p>
+    <div ref={ref} data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-sel px-6 py-4 text-sel-ink shadow-lift">
+      <p className="eyebrow !text-sel-muted">Since day one</p>
       {items.map(([k, label, v]) => (
         <LifetimeStat key={k} label={label} value={v ?? 0} />
       ))}
@@ -68,8 +68,8 @@ function LifetimeStat({ label, value }) {
     countUp(ref.current, value ?? 0, { duration: 1.4 });
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <p className="font-ui text-sm text-[#cfe8e5]/90">
-      <span ref={ref} className="numeral mr-1.5 text-2xl font-semibold text-white">0</span>
+    <p className="font-ui text-sm text-sel-muted">
+      <span ref={ref} className="numeral mr-1.5 text-2xl font-semibold text-sel-ink">0</span>
       {label}
     </p>
   );
@@ -130,8 +130,8 @@ function MinutesDonut({ minutes }) {
   return (
     <div className="flex items-center gap-5">
       <svg viewBox="0 0 140 140" className="h-36 w-36 shrink-0" role="img" aria-label="Voice minutes used">
-        <circle cx="70" cy="70" r={R} fill="none" stroke="var(--chart-track)" strokeWidth="14" />
-        <circle ref={arcRef} cx="70" cy="70" r={R} fill="none" stroke="#0e7490" strokeWidth="14"
+        <circle cx="70" cy="70" r={R} fill="none" className="stroke-line2" strokeWidth="14" />
+        <circle ref={arcRef} cx="70" cy="70" r={R} fill="none" className="stroke-accent" strokeWidth="14"
           strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C}
           transform="rotate(-90 70 70)" />
         <text x="70" y="66" textAnchor="middle" className="fill-teal-deep" fontSize="22"
@@ -404,7 +404,7 @@ export default function Dashboard() {
             {[7, 30, 90].map((d) => (
               <button key={d} onClick={() => setDays(d)}
                 className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
-                  days === d ? "bg-teal text-white" : "bg-surface text-slate hover:bg-teal-pale"
+                  days === d ? "bg-accent text-accent-ink" : "border border-hairline text-slate hover:bg-pill"
                 }`}>
                 {d}d
               </button>
@@ -472,8 +472,8 @@ export default function Dashboard() {
 
       {/* Doctors on leave — today highlighted; receptionist marks leave, owner sees it here */}
       {(an?.on_leave ?? []).length > 0 && (
-        <section data-reveal className="card overflow-hidden border-amber-200/70">
-          <header className="flex items-center justify-between border-b border-hairline bg-amber-50/70 px-5 py-3">
+        <section data-reveal className="card overflow-hidden">
+          <header className="flex items-center justify-between border-b border-hairline bg-warn/10 px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Doctors on leave</h2>
             <span className="font-ui text-xs text-slate">next 30 days</span>
           </header>
@@ -482,11 +482,11 @@ export default function Dashboard() {
               <div key={`${g.doctor}-${g.from}`} className="flex items-center justify-between px-5 py-3">
                 <div className="flex items-center gap-2.5">
                   {/* dot = real semantic state: leave covers TODAY, patients being called */}
-                  {g.coversToday && <span className="h-2 w-2 rounded-full bg-amber-500" aria-label="on leave today" />}
+                  {g.coversToday && <span className="h-2 w-2 rounded-full bg-warn" aria-label="on leave today" />}
                   <p className="font-ui text-sm font-medium">{g.doctor}</p>
                   {g.reason && <span className="font-ui text-xs text-slate">· {g.reason}</span>}
                 </div>
-                <p className={`font-ui text-sm ${g.coversToday ? "font-semibold text-amber-700" : "text-slate"}`}>
+                <p className={`font-ui text-sm ${g.coversToday ? "font-semibold text-warn" : "text-slate"}`}>
                   {g.from === g.to ? fmtDay(g.from) : `${fmtDay(g.from)} to ${fmtDay(g.to)}`}
                   {g.coversToday && " · patients being informed by call"}
                 </p>
@@ -531,14 +531,10 @@ export default function Dashboard() {
           {[...(an?.by_doctor ?? [])].sort((a, b) => b.booked - a.booked).map((d, i, arr) => (
             <div key={d.doctor_name} className="ledger-row relative">
               {i === 0 && d.booked > 0 && (
-                <span className="absolute right-5 top-1.5 rounded-full bg-teal-mint px-2 py-0.5 font-ui text-[10px] font-semibold text-teal-deep">
-                  most patients
-                </span>
+                <span className="absolute right-5 top-1.5 tag tag-good">most patients</span>
               )}
               {i === arr.length - 1 && arr.length > 1 && d.booked < arr[0].booked && (
-                <span className="absolute right-5 top-1.5 rounded-full bg-amber-50 px-2 py-0.5 font-ui text-[10px] font-semibold text-amber-700">
-                  needs attention
-                </span>
+                <span className="absolute right-5 top-1.5 tag tag-warn">needs attention</span>
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">

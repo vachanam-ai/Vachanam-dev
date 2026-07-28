@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useRef } from "react";
 
 /* Peak-hours heatmap (2026-07-11): weekday × hour grid of answered calls in
-   branch-local time. Teal intensity = volume; cells stagger-fade in. */
+   branch-local time. Ink intensity = volume (accent token, so it inverts to
+   light cells in dark mode); cells stagger-fade in. */
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8:00–21:00
@@ -52,8 +53,8 @@ export default function Heatmap({ cells }) {
                 const isPeak = peak && peak.weekday === di && peak.hour === h && v > 0;
                 return (
                   <div key={`${di}-${h}`} data-cell
-                    className={`aspect-square rounded-[4px] ${isPeak ? "ring-2 ring-gold" : ""}`}
-                    style={{ background: v ? `rgba(15, 118, 110, ${0.15 + 0.85 * (v / max)})` : "var(--cell-empty)" }}
+                    className={`aspect-square rounded-[4px] ${isPeak ? "ring-2 ring-warn" : ""}`}
+                    style={{ background: v ? `rgb(var(--accent) / ${0.12 + 0.8 * (v / max)})` : "var(--cell-empty)" }}
                     title={`${d} ${h}:00–${h + 1}:00 · ${v} call${v === 1 ? "" : "s"}`} />
                 );
               })}
@@ -63,7 +64,7 @@ export default function Heatmap({ cells }) {
       </div>
       {peak && peak.calls > 0 && (
         <p className="mt-3 font-ui text-xs text-slate">
-          Your phone is busiest <b className="text-teal-deep">{DAYS[peak.weekday]} {peak.hour}:00–{peak.hour + 1}:00</b> ({peak.calls} calls)
+          Your phone is busiest <b className="text-ink">{DAYS[peak.weekday]} {peak.hour}:00–{peak.hour + 1}:00</b> ({peak.calls} calls)
         </p>
       )}
     </div>

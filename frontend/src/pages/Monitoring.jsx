@@ -36,7 +36,7 @@ function HealthBoard() {
     <section className="card overflow-hidden">
       <header className={`flex items-center justify-between border-b border-hairline px-5 py-3 ${anyDown ? "bg-red-50" : "bg-teal-mint/60"}`}>
         <h2 className="font-display text-lg font-semibold">Live health · watchdog</h2>
-        <span className={`rounded-full px-3 py-0.5 font-ui text-xs font-semibold ${anyDown ? "bg-red-600 text-white" : "bg-teal text-white"}`}>
+        <span className={`rounded-full px-3 py-0.5 font-ui text-xs font-semibold ${anyDown ? "bg-red-600 text-white" : "bg-accent text-accent-ink"}`}>
           {anyDown ? "ATTENTION" : "ALL SYSTEMS OK"}
         </span>
       </header>
@@ -123,7 +123,7 @@ export default function Monitoring() {
           {[7, 30, 90].map((d) => (
             <button key={d} onClick={() => setDays(d)}
               className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
-                days === d ? "bg-teal text-white" : "bg-surface text-slate hover:bg-teal-pale"
+                days === d ? "bg-accent text-accent-ink" : "bg-surface text-slate hover:bg-teal-pale"
               }`}>
               {d}d
             </button>

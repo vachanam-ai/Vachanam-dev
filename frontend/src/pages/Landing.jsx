@@ -161,7 +161,7 @@ export default function Landing() {
           className="pointer-events-none absolute inset-0 -z-10"
           style={{
             background:
-              "radial-gradient(900px 480px at 75% -5%, rgba(0,143,143,.12), transparent 60%), radial-gradient(700px 420px at 5% 30%, rgba(240,198,116,.10), transparent 55%)"
+              "radial-gradient(760px 440px at 82% -8%, rgba(166,124,34,.07), transparent 60%)"
           }}
         />
         <div className="mx-auto grid max-w-6xl gap-12 px-4 py-20 lg:grid-cols-[1.15fr_1fr] lg:py-28">
@@ -232,7 +232,7 @@ export default function Landing() {
                   <div key={i} className="flex gap-3">
                     <span
                       className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
-                        isAgent ? "bg-teal text-white" : "bg-teal-mint text-teal-deep"
+                        isAgent ? "bg-accent text-accent-ink" : "bg-pill text-ink"
                       }`}
                     >
                       {isAgent ? "AI" : "P"}
@@ -240,7 +240,7 @@ export default function Landing() {
                     <div>
                       <p
                         className={`font-ui text-[11px] font-semibold uppercase tracking-wide ${
-                          isAgent ? "text-teal" : "text-slate"
+                          isAgent ? "text-ink" : "text-slate"
                         }`}
                       >
                         {who}
@@ -272,12 +272,12 @@ export default function Landing() {
       </section>
 
       {/* Stats strip */}
-      <section data-section className="border-y border-hairline bg-[#0e4a49] text-white">
+      <section data-section className="border-y border-hairline bg-sel text-sel-ink">
         <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-4 py-10 text-center md:grid-cols-4">
           {[["20-30%", "calls missed by busy clinics"], ["₹3,000+", "lost revenue every day"], ["< 4 min", "average booking call"], ["24×7", "your line never sleeps"]].map(([n, l]) => (
             <div key={l} data-item>
               <p className="numeral text-3xl text-gold sm:text-4xl">{n}</p>
-              <p className="mt-1 font-ui text-xs text-[#cfe8e5]/80">{l}</p>
+              <p className="mt-1 font-ui text-xs text-sel-muted">{l}</p>
             </div>
           ))}
         </div>
@@ -292,7 +292,7 @@ export default function Landing() {
         <div className="mt-10 grid gap-6 md:grid-cols-4">
           {STEPS.map(([t, d], i) => (
             <div key={t} data-item className="card relative p-6">
-              <span className="numeral absolute -top-4 left-5 grid h-9 w-9 place-items-center rounded-full bg-teal text-lg text-white shadow-card">
+              <span className="numeral absolute -top-4 left-5 grid h-9 w-9 place-items-center rounded-full bg-accent text-lg text-accent-ink shadow-card">
                 {i + 1}
               </span>
               <h3 className="mt-3 font-display text-lg font-semibold">{t}</h3>
@@ -405,7 +405,7 @@ export default function Landing() {
           Pays for itself with two saved patients a day
         </h2>
         {/* Lite: entry tier, deliberately small and set apart from the main plans */}
-        <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-mist/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-pill px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-ui text-sm">
               <span className="font-semibold">Lite · <span className="mr-1 text-slate line-through">₹1,999</span><span className="numeral text-teal-deep">₹1,799</span>/mo</span>
@@ -544,22 +544,22 @@ export default function Landing() {
       </section>
 
       {/* Closing CTA */}
-      <section className="border-t border-hairline bg-[#0e4a49] py-16 text-center text-white">
-        <p className="font-brand text-3xl text-gold">Vachanam</p>
+      <section className="border-t border-hairline bg-sel py-16 text-center text-sel-ink">
+        <p className="font-brand text-3xl font-semibold tracking-[-0.02em] text-gold">Vachanam</p>
         <h2 className="mx-auto mt-4 max-w-2xl font-display text-3xl font-semibold tracking-tight">
           Healing starts with being heard.
         </h2>
-        <p className="mt-3 font-ui text-[#cfe8e5]/85">
+        <p className="mt-3 font-ui text-sel-muted">
           <a href="mailto:hello@vachanam.in" className="underline-offset-4 hover:underline">hello@vachanam.in</a>
           {" · "}India
         </p>
         <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
           <Link to="/register" className="btn-gold inline-flex px-8 py-3">Get started</Link>
-          <a href="mailto:hello@vachanam.in?subject=Talk%20to%20Vachanam" className="btn inline-flex border border-white/30 px-8 py-3 text-white hover:bg-surface/10">
+          <a href="mailto:hello@vachanam.in?subject=Talk%20to%20Vachanam" className="btn inline-flex rounded-full border border-sel-line px-8 py-3 text-sel-ink hover:bg-sel-ink/10">
             Talk to us
           </a>
         </div>
-        <p className="mt-8 font-ui text-xs text-[#cfe8e5]/70">
+        <p className="mt-8 font-ui text-xs text-sel-muted">
           © 2026 Vachanam · All rights reserved ·{" "}
           <a href={`${API_BASE}/privacy`} className="underline-offset-4 hover:underline">Privacy</a>
           {" · "}

@@ -13,6 +13,36 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Monochrome UI redesign ("clinic desk"), teal removed
+
+Reskinned the entire frontend from teal/cream to the monochrome BizLink
+reference Vinay approved: one neutral ground, near-black ink accent, a single
+sage-cream band, **General Sans** everywhere, **left-sidebar** shell, working
+dark mode. Teal removed entirely.
+
+Key decision — **cascade, not rewrite**: Tailwind reads the palette through
+CSS-var tokens by name, so remapping token *values* in `index.css` re-themes
+all 18 pages at once. Kept the `teal*` token *names* (now the neutral accent
+scale) to avoid a 111-site rename. Dark mode inverts the accent BizLink-style
+(black button ↔ light button), which forced replacing every `bg-teal text-white`
+with `bg-accent text-accent-ink` (white text is invisible on the inverted
+accent in dark). Self-hosted General Sans (no CDN, PWA-offline). Data model /
+backend / caller-identity code untouched, per Vinay.
+
+Files: `frontend/src/index.css`, `tailwind.config.js`, `index.html`,
+`public/_headers`, `public/fonts/general-sans-*.woff2`, `lib/motion.js`,
+`components/Shell.jsx`, `components/ErrorBoundary.jsx`, `components/SupportWidget.jsx`,
+`components/dash/{TrendChart,Heatmap}.jsx`, `pages/{DoctorSchedule,Dashboard,
+Queue,Login,Register,Landing,Settings,Treatments}.jsx`. DoctorSchedule rebuilt
+as an accordion (was ~6700px — the original trigger). Build + vitest (6/6) green.
+Spec: `docs/superpowers/specs/2026-07-29-monochrome-ui-redesign.md`.
+
+Follow-up: internal pages (Admin/Monitoring/Settings/etc.) inherit the theme but
+weren't individually re-laid-out — revisit only if a screen reads poorly. Verify
+General Sans + sidebar on a real device after deploy.
+
+---
+
 ## 2026-07-29 — Fresh-database chain and security-scan gate repaired
 
 Rewrote deployed revision `8559268c0c44` from the accidental second full-schema

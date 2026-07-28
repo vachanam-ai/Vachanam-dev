@@ -2,61 +2,129 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Vachanam design system — "calm clinic ledger" ──────────────────────
-   Cream paper surfaces, deep-teal structure, Spectral numerals as heroes,
-   gold reserved for "now serving". Subtle grain keeps it warm, not flat. */
+/* ── Vachanam design system — "monochrome clinic desk" ───────────────────
+   Ported from the BizLink-reference mockup (2026-07-29, Vinay approved).
+   One neutral ground, near-black ink, a single sage-cream band as the only
+   warm note, and General Sans carrying every role. Teal removed entirely.
+   Dark mode inverts the accent (black button → light button) BizLink-style. */
+
+/* Self-hosted General Sans (Fontshare) — no external CDN so the PWA works
+   offline and there is no render-blocking font fetch. 4 weights, ~90KB. */
+@font-face {
+  font-family: "General Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/general-sans-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "General Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/general-sans-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "General Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/general-sans-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "General Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/general-sans-700.woff2") format("woff2");
+}
 
 /* Theme tokens as RGB triplets so Tailwind opacity modifiers keep working
-   (bg-teal-mint/60 etc.). Light = the original "calm clinic ledger"; .dark
-   swaps the whole palette in one place. */
+   (bg-pill/60 etc.). The EXISTING Tailwind names (teal/cream/surface/…) are
+   kept and remapped to monochrome so all 18 pages re-theme from this one
+   file; `teal*` is now the neutral accent scale (name kept to avoid a
+   111-site rename). New names — band, pill, line2, accent, sel, good, warn,
+   crit — are registered in tailwind.config.js. */
 :root {
-  --teal: 0 107 107;
-  --teal-deep: 0 79 79;
-  --teal-light: 0 143 143;
-  --teal-pale: 224 242 241;
-  --teal-mint: 240 250 250;
-  --ink: 26 46 46;
-  --ink-soft: 45 68 68;
-  --slate: 112 128 144;
-  --slate-light: 160 173 184;
-  --cream: 250 252 252;
-  --surface: 255 255 255;
-  --hairline: 208 228 228;
-  --gold: 240 198 116;
-  --gold-soft: 255 244 214;
-  --gold-ink: 90 69 0;
-  --danger: 165 29 45;
+  color-scheme: light;
+  /* accent scale (was teal) → near-black ink */
+  --teal: 27 27 26;          /* accent / primary button bg / active nav */
+  --teal-deep: 27 27 26;     /* accent text → ink */
+  --teal-light: 139 141 140; /* focus ring / soft accent */
+  --teal-pale: 244 244 241;  /* pill fill */
+  --teal-mint: 244 244 241;  /* hover fill */
+  /* text */
+  --ink: 27 27 26;
+  --ink-soft: 66 67 63;
+  --slate: 139 141 140;       /* muted */
+  --slate-light: 183 184 180; /* faint */
+  /* surfaces */
+  --cream: 247 247 245;   /* page ground */
+  --surface: 255 255 255; /* cards / panel */
+  --hairline: 237 237 235;
+  /* the one warm note + accents */
+  --band: 236 238 225;    /* sage-cream stat band */
+  --pill: 244 244 241;
+  --line2: 228 228 224;   /* stronger hairline (chip/avatar borders) */
+  --accent: 27 27 26;
+  --accent-ink: 251 251 248;
+  /* black "selected" detail card */
+  --sel: 28 28 27;
+  --sel-ink: 243 243 239;
+  --sel-muted: 155 156 150;
+  --sel-line: 51 51 48;
+  /* semantic status */
+  --good: 58 143 96;   --good-bg: 233 242 236;
+  --warn: 166 124 34;  --warn-bg: 244 237 216;
+  --danger: 182 74 61; --danger-bg: 246 231 227;
+  /* legacy gold (now-serving) — aligned to the warm/sage family */
+  --gold: 166 124 34;
+  --gold-soft: 244 237 216;
+  --gold-ink: 122 90 20;
   /* chart internals (hex — used directly in SVG attrs) */
-  --chart-grid: #eef2f6;
-  --chart-cancelled: #e5e9ee;
-  --chart-track: #d8ece7;
-  --rate-label: #b45309;
-  --cell-empty: #eef4f2;
+  --chart-grid: #ededeb;
+  --chart-cancelled: #e4e4e0;
+  --chart-track: #e4e4e0;
+  --chart-ghost: #b7b8b4;
+  --rate-label: #8b8d8c;
+  --cell-empty: #f4f4f1;
 }
 
 .dark {
   color-scheme: dark;
-  --teal: 32 178 166;
-  --teal-deep: 127 212 205;   /* used as TEXT accent — light on dark */
-  --teal-light: 53 193 184;
-  --teal-pale: 19 50 49;
-  --teal-mint: 15 31 30;
-  --ink: 232 241 239;
-  --ink-soft: 198 214 211;
-  --slate: 148 166 163;
-  --slate-light: 106 126 123;
-  --cream: 10 19 18;
-  --surface: 18 32 31;
-  --hairline: 32 54 52;
-  --gold: 240 198 116;
-  --gold-soft: 51 41 15;
-  --gold-ink: 244 213 138;
-  --danger: 239 106 106;
-  --chart-grid: #1c3230;
-  --chart-cancelled: #2b3f3d;
-  --chart-track: #163331;
-  --rate-label: #f0b429;
-  --cell-empty: #142523;
+  --teal: 240 239 232;
+  --teal-deep: 240 239 232;
+  --teal-light: 143 143 136;
+  --teal-pale: 34 34 32;
+  --teal-mint: 34 34 32;
+  --ink: 240 239 232;
+  --ink-soft: 200 200 193;
+  --slate: 143 143 136;
+  --slate-light: 92 92 86;
+  --cream: 15 15 14;
+  --surface: 21 21 19;
+  --hairline: 38 38 34;
+  --band: 28 28 23;
+  --pill: 34 34 32;
+  --line2: 47 47 42;
+  --accent: 240 239 232;
+  --accent-ink: 20 20 18;
+  --sel: 240 239 232;
+  --sel-ink: 20 20 18;
+  --sel-muted: 108 108 100;
+  --sel-line: 217 216 208;
+  --good: 87 181 135;  --good-bg: 24 37 30;
+  --warn: 211 166 72;  --warn-bg: 38 32 19;
+  --danger: 223 106 92; --danger-bg: 39 22 18;
+  --gold: 211 166 72;
+  --gold-soft: 38 32 19;
+  --gold-ink: 211 166 72;
+  --chart-grid: #262622;
+  --chart-cancelled: #2f2f2a;
+  --chart-track: #2f2f2a;
+  --chart-ghost: #5c5c56;
+  --rate-label: #8f8f88;
+  --cell-empty: #222220;
 }
 
 html {
@@ -66,125 +134,118 @@ html {
 
 body {
   @apply bg-cream text-ink font-ui;
-  background-image:
-    radial-gradient(1200px 600px at 85% -10%, rgba(0, 143, 143, 0.06), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(0, 107, 107, 0.05), transparent 55%);
   min-height: 100dvh;
-}
-
-/* Paper grain — one layer, fixed, barely there */
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1;
-  opacity: 0.035;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  letter-spacing: -0.006em;
 }
 
 #root { position: relative; z-index: 2; }
 
-/* ── Ledger primitives ── */
+/* ── Primitives ── */
 .card {
-  @apply bg-surface/85 border border-hairline rounded-2xl shadow-card;
-  backdrop-filter: blur(6px);
-  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 180ms ease;
+  @apply bg-surface border border-hairline rounded-2xl;
+  box-shadow: var(--shadow-card);
+  transition: border-color 160ms ease, box-shadow 180ms ease, transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 2px 4px rgba(26, 46, 46, 0.06), 0 18px 44px -16px rgba(0, 107, 107, 0.3);
-}
+:root { --shadow-card: 0 1px 2px rgba(20, 20, 18, 0.05), 0 10px 30px -18px rgba(20, 20, 18, 0.14); }
+.dark { --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 34px -18px rgba(0, 0, 0, 0.7); }
+.card:hover { border-color: rgb(var(--line2)); }
+/* opt-in lift for interactive cards */
+.card-hover:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(20,20,18,.06), 0 18px 40px -18px rgba(20,20,18,.22); }
 
 .ledger-row {
   @apply flex items-center gap-4 px-4 py-3 border-b border-hairline last:border-b-0;
 }
 
-/* Compact desktop density (2026-07-12, Vinay: "everything looks very big").
-   36-40px control height + 14px text is the desktop norm; 44px touch targets
-   are restored under (pointer: coarse) below, per Apple/Android guidelines. */
+/* Compact desktop density; 44px touch targets restored under coarse pointer. */
 .btn {
-  @apply inline-flex items-center justify-center gap-2 font-ui font-medium rounded-lg
-    px-3.5 py-2 text-sm transition-all duration-150 select-none
-    focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-light
-    disabled:opacity-40 disabled:pointer-events-none active:scale-[0.98];
+  @apply inline-flex items-center justify-center gap-2 font-ui font-semibold
+    px-4 py-2 text-sm transition-all duration-150 select-none
+    focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate
+    disabled:opacity-40 disabled:pointer-events-none active:scale-[0.985];
 }
-.btn-primary { @apply btn bg-teal text-white hover:brightness-110 shadow-card; }
-.btn-ghost { @apply btn bg-transparent text-teal border border-hairline hover:bg-teal-mint; }
-.btn-danger { @apply btn bg-surface text-danger border border-danger/30 hover:bg-danger/5; }
-.btn-gold { @apply btn bg-gold-soft text-gold-ink border border-gold/60 hover:brightness-95; }
+/* Primary = the BizLink black pill (inverts to a light pill in dark). */
+.btn-primary { @apply btn rounded-full; background: rgb(var(--accent)); color: rgb(var(--accent-ink)); }
+.btn-primary:hover { opacity: 0.9; }
+.btn-ghost { @apply btn rounded-lg bg-transparent text-ink-soft border border-hairline hover:bg-pill hover:border-line2; }
+.btn-danger { @apply btn rounded-lg bg-surface text-danger border border-danger/30 hover:bg-danger/5; }
+.btn-gold { @apply btn rounded-full; background: rgb(var(--gold-soft)); color: rgb(var(--gold-ink)); border: 1px solid rgb(var(--gold) / 0.5); }
 
+/* Chips: small labels. token uses the sage band; others neutral. */
 .chip {
   @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium font-ui;
+  font-variant-numeric: tabular-nums;
 }
-.chip-token { @apply chip bg-teal-pale text-teal-deep; }
-.chip-slot { @apply chip bg-gold-soft text-gold-ink; }
-.chip-muted { @apply chip bg-slate-light/20 text-slate; }
-.chip-danger { @apply chip bg-danger/10 text-danger; }
+.chip-token { @apply chip; background: rgb(var(--band)); color: rgb(var(--ink)); }
+.chip-slot { @apply chip border border-line2 text-ink-soft; }
+.chip-muted { @apply chip bg-pill text-slate; }
+.chip-danger { @apply chip; background: rgb(var(--danger-bg)); color: rgb(var(--danger)); }
+
+/* Bordered count/meta chip (BizLink board style). */
+.chip-count {
+  @apply inline-flex items-center gap-1.5 rounded-lg border border-line2 px-2 py-1 text-xs font-semibold text-ink-soft;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Status tags — semantic only, separate from the neutral accent. */
+.tag { @apply inline-flex items-center rounded-full px-2 py-0.5 text-[10.5px] font-semibold; }
+.tag-good { background: rgb(var(--good-bg)); color: rgb(var(--good)); }
+.tag-warn { background: rgb(var(--warn-bg)); color: rgb(var(--warn)); }
+.tag-crit { background: rgb(var(--danger-bg)); color: rgb(var(--danger)); }
 
 .field {
-  @apply w-full rounded-lg border border-hairline bg-surface px-3 py-2 font-ui text-ink text-sm
-    placeholder:text-slate-light focus:border-teal-light focus:outline-none
-    focus:ring-2 focus:ring-teal-light/25 transition;
+  @apply w-full rounded-xl border px-3.5 py-2.5 font-ui text-ink text-sm transition;
+  background: rgb(var(--pill));
+  border-color: rgb(var(--line2));
 }
-/* Alias — the support pages were written with `input`; keep both valid so a
-   missed rename can never ship an unstyled control again. */
+.field::placeholder { color: rgb(var(--slate)); }
+.field:focus {
+  outline: none;
+  border-color: rgb(var(--accent));
+  box-shadow: 0 0 0 3px rgb(var(--accent) / 0.12);
+  background: rgb(var(--surface));
+}
 .input { @apply field; }
 
-/* Touch devices get full 44px+ targets (Apple HIG / Android 48dp) without
-   inflating desktop density. */
 @media (pointer: coarse) {
-  .btn, .field, .input {
-    min-height: 44px;
-  }
+  .btn, .field, .input { min-height: 44px; }
 }
-
-/* iOS Safari zooms the page when a focused input's font is < 16px. Force a
-   16px minimum on every native control on small screens so focusing a field
-   never yanks the viewport. Desktop keeps the designed sizes. */
 @media (max-width: 640px) {
-  input,
-  select,
-  textarea {
-    font-size: 16px;
-  }
+  input, select, textarea { font-size: 16px; }
 }
 
-.label { @apply block text-xs font-medium uppercase tracking-[0.12em] text-slate mb-1.5 font-ui; }
+.label { @apply block text-[11px] font-semibold uppercase tracking-[0.09em] text-slate mb-1.5 font-ui; }
 
-/* Hero numerals — Fraunces, soft serif character at display sizes */
+/* Hero numerals — General Sans, geometric grotesque, tight tabular. */
 .numeral {
-  font-family: "Fraunces", Georgia, serif;
-  font-weight: 600;
+  font-family: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  font-weight: 700;
   font-variant-numeric: lining-nums tabular-nums;
-  font-optical-sizing: auto;
   letter-spacing: -0.02em;
 }
+.num { font-variant-numeric: tabular-nums; letter-spacing: -0.015em; }
 
-/* Section headers — small caps editorial */
-.section-title {
-  @apply font-display text-ink text-lg font-semibold tracking-tight;
-}
-.eyebrow {
-  @apply text-[11px] font-ui font-semibold uppercase tracking-[0.18em] text-teal;
-}
+.section-title { @apply font-ui text-ink text-lg font-semibold; letter-spacing: -0.01em; }
+.eyebrow { @apply text-[11px] font-ui font-semibold uppercase tracking-[0.14em] text-slate; }
 
-/* Google Sign-In button renders in an iframe we can't style; its filled_black
-   personalized variant ships a white 1px border ring that clashes with the
-   dark card. Mask the pill and pull the iframe out 2px each side so the ring
-   is cropped away (button text has >2px internal padding — nothing clips). */
-.gsi-crop {
-  border-radius: 9999px;
-  overflow: hidden;
-  width: fit-content;
-}
+h1, h2, h3 { text-wrap: balance; }
+
+/* Google Sign-In iframe ring crop (unchanged). */
+.gsi-crop { border-radius: 9999px; overflow: hidden; width: fit-content; }
 .gsi-crop > div { margin: -2px; }
 
-/* Scrollbars that match the paper */
-* { scrollbar-width: thin; scrollbar-color: rgb(var(--hairline)) transparent; }
+/* Scrollbars */
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--line2)) transparent; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
-*::-webkit-scrollbar-thumb { background: rgb(var(--hairline)); border-radius: 8px; }
+*::-webkit-scrollbar-thumb { background: rgb(var(--line2)); border-radius: 8px; }
 
-/* GSAP reveal targets start hidden to avoid flash — but ONLY until the
-   reveal marks them (#355: late-mounting cards stayed invisible forever). */
+:focus-visible { outline: 2px solid rgb(var(--slate)); outline-offset: 2px; border-radius: 6px; }
+::selection { background: rgb(var(--accent)); color: rgb(var(--accent-ink)); }
+
+/* GSAP reveal targets start hidden to avoid flash — only until the reveal
+   marks them (#355: late-mounting cards stayed invisible forever). */
 [data-reveal]:not([data-revealed]) { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal]:not([data-revealed]) { opacity: 1; }
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}

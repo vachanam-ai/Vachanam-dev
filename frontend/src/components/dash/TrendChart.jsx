@@ -9,12 +9,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
    dot rides each curve like a pen tip. Range switches re-run the entrance
    (fade + redraw — deliberate, never a snap). Reduced motion = instant. */
 
+/* Categorical series — semantic where it means something (seen=good,
+   no-show=warn), neutral grays elsewhere, gold reserved for the show-rate
+   curve (the design's one warm accent). No teal. Fixed mid-tones chosen to
+   read on both the light and dark card grounds.
+   ponytail: fixed hexes, swap to per-theme CSS vars if dark contrast slips. */
 const COLORS = {
-  seen: "#0f766e",
-  upcoming: "#5eead4",
-  noShow: "#f59e0b",
+  seen: "#3a8f60",
+  upcoming: "#a7b0ab",
+  noShow: "#c9922f",
   cancelled: "var(--chart-cancelled)",
-  calls: "#0e7490",
+  calls: "#6f6f68",
   grid: "var(--chart-grid)",
 };
 
@@ -243,7 +248,7 @@ export default function TrendChart({ daily, calls }) {
             left: `${Math.min(Math.max((cx(hover) / W) * 100, 12), 82)}%`,
             top: 0, transform: "translate(-50%, -6px)",
           }}>
-          <p className="font-ui text-[11px] font-semibold text-teal-deep">
+          <p className="font-ui text-[11px] font-semibold text-ink">
             {new Date(hd.date + "T00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
           </p>
           <div className="mt-1 space-y-0.5 font-ui text-[11px] text-slate">
@@ -253,7 +258,7 @@ export default function TrendChart({ daily, calls }) {
             <p><span className="inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.cancelled }} /> Cancelled <b className="numeral float-right">{hd.cancelled}</b></p>
             <p><span className="inline-block h-2 w-2 rounded-full" style={{ background: COLORS.calls }} /> Calls <b className="numeral float-right">{hc?.calls ?? 0}</b></p>
             {hd.show_rate !== null && (
-              <p><span className="inline-block h-2 w-2 rounded-full bg-amber-500" /> Show rate <b className="numeral float-right">{Math.round(hd.show_rate * 100)}%</b></p>
+              <p><span className="inline-block h-2 w-2 rounded-full bg-warn" /> Show rate <b className="numeral float-right">{Math.round(hd.show_rate * 100)}%</b></p>
             )}
           </div>
         </div>
