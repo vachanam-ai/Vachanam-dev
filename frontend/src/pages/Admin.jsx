@@ -384,7 +384,7 @@ export default function Admin() {
 
       {/* Clinic business ledger */}
       <section data-reveal className="card overflow-hidden">
-        <header className="flex items-center justify-between border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <header className="flex items-center justify-between border-b border-hairline bg-pill px-5 py-3">
           <h2 className="font-display text-lg font-semibold">Clinics — usage, money, controls</h2>
           <span className="font-ui text-sm text-slate">{ov?.clients_total ?? 0} total</span>
         </header>
@@ -403,7 +403,7 @@ export default function Admin() {
 
       {/* Payments */}
       <section data-reveal className="card overflow-hidden">
-        <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <header className="border-b border-hairline bg-pill px-5 py-3">
           <h2 className="font-display text-lg font-semibold">Payments</h2>
         </header>
         {!ov || ov.payments.length === 0 ? (

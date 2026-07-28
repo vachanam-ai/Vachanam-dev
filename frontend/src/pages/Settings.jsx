@@ -88,7 +88,7 @@ function Section({ id, title, sub, done, children }) {
 
 function InfoBox({ title, children }) {
   return (
-    <div className="mt-4 rounded-xl border border-teal-pale bg-teal-mint/70 p-4 font-ui text-sm">
+    <div className="mt-4 rounded-xl border border-teal-pale bg-pill p-4 font-ui text-sm">
       {title && <p className="font-medium">{title}</p>}
       <div className="mt-1 space-y-1 text-ink-soft">{children}</div>
     </div>

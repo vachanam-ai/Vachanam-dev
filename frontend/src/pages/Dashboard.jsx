@@ -8,6 +8,7 @@ import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
 import Heatmap from "../components/dash/Heatmap.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { countUp, revealNow, revealStagger } from "../lib/motion.js";
+import PageHeader from "../components/PageHeader.jsx";
 
 function Hero({ label, value, sub, gold, suffix = "" }) {
   const ref = useRef(null);
@@ -97,7 +98,7 @@ function MonthRow({ label, value }) {
     countUp(ref.current, value ?? 0, { duration: 1.0 });
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="flex items-baseline justify-between rounded-lg bg-teal-mint/50 px-3 py-2">
+    <div className="flex items-baseline justify-between rounded-lg bg-pill px-3 py-2">
       <span className="font-ui text-xs text-slate">{label}</span>
       <span ref={ref} className="numeral text-xl text-teal-deep">0</span>
     </div>
@@ -244,7 +245,7 @@ function MessagesCard({ branchId }) {
   if (!msgs.length) return null;
   return (
     <section ref={ref} data-reveal className="card overflow-hidden">
-      <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-5 py-3">
+      <header className="flex items-center gap-3 border-b border-hairline bg-pill px-5 py-3">
         <h2 className="font-display text-lg font-semibold">Messages for the doctor</h2>
         {data.pending > 0 && (
           <span className="chip bg-gold-soft text-gold-ink">{data.pending} pending</span>
@@ -349,11 +350,8 @@ export default function Dashboard() {
   const totalSource = Object.values(an?.by_source ?? {}).reduce((a, b) => a + b, 0);
 
   return (
-    <div ref={pageRef} className="space-y-8">
-      <div data-reveal>
-        <p className="eyebrow">Clinic overview</p>
-        <h1 className="section-title text-2xl">Today at a glance</h1>
-      </div>
+    <div ref={pageRef} className="space-y-6">
+      <PageHeader eyebrow="Clinic overview" title="Today at a glance" />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Hero label="Bookings today" value={s.total} sub="voice + walk-in" />
@@ -377,19 +375,19 @@ export default function Dashboard() {
       {/* Minutes + this month + busiest weekdays */}
       <div className="grid gap-6 lg:grid-cols-3">
         <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Voice minutes · this month</h2>
           </header>
           <div className="px-5 py-4"><MinutesDonut minutes={an?.minutes} /></div>
         </section>
         <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
             <h2 className="font-display text-lg font-semibold">This month</h2>
           </header>
           <div className="px-5 py-4"><MonthBlock month={an?.month} /></div>
         </section>
         <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Busiest days · {days}d</h2>
           </header>
           <div className="px-5 py-4"><WeekdayBars load={an?.weekday_load} /></div>
@@ -398,7 +396,7 @@ export default function Dashboard() {
 
       {/* Trend — bookings, outcomes, show rate over time */}
       <section data-reveal className="card overflow-hidden">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-pill px-5 py-3">
           <h2 className="font-display text-lg font-semibold">Bookings &amp; show rate</h2>
           <div className="flex gap-1">
             {[7, 30, 90].map((d) => (
@@ -421,7 +419,7 @@ export default function Dashboard() {
 
       {/* Peak hours — when the phone actually rings */}
       <section data-reveal className="card overflow-hidden">
-        <header className="flex items-center justify-between border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <header className="flex items-center justify-between border-b border-hairline bg-pill px-5 py-3">
           <h2 className="font-display text-lg font-semibold">Peak hours · {days}d</h2>
           <span className="font-ui text-xs text-slate">calls by weekday &amp; hour</span>
         </header>
@@ -430,7 +428,7 @@ export default function Dashboard() {
 
       {/* Call quality — how the AI receptionist is actually performing */}
       <section data-reveal className="card overflow-hidden">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-pill px-5 py-3">
           <h2 className="font-display text-lg font-semibold">Call quality · {days}d</h2>
           <span className="font-ui text-xs text-slate">{cq?.total_calls ?? 0} calls</span>
         </header>
@@ -499,7 +497,7 @@ export default function Dashboard() {
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Where bookings come from */}
         <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Booking sources · {days}d</h2>
           </header>
           <div className="space-y-3 px-5 py-4">
@@ -525,7 +523,7 @@ export default function Dashboard() {
 
         {/* Per-doctor period performance */}
         <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Doctors · {days}d</h2>
           </header>
           {[...(an?.by_doctor ?? [])].sort((a, b) => b.booked - a.booked).map((d, i, arr) => (
@@ -563,7 +561,7 @@ export default function Dashboard() {
 
       {/* Live per-doctor queue (today) */}
       <section data-reveal className="card overflow-hidden">
-        <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <header className="border-b border-hairline bg-pill px-5 py-3">
           <h2 className="font-display text-lg font-semibold">Doctor load · live today</h2>
         </header>
         {(queue?.doctors ?? []).map((d) => {
