@@ -154,16 +154,14 @@ jobs:
         # separate vachanam_test (name must contain "_test").
         run: PGPASSWORD=localdev123 psql -h localhost -U vachanam -d vachanam_dev -c "CREATE DATABASE vachanam_test"
 
-      - name: Alembic chain sanity (single head)
-        # `alembic upgrade head` from base is KNOWN-broken (TD-027: migration
-        # 8559 is a full-schema rewrite; every env bootstraps via create_all +
-        # stamp — the tests' conftest does exactly that). What CI CAN verify
-        # cheaply: the chain still has exactly ONE head, so a mis-parented
-        # new migration fails the build instead of splitting prod.
+      - name: Alembic fresh-database upgrade
+        # This is deliberately an upgrade from an empty database. It catches
+        # duplicate DDL, missing parents, enum drift, and split heads before a
+        # migration reaches Neon or blocks the ZAP environment.
         run: |
-          HEADS=$(alembic heads | wc -l)
-          echo "alembic heads: $HEADS"
-          test "$HEADS" -eq 1
+          alembic upgrade head
+          test "$(alembic heads | wc -l)" -eq 1
+          test "$(alembic current | grep -c '(head)')" -eq 1
 
       - name: Run pytest
         run: pytest tests/ -q --tb=short

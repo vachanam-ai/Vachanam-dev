@@ -1,5 +1,18 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-29 — FRESH-DATABASE MIGRATIONS + ZAP GATE REPAIRED.**
+> Closed the historical Alembic bootstrap collision: revision `8559268c0c44`
+> now applies only its intended audit table, 15 FK delete rules, and 15 FK
+> indexes instead of recreating the initial schema. CI now performs a real
+> empty-database `alembic upgrade head`; the old single-head-only workaround is
+> gone. `kk34_schema_alignment` backfills and makes five required timestamps
+> non-null and adds the missing support-message FK index. ORM metadata now
+> preserves intentional DB comments, the call-quality partial judge index, and
+> doctor-user uniqueness, so `alembic check` reports no drift. ZAP is manually
+> dispatchable and treats a missing report as failure. Proof: clean-room
+> PostgreSQL `base → head`, direct `8559` downgrade/upgrade, schema assertions,
+> 3 migration guards, and the complete suite: 1,396 passed, 4 skipped.
+
 > **2026-07-29 — MULTI-SESSION + EXACT-DATE DOCTOR SCHEDULES (PRODUCTION RELEASE).**
 > Token and appointment doctors now support multiple non-overlapping sessions
 > per day and an exact-date mode for hospitals that publish tomorrow's schedule

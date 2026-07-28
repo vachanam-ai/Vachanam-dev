@@ -1,6 +1,7 @@
 name: ZAP Baseline Scan
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [master, main]
   schedule:
@@ -146,7 +147,8 @@ jobs:
             fi
             echo "No high-risk findings detected."
           else
-            echo "::warning::ZAP report not found — scan may have failed."
+            echo "::error::ZAP report not found — the scan did not complete."
+            exit 1
           fi
 
       - name: Stop backend

@@ -163,13 +163,12 @@ Important entities:
   branch-patient data.
 - `AuditLog`: no FKs by design; intended append-only.
 
-Migration warning:
+Migration baseline:
 
-- There is documented debt in `docs/TECH_DEBT.md`: the early Alembic chain has
-  a from-base collision around `8559268c0c44` recreating tables. Existing prod
-  was bootstrapped with `create_all` and stamped, then later migrations applied.
-  Until this is fixed, do not assume `alembic upgrade head` from an empty DB is
-  safe without checking the current migration-chain tests.
+- The historical from-base collision in `8559268c0c44` was repaired on
+  2026-07-29. A clean PostgreSQL database now upgrades through every revision,
+  and CI runs that exact path before deployment. Keep the migration-chain guard
+  and `alembic check` green whenever models or revisions change.
 
 ## Key Flows
 

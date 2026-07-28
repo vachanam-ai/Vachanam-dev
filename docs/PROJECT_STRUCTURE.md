@@ -198,7 +198,7 @@ Owner: `devops-engineer`.
 
 | Path | Status | Purpose |
 |---|---|---|
-| `.github/workflows/ci.yml` | working | Two-job workflow triggered on PR + push to main/master. Job 1 `test`: Python 3.11, Postgres 16 service, Redis 7 service, installs backend + agent deps, runs `alembic upgrade head`, runs `pytest tests/ -v --tb=short`. Job 2 `secret-scan`: full git history checkout + gitleaks OSS scan. **TD-015 closed.** |
+| `.github/workflows/ci.yml` | tested | Release workflow: Ruff, production dependency secret scan, frontend lint/test/build, clean PostgreSQL `alembic upgrade head`, full pytest with PostgreSQL+Redis, semver release, and Fly deploy. |
 | `.github/dependabot.yml` | working | Weekly (Monday 06:00 UTC) security updates for: `pip` root scan (backend), `pip /agent` scan (agent), `npm /frontend` (future-proof for Phase 7), `github-actions`. Max 5 open PRs per ecosystem. Labels auto-applied. |
 | `.gitleaks.toml` | working | Gitleaks configuration. Extends default OSS ruleset. Allowlist: test fixture phone numbers (+919999999999 etc.), ci.yml test JWT secret, test-prefixed API key stubs, .env.example empty-value lines, docs/*.md example key patterns. |
 
@@ -234,6 +234,7 @@ Owner: `database-engineer`.
 | `alembic/versions/ffcf1134aa8f_initial_schema_with_user_table.py` | working | Initial schema — 10 tables. Phase 4 (replaces orphan 2fe8f201bc31). |
 | `alembic/versions/8559268c0c44_phase45_audit_log_ondelete_fk_indexes.py` | working | Phase 4.5 Task 2 — adds `audit_log` table, sets explicit FK `ondelete=` (TD-019 closed), FK-only indexes (TD-018 narrowed scope). Reviewed; commit `be6d76e`. |
 | `alembic/versions/jj33_doctor_multi_session_schedules.py` | tested | Adds doctor schedule mode/recurring JSON and exact-date multi-session table; safely backfills configured legacy hours and fails unknown hours closed. |
+| `alembic/versions/kk34_schema_alignment.py` | tested | Backfills/tightens required timestamps and adds the missing support-message FK index; closes clean-room model/schema drift. |
 
 **Open debt:** TD-022 (audit_log.metadata_json PII denylist enforcement — must ship with `@audit` decorator in Phase 4.5 Task 7), TD-023 (`GRANT INSERT, SELECT ON audit_log` + `REVOKE UPDATE, DELETE` — Phase 10 prod-init SQL).
 
@@ -261,6 +262,7 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/unit/test_tts_sanitizer.py` | tested (11/11) | TTS sanitization rules. |
 | `tests/unit/test_booking_confirmation_wording.py` | tested | Booking/reschedule confirmations require the punctuality message; cancellation excludes it. |
 | `tests/unit/test_doctor_multi_session_schedule.py` | tested | Multi-session validation, sorting, overlap rejection, weekday validation, and slot-boundary coverage. |
+| `tests/unit/test_migration_chain.py` | tested | Prevents the Phase 4.5 full-schema duplication, requires CI's real base-to-head upgrade, and requires missing ZAP reports to fail. |
 | `tests/unit/test_bot_pipeline_builder.py`, `test_bot_tools_and_fallback.py`, `test_bot_tts_sanitizer.py`, `test_pipecat_imports.py` | tested | Pipecat bot pipeline, tool registration, LLM fallback, sanitizer wiring. (Replaced LiveKit-era test_emergency/test_silence_handler/test_audio_quality — modules deleted with the Pipecat rewrite.) |
 | `tests/unit/test_auth.py` | tested (6/6) | JWT + Google OAuth verification. |
 | `tests/integration/__init__.py` | placeholder | Package marker. |

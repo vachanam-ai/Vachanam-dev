@@ -13,6 +13,26 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Fresh-database chain and security-scan gate repaired
+
+Rewrote deployed revision `8559268c0c44` from the accidental second full-schema
+snapshot into the delta its documentation always claimed: create `audit_log`,
+replace 15 anonymous FKs with explicit delete rules, and add their lookup
+indexes. Existing production databases do not re-run the revision; new databases
+now upgrade from base through every migration without collisions.
+
+Added `kk34_schema_alignment` after a clean-room `alembic check` exposed the
+remaining historical drift. It defensively backfills and tightens five required
+timestamps and adds the missing `support_messages.ticket_id` index. ORM metadata
+was aligned with intentional production comments, doctor-user uniqueness, and
+the partial unjudged-call index instead of deleting those useful structures.
+
+CI now runs `alembic upgrade head` on an empty PostgreSQL database and verifies a
+single current head. ZAP gained manual dispatch and fails when no report is
+produced. Proof before release: direct `ffcf → 8559 → ffcf`, complete `base →
+kk34`, zero `alembic check` operations, targeted schema assertions, 3 structural
+guards, and 1,396 passing application tests with 4 intentional skips.
+
 ## 2026-07-29 — Authoritative multi-session and exact-date doctor schedules
 
 Replaced the one-window-per-doctor assumption with a single fail-closed schedule

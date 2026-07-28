@@ -199,3 +199,19 @@ at index update time).
 
 **Reviewer:** security-engineer — verify payload_json PII compliance + emergency_reason
 exclusion from audit log + doctor-role enum value doesn't grant unintended access.
+
+---
+
+## 2026-07-29 — 8559268 repair + kk34 schema alignment
+
+`8559268c0c44` was corrected in place because production was already stamped
+past it and Alembic does not checksum revision bodies. Its effective schema is
+unchanged: `audit_log`, 15 explicit FK delete rules, and 15 FK indexes. The
+accidental duplicate initial-schema DDL was removed, allowing clean databases to
+upgrade normally.
+
+`kk34_schema_alignment` follows `jj33_doctor_schedules`. It backfills NULL values
+before making five server-default timestamps non-null and adds
+`ix_support_messages_ticket_id`. ORM metadata was aligned with existing intended
+comments/indexes/constraints. Verified on an isolated PostgreSQL database with
+direct 8559 round-trip, base-to-head upgrade, and zero `alembic check` drift.
