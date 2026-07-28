@@ -5,6 +5,7 @@ import { fetchDoctors, markUnavailable, previewAffected, fetchUpcomingLeave } fr
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { localDateInputValue } from "../utils/date.js";
+import PageHeader from "../components/PageHeader.jsx";
 
 const today = localDateInputValue;
 
@@ -66,20 +67,14 @@ export default function Availability() {
 
   return (
     <div ref={pageRef} className="mx-auto max-w-2xl space-y-6">
-      <div data-reveal>
-        <p className="eyebrow">Front desk</p>
-        <h1 className="section-title text-2xl">Doctor unavailable / leave</h1>
-        <p className="mt-1 font-ui text-sm text-slate">
-          Mark a doctor off for a date range. Those dates are blocked on the calendar and any
-          existing bookings are cancelled — patients get contacted to rebook.
-        </p>
-      </div>
+      <PageHeader eyebrow="Front desk" title="Doctor unavailable / leave"
+        sub="Mark a doctor off for a date range — those dates are blocked and existing bookings are cancelled (patients get contacted to rebook)." />
 
       <UpcomingLeave branchId={branchId} />
 
       <form
         data-reveal
-        className="card space-y-5 p-6"
+        className="card space-y-5 p-5"
         onSubmit={(e) => {
           e.preventDefault();
           if (canSubmit) mark.mutate();
@@ -94,8 +89,8 @@ export default function Availability() {
                 <button type="button" key={id} onClick={() => setDoctorId(id)}
                   className={`rounded-xl border px-4 py-3 text-left transition ${
                     doctorId === id
-                      ? "border-teal bg-teal-mint shadow-card"
-                      : "border-hairline bg-surface hover:border-teal-light/60"
+                      ? "border-accent bg-pill"
+                      : "border-hairline bg-surface hover:border-line2"
                   }`}>
                   <p className="font-ui font-medium">{d.name}</p>
                   <span className={d.booking_type === "token" ? "chip-token mt-1" : "chip-slot mt-1"}>
@@ -131,7 +126,7 @@ export default function Availability() {
 
         {doctorId && affected && (
           <div className={`rounded-xl border p-4 font-ui text-sm ${
-            affected.count > 0 ? "border-gold/60 bg-gold-soft text-gold-ink" : "border-hairline bg-teal-mint/60 text-ink-soft"
+            affected.count > 0 ? "border-warn/40 bg-warn/10 text-ink-soft" : "border-hairline bg-pill text-ink-soft"
           }`}>
             {affected.count > 0
               ? `${affected.count} existing booking(s) in this range will be cancelled and those patients contacted to rebook.`
@@ -161,7 +156,7 @@ function UpcomingLeave({ branchId }) {
 
   return (
     <section data-reveal className="card overflow-hidden">
-      <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+      <header className="flex items-center gap-3 border-b border-hairline bg-pill px-4 py-3">
         <h2 className="font-display text-lg font-semibold">On leave · next 30 days</h2>
         <span className="chip-muted">{leave.length}</span>
       </header>

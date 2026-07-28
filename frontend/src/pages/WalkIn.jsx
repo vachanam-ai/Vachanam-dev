@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api, fetchDoctorSchedules, fetchDoctors } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
+import PageHeader from "../components/PageHeader.jsx";
 
 /** Build choices independently inside every authoritative session. */
 function slotChoices(sessions, step = 15) {
@@ -101,15 +102,12 @@ export default function WalkIn() {
 
   return (
     <div ref={pageRef} className="mx-auto max-w-3xl space-y-6">
-      <div data-reveal>
-        <p className="eyebrow">Front desk</p>
-        <h1 className="section-title text-2xl">Walk-in registration</h1>
-      </div>
+      <PageHeader eyebrow="Front desk" title="Walk-in registration" />
 
-      <div className="grid gap-6 md:grid-cols-[1fr_280px]">
+      <div className="grid gap-5 md:grid-cols-[1fr_260px]">
         <form
           data-reveal
-          className="card space-y-5 p-6"
+          className="card space-y-5 p-5"
           onSubmit={(e) => {
             e.preventDefault();
             if (canSubmit) book.mutate();
@@ -129,8 +127,8 @@ export default function WalkIn() {
                     onClick={() => { setDoctorId(id); setSlot(""); }}
                     className={`rounded-xl border px-4 py-3 text-left transition ${
                       selected
-                        ? "border-teal bg-teal-mint shadow-card"
-                        : "border-hairline bg-surface hover:border-teal-light/60"
+                        ? "border-accent bg-pill"
+                        : "border-hairline bg-surface hover:border-line2"
                     }`}
                   >
                     <p className="font-ui font-medium">{d.name}</p>
@@ -163,7 +161,7 @@ export default function WalkIn() {
           </div>
 
           {doctorId && todaySchedule?.status !== "available" && (
-            <p className="rounded-xl border border-gold/40 bg-gold-soft p-3 font-ui text-sm">
+            <p className="rounded-xl border border-warn/30 bg-warn/10 p-3 font-ui text-sm text-ink-soft">
               {todaySchedule?.status === "unpublished"
                 ? "Today's schedule has not been published. Booking is blocked until it is confirmed."
                 : "This doctor has no published sessions today."}
@@ -181,8 +179,8 @@ export default function WalkIn() {
                     <button type="button" key={t} onClick={() => setSlot(t)}
                       className={`rounded-lg border px-3 py-1.5 font-ui text-sm tabular-nums transition ${
                         slot === t
-                          ? "border-gold bg-gold-soft text-gold-ink"
-                          : "border-hairline bg-surface hover:border-gold/60"
+                          ? "border-accent bg-pill text-ink"
+                          : "border-hairline bg-surface hover:border-line2"
                       }`}>
                       {t}
                     </button>
@@ -208,14 +206,14 @@ export default function WalkIn() {
         </form>
 
         {/* Receipt — the thing the receptionist reads out loud */}
-        <aside data-reveal className="card h-fit p-6 text-center">
+        <aside data-reveal className="card h-fit p-5 text-center">
           <p className="eyebrow">Last booking</p>
           {receipt ? (
             <>
-              <p className="numeral mt-3 text-7xl text-teal-deep">
+              <p className="numeral mt-3 text-6xl text-ink">
                 {receipt.booking_type === "token" ? receipt.token_number : receipt.appointment_time}
               </p>
-              <p className="mt-2 font-display text-lg">{receipt.patient_name}</p>
+              <p className="mt-2 font-ui text-lg font-semibold">{receipt.patient_name}</p>
               <p className="font-ui text-sm text-slate">{receipt.doctor_name}</p>
             </>
           ) : (

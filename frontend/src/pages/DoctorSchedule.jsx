@@ -259,6 +259,8 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
   );
 }
 
+const shortT = (t) => (t || "").replace(/^0/, "").replace(":00", "");
+
 function DateSchedulePublisher({ branchId, doctor }) {
   const qc = useQueryClient();
   const tomorrow = new Date();
@@ -270,6 +272,7 @@ function DateSchedulePublisher({ branchId, doctor }) {
   ]);
   const [tokenLimit, setTokenLimit] = useState(doctor.daily_token_limit ?? 50);
   const [notes, setNotes] = useState("");
+  const [showForm, setShowForm] = useState(false);
   const rangeStart = localISO(new Date());
   const rangeEndDate = new Date();
   rangeEndDate.setDate(rangeEndDate.getDate() + 14);
@@ -289,92 +292,101 @@ function DateSchedulePublisher({ branchId, doctor }) {
     onSuccess: () => {
       toast.success(`${doctor.name}'s ${selectedDate} schedule published`);
       qc.invalidateQueries({ queryKey: ["doctor-schedules", branchId, doctor.id] });
+      setShowForm(false);
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not publish schedule")
   });
 
-  const fmtDay = (iso) =>
-    new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", { weekday: "short", day: "2-digit", month: "short" });
+  // Weekday + day only ("Wed 29") — month shown just when it rolls over, to
+  // keep chips one line. Load a chip into the form on click (opens the form).
+  const loadDate = (entry) => {
+    setSelectedDate(entry.date);
+    if (entry.is_published) {
+      setSessions(entry.sessions);
+      setTokenLimit(entry.token_limit ?? doctor.daily_token_limit ?? 50);
+      setNotes(entry.notes ?? "");
+    }
+    setShowForm(true);
+  };
 
   return (
     <div>
-      <div className="mb-3">
-        <h3 className="section-title">Publish an exact date</h3>
-        <p className="font-ui text-xs text-slate">This exact-date entry overrides any weekly pattern. Empty sessions explicitly mark the doctor unavailable.</p>
+      {/* Compact 15-day availability strip — the default view. */}
+      <div className="mb-2 flex items-center justify-between">
+        <p className="label mb-0">Next 15 days</p>
+        <button type="button" onClick={() => setShowForm((v) => !v)}
+          className="font-ui text-xs font-semibold text-ink underline-offset-4 hover:underline">
+          {showForm ? "Hide" : "＋ Publish a date"}
+        </button>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label className="label">Date</label>
-          <input className="field" type="date" min={rangeStart} value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)} />
-        </div>
-        {doctor.booking_type === "token" && (
-          <div>
-            <label className="label">Token limit for this date</label>
-            <input className="field" type="number" min={1} max={500} value={tokenLimit}
-              onChange={(e) => setTokenLimit(e.target.value)} />
+      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-7">
+        {dates.map((entry) => {
+          const d = new Date(`${entry.date}T00:00:00`);
+          const published = entry.status !== "unpublished";
+          const open = published && entry.sessions.length > 0;
+          const dot = open ? "var(--good)" : entry.source === "leave" ? "var(--warn)"
+            : published ? "var(--slate)" : "var(--faint, #b7b8b4)";
+          const hrs = !published ? "—"
+            : entry.sessions.length ? entry.sessions.map((s) => `${shortT(s.start)}–${shortT(s.end)}`).join(" ")
+            : entry.source === "leave" ? "Leave" : "Closed";
+          return (
+            <button key={entry.date} type="button" onClick={() => loadDate(entry)}
+              title={hrs}
+              className={`rounded-lg border px-2 py-1.5 text-left transition hover:border-line2 ${
+                selectedDate === entry.date && showForm ? "border-accent bg-pill" : "border-hairline"
+              }`}>
+              <div className="flex items-center justify-between gap-1">
+                <span className="font-ui text-[11px] font-semibold text-ink">
+                  {d.toLocaleDateString("en-IN", { weekday: "short" })} {d.getDate()}
+                </span>
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: dot }} />
+              </div>
+              <p className="mt-0.5 truncate font-ui text-[10.5px] leading-tight text-slate">{hrs}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Publish/override form — on demand only, so it never dominates the card. */}
+      {showForm && (
+        <div className="mt-3 rounded-xl border border-hairline bg-pill/40 p-3 sm:p-4">
+          <p className="font-ui text-xs text-slate">Overrides the weekly pattern for one date. Empty sessions = unavailable.</p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Date</label>
+              <input className="field" type="date" min={rangeStart} value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)} />
+            </div>
+            {doctor.booking_type === "token" && (
+              <div>
+                <label className="label">Token limit</label>
+                <input className="field" type="number" min={1} max={500} value={tokenLimit}
+                  onChange={(e) => setTokenLimit(e.target.value)} />
+              </div>
+            )}
+            <div className="sm:col-span-2">
+              <label className="label">Sessions</label>
+              {sessions.length ? (
+                <SessionsEditor sessions={sessions} onChange={setSessions} />
+              ) : (
+                <p className="rounded-lg bg-band p-3 font-ui text-sm text-ink-soft">No sessions: publishes as unavailable.</p>
+              )}
+              <button type="button" className="btn-ghost mt-2 px-3 py-1.5 text-xs"
+                onClick={() => setSessions(sessions.length ? [] : [{ start: "09:00", end: "12:00" }])}>
+                {sessions.length ? "Mark unavailable all day" : "Add a session"}
+              </button>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="label">Internal note (optional)</label>
+              <input className="field" value={notes} onChange={(e) => setNotes(e.target.value)}
+                placeholder="Schedule shared by doctor at 7pm" />
+            </div>
           </div>
-        )}
-        <div className="sm:col-span-2">
-          <label className="label">Sessions</label>
-          {sessions.length ? (
-            <SessionsEditor sessions={sessions} onChange={setSessions} />
-          ) : (
-            <p className="rounded-lg bg-band p-3 font-ui text-sm text-ink-soft">No sessions: this publishes the doctor as unavailable.</p>
-          )}
-          <button type="button" className="btn-ghost mt-2 px-3 py-1.5 text-sm"
-            onClick={() => setSessions(sessions.length ? [] : [{ start: "09:00", end: "12:00" }])}>
-            {sessions.length ? "Mark unavailable all day" : "Add a session"}
+          <button className="btn-primary mt-3" disabled={publish.isPending} onClick={() => publish.mutate()}>
+            {publish.isPending ? "Publishing…" : "Publish this date"}
           </button>
         </div>
-        <div className="sm:col-span-2">
-          <label className="label">Internal note (optional)</label>
-          <input className="field" value={notes} onChange={(e) => setNotes(e.target.value)}
-            placeholder="Schedule shared by doctor at 7pm" />
-        </div>
-      </div>
-      <button className="btn-primary mt-4" disabled={publish.isPending} onClick={() => publish.mutate()}>
-        {publish.isPending ? "Publishing…" : "Publish exact schedule"}
-      </button>
-
-      {/* Next 15 days — compact chips, click to load that date into the form. */}
-      <div className="mt-5">
-        <p className="label">Next 15 days</p>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {dates.map((entry) => {
-            const published = entry.status !== "unpublished";
-            const busy = published && entry.sessions.length > 0;
-            return (
-              <button key={entry.date} type="button"
-                onClick={() => {
-                  setSelectedDate(entry.date);
-                  if (entry.is_published) {
-                    setSessions(entry.sessions);
-                    setTokenLimit(entry.token_limit ?? doctor.daily_token_limit ?? 50);
-                    setNotes(entry.notes ?? "");
-                  }
-                }}
-                className={`rounded-xl border p-3 text-left transition hover:border-line2 ${
-                  selectedDate === entry.date ? "border-accent bg-pill" : "border-hairline"
-                }`}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-ui text-xs font-semibold text-ink">{fmtDay(entry.date)}</p>
-                  <span className={busy ? "tag tag-good" : published ? "tag tag-warn" : "tag tag-crit"}>
-                    {busy ? "open" : entry.source === "leave" ? "leave" : published ? "closed" : "—"}
-                  </span>
-                </div>
-                <p className="mt-1 font-ui text-sm text-ink-soft">
-                  {!published
-                    ? "Not published"
-                    : entry.sessions.length
-                      ? entry.sessions.map((s) => `${s.start}–${s.end}`).join(" · ")
-                      : entry.source === "leave" ? "On leave" : "Unavailable"}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -422,7 +434,7 @@ function DoctorAccordion({ doctor, id, waiting, role, branchId, onChanged }) {
       </button>
 
       {open && (
-        <div className="space-y-5 border-t border-hairline p-4 sm:p-6">
+        <div className="space-y-4 border-t border-hairline p-4">
           {role === "org_admin" && (
             <div className="flex flex-wrap gap-2">
               <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => setEditing((e) => !e)}>
