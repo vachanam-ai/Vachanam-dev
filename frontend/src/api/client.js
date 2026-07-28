@@ -67,7 +67,18 @@ export const forgotPassword = (email, captchaToken) =>
   api.post("/auth/forgot-password", { email }, captchaConfig(captchaToken)).then((r) => r.data);
 export const resetPassword = (email, code, new_password) =>
   api.post("/auth/reset-password", { email, code, new_password }).then((r) => r.data);
-export const fetchMe = () => api.get("/auth/me").then((r) => r.data);
+export const fetchMe = () =>
+  api.get("/auth/me").then((r) => {
+    const d = r.data;
+    // Guard: if the wrong backend (a misrouted proxy, another app on the port)
+    // answers /auth/me with a 200 HTML body, axios hands us that string. Treat
+    // anything that is not a real user object as logged-OUT — otherwise a
+    // truthy garbage "user" renders an empty shell forever with no redirect.
+    if (!d || typeof d !== "object" || !d.user_id || !d.role) {
+      throw new Error("Unexpected /auth/me response — not a Vachanam session");
+    }
+    return d;
+  });
 export const logoutSession = () => api.post("/auth/logout");
 
 // ── Plan / billing (clinic owner) ──
