@@ -39,4 +39,6 @@ def test_zap_missing_report_is_a_failure():
     workflow = (ROOT / ".github" / "workflows" / "zap-baseline.yml").read_text()
     missing_report_branch = workflow.split("ZAP report not found", maxsplit=1)[1]
 
+    assert "ghcr.io/zaproxy/zaproxy:stable" in workflow
+    assert "softwaresecurityproject/zap-stable" not in workflow
     assert "exit 1" in missing_report_branch

@@ -9,7 +9,7 @@
 > non-null and adds the missing support-message FK index. ORM metadata now
 > preserves intentional DB comments, the call-quality partial judge index, and
 > doctor-user uniqueness, so `alembic check` reports no drift. ZAP is manually
-> dispatchable and treats a missing report as failure. Proof: clean-room
+> dispatchable, uses the official GHCR stable image, and treats a missing report as failure. Proof: clean-room
 > PostgreSQL `base → head`, direct `8559` downgrade/upgrade, schema assertions,
 > 3 migration guards, and the complete suite: 1,396 passed, 4 skipped.
 

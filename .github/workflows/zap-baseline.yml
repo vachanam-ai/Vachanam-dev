@@ -123,7 +123,7 @@ jobs:
           docker run --rm \
             --network host \
             -v $(pwd)/zap:/zap/wrk:rw \
-            -t softwaresecurityproject/zap-stable:latest \
+            -t ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
               -t http://localhost:8000 \
               -r zap-report.html \
