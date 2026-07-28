@@ -31,7 +31,8 @@ CI now runs `alembic upgrade head` on an empty PostgreSQL database and verifies 
 single current head. ZAP gained manual dispatch, uses the official
 `ghcr.io/zaproxy/zaproxy:stable` image, creates a container-writable report
 directory, validates actual high-risk alerts from the JSON report, and fails
-when either report is missing.
+when either report is missing. Its Python and artifact actions use their
+Node-24-native releases, avoiding post-job cache failures and deprecation noise.
 Proof before release: direct `ffcf → 8559 → ffcf`, complete `base →
 kk34`, zero `alembic check` operations, targeted schema assertions, 3 structural
 guards, and 1,396 passing application tests with 4 intentional skips.

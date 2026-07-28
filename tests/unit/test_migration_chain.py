@@ -41,6 +41,8 @@ def test_zap_missing_report_is_a_failure():
 
     assert "ghcr.io/zaproxy/zaproxy:stable" in workflow
     assert "softwaresecurityproject/zap-stable" not in workflow
+    assert "actions/setup-python@v6" in workflow
+    assert "actions/upload-artifact@v6" in workflow
     assert "chmod 777 zap" in workflow
     assert "-J zap-report.json" in workflow
     assert 'a.get(\"riskcode\")' in workflow
