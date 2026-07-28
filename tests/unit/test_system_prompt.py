@@ -182,27 +182,32 @@ def test_system_prompt_407_schedule_and_grounding():
         available_weekdays=[0, 1, 2, 3, 4, 5],
     )
     prompt = _make_prompt(doctors=[appt, tok])
-    # real schedule is now in the doctor list (ground truth, not guessed)
-    assert "sits Mon, Tue, Wed, Thu, Fri, Sat 09:00-23:00" in prompt
+    # Static hours are deliberately absent: exact-date schedules can change
+    # daily and stale prompt data must never override the availability tool.
+    assert "sits Mon, Tue, Wed, Thu, Fri, Sat 09:00-23:00" not in prompt
+    assert "schedule intentionally omitted — retrieve exact date" in prompt
     # token doctor flagged as walk-in queue, never time slots
     assert "WALK-IN QUEUE" in prompt
     # the grounding wall
     assert "NEVER GUESS HOURS OR DAYS" in prompt
-    assert "check_availability THIS turn for THAT date" in prompt
+    assert "check_availability THIS turn" in prompt
+    assert "for THAT exact date" in prompt
     assert "never offer a time or range for them" in prompt  # token
     # no-invented-doctor (torture BOOK3: agent invented a diabetic specialist)
     assert "Never invent a doctor" in prompt
 
 
 def test_system_prompt_407_full_weekdays_render_every_day():
-    """A doctor sitting all 7 days renders 'every day', not a 7-item list."""
+    """Even a legacy all-week roster does not leak static hours into the prompt."""
     d = DoctorContext(
         id="d", name="Dr. All", specialization="general", routing_keywords=["x"],
         booking_type="appointment", is_default=True,
         working_hours_start="08:00", working_hours_end="20:00",
         available_weekdays=[0, 1, 2, 3, 4, 5, 6],
     )
-    assert "sits every day 08:00-20:00" in _make_prompt(doctors=[d])
+    prompt = _make_prompt(doctors=[d])
+    assert "sits every day 08:00-20:00" not in prompt
+    assert "schedule intentionally omitted — retrieve exact date" in prompt
 
 
 def test_system_prompt_bans_mid_flow_reconfirmation():

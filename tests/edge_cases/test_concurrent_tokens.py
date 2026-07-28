@@ -37,6 +37,8 @@ async def concurrent_clinic(db):
         specialization="general_physician",
         is_default_doctor=True,
         booking_type="token",
+        schedule_mode="recurring",
+        recurring_schedule={str(i): [{"start": "00:00", "end": "23:59"}] for i in range(7)},
         daily_token_limit=200,
         status="active",
     )
@@ -124,6 +126,8 @@ async def test_concurrent_assigns_at_boundary_get_unique_numbers(db, redis):
         specialization="general_physician",
         is_default_doctor=True,
         booking_type="token",
+        schedule_mode="recurring",
+        recurring_schedule={str(i): [{"start": "00:00", "end": "23:59"}] for i in range(7)},
         daily_token_limit=100,
         status="active",
     )

@@ -92,6 +92,9 @@ async def clinic(db):
         routing_keywords=["fever"],
         is_default_doctor=True,
         booking_type="token",
+        working_hours_start=time(9, 0),
+        working_hours_end=time(17, 0),
+        available_weekdays=[0, 1, 2, 3, 4, 5],
         daily_token_limit=20,
         status="active",
     )

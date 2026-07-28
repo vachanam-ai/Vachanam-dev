@@ -100,7 +100,7 @@ async def test_421_friend_booking_gets_own_patient_record(setup, db, redis):
         doctor_id=doc.id, branch_id=br.id, patient_name="Sudarshan",
         patient_phone=PHONE, complaint="skin",
         booking_date=BOOK_DATE + timedelta(days=1),
-        token_number=1, followup_consent=False, appointment_time=time(10, 15),
+        token_number=1, followup_consent=False, appointment_time=time(10, 30),
         source='voice', calendar_service=_Cal(), meta_service=_Meta(),
         db=db, patient_age=30, different_person=False,
     )
@@ -110,7 +110,7 @@ async def test_421_friend_booking_gets_own_patient_record(setup, db, redis):
         doctor_id=doc.id, branch_id=br.id, patient_name="Sudarshan",
         patient_phone=PHONE, complaint="skin",
         booking_date=BOOK_DATE + timedelta(days=1),
-        token_number=1, followup_consent=False, appointment_time=time(10, 15),
+        token_number=1, followup_consent=False, appointment_time=time(10, 30),
         source='voice', calendar_service=_Cal(), meta_service=_Meta(),
         db=db, patient_age=30, different_person=True,
     )

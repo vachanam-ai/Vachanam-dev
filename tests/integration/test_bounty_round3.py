@@ -46,6 +46,8 @@ async def clinic(db):
     token_doc = Doctor(
         branch_id=branch.id, name="Dr. T3", specialization="general_physician",
         routing_keywords=["fever"], is_default_doctor=True, booking_type="token",
+        schedule_mode="recurring",
+        recurring_schedule={str(i): [{"start": "00:00", "end": "23:59"}] for i in range(7)},
         daily_token_limit=50, status="active",
     )
     db.add(token_doc)

@@ -71,6 +71,8 @@ async def clinic(db):
         routing_keywords=["fever"],
         is_default_doctor=True,
         booking_type="token",
+        schedule_mode="recurring",
+        recurring_schedule={str(i): [{"start": "00:00", "end": "23:59"}] for i in range(7)},
         daily_token_limit=20,
         status="active",
     )

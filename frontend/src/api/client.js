@@ -128,6 +128,14 @@ export const previewAffected = (branchId, doctorId, from, to) =>
 export const fetchUpcomingLeave = (branchId, days = 30) =>
   api.get(`/availability/${branchId}/leave/upcoming`, { params: { days } })
     .then((r) => r.data);
+export const fetchDoctorSchedules = (branchId, doctorId, from, to) =>
+  api.get(`/availability/${branchId}/${doctorId}/schedule`, { params: { from, to } })
+    .then((r) => r.data);
+export const publishDoctorSchedule = (branchId, doctorId, date, payload) =>
+  api.put(`/availability/${branchId}/${doctorId}/schedule/${date}`, payload)
+    .then((r) => r.data);
+export const deleteDoctorSchedule = (branchId, doctorId, date) =>
+  api.delete(`/availability/${branchId}/${doctorId}/schedule/${date}`);
 
 // ── Branch settings / team ──
 export const fetchBranchSettings = (branchId) =>

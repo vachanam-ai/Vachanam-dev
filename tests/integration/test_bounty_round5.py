@@ -167,7 +167,9 @@ async def test_b10_walkin_token_doctor_drops_stray_appointment_time(clinic, clie
     dr = await client.post(
         f"/doctors/{bid}", headers=_auth(owner),
         json={"name": "Dr Walk", "specialization": "dentist", "routing_keywords": ["x"],
-              "booking_type": "token", "daily_token_limit": 20},
+              "booking_type": "token", "daily_token_limit": 20,
+              "working_hours_start": "00:00", "working_hours_end": "23:59",
+              "available_weekdays": [0, 1, 2, 3, 4, 5, 6]},
     )
     assert dr.status_code in (200, 201), dr.text
     doctor_id = dr.json()["id"]
@@ -198,7 +200,9 @@ async def test_td021_urgent_walkin_bypasses_full_token_queue(clinic, client):
         f"/doctors/{bid}", headers=_auth(owner),
         json={"name": "Dr Cap One", "specialization": "dentist",
               "routing_keywords": ["cap"], "booking_type": "token",
-              "daily_token_limit": 1},
+              "daily_token_limit": 1,
+              "working_hours_start": "00:00", "working_hours_end": "23:59",
+              "available_weekdays": [0, 1, 2, 3, 4, 5, 6]},
     )
     assert dr.status_code in (200, 201), dr.text
     doctor_id = dr.json()["id"]

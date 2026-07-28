@@ -192,6 +192,17 @@ class Doctor(Base):
     available_weekdays: Mapped[list] = mapped_column(
         JSONB, nullable=False, server_default=text("'[0,1,2,3,4,5,6]'::jsonb")
     )
+    # Authoritative scheduling model (2026-07-28):
+    # recurring uses recurring_schedule unless a date override exists;
+    # date_specific requires an explicitly published row for every date.
+    # Missing date-specific data is UNKNOWN, never inferred as available.
+    schedule_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="recurring", default="recurring"
+    )
+    # Shape: {"0": [{"start": "09:00", "end": "12:00"}, ...], ...}
+    recurring_schedule: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
     # post_treatment_followup: auto-set TRUE for booking_type='appointment' at creation.
     post_treatment_followup: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false()
@@ -217,6 +228,9 @@ class Doctor(Base):
     tokens: Mapped[list["Token"]] = relationship(back_populates="doctor")
     followup_tasks: Mapped[list["FollowupTask"]] = relationship(back_populates="doctor")
     unavailabilities: Mapped[list["DoctorUnavailability"]] = relationship(back_populates="doctor")
+    date_schedules: Mapped[list["DoctorDateSchedule"]] = relationship(
+        back_populates="doctor", cascade="all, delete-orphan"
+    )
 
 
 class Patient(Base):
@@ -871,6 +885,40 @@ class DoctorUnavailability(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     doctor: Mapped["Doctor"] = relationship(back_populates="unavailabilities")
+
+
+class DoctorDateSchedule(Base):
+    """Authoritative sessions published for one doctor on one date.
+
+    Empty sessions means explicitly unavailable. For a date_specific doctor,
+    no row means not yet published. Those states must remain distinct.
+    """
+    __tablename__ = "doctor_date_schedules"
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "date", name="uq_doctor_date_schedule_doctor_date"),
+        Index("ix_doctor_date_schedules_branch_date", "branch_id", "date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    sessions: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    token_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    doctor: Mapped["Doctor"] = relationship(back_populates="date_schedules")
 
 
 class CalendarWriteTask(Base):

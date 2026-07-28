@@ -4,8 +4,10 @@ import { toast } from "sonner";
 import {
   createDoctor,
   deleteDoctor,
+  fetchDoctorSchedules,
   fetchDoctors,
   fetchTodayQueue,
+  publishDoctorSchedule,
   stopWalkinsToday,
   updateDoctor
 } from "../api/client.js";
@@ -19,6 +21,8 @@ const EMPTY_DOCTOR = {
   name: "",
   specialization: "",
   booking_type: "token",
+  schedule_mode: "recurring",
+  recurring_schedule: {},
   daily_token_limit: 50,
   working_hours_start: "09:00",
   working_hours_end: "17:00",
@@ -27,29 +31,48 @@ const EMPTY_DOCTOR = {
   google_calendar_id: ""
 };
 
-function WeekdayPicker({ value, onChange }) {
-  const toggle = (i) =>
-    onChange(value.includes(i) ? value.filter((d) => d !== i) : [...value, i].sort());
+const localISO = (value) => {
+  const d = new Date(value);
+  const offset = d.getTimezoneOffset() * 60_000;
+  return new Date(d.getTime() - offset).toISOString().slice(0, 10);
+};
+
+const scheduleForForm = (doctor) => {
+  if (doctor?.recurring_schedule && Object.keys(doctor.recurring_schedule).length) {
+    return doctor.recurring_schedule;
+  }
+  const days = doctor?.available_weekdays ?? [0, 1, 2, 3, 4, 5];
+  const start = doctor?.working_hours_start?.slice(0, 5) ?? "09:00";
+  const end = doctor?.working_hours_end?.slice(0, 5) ?? "17:00";
+  return Object.fromEntries(days.map((day) => [String(day), [{ start, end }]]));
+};
+
+function SessionsEditor({ sessions, onChange }) {
+  const update = (index, key, value) =>
+    onChange(sessions.map((session, i) => i === index ? { ...session, [key]: value } : session));
   return (
-    <div className="flex flex-wrap gap-1.5">
-      {WEEKDAYS.map((label, i) => (
-        <button type="button" key={label} onClick={() => toggle(i)}
-          className={`h-10 w-12 rounded-lg border font-ui text-sm font-medium transition ${
-            value.includes(i)
-              ? "border-teal bg-teal text-white"
-              : "border-hairline bg-surface text-slate hover:border-teal-light/60"
-          }`}>
-          {label}
-        </button>
+    <div className="space-y-2">
+      {sessions.map((session, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <input className="field" type="time" value={session.start}
+            onChange={(e) => update(index, "start", e.target.value)} />
+          <span className="text-slate">to</span>
+          <input className="field" type="time" value={session.end}
+            onChange={(e) => update(index, "end", e.target.value)} />
+          {sessions.length > 1 && (
+            <button type="button" className="btn-ghost px-3" onClick={() => onChange(sessions.filter((_, i) => i !== index))}>
+              Remove
+            </button>
+          )}
+        </div>
       ))}
+      <button type="button" className="btn-ghost px-3 py-1.5 text-sm"
+        onClick={() => onChange([...sessions, { start: "17:00", end: "21:00" }])}>
+        + Add another session
+      </button>
     </div>
   );
 }
-
-const fmtDays = (days) => {
-  if (!days?.length || days.length === 7) return "Every day";
-  return days.map((d) => WEEKDAYS[d]).join(" · ");
-};
 
 function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCancel }) {
   const isEdit = Boolean(doctorId);
@@ -63,10 +86,12 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
           specialization: initial.specialization ?? "",
           daily_token_limit: initial.daily_token_limit ?? 50,
           slot_duration_minutes: initial.slot_duration_minutes ?? 15,
+          schedule_mode: initial.schedule_mode ?? "recurring",
+          recurring_schedule: scheduleForForm(initial),
           available_weekdays: initial.available_weekdays ?? [0, 1, 2, 3, 4, 5],
           google_calendar_id: initial.google_calendar_id ?? ""
         }
-      : EMPTY_DOCTOR
+      : { ...EMPTY_DOCTOR, recurring_schedule: scheduleForForm(null) }
   );
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
   const isToken = f.booking_type === "token";
@@ -77,6 +102,8 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
         name: f.name.trim(),
         specialization: f.specialization.trim() || null,
         booking_type: f.booking_type,
+        schedule_mode: f.schedule_mode,
+        recurring_schedule: f.schedule_mode === "recurring" ? f.recurring_schedule : {},
         daily_token_limit: isToken ? Number(f.daily_token_limit) : null,
         working_hours_start: f.working_hours_start || null,
         working_hours_end: f.working_hours_end || null,
@@ -88,7 +115,7 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
     },
     onSuccess: (d) => {
       toast.success(isEdit ? `${d.name} updated` : `${d.name} added`);
-      if (!isEdit) setF(EMPTY_DOCTOR);
+      if (!isEdit) setF({ ...EMPTY_DOCTOR, recurring_schedule: scheduleForForm(null) });
       onDone();
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not save doctor")
@@ -132,20 +159,53 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
         </div>
       </div>
       <div className="sm:col-span-2">
-        <label className="label">Available days</label>
-        <WeekdayPicker
-          value={f.available_weekdays}
-          onChange={(days) => setF((s) => ({ ...s, available_weekdays: days }))}
-        />
+        <label className="label">How is this doctor&apos;s schedule published?</label>
+        <div className="flex gap-2">
+          {[["recurring", "Repeats weekly"], ["date_specific", "Different every date"]].map(([value, label]) => (
+            <button type="button" key={value}
+              onClick={() => setF((s) => ({ ...s, schedule_mode: value }))}
+              className={`flex-1 rounded-xl border px-4 py-2.5 font-ui text-sm font-medium ${
+                f.schedule_mode === value ? "border-teal bg-teal-mint" : "border-hairline bg-surface"
+              }`}>
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
-      <div>
-        <label className="label">Hours start</label>
-        <input className="field" type="time" value={f.working_hours_start} onChange={set("working_hours_start")} />
-      </div>
-      <div>
-        <label className="label">Hours end</label>
-        <input className="field" type="time" value={f.working_hours_end} onChange={set("working_hours_end")} />
-      </div>
+      {f.schedule_mode === "recurring" ? (
+        <div className="sm:col-span-2 space-y-4">
+          <p className="font-ui text-xs text-slate">Each weekday can have several separate sessions. Breaks remain unavailable.</p>
+          {WEEKDAYS.map((label, day) => {
+            const sessions = f.recurring_schedule?.[String(day)] ?? [];
+            const enabled = sessions.length > 0;
+            return (
+              <div key={label} className="rounded-xl border border-hairline p-3">
+                <label className="mb-2 flex items-center gap-2 font-ui text-sm font-medium">
+                  <input type="checkbox" checked={enabled} onChange={(e) => setF((state) => ({
+                    ...state,
+                    available_weekdays: e.target.checked
+                      ? [...new Set([...state.available_weekdays, day])].sort()
+                      : state.available_weekdays.filter((value) => value !== day),
+                    recurring_schedule: {
+                      ...state.recurring_schedule,
+                      [String(day)]: e.target.checked ? [{ start: "09:00", end: "17:00" }] : []
+                    }
+                  }))} />
+                  {label}
+                </label>
+                {enabled && <SessionsEditor sessions={sessions} onChange={(next) => setF((state) => ({
+                  ...state,
+                  recurring_schedule: { ...state.recurring_schedule, [String(day)]: next }
+                }))} />}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="sm:col-span-2 rounded-xl border border-gold/40 bg-gold-soft p-4 font-ui text-sm text-slate">
+          No schedule is assumed. Publish every exact date below; until then the voice agent says “timing not confirmed yet” and refuses bookings.
+        </div>
+      )}
       {isToken ? (
         <div>
           <label className="label">Daily token limit</label>
@@ -181,6 +241,107 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
         )}
       </div>
     </form>
+  );
+}
+
+function DateSchedulePublisher({ branchId, doctor }) {
+  const qc = useQueryClient();
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const [selectedDate, setSelectedDate] = useState(localISO(tomorrow));
+  const [sessions, setSessions] = useState([
+    { start: "09:00", end: "12:00" },
+    { start: "17:00", end: "21:00" }
+  ]);
+  const [tokenLimit, setTokenLimit] = useState(doctor.daily_token_limit ?? 50);
+  const [notes, setNotes] = useState("");
+  const rangeStart = localISO(new Date());
+  const rangeEndDate = new Date();
+  rangeEndDate.setDate(rangeEndDate.getDate() + 14);
+  const rangeEnd = localISO(rangeEndDate);
+
+  const { data: dates = [] } = useQuery({
+    queryKey: ["doctor-schedules", branchId, doctor.id, rangeStart, rangeEnd],
+    queryFn: () => fetchDoctorSchedules(branchId, doctor.id, rangeStart, rangeEnd),
+    enabled: Boolean(branchId && doctor.id)
+  });
+  const publish = useMutation({
+    mutationFn: () => publishDoctorSchedule(branchId, doctor.id, selectedDate, {
+      sessions,
+      token_limit: doctor.booking_type === "token" ? Number(tokenLimit) : null,
+      notes: notes.trim() || null
+    }),
+    onSuccess: () => {
+      toast.success(`${doctor.name}'s ${selectedDate} schedule published`);
+      qc.invalidateQueries({ queryKey: ["doctor-schedules", branchId, doctor.id] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not publish schedule")
+  });
+
+  return (
+    <div className="mt-5 border-t border-hairline pt-5">
+      <div className="mb-3">
+        <h3 className="font-display text-lg font-semibold">Publish an exact date</h3>
+        <p className="font-ui text-xs text-slate">This exact-date entry overrides any weekly pattern. Empty sessions explicitly mark the doctor unavailable.</p>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className="label">Date</label>
+          <input className="field" type="date" min={rangeStart} value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)} />
+        </div>
+        {doctor.booking_type === "token" && (
+          <div>
+            <label className="label">Token limit for this date</label>
+            <input className="field" type="number" min={1} max={500} value={tokenLimit}
+              onChange={(e) => setTokenLimit(e.target.value)} />
+          </div>
+        )}
+        <div className="sm:col-span-2">
+          <label className="label">Sessions</label>
+          {sessions.length ? (
+            <SessionsEditor sessions={sessions} onChange={setSessions} />
+          ) : (
+            <p className="rounded-lg bg-gold-soft p-3 font-ui text-sm">No sessions: this publishes the doctor as unavailable.</p>
+          )}
+          <button type="button" className="btn-ghost mt-2 px-3 py-1.5 text-sm"
+            onClick={() => setSessions(sessions.length ? [] : [{ start: "09:00", end: "12:00" }])}>
+            {sessions.length ? "Mark unavailable all day" : "Add a session"}
+          </button>
+        </div>
+        <div className="sm:col-span-2">
+          <label className="label">Internal note (optional)</label>
+          <input className="field" value={notes} onChange={(e) => setNotes(e.target.value)}
+            placeholder="Schedule shared by doctor at 7pm" />
+        </div>
+      </div>
+      <button className="btn-primary mt-4" disabled={publish.isPending} onClick={() => publish.mutate()}>
+        {publish.isPending ? "Publishing…" : "Publish exact schedule"}
+      </button>
+
+      <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {dates.map((entry) => (
+          <button key={entry.date} type="button" onClick={() => {
+            setSelectedDate(entry.date);
+            if (entry.is_published) {
+              setSessions(entry.sessions);
+              setTokenLimit(entry.token_limit ?? doctor.daily_token_limit ?? 50);
+              setNotes(entry.notes ?? "");
+            }
+          }} className="rounded-xl border border-hairline p-3 text-left">
+            <p className="font-ui text-xs font-semibold uppercase tracking-wide text-slate">{entry.date}</p>
+            <p className={`mt-1 font-ui text-sm ${entry.status === "unpublished" ? "text-gold-deep" : "text-ink"}`}>
+              {entry.status === "unpublished"
+                ? "Not published"
+                : entry.sessions.length
+                  ? entry.sessions.map((s) => `${s.start}–${s.end}`).join(" · ")
+                  : entry.source === "leave" ? "On leave" : "Unavailable"}
+            </p>
+            <p className="mt-1 font-ui text-[11px] text-slate">{entry.source.replace("_", " ")}</p>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -250,12 +411,9 @@ export default function DoctorSchedule() {
                   <span className={d.booking_type === "token" ? "chip-token" : "chip-slot"}>
                     {d.booking_type === "token" ? "token queue" : "appointments"}
                   </span>
-                  {d.working_hours_start && (
-                    <span className="font-ui text-sm text-slate tabular-nums">
-                      {d.working_hours_start}–{d.working_hours_end}
-                    </span>
-                  )}
-                  <span className="font-ui text-xs text-slate">{fmtDays(d.available_weekdays)}</span>
+                  <span className="font-ui text-xs text-slate">
+                    {d.schedule_mode === "date_specific" ? "Exact-date schedules" : "Recurring multi-session schedule"}
+                  </span>
                 </div>
               </div>
               <div className="text-center">
@@ -300,6 +458,8 @@ export default function DoctorSchedule() {
                 />
               </div>
             )}
+
+            <DateSchedulePublisher branchId={branchId} doctor={d} />
 
             {d.booking_type === "token" && (
               <div className="mt-5 border-t border-hairline pt-4">

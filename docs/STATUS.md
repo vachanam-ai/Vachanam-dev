@@ -1,5 +1,21 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-29 — MULTI-SESSION + EXACT-DATE DOCTOR SCHEDULES (PRODUCTION RELEASE).**
+> Token and appointment doctors now support multiple non-overlapping sessions
+> per day and an exact-date mode for hospitals that publish tomorrow's schedule
+> each evening. One authoritative resolver applies leave, exact-date overrides,
+> recurring schedules, and an explicit unpublished state in that order. Missing
+> date-specific data fails closed: the dashboard and voice agent say the timing
+> is not published and never infer another date's hours. Availability, token
+> assignment, final booking confirmation, walk-ins, leave changes, and schedule
+> edits all use the same resolver and database locks. Existing confirmed
+> appointments cannot be orphaned by a schedule edit; publication and deletion
+> are audit logged. Voice responses must perform an exact-date availability tool
+> call before stating sessions, leave, capacity, or slots. Proof: 1,393 tests
+> passed with 4 intentional skips; PostgreSQL downgrade/upgrade/backfill cycle,
+> Ruff, compile, Alembic single-head, diff check, and the production Vite build
+> passed. Migration head: `jj33_doctor_schedules`.
+
 > **2026-07-27 - BOOKING/CANCELLATION/RESCHEDULE INTEGRITY AUDIT.**
 > Fixed false unavailable answers caused by caller history and self-held Redis
 > capacity; made repeated and changed holds idempotent; restored distinct family

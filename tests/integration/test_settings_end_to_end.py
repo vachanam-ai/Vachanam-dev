@@ -214,6 +214,8 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
             "name": "Dr. Asha", "specialization": "dentist",
             "routing_keywords": ["tooth", "dental"], "booking_type": "token",
             "daily_token_limit": 30, "is_default_doctor": True,
+            "working_hours_start": "00:00", "working_hours_end": "23:59",
+            "available_weekdays": [0, 1, 2, 3, 4, 5, 6],
         },
     )
     assert dr.status_code in (200, 201), dr.text

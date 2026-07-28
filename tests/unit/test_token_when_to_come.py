@@ -63,6 +63,7 @@ async def test_future_date_token_never_open_now(db, redis, monkeypatch):
     r = await booking_tools.assign_token(d.id, b.id, date.today() + timedelta(days=2), db)
     assert r["success"] is True
     assert r["queue_open_now"] is False  # tomorrow's queue is not running today
+    assert "10:00" in r["when_to_come"]
 
 
 @pytest.mark.asyncio
@@ -70,6 +71,5 @@ async def test_unconfigured_hours_no_time_promise(db, redis, monkeypatch):
     b, d = await _seed(db, start=None, end=None)
     _freeze_branch_now(monkeypatch, b, time(3, 0))
     r = await booking_tools.assign_token(d.id, b.id, date.today(), db)
-    assert r["success"] is True
-    assert r["queue_open_now"] is False
-    assert "not configured" in r["when_to_come"]
+    assert r["success"] is False
+    assert "SCHEDULE NOT PUBLISHED" in r["reason"]

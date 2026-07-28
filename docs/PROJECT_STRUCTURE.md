@@ -142,6 +142,7 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 |---|---|---|
 | `backend/services/__init__.py` | placeholder | Package marker. |
 | `backend/services/audit_service.py` | tested (22/22) | Phase 4.5 Task 7. `PII_DENYLIST` constant, `write_audit_row()` async INSERT helper (PII-validates metadata before DB write; swallows DB errors per spec §8.5), `@audit` decorator factory (sets audit context from request.state; catches all audit errors; never blocks user response). TD-022 closed. |
+| `backend/services/doctor_schedule.py` | tested | Authoritative fail-closed resolver for recurring and exact-date multi-session schedules; leave precedence, validation, per-session slot generation, and unpublished/unavailable distinction. |
 | `backend/jobs/__init__.py` | placeholder | Package marker. |
 
 **Not yet created (Phase 5+):** `services/token_service.py`, `services/calendar_service.py`, `services/meta_service.py`, `services/whatsapp_agent.py`, `services/doctor_commands.py`, `services/cancel_day_bookings.py`, `services/vobiz_partner.py`, `services/onboarding_service.py`. Jobs: `token_expiry.py`, `eod_summary.py`, `followup_calls.py`, `pre_appt_reminder.py`, `billing_cycle.py`, `trial_expiry.py`.
@@ -232,6 +233,7 @@ Owner: `database-engineer`.
 | `alembic/script.py.mako` | working | Migration template. |
 | `alembic/versions/ffcf1134aa8f_initial_schema_with_user_table.py` | working | Initial schema — 10 tables. Phase 4 (replaces orphan 2fe8f201bc31). |
 | `alembic/versions/8559268c0c44_phase45_audit_log_ondelete_fk_indexes.py` | working | Phase 4.5 Task 2 — adds `audit_log` table, sets explicit FK `ondelete=` (TD-019 closed), FK-only indexes (TD-018 narrowed scope). Reviewed; commit `be6d76e`. |
+| `alembic/versions/jj33_doctor_multi_session_schedules.py` | tested | Adds doctor schedule mode/recurring JSON and exact-date multi-session table; safely backfills configured legacy hours and fails unknown hours closed. |
 
 **Open debt:** TD-022 (audit_log.metadata_json PII denylist enforcement — must ship with `@audit` decorator in Phase 4.5 Task 7), TD-023 (`GRANT INSERT, SELECT ON audit_log` + `REVOKE UPDATE, DELETE` — Phase 10 prod-init SQL).
 
@@ -258,10 +260,12 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/unit/__init__.py` | placeholder | Package marker. |
 | `tests/unit/test_tts_sanitizer.py` | tested (11/11) | TTS sanitization rules. |
 | `tests/unit/test_booking_confirmation_wording.py` | tested | Booking/reschedule confirmations require the punctuality message; cancellation excludes it. |
+| `tests/unit/test_doctor_multi_session_schedule.py` | tested | Multi-session validation, sorting, overlap rejection, weekday validation, and slot-boundary coverage. |
 | `tests/unit/test_bot_pipeline_builder.py`, `test_bot_tools_and_fallback.py`, `test_bot_tts_sanitizer.py`, `test_pipecat_imports.py` | tested | Pipecat bot pipeline, tool registration, LLM fallback, sanitizer wiring. (Replaced LiveKit-era test_emergency/test_silence_handler/test_audio_quality — modules deleted with the Pipecat rewrite.) |
 | `tests/unit/test_auth.py` | tested (6/6) | JWT + Google OAuth verification. |
 | `tests/integration/__init__.py` | placeholder | Package marker. |
 | `tests/integration/test_booking_flow.py` | tested (4/4) | Full booking happy path against real DB + real Redis. |
+| `tests/integration/test_doctor_date_schedules.py` | tested | Exact-date publication, unpublished truth, leave precedence, booking protection, authorization, and recurring-edit safeguards. |
 | `tests/edge_cases/__init__.py` | placeholder | Package marker. |
 | `tests/edge_cases/test_concurrent_tokens.py` | tested (2/2) | RULE 2 — N=100 concurrent callers all get distinct tokens (TD-010 closed). |
 | `tests/edge_cases/test_data_isolation.py` | tested (3/3) | RULE 1 — cross-org `branch_id` leak attempts blocked. |

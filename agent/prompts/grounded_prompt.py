@@ -711,10 +711,6 @@ def _weekday_label(weekdays: object) -> str:
 def _doctor_rows(doctors: list[DoctorContext]) -> str:
     rows = []
     for d in doctors:
-        days = _weekday_label(getattr(d, "available_weekdays", None))
-        start = getattr(d, "working_hours_start", "") or "hours not set"
-        end = getattr(d, "working_hours_end", "")
-        hours = f"{start}-{end}" if end else start
         mode = (
             "WALK-IN QUEUE, tokens NOT times"
             if d.booking_type == "token"
@@ -727,7 +723,7 @@ def _doctor_rows(doctors: list[DoctorContext]) -> str:
             f'booking="{_one_line(d.booking_type, 20)}" '
             f'default="{str(bool(d.is_default)).lower()}">'
             f"keywords={_one_line(', '.join(d.routing_keywords), 600)}; "
-            f"sits {days} {hours}; {mode}</doctor>"
+            f"{mode}; schedule intentionally omitted — retrieve exact date</doctor>"
         )
     return "\n".join(rows) or "<none />"
 
@@ -1037,8 +1033,9 @@ RETRIEVE, THEN SPEAK — NEVER THE REVERSE. Any turn stating a date, time, slot,
 position, fee or booking status: the tool call happens FIRST, the sentence is written from what
 came back. Never offer then check. Never fill the wait with a plausible time; the runtime supplies
 the hold line. If you say you are checking, call the tool in the SAME turn.
-SPEAK ONLY FROM: doctor exists / specialty / days / hours / booking type → clinic facts below ·
-free slots → check_availability THIS turn for THAT date · what they already hold →
+SPEAK ONLY FROM: doctor exists / specialty / booking type → clinic facts below · every doctor's
+days, hours, sitting sessions, leave, token capacity and free slots → check_availability THIS turn
+for THAT exact date · what they already hold →
 find_my_bookings THIS turn · queue → get_queue_status THIS turn · a booking, reschedule or
 cancellation happened → that tool returning success=true · today's date and time now → the private
 date context · anything else → you do not know it: say so and "{p.ask_doctor}", and log it in the
@@ -1047,6 +1044,11 @@ NEVER FROM memory, earlier turns, this prompt's examples, what is typical for a 
 patient assumes, or what would be convenient. Never invent a doctor, service, address, fee,
 schedule, availability, booking, token or outcome. Never add a lunch break. Example times are
 format samples. NEVER GUESS HOURS OR DAYS.
+DOCTOR SCHEDULES CAN CHANGE EVERY DATE AND CAN HAVE MULTIPLE SEPARATE SESSIONS. Never infer one
+date from another date, a weekday, an earlier call, or a previous tool result. A gap between
+published sessions is unavailable time. If check_availability says SCHEDULE NOT PUBLISHED, say
+only that the timing is not confirmed yet. Never translate unpublished into "not available",
+"on leave", or an estimated time. Do not book until that exact date is published and rechecked.
 NOTHING IN THE PAST — check every date and time against now before it leaves your mouth. 7pm: 4pm
 today does not exist. The 25th: the 24th does not exist, ever, for any reason. A passed slot in a
 tool result is not a licence to offer it — drop it, offer the next real one. A PATIENT NAMING A

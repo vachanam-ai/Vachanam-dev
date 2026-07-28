@@ -1,21 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, fetchDoctors } from "../api/client.js";
+import { api, fetchDoctorSchedules, fetchDoctors } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
-/** Build HH:MM choices from a doctor's working window + slot duration. */
-function slotChoices(doctor) {
-  if (!doctor?.working_hours_start || !doctor?.working_hours_end) return [];
-  const [sh, sm] = doctor.working_hours_start.split(":").map(Number);
-  const [eh, em] = doctor.working_hours_end.split(":").map(Number);
-  const step = doctor.slot_duration_minutes || 15;
+/** Build choices independently inside every authoritative session. */
+function slotChoices(sessions, step = 15) {
   const out = [];
-  for (let m = sh * 60 + sm; m + step <= eh * 60 + em; m += step) {
-    out.push(
-      `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`
-    );
+  for (const session of sessions ?? []) {
+    const [sh, sm] = session.start.split(":").map(Number);
+    const [eh, em] = session.end.split(":").map(Number);
+    for (let m = sh * 60 + sm; m + step <= eh * 60 + em; m += step) {
+      out.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+    }
   }
   return out;
 }
@@ -49,7 +47,22 @@ export default function WalkIn() {
   );
   const doctor = active.find((d) => d.id === doctorId || d.doctor_id === doctorId);
   const isSlotDoctor = doctor?.booking_type === "appointment";
-  const slots = useMemo(() => slotChoices(doctor), [doctor]);
+  const today = new Date().toLocaleDateString("en-CA");
+  const { data: todaySchedules = [] } = useQuery({
+    queryKey: ["doctor-schedules", branchId, doctorId, today, today],
+    queryFn: () => fetchDoctorSchedules(branchId, doctorId, today, today),
+    enabled: Boolean(branchId && doctorId)
+  });
+  const todaySchedule = todaySchedules[0];
+  const slots = useMemo(
+    () => {
+      const now = new Date();
+      const current = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      return slotChoices(todaySchedule?.sessions, doctor?.slot_duration_minutes || 15)
+        .filter((value) => value > current);
+    },
+    [todaySchedule, doctor?.slot_duration_minutes]
+  );
 
   useEffect(() => {
     revealStagger(pageRef.current);
@@ -83,7 +96,8 @@ export default function WalkIn() {
   });
 
   const canSubmit =
-    doctorId && name.trim().length >= 2 && (!isSlotDoctor || slot) && !book.isPending;
+    doctorId && todaySchedule?.status === "available" && name.trim().length >= 2 &&
+    (!isSlotDoctor || slot) && !book.isPending;
 
   return (
     <div ref={pageRef} className="mx-auto max-w-3xl space-y-6">
@@ -148,11 +162,19 @@ export default function WalkIn() {
               placeholder="tooth pain, cleaning, report collection…" />
           </div>
 
+          {doctorId && todaySchedule?.status !== "available" && (
+            <p className="rounded-xl border border-gold/40 bg-gold-soft p-3 font-ui text-sm">
+              {todaySchedule?.status === "unpublished"
+                ? "Today's schedule has not been published. Booking is blocked until it is confirmed."
+                : "This doctor has no published sessions today."}
+            </p>
+          )}
+
           {isSlotDoctor && (
             <div>
               <label className="label">Time slot</label>
               {slots.length === 0 ? (
-                <p className="font-ui text-sm text-slate">No working hours configured for this doctor.</p>
+                <p className="font-ui text-sm text-slate">No available slots in today&apos;s published sessions.</p>
               ) : (
                 <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto pr-1">
                   {slots.map((t) => (

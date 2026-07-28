@@ -11,8 +11,13 @@ from sqlalchemy import select, and_, func, text, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from backend.config import settings
-from backend.models.schema import Doctor, DoctorUnavailability, Token, Patient, Branch
+from backend.models.schema import Doctor, Token, Patient, Branch
 from backend.services.audit_service import write_audit_row
+from backend.services.doctor_schedule import (
+    ResolvedDoctorSchedule,
+    resolve_doctor_schedule,
+    sessions_as_text,
+)
 
 logger = structlog.get_logger()
 
@@ -100,82 +105,58 @@ def booking_is_upcoming(token: Token, now: datetime) -> bool:
     )
 
 
-def _outside_working_hours(doctor: Doctor, appointment_time: time) -> dict | None:
-    """Failure dict when the time falls outside the doctor's working hours,
-    else None. AM/PM confusion ("3" heard as 03:00) must die HERE — the last
-    code between the LLM and a 3 AM calendar event."""
-    start, end = doctor.working_hours_start, doctor.working_hours_end
-    if start and end and not (start <= appointment_time < end):
-        hours = (
-            f"{start.strftime('%I:%M %p').lstrip('0')} to "
-            f"{end.strftime('%I:%M %p').lstrip('0')}"
-        )
+def _outside_working_hours(
+    doctor: Doctor,
+    schedule: ResolvedDoctorSchedule,
+    appointment_time: time,
+) -> dict | None:
+    """Refuse a time outside the exact date's authoritative sessions."""
+    if not schedule.contains(appointment_time):
+        hours = sessions_as_text(schedule.sessions) or "no published sessions"
         return {
             "success": False,
             "reason": "outside_working_hours",
             "working_hours": hours,
             "instruction": (
                 f"{appointment_time.strftime('%I:%M %p').lstrip('0')} is OUTSIDE "
-                f"{doctor.name}'s working hours ({hours}). If the patient said a "
+                f"{doctor.name}'s published sessions ({hours}). If the patient said a "
                 "bare number like '3', they almost certainly meant the PM time "
-                "inside working hours — re-read their request, convert to 24h "
-                "correctly, and retry with a time within working hours."
+                "inside a published session. Re-read their request, convert to 24h "
+                "correctly, and retry only with an exact available slot."
             ),
         }
     return None
 
 
-async def doctor_bookable(
-    doctor: Doctor, branch_id: UUID, booking_date: date, db: AsyncSession
+def _schedule_block_reason(
+    doctor: Doctor,
+    booking_date: date,
+    schedule: ResolvedDoctorSchedule,
+    now: datetime,
 ) -> str | None:
-    """Why this doctor can NOT take this date, or None if bookable.
-
-    Guards that were previously missing entirely: past dates, the doctor's
-    working weekdays, receptionist-marked leave (doctor_unavailability), and
-    same-day walk-in closure for token doctors.
-    """
-    now = await _branch_now(branch_id, db)
     today = now.date()
     if booking_date < today:
         return f"{booking_date.strftime('%d %B')} is in the past. Ask for a future date."
-
-    if (
-        booking_date == today
-        and doctor.working_hours_end
-        and now.time() >= doctor.working_hours_end
-    ):
+    if schedule.status == "unpublished":
         return (
-            f"{doctor.name} has finished for today "
-            f"({doctor.working_hours_end.strftime('%I:%M %p').lstrip('0')}). "
-            "Ask for another date and check it before promising availability."
+            f"SCHEDULE NOT PUBLISHED for {doctor.name} on "
+            f"{booking_date.strftime('%d %B')}. Say only that the timing is not "
+            "confirmed yet and offer to check again after the clinic publishes it. "
+            "Do not make any other schedule claim."
         )
-
-    weekdays = doctor.available_weekdays or []
-    if not weekdays:
+    if schedule.status == "unavailable":
+        if schedule.source == "leave":
+            return f"{doctor.name} is on leave on {booking_date.strftime('%d %B')}. Offer another date."
         return (
-            f"{doctor.name}'s working days are not configured. "
-            "Ask the clinic to correct the schedule before booking."
+            f"The clinic explicitly published no sessions for {doctor.name} on "
+            f"{booking_date.strftime('%d %B')}. Say the doctor is unavailable that date."
         )
-    if booking_date.weekday() not in weekdays:
-        names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        sits = ", ".join(names[d] for d in sorted(weekdays))
+    if booking_date == today and schedule.sessions and now.time() >= schedule.sessions[-1].end:
         return (
-            f"{doctor.name} does not sit on {names[booking_date.weekday()]}s. "
-            f"Available days: {sits}."
+            f"{doctor.name} has finished the final published session for today "
+            f"({schedule.sessions[-1].end.strftime('%I:%M %p').lstrip('0')}). "
+            "Ask for another date and check that exact date."
         )
-
-    leave = await db.execute(
-        select(DoctorUnavailability.id).where(
-            and_(
-                DoctorUnavailability.branch_id == branch_id,
-                DoctorUnavailability.doctor_id == doctor.id,
-                DoctorUnavailability.date == booking_date,
-            )
-        )
-    )
-    if leave.scalar_one_or_none() is not None:
-        return f"{doctor.name} is on leave on {booking_date.strftime('%d %B')}. Offer another date."
-
     if (
         doctor.booking_type == "token"
         and booking_date == today
@@ -187,6 +168,22 @@ async def doctor_bookable(
         )
 
     return None
+
+
+async def _resolve_bookable(
+    doctor: Doctor, branch_id: UUID, booking_date: date, db: AsyncSession
+) -> tuple[ResolvedDoctorSchedule, datetime, str | None]:
+    now = await _branch_now(branch_id, db)
+    schedule = await resolve_doctor_schedule(doctor, branch_id, booking_date, db)
+    return schedule, now, _schedule_block_reason(doctor, booking_date, schedule, now)
+
+
+async def doctor_bookable(
+    doctor: Doctor, branch_id: UUID, booking_date: date, db: AsyncSession
+) -> str | None:
+    """Compatibility wrapper used by non-voice callers."""
+    _, _, blocked = await _resolve_bookable(doctor, branch_id, booking_date, db)
+    return blocked
 
 
 async def route_to_doctor(
@@ -465,7 +462,8 @@ async def check_availability(
         """Existing-booking note rides ALONG WITH the real answer (#430)."""
         return f"{note}{msg}" if note else msg
 
-    blocked = await doctor_bookable(doctor, branch_id, booking_date, db)
+    schedule = await resolve_doctor_schedule(doctor, branch_id, booking_date, db)
+    blocked = _schedule_block_reason(doctor, booking_date, schedule, now)
     if blocked:
         return _ret(blocked)
 
@@ -501,7 +499,7 @@ async def check_availability(
                 )
             )
         ).scalar_one_or_none() or 0
-        limit = doctor.daily_token_limit or 50
+        limit = schedule.token_limit or 50
         # CAPACITY = CONFIRMED seats, not the monotonic counter. A token that was
         # cancelled or rescheduled away frees its SEAT (the day can be rebooked),
         # even though its NUMBER is never reused (the counter only ever climbs —
@@ -518,18 +516,17 @@ async def check_availability(
         next_number = max(redis_current, db_max_number) + 1
         return _ret(
             f"Doctor has {db_confirmed} patients booked on {booking_date.strftime('%d %B')}. "
+            f"Published sitting sessions: {sessions_as_text(schedule.sessions)}. "
             f"You will be token number {next_number}."
         )
 
     # Appointment type — compute available ranges
-    if not doctor.working_hours_start or not doctor.working_hours_end or not doctor.slot_duration_minutes:
+    if not schedule.sessions or not doctor.slot_duration_minutes:
         return _ret("Doctor's schedule is not configured. Please call the clinic directly.")
 
-    all_slots = _generate_slots(
-        doctor.working_hours_start,
-        doctor.working_hours_end,
-        doctor.slot_duration_minutes,
-    )
+    # Generate each session independently. A slot can never bridge a lunch or
+    # evening break between two published sessions.
+    all_slots = schedule.slots(doctor.slot_duration_minutes)
     # Same-day booking: never offer a slot that has already passed.
     # (`now` was resolved above, before the existing-booking note.)
     if booking_date == now.date():
@@ -649,8 +646,16 @@ async def assign_token(
     if not doctor:
         return {"success": False, "reason": "doctor_not_found"}
 
-    blocked = await doctor_bookable(doctor, branch_id, booking_date, db)
+    schedule, now_branch, blocked = await _resolve_bookable(
+        doctor, branch_id, booking_date, db
+    )
     if blocked:
+        if doctor.booking_type == "appointment" and schedule.status == "unpublished":
+            return {
+                "success": False,
+                "reason": "schedule_not_configured",
+                "instruction": blocked,
+            }
         return {"success": False, "reason": blocked}
 
     if doctor.booking_type == "token":
@@ -661,7 +666,6 @@ async def assign_token(
         # so the "~2h after midnight" intent actually landed ~07:30 IST next
         # day; for future-dated bookings the key legitimately lives for days
         # (RULE 9 booking keys expire same day). Both endpoints in branch tz now.
-        now_branch = await _branch_now(branch_id, db)
         midnight = datetime.combine(
             booking_date + timedelta(days=1), time(0, 0), tzinfo=now_branch.tzinfo
         )
@@ -703,7 +707,7 @@ async def assign_token(
         # consume capacity: 30 issued / 30 limit read "full" even after 10 were
         # cancelled. confirm_booking's confirmed-count re-check (RULE 2 tripwire)
         # is the race-authoritative gate, so this seat check can be advisory.
-        limit = doctor.daily_token_limit or 50
+        limit = schedule.token_limit or 50
         # TD-021 (Vinay 2026-07-12): an URGENT walk-in from the desk bypasses
         # the daily cap — the clinic is physically looking at the patient and
         # owns the call. Token-queue cap ONLY; slot occupancy below is never
@@ -735,26 +739,25 @@ async def assign_token(
         # WHEN TO COME — grounded facts so the LLM never improvises "come now"
         # (real call 2026-07-17 03:00: token 1 assigned, agent said "come now
         # itself"; the doctor sits from morning). Computed in BRANCH time.
-        hours = None
-        queue_open_now = False
-        if doctor.working_hours_start and doctor.working_hours_end:
-            hours = (
-                f"{doctor.working_hours_start.strftime('%H:%M')}–"
-                f"{doctor.working_hours_end.strftime('%H:%M')}"
-            )
-            queue_open_now = (
-                booking_date == now_branch.date()
-                and doctor.working_hours_start <= now_branch.time() <= doctor.working_hours_end
-            )
+        hours = sessions_as_text(schedule.sessions)
+        queue_open_now = (
+            booking_date == now_branch.date() and schedule.contains(now_branch.time())
+        )
         if queue_open_now:
             when_to_come = (
                 "The queue is running NOW — tell the patient they can come right away."
             )
         elif hours:
+            next_session = schedule.sessions[0]
+            if booking_date == now_branch.date():
+                next_session = next(
+                    (item for item in schedule.sessions if item.start > now_branch.time()),
+                    schedule.sessions[0],
+                )
             when_to_come = (
                 f"The doctor sits {hours} on {booking_date.isoformat()} — the queue "
                 f"is NOT running right now. Tell the patient to come once the doctor "
-                f"starts (from {doctor.working_hours_start.strftime('%H:%M')}); NEVER "
+                f"starts (from {next_session.start.strftime('%H:%M')}); NEVER "
                 "say 'come now'."
             )
         else:
@@ -778,11 +781,7 @@ async def assign_token(
 
         # No configured schedule used to mean NO validation at all — any time
         # (3 AM included) sailed through the empty grid check below.
-        if (
-            not doctor.working_hours_start
-            or not doctor.working_hours_end
-            or not doctor.slot_duration_minutes
-        ):
+        if not schedule.sessions or not doctor.slot_duration_minutes:
             return {
                 "success": False,
                 "reason": "schedule_not_configured",
@@ -794,7 +793,7 @@ async def assign_token(
 
         # HARD BOUND: never book outside working hours. The LLM read a spoken
         # "3" as 03:00 and a patient got a 3 AM appointment.
-        hours_block = _outside_working_hours(doctor, appointment_time)
+        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
         if hours_block:
             return hours_block
 
@@ -802,7 +801,7 @@ async def assign_token(
         # filters past slots but nothing forces it to run first, and the walk-in
         # UI lists all slots — a 09:00 booking made at 17:00 gets a calendar
         # event in the past and no reminder.
-        now_b = await _branch_now(branch_id, db)
+        now_b = now_branch
         if booking_date == now_b.date() and appointment_time <= now_b.time():
             return {
                 "success": False,
@@ -816,11 +815,7 @@ async def assign_token(
         # Requested time must sit on the doctor's slot grid (e.g. hours from
         # 9:00 every 30min -> 16:00 valid, 16:10 not). Snap is the agent's job;
         # here we refuse with the nearest grid times so it can re-offer.
-        grid = _generate_slots(
-            doctor.working_hours_start,
-            doctor.working_hours_end,
-            doctor.slot_duration_minutes,
-        )
+        grid = schedule.slots(doctor.slot_duration_minutes)
         if grid and appointment_time not in grid:
             nearest = sorted(grid, key=lambda s: abs(
                 datetime.combine(booking_date, s) - datetime.combine(booking_date, appointment_time)
@@ -990,12 +985,60 @@ async def confirm_booking(
     doctor = result.scalar_one_or_none()
     if doctor is None:
         return {"success": False, "reason": "doctor_not_found"}
+
+    # Shared config lock: confirmations for the same doctor remain concurrent,
+    # while a doctor-level recurring/mode edit takes the exclusive counterpart.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock_shared(hashtextextended(:k, 0))"),
+        {"k": f"schedule-config:{branch_id}:{doctor_id}"},
+    )
+    # Serialize schedule publication and final booking for this doctor/date.
+    # The schedule API takes the same transaction lock, so a booking can never
+    # race an edit and commit against sessions that were just withdrawn.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+        {"k": f"schedule:{branch_id}:{doctor_id}:{booking_date}"},
+    )
+    schedule, schedule_now, schedule_block = await _resolve_bookable(
+        doctor, branch_id, booking_date, db
+    )
+    if schedule_block:
+        return {
+            "success": False,
+            "reason": "not_bookable",
+            "instruction": schedule_block,
+        }
     if doctor.booking_type == "token":
         appointment_time = None  # token queue has no clock time — ignore strays
-    elif appointment_time is not None:
-        hours_block = _outside_working_hours(doctor, appointment_time)
+    else:
+        if appointment_time is None:
+            return {"success": False, "reason": "appointment_time_required"}
+        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
         if hours_block:
             return hours_block
+        grid = schedule.slots(doctor.slot_duration_minutes)
+        if appointment_time not in grid:
+            return {
+                "success": False,
+                "reason": "off_grid_time",
+                "nearest_slots": [
+                    value.strftime("%H:%M")
+                    for value in sorted(
+                        grid,
+                        key=lambda value: abs(
+                            datetime.combine(booking_date, value)
+                            - datetime.combine(booking_date, appointment_time)
+                        ),
+                    )[:2]
+                ],
+                "instruction": "That time is not an exact published slot. Offer a nearest slot.",
+            }
+        if booking_date == schedule_now.date() and appointment_time <= schedule_now.time():
+            return {
+                "success": False,
+                "reason": "past_slot",
+                "instruction": "That appointment time has already passed. Offer a future slot.",
+            }
 
     # 1. Find or create patient. Match on phone AND name: a caller books for
     # family members too, so several patients legitimately share one phone —
@@ -1163,7 +1206,9 @@ async def confirm_booking(
     # is no DB unique constraint to catch it, so we re-verify here, in the same
     # transaction as the insert, counting only CONFIRMED rows in the DB
     # (source of truth) and excluding the booking being replaced on reschedule.
-    bookable_block = await doctor_bookable(doctor, branch_id, booking_date, db)
+    bookable_block = _schedule_block_reason(
+        doctor, booking_date, schedule, schedule_now
+    )
     if bookable_block:
         return {"success": False, "reason": "not_bookable", "instruction": bookable_block}
 
@@ -1179,7 +1224,7 @@ async def confirm_booking(
         confirmed_count = (
             await db.execute(select(func.count()).select_from(Token).where(and_(*cap_filters)))
         ).scalar_one()
-        if confirmed_count >= (doctor.daily_token_limit or 50):
+        if confirmed_count >= (schedule.token_limit or 50):
             return {
                 "success": False,
                 "reason": "full",

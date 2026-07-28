@@ -13,6 +13,31 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Authoritative multi-session and exact-date doctor schedules
+
+Replaced the one-window-per-doctor assumption with a single fail-closed schedule
+model shared by the API, voice agent, booking confirmation, dashboard, and
+walk-in flow. Both token and appointment doctors can have several sessions on a
+day. Clinics may choose recurring weekly sessions or exact-date publication;
+an absent exact-date row means unpublished, not unavailable and never available.
+Leave overrides all schedule sources. Empty published sessions explicitly mean
+unavailable.
+
+Added `DoctorDateSchedule`, recurring schedule JSON, date-specific token-limit
+overrides, validation for overlaps/session boundaries, schedule publication APIs,
+staff/self-doctor authorization, and advisory locks serializing publication,
+leave, booking confirmation, and recurring-config edits. A schedule edit cannot
+invalidate confirmed patients. Publication/unpublication records exact schedule
+facts in the audit trail. The voice prompt now receives only the doctor roster
+and must call exact-date availability in the current turn before saying any
+timing, leave, capacity, or free-slot fact.
+
+The additive migration backfills legacy configured hours into recurring JSON;
+legacy doctors without trustworthy hours migrate to date-specific mode and fail
+closed. Verification: 1,393 tests passed, 4 skipped; focused schedule suite,
+PostgreSQL downgrade/upgrade/backfill cycle, Ruff, Python compile, diff check,
+Alembic single-head check, and production frontend build all passed.
+
 ## 2026-07-24 — P0 first-audio and conversational-latency correction
 
 Production traces disproved the perceived numbers in the optimistic direction:

@@ -25,7 +25,7 @@ Audit: @audit decorator on POST, PATCH, DELETE.
 Per CLAUDE.md Rule 1: every query filters by branch_id.
 """
 import uuid
-from datetime import time
+from datetime import date, time
 from typing import Optional
 
 import structlog
@@ -38,10 +38,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
-from backend.models.schema import Branch, Doctor
+from backend.models.schema import Branch, Doctor, Token
 from backend.services.audit_service import audit
 from backend.services.calendar_service import GoogleCalendarService
 from backend.services.clinic_cache import invalidate as invalidate_clinic_cache
+from backend.services.doctor_schedule import (
+    effective_recurring_schedule,
+    resolve_doctor_schedule,
+    validate_recurring_schedule,
+)
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -82,6 +87,13 @@ class DoctorUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     specialization: Optional[str] = Field(default=None, max_length=100)
     booking_type: Optional[str] = Field(default=None, pattern="^(token|appointment)$")
+    schedule_mode: Optional[str] = Field(
+        default=None, pattern="^(recurring|date_specific)$"
+    )
+    recurring_schedule: Optional[dict] = Field(
+        default=None,
+        description="Weekday keys 0-6 mapped to multiple {start,end} sessions",
+    )
     working_hours_start: Optional[str] = Field(
         default=None,
         description="HH:MM format e.g. '09:00'",
@@ -115,6 +127,16 @@ class DoctorUpdate(BaseModel):
             raise ValueError("available_weekdays cannot contain duplicates")
         return value
 
+    @field_validator("recurring_schedule")
+    @classmethod
+    def _valid_recurring_schedule(cls, value):
+        if value is None:
+            return value
+        try:
+            return validate_recurring_schedule(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
     @field_validator("invited_email")
     @classmethod
     def _normalise_invited_email(cls, value):
@@ -135,8 +157,19 @@ class DoctorIn(DoctorUpdate):
     booking_type: str = Field(..., pattern="^(token|appointment)$")
 
     @model_validator(mode="after")
-    def _appointment_has_schedule(self):
-        if self.booking_type == "appointment" and any(
+    def _doctor_has_schedule(self):
+        mode = self.schedule_mode or "recurring"
+        has_multi_schedule = bool(self.recurring_schedule)
+        missing_legacy_hours = (
+            self.working_hours_start is None or self.working_hours_end is None
+        )
+        # A minimally-created token doctor is safe as date-specific: no dates
+        # are bookable until the clinic explicitly publishes them. This keeps
+        # older API clients working without inventing default hours.
+        if self.booking_type == "token" and mode == "recurring" and not has_multi_schedule and missing_legacy_hours:
+            self.schedule_mode = "date_specific"
+            mode = "date_specific"
+        if self.booking_type == "appointment" and mode == "recurring" and not has_multi_schedule and any(
             value is None
             for value in (
                 self.working_hours_start,
@@ -160,6 +193,8 @@ class DoctorOut(BaseModel):
     name: str
     specialization: Optional[str]
     booking_type: str
+    schedule_mode: str
+    recurring_schedule: dict
     working_hours_start: Optional[str]
     working_hours_end: Optional[str]
     available_weekdays: list
@@ -201,6 +236,37 @@ def _parse_time(value: Optional[str], field_name: str) -> Optional[time]:
 
 def _validate_schedule(doc: Doctor) -> None:
     """Reject schedule shapes that would otherwise look "fully booked"."""
+    schedule_mode = getattr(doc, "schedule_mode", None) or "recurring"
+    if schedule_mode not in ("recurring", "date_specific"):
+        raise HTTPException(status_code=422, detail="Invalid schedule mode.")
+    try:
+        recurring = effective_recurring_schedule(doc)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if schedule_mode == "date_specific":
+        if doc.booking_type == "appointment" and not doc.slot_duration_minutes:
+            raise HTTPException(
+                status_code=422,
+                detail="Appointment doctors require slot duration.",
+            )
+        return
+    if doc.recurring_schedule:
+        sessions = [session for day in recurring.values() for session in day]
+        if not sessions:
+            raise HTTPException(status_code=422, detail="Configure at least one recurring session.")
+        if doc.booking_type == "appointment":
+            if not doc.slot_duration_minutes:
+                raise HTTPException(status_code=422, detail="Appointment doctors require slot duration.")
+            for session in sessions:
+                start = _parse_time(session["start"], "session start")
+                end = _parse_time(session["end"], "session end")
+                minutes = (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute)
+                if doc.slot_duration_minutes > minutes:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Slot duration must fit inside every recurring session.",
+                    )
+        return
     weekdays = doc.available_weekdays
     if not weekdays:
         raise HTTPException(status_code=422, detail="Select at least one working weekday.")
@@ -229,6 +295,56 @@ def _validate_schedule(doc: Doctor) -> None:
                 status_code=422,
                 detail="Slot duration must fit inside the working-hours window.",
             )
+
+
+async def _reject_if_schedule_edit_breaks_bookings(
+    doc: Doctor,
+    branch_id: uuid.UUID,
+    db: AsyncSession,
+) -> None:
+    """Prevent recurring/mode/capacity edits from orphaning future patients."""
+    from backend.routers.queue import _branch_today
+    branch_today = await _branch_today(branch_id, db)
+    upcoming = (
+        await db.execute(
+            select(Token).where(
+                Token.branch_id == branch_id,
+                Token.doctor_id == doc.id,
+                Token.date >= branch_today,
+                Token.status == "confirmed",
+            )
+        )
+    ).scalars().all()
+    if not upcoming:
+        return
+
+    invalid: list[Token] = []
+    by_date: dict[date, list[Token]] = {}
+    for token in upcoming:
+        by_date.setdefault(token.date, []).append(token)
+    for target_date, tokens in by_date.items():
+        schedule = await resolve_doctor_schedule(doc, branch_id, target_date, db)
+        if not schedule.is_bookable:
+            invalid.extend(tokens)
+            continue
+        if doc.booking_type == "appointment":
+            valid_slots = set(schedule.slots(doc.slot_duration_minutes))
+            invalid.extend(
+                token for token in tokens
+                if token.appointment_time is None or token.appointment_time not in valid_slots
+            )
+        else:
+            limit = schedule.token_limit or 50
+            if len(tokens) > limit:
+                invalid.extend(tokens[limit:])
+    if invalid:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This change would invalidate {len(invalid)} confirmed future booking(s). "
+                "Publish safe exact-date overrides or reschedule those patients first."
+            ),
+        )
 
 
 async def _assert_calendar_available(
@@ -280,6 +396,8 @@ def _doctor_to_out(doc: Doctor) -> DoctorOut:
         name=doc.name,
         specialization=doc.specialization,
         booking_type=doc.booking_type,
+        schedule_mode=doc.schedule_mode or "recurring",
+        recurring_schedule=doc.recurring_schedule or {},
         working_hours_start=(
             doc.working_hours_start.strftime("%H:%M")
             if doc.working_hours_start else None
@@ -327,6 +445,43 @@ async def _maybe_upsert_recurring_cal_event(
     """
     cal_id = doc.google_calendar_id or branch.google_calendar_id
     if not cal_id:
+        return
+    recurring_values = [
+        sessions for sessions in (doc.recurring_schedule or {}).values() if sessions
+    ]
+    recurring_pairs = {
+        (sessions[0].get("start"), sessions[0].get("end"))
+        for sessions in recurring_values if len(sessions) == 1
+    }
+    legacy_pair = (
+        doc.working_hours_start.strftime("%H:%M") if doc.working_hours_start else None,
+        doc.working_hours_end.strftime("%H:%M") if doc.working_hours_end else None,
+    )
+    complex_recurring = bool(doc.recurring_schedule) and (
+        any(len(sessions) != 1 for sessions in recurring_values)
+        or len(recurring_pairs) != 1
+        or recurring_pairs != {legacy_pair}
+        or {int(day) for day, sessions in doc.recurring_schedule.items() if sessions}
+        != set(doc.available_weekdays or [])
+    )
+    if doc.schedule_mode == "date_specific" or complex_recurring:
+        # The legacy Calendar helper represents exactly one repeating window.
+        # Reusing it for split/date-specific sessions would publish false hours.
+        # Patient appointment events still sync normally; remove only the old
+        # misleading clinic-hours block until Calendar supports N sessions.
+        if doc.calendar_event_id_recurring:
+            try:
+                await GoogleCalendarService().delete_event(
+                    old_calendar_id or cal_id, doc.calendar_event_id_recurring
+                )
+            except Exception as exc:
+                logger.warning("complex_schedule_old_calendar_delete_failed", error=str(exc))
+            doc.calendar_event_id_recurring = None
+            await db.commit()
+        logger.info(
+            "recurring_calendar_skipped_complex_schedule",
+            doctor_id=str(doc.id), schedule_mode=doc.schedule_mode,
+        )
         return
     if not doc.working_hours_start or not doc.working_hours_end:
         logger.warning(
@@ -511,6 +666,8 @@ async def create_doctor(
         name=body.name,
         specialization=body.specialization,
         booking_type=body.booking_type,
+        schedule_mode=body.schedule_mode or "recurring",
+        recurring_schedule=body.recurring_schedule or {},
         working_hours_start=_parse_time(body.working_hours_start, "working_hours_start"),
         working_hours_end=_parse_time(body.working_hours_end, "working_hours_end"),
         available_weekdays=body.available_weekdays if body.available_weekdays is not None else [0, 1, 2, 3, 4, 5, 6],
@@ -607,6 +764,14 @@ async def update_doctor(
     if not doc:
         raise HTTPException(status_code=404, detail="Doctor not found")
 
+    # Exclusive counterpart to confirm_booking's shared config lock. Existing
+    # confirmations can finish, then no new confirmation can read half-edited
+    # recurring rules before this transaction commits.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"schedule-config:{branch_uuid}:{doctor_uuid}"},
+    )
+
     changed = body.model_dump(exclude_unset=True)
     if "google_calendar_id" in changed:
         changed["google_calendar_id"] = await _assert_calendar_available(
@@ -617,6 +782,8 @@ async def update_doctor(
         or "working_hours_end" in changed
         or "available_weekdays" in changed
         or "booking_type" in changed
+        or "schedule_mode" in changed
+        or "recurring_schedule" in changed
         or "google_calendar_id" in changed
     )
     # TD-023: remember the OLD effective calendar so the recurring-event upsert
@@ -633,6 +800,14 @@ async def update_doctor(
             setattr(doc, field, value)
 
     _validate_schedule(doc)
+
+    schedule_fields = {
+        "booking_type", "schedule_mode", "recurring_schedule",
+        "working_hours_start", "working_hours_end", "available_weekdays",
+        "slot_duration_minutes", "max_concurrent_per_slot", "daily_token_limit",
+    }
+    if schedule_fields.intersection(changed):
+        await _reject_if_schedule_edit_breaks_bookings(doc, branch_uuid, db)
 
     # G8: promoting this doctor to default demotes every other in the branch.
     if changed.get("is_default_doctor") is True:
