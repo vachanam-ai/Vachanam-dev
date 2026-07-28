@@ -29,7 +29,8 @@ the partial unjudged-call index instead of deleting those useful structures.
 
 CI now runs `alembic upgrade head` on an empty PostgreSQL database and verifies a
 single current head. ZAP gained manual dispatch, uses the official
-`ghcr.io/zaproxy/zaproxy:stable` image, and fails when no report is produced.
+`ghcr.io/zaproxy/zaproxy:stable` image, creates a container-writable report
+directory, and fails when no report is produced.
 Proof before release: direct `ffcf → 8559 → ffcf`, complete `base →
 kk34`, zero `alembic check` operations, targeted schema assertions, 3 structural
 guards, and 1,396 passing application tests with 4 intentional skips.

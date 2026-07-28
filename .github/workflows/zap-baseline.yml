@@ -116,7 +116,7 @@ jobs:
           exit 1
 
       - name: Create ZAP output directory
-        run: mkdir -p zap
+        run: mkdir -p zap && chmod 777 zap
 
       - name: Run ZAP baseline scan
         run: |
