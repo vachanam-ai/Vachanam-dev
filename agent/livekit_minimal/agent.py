@@ -30,6 +30,7 @@ from datetime import timezone as _tz
 
 timezone_utc = _tz.utc
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 from dotenv import load_dotenv
@@ -143,7 +144,12 @@ from agent.tools.booking_tools import (  # noqa: E402
     set_preferred_language,
 )
 from backend.config import settings  # noqa: E402
-from backend.database import AsyncSessionLocal, get_loop_engine  # noqa: E402
+from backend.database import (  # noqa: E402
+    AsyncSessionLocal,
+    dispose_loop_engine,
+    get_loop_engine,
+    run_db_read,
+)
 from backend.models.schema import Branch, Doctor  # noqa: E402
 from backend.models.schema import Patient as _PatientModel  # noqa: E402
 from backend.models.schema import Token as _TokenModel  # noqa: E402
@@ -1859,7 +1865,19 @@ def _exact_availability_matches(
 ) -> bool:
     """True only when the DB's first free slot starts at the requested minute."""
     requested = query_start.strftime("%I:%M %p").lstrip("0")
-    return availability.startswith(f"{doctor_name} is available {requested} to ")
+    result_name, separator, result = availability.partition(" is available ")
+    if not separator:
+        return False
+
+    def normalize(value: str) -> str:
+        return "".join(
+            character.casefold() for character in value if character.isalnum()
+        )
+
+    return (
+        normalize(result_name) == normalize(doctor_name)
+        and result.startswith(f"{requested} to ")
+    )
 
 
 class VachanamAgent(Agent):
@@ -2127,6 +2145,13 @@ class VachanamAgent(Agent):
         except Exception as e:  # noqa: BLE001 — a latency aid must never break a turn
             logger.warning("prefetch_routing_error: %s", e)
 
+    async def _read_availability(self, **kwargs) -> str:
+        """Availability reads recover once on a fresh pooled connection."""
+        async def _check(db):
+            return await check_availability(db=db, **kwargs)
+
+        return await run_db_read(_check)
+
     async def _handle_grounded_user_turn(self, text: str) -> bool:
         """Speak unambiguous roster and corrected-time answers without an LLM."""
         lang = self._state.language or self._lang_code
@@ -2148,11 +2173,10 @@ class VachanamAgent(Agent):
             return False
 
         self._cancel_prefetch()
-        availability = await check_availability(
+        availability = await self._read_availability(
             doctor_id=doctor_id,
             branch_id=self._state.branch_id,
             booking_date=booking_date,
-            db=self._db,
             query_start=requested,
             query_end=requested,
             caller_phone=None,
@@ -2255,13 +2279,15 @@ class VachanamAgent(Agent):
         """Route on a DEDICATED session — async sessions are not concurrency-safe,
         so the prefetch must never share the call's self._db with the live turn.
         Still strictly branch-scoped (RULE 1)."""
-        async with AsyncSessionLocal() as pdb:
+        async def _route(pdb):
             return await route_to_doctor(
                 complaint=complaint,
                 branch_id=self._state.branch_id,
                 db=pdb,
                 llm_call=_routing_llm_call,
             )
+
+        return await run_db_read(_route)
 
     async def _consume_or_route(self, complaint: str) -> dict:
         """Return the prefetched routing result when it matches this complaint (the
@@ -2279,12 +2305,15 @@ class VachanamAgent(Agent):
                 logger.warning("prefetch_route_failed_refetch: %s", e)
         elif task is not None and not task.done():
             task.cancel()
-        return await route_to_doctor(
-            complaint=complaint,
-            branch_id=self._state.branch_id,
-            db=self._db,
-            llm_call=_routing_llm_call,
-        )
+        async def _route(db):
+            return await route_to_doctor(
+                complaint=complaint,
+                branch_id=self._state.branch_id,
+                db=db,
+                llm_call=_routing_llm_call,
+            )
+
+        return await run_db_read(_route)
 
     async def _handle_lost_connection(self) -> None:
         """#lost: the caller said "hello" 3 times running — they almost
@@ -2354,15 +2383,23 @@ class VachanamAgent(Agent):
                 except Exception as _tx:  # noqa: BLE001
                     logger.warning("doctor_needle_transliterate_failed: %s", _tx)
             if needle:
-                result = await self._db.execute(
-                    select(Doctor).where(
-                        and_(
-                            Doctor.branch_id == self._state.branch_id,
-                            Doctor.status == "active",
+                doctors = [
+                    SimpleNamespace(id=doctor_id, name=name)
+                    for doctor_id, name in self._doctor_names.items()
+                ]
+                if not doctors:
+                    async def _load_active(db):
+                        result = await db.execute(
+                            select(Doctor).where(
+                                and_(
+                                    Doctor.branch_id == self._state.branch_id,
+                                    Doctor.status == "active",
+                                )
+                            )
                         )
-                    )
-                )
-                doctors = list(result.scalars())
+                        return list(result.scalars())
+
+                    doctors = await run_db_read(_load_active)
                 matches = [doc for doc in doctors if needle in doc.name.lower()]
                 if len(matches) == 1:
                     return matches[0].id
@@ -2455,11 +2492,10 @@ class VachanamAgent(Agent):
         parsed_date = self._parse_date(booking_date)
         parsed_start = self._parse_time(query_start)
         parsed_end = self._parse_time(query_end)
-        availability = await check_availability(
+        availability = await self._read_availability(
             doctor_id=resolved,
             branch_id=self._state.branch_id,
             booking_date=parsed_date,
-            db=self._db,
             query_start=parsed_start,
             query_end=parsed_end,
             # Availability is capacity only. Existing bookings are fetched by
@@ -3126,7 +3162,9 @@ class VachanamAgent(Agent):
         # booking being moved (FIXLOG #281).
         _say_wait_filler(context)  # slow: booking lookup (#361 dead air; silent-minute 07-20)
         self._state.existing_booking_intent = True
-        rows = await find_bookings_by_phone(self._state.branch_id, phone, self._db)
+        rows = await run_db_read(
+            lambda db: find_bookings_by_phone(self._state.branch_id, phone, db)
+        )
         confirmed_rows = [r for r in rows if r[0].status == "confirmed"]
         if len(confirmed_rows) == 1:
             rows_single = confirmed_rows
@@ -3162,8 +3200,10 @@ class VachanamAgent(Agent):
         Token-queue doctors only — for a slot-doctor booking just restate
         their appointment time from find_my_bookings instead."""
         _guard_human_booking(self._state)
-        result = await queue_position_by_phone(
-            self._state.branch_id, self._state.patient_phone, self._db
+        result = await run_db_read(
+            lambda db: queue_position_by_phone(
+                self._state.branch_id, self._state.patient_phone, db
+            )
         )
         if result.get("found"):
             queue = result.get("queue") or []
@@ -4491,13 +4531,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # already be done. Fire-and-forget; never blocks or fails the call.
     from sqlalchemy import text as _sql_text
 
-    async def _warm_db_pool() -> None:
+    async def _warm_db_pool() -> bool:
         try:
             eng = get_loop_engine()
             async with eng.connect() as _wc:
                 await _wc.execute(_sql_text("SELECT 1"))
+            return True
         except Exception as _we:  # noqa: BLE001 — warming is best-effort
             logger.warning("db_pool_warm_failed: %s", _we)
+            return False
 
     _warm_task = asyncio.create_task(_warm_db_pool())
 
@@ -4746,6 +4788,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     state.call_type = "outbound" if outbound_number else "inbound_booking"
     state.call_start = datetime_cls.now(timezone_utc)
+
+    # Do not let the first clinic lookup discover a cold/dead connection. The
+    # warm-up normally finishes during ringing; if it failed, one bounded fresh
+    # read retries before any patient-facing database claim is made.
+    if not await _warm_task:
+        try:
+            await run_db_read(
+                lambda retry_db: retry_db.execute(_sql_text("SELECT 1"))
+            )
+        except Exception as warm_error:  # noqa: BLE001
+            await dispose_loop_engine()
+            await _end_call_with_notice(
+                ctx, f"db_unavailable: {str(warm_error)[:140]}", _t_answer
+            )
+            return
 
     db = AsyncSessionLocal()
 
@@ -6246,6 +6303,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         logger.warning("followup_response_writeback_failed: %s", _fe)
             finally:
                 await db.close()
+                await dispose_loop_engine()
 
         ctx.add_shutdown_callback(_cleanup_on_shutdown)
 

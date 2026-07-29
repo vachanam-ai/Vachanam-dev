@@ -43,6 +43,11 @@ def test_exact_match_never_turns_a_nearby_slot_into_requested_time():
         "Ravi",
         time(10, 37),
     )
+    assert _exact_availability_matches(
+        "Dr.Srinivas is available 7:00 PM to 7:15 PM on 30 July.",
+        "Dr. Srinivas",
+        time(19, 0),
+    )
 
 
 def test_agent_fast_paths_are_narrow_grounded_and_reversible():

@@ -1,12 +1,19 @@
 import asyncio
+import logging
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 from weakref import WeakKeyDictionary
 
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from backend.config import settings
+
+logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 def _engine_config(raw_url: str) -> tuple[object, dict]:
@@ -24,17 +31,27 @@ def _engine_config(raw_url: str) -> tuple[object, dict]:
     transaction_pooler = (
         host.endswith(".pooler.supabase.com") and url.port == 6543
     )
+    session_pooler = host.endswith(".pooler.supabase.com") and url.port == 5432
     kwargs: dict = {}
     if transaction_pooler:
         query["prepared_statement_cache_size"] = "0"
         kwargs = {
             "poolclass": NullPool,
-            "connect_args": {"statement_cache_size": 0},
+            "connect_args": {
+                "statement_cache_size": 0,
+                "timeout": 3,
+                "command_timeout": 5,
+            },
         }
     else:
+        # Session mode has a project-wide 15-client ceiling on the free tier.
+        # A voice call needs its main session plus at most one short read.
         kwargs = {
-            "pool_size": 10,
-            "max_overflow": 20,
+            "pool_size": 2 if session_pooler else 10,
+            "max_overflow": 0 if session_pooler else 20,
+            "pool_timeout": 3,
+            "pool_recycle": 300,
+            "connect_args": {"timeout": 3, "command_timeout": 5},
         }
     return url.set(query=query), kwargs
 
@@ -73,6 +90,14 @@ def get_loop_engine():
     return eng
 
 
+async def dispose_loop_engine() -> None:
+    """Close every pooled connection owned by the current LiveKit call loop."""
+    loop = asyncio.get_running_loop()
+    eng = _loop_engines.pop(loop, None)
+    if eng is not None:
+        await eng.dispose()
+
+
 class _LoopAwareSessionFactory:
     """Drop-in replacement for the old module-level async_sessionmaker: every
     `AsyncSessionLocal()` call binds the session to the current loop's engine.
@@ -87,6 +112,49 @@ class _LoopAwareSessionFactory:
 
 
 AsyncSessionLocal = _LoopAwareSessionFactory()
+
+
+def is_transient_database_error(error: BaseException) -> bool:
+    """Whether a failed read is safe to repeat on a fresh connection."""
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, (InterfaceError, OperationalError)):
+            return True
+        if isinstance(current, DBAPIError) and current.connection_invalidated:
+            return True
+        if isinstance(current, (ConnectionError, OSError, asyncio.TimeoutError)):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+async def run_db_read(
+    operation: Callable[[AsyncSession], Awaitable[T]],
+    *,
+    attempts: int = 2,
+) -> T:
+    """Run a read in a short session and retry only connection-level failures.
+
+    A fresh session prevents one dropped long-lived call connection from
+    poisoning every later availability/lookup turn. Writes deliberately do not
+    use this helper because repeating an uncertain commit can duplicate data.
+    """
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    for attempt in range(1, attempts + 1):
+        try:
+            async with AsyncSessionLocal() as session:
+                return await operation(session)
+        except Exception as error:
+            if attempt == attempts or not is_transient_database_error(error):
+                raise
+            logger.warning(
+                "database_read_retry attempt=%d error=%s",
+                attempt,
+                type(error).__name__,
+            )
+            await asyncio.sleep(0.05 * attempt)
+    raise AssertionError("unreachable")
 
 
 class Base(DeclarativeBase):
