@@ -88,6 +88,11 @@ from agent.livekit_minimal.confirm_speech import (  # noqa: E402
     build_exact_availability_text,
     build_queue_status_text,
 )
+from agent.livekit_minimal.grounded_turns import (  # noqa: E402
+    doctor_roster_reply,
+    extract_exact_time,
+    is_short_close_reply,
+)
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -1874,6 +1879,7 @@ class VachanamAgent(Agent):
         chat_ctx=None,        # conversation history carried across the handoff
         llm=None,             # #417 per-agent LLM (prompt-cache-backed primary)
         doctor_names: dict[UUID, str] | None = None,
+        doctor_facts: list[DoctorContext] | None = None,
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
         # None would DISABLE the session-level pipeline, not inherit it.
@@ -1901,6 +1907,7 @@ class VachanamAgent(Agent):
         self._agent_factory = agent_factory
         self._switch_ack = switch_ack
         self._doctor_names = doctor_names or {}
+        self._doctor_facts = doctor_facts or []
         # Kept so switch_language can PRIME the new agent's TTS before handoff
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
@@ -2044,37 +2051,29 @@ class VachanamAgent(Agent):
         except Exception as e:  # noqa: BLE001 — never swallow a real turn
             logger.warning("hello_counter_error: %s", e)
 
-        # #5 tool prefetch: fire the (slow) doctor-routing call in parallel with
-        # the reply LLM on a dedicated session. Only wasted on a rare echo turn
-        # (cancelled next turn), so the maximal-overlap placement wins.
-        try:
-            self._maybe_prefetch_routing(self._message_text(new_message))
-        except Exception as e:  # noqa: BLE001 — a latency aid must never break a turn
-            logger.warning("prefetch_routing_error: %s", e)
-
         try:
             import difflib
 
             norm_user = self._normalize_for_echo(self._message_text(new_message))
-            if len(norm_user) < 20:
-                return  # too short to be a confident full-sentence echo
-            last_agent = ""
-            for item in reversed(getattr(turn_ctx, "items", None) or []):
-                if getattr(item, "role", None) == "assistant":
-                    last_agent = self._message_text(item)
-                    break
-            norm_agent = self._normalize_for_echo(last_agent)
-            if len(norm_agent) < 20:
-                return
-            ratio = difflib.SequenceMatcher(None, norm_user, norm_agent).ratio()
-            if ratio >= 0.85 or (len(norm_user) >= 25 and norm_user in norm_agent):
-                from livekit.agents import StopResponse
+            if len(norm_user) >= 20:
+                last_agent = ""
+                for item in reversed(getattr(turn_ctx, "items", None) or []):
+                    if getattr(item, "role", None) == "assistant":
+                        last_agent = self._message_text(item)
+                        break
+                norm_agent = self._normalize_for_echo(last_agent)
+                if len(norm_agent) >= 20:
+                    ratio = difflib.SequenceMatcher(None, norm_user, norm_agent).ratio()
+                    if ratio >= 0.85 or (
+                        len(norm_user) >= 25 and norm_user in norm_agent
+                    ):
+                        from livekit.agents import StopResponse
 
-                logger.warning(
-                    "echo_turn_discarded ratio=%.2f len=%d branch_id=%s",
-                    ratio, len(norm_user), str(self._state.branch_id),
-                )
-                raise StopResponse()
+                        logger.warning(
+                            "echo_turn_discarded ratio=%.2f len=%d branch_id=%s",
+                            ratio, len(norm_user), str(self._state.branch_id),
+                        )
+                        raise StopResponse()
         except Exception as e:
             # StopResponse is the intended control-flow signal — re-raise it.
             from livekit.agents import StopResponse
@@ -2083,6 +2082,140 @@ class VachanamAgent(Agent):
                 raise
             # Any other error must NEVER swallow a real turn — let it through.
             logger.warning("echo_guard_error: %s", e)
+
+        # A verified booking already asked "anything else?" in deterministic
+        # speech. Close equally deterministically on a short no/thanks/bye.
+        if self._state.awaiting_anything_else:
+            current_text = self._message_text(new_message)
+            self._state.awaiting_anything_else = False
+            if is_short_close_reply(current_text):
+                asyncio.create_task(self._handle_post_booking_close())
+                raise StopResponse()
+
+        # High-risk clinic facts do not need a generative turn. Run this only
+        # after the echo guard so carrier echo cannot create a self-talk loop.
+        try:
+            if await self._handle_grounded_user_turn(
+                self._message_text(new_message)
+            ):
+                raise StopResponse()
+        except StopResponse:
+            raise
+        except Exception as e:  # noqa: BLE001 — fail closed, never invent
+            logger.error("grounded_user_turn_failed: %s", e)
+            try:
+                lang = self._state.language or self._lang_code
+                line = {
+                    "te": "[softly] క్షమించండి, ఇప్పుడది కరెక్ట్‌గా చెక్ చేయలేకపోయాను. మళ్ళీ చెక్ చేయనా?",
+                    "hi": "[softly] माफ़ कीजिए, मैं अभी यह सही तरह जाँच नहीं पाई। फिर से जाँचूँ?",
+                    "en": "[softly] Sorry, I could not verify that just now. Shall I check again?",
+                }.get(lang, "[softly] Sorry, I could not verify that just now. Shall I check again?")
+                self.session.say(sanitize_for_tts(line))
+                raise StopResponse()
+            except StopResponse:
+                raise
+            except Exception:  # noqa: BLE001 — ordinary LLM path is last resort
+                pass
+
+        # #5 tool prefetch: begin only after deterministic/echo paths decline.
+        try:
+            self._maybe_prefetch_routing(self._message_text(new_message))
+        except Exception as e:  # noqa: BLE001 — a latency aid must never break a turn
+            logger.warning("prefetch_routing_error: %s", e)
+
+    async def _handle_grounded_user_turn(self, text: str) -> bool:
+        """Speak unambiguous roster and corrected-time answers without an LLM."""
+        lang = self._state.language or self._lang_code
+        roster_text = doctor_roster_reply(text, lang, self._doctor_facts)
+        if roster_text:
+            self._cancel_prefetch()
+            self.session.say(sanitize_for_tts(roster_text))
+            logger.info("grounded_roster_spoken lang=%s", lang)
+            return True
+
+        doctor_id = self._state.last_availability_doctor_id
+        booking_date = self._state.last_availability_date
+        if doctor_id is None or booking_date is None:
+            return False
+        requested = extract_exact_time(
+            text, self._state.last_availability_query_time
+        )
+        if requested is None:
+            return False
+
+        self._cancel_prefetch()
+        availability = await check_availability(
+            doctor_id=doctor_id,
+            branch_id=self._state.branch_id,
+            booking_date=booking_date,
+            db=self._db,
+            query_start=requested,
+            query_end=requested,
+            caller_phone=None,
+            held_slot_key=(
+                self._state.token_redis_key
+                if self._state.token_held
+                and not self._state.token_confirmed
+                and (self._state.token_redis_key or "").startswith("slot:")
+                else None
+            ),
+            branch_timezone=self._state.branch_timezone,
+        )
+        self._state.last_availability_query_time = requested
+        doctor_name = self._doctor_names.get(doctor_id, "")
+        if doctor_name and _exact_availability_matches(
+            availability, doctor_name, requested
+        ):
+            reply = build_exact_availability_text(
+                lang, date_=booking_date, time_=requested
+            )
+        elif "SCHEDULE NOT PUBLISHED" in availability:
+            reply = {
+                "te": "[softly] ఆ రోజు డాక్టర్ టైమింగ్ ఇంకా కన్ఫర్మ్ కాలేదండి.",
+                "hi": "[softly] उस दिन डॉक्टर का समय अभी पक्का नहीं हुआ है।",
+                "en": "[softly] The doctor's timing for that day is not confirmed yet.",
+            }.get(lang)
+        elif "NOT free" in availability or "fully booked" in availability:
+            reply = {
+                "te": "[softly] ఆ టైమ్‌కి ఖాళీ లేదండి. ఇంకో టైమ్ చెక్ చేయనా?",
+                "hi": "[softly] उस समय जगह खाली नहीं है। कोई और समय जाँचूँ?",
+                "en": "[softly] That exact time is not free. Shall I check another time?",
+            }.get(lang)
+        elif "on leave" in availability or "unavailable" in availability:
+            reply = {
+                "te": "[softly] ఆ రోజు డాక్టర్ అందుబాటులో లేరండి. ఇంకో రోజు చెక్ చేయనా?",
+                "hi": "[softly] डॉक्टर उस दिन उपलब्ध नहीं हैं। कोई और दिन जाँचूँ?",
+                "en": "[softly] The doctor is not available that day. Shall I check another day?",
+            }.get(lang)
+        else:
+            reply = None
+        if not reply:
+            raise RuntimeError(f"unrenderable availability result: {availability[:80]}")
+        self.session.say(sanitize_for_tts(reply))
+        logger.info(
+            "grounded_time_recheck_spoken doctor=%s date=%s time=%s",
+            str(doctor_id)[-8:], booking_date, requested,
+        )
+        return True
+
+    async def _handle_post_booking_close(self) -> None:
+        """Say one short goodbye, let it finish, then close the LiveKit room."""
+        try:
+            line = get_lines(self._state.language or self._lang_code).cap_goodbye
+            await self.session.say(sanitize_for_tts(line), allow_interruptions=True)
+            try:
+                await self.session.current_speech.wait_for_playout()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("post_booking_goodbye_failed: %s", e)
+        try:
+            lkapi = api.LiveKitAPI()
+            await lkapi.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
+            await lkapi.aclose()
+            logger.info("call_ended_post_booking room=%s", self._room.name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("post_booking_hangup_failed: %s", e)
 
     def _cancel_prefetch(self) -> None:
         """Drop the in-flight routing prefetch (stale turn / topic change). Bounds
@@ -2336,7 +2469,11 @@ class VachanamAgent(Agent):
                 and (self._state.token_redis_key or "").startswith("slot:")
                 else None
             ),
+            branch_timezone=self._state.branch_timezone,
         )
+        self._state.last_availability_doctor_id = resolved
+        self._state.last_availability_date = parsed_date
+        self._state.last_availability_query_time = parsed_start
         doctor_name = self._doctor_names.get(resolved, "")
         exact_positive = (
             parsed_start is not None
@@ -2726,13 +2863,17 @@ class VachanamAgent(Agent):
             if not text:
                 return False
             sess.say(sanitize_for_tts(text))
-            # WRAP-UP: cancel/reschedule are terminal — the caller rang to do
-            # exactly this. After the confirm line, a short silence should end
-            # the call instead of the full 30s "are you there?" cycle. A NEW
-            # booking is NOT terminal (the flow offers "anything else?"), so it
-            # never arms closing.
-            if kind in ("cancelled", "resched_slot", "resched_token"):
+            # Every verified mutation now ends with the deterministic
+            # "anything else?" offer for a new booking, or its terminal confirm
+            # for cancel/reschedule. Silence after either ends promptly; any
+            # caller speech clears closing in the watchdog event handler.
+            if kind in (
+                "booked_token", "booked_slot", "cancelled",
+                "resched_slot", "resched_token",
+            ):
                 self._state.closing = True
+            if kind in ("booked_token", "booked_slot"):
+                self._state.awaiting_anything_else = True
             logger.info("deterministic_confirm_spoken kind=%s lang=%s", kind, lang)
             return True
         except Exception as exc:  # noqa: BLE001 — booking result still wins
@@ -4892,6 +5033,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # branch language) — then the target language's default voice.
         tts_voice = _voice_for_lang(branch, lang_code)
         state.branch_id = branch_id
+        state.branch_timezone = branch.timezone or "Asia/Kolkata"
 
         # REAL GREETING AT ANSWER (Vinay 2026-07-05: "within 2 seconds the agent
         # needs to speak... not prerecorded message but original conversation").
@@ -5372,6 +5514,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ),
                 llm=switched_cached_llm,
                 doctor_names=_doctor_names,
+                doctor_facts=doctor_contexts,
             )
             if switched_cached_llm is None and switched_key not in _PROMPT_CACHE_PENDING:
                 _PROMPT_CACHE_PENDING.add(switched_key)
@@ -5414,6 +5557,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             agent_factory=_agent_for_lang,
             llm=_cached_llm,
             doctor_names=_doctor_names,
+            doctor_facts=doctor_contexts,
         )
         if _cached_llm is not None:
             logger.info("llm_prompt_cache_hit key=%s", _cache_key)

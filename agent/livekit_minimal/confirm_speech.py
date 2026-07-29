@@ -72,7 +72,13 @@ def build_confirm_text(
         if time_ is None:
             return None
         values["time"] = _spoken_time(time_, lang_code)
-    return template.format(**values)
+    text = template.format(**values)
+    if kind in {"booked_token", "booked_slot"}:
+        anything_else = getattr(get_lines(lang_code), "anything_else", "")
+        if not anything_else:
+            anything_else = get_lines("en").anything_else
+        text = f"{text} {anything_else}"
+    return text
 
 
 def build_exact_availability_text(

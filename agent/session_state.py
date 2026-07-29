@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, time
 from uuid import UUID
 
 
@@ -9,6 +9,7 @@ class SessionState:
 
     # Branch and doctor resolved at call start
     branch_id: UUID | None = None
+    branch_timezone: str = "Asia/Kolkata"
     doctor_id: UUID | None = None
     patient_name: str | None = None
     patient_phone: str | None = None
@@ -38,6 +39,11 @@ class SessionState:
     token_redis_key: str | None = None
     token_number: int | None = None
     appointment_time: str | None = None  # "HH:MM" for appointment-type
+    # Last authoritative availability lookup. A short follow-up correction such
+    # as "not 7:30, 7" is rechecked against this same doctor/date in code.
+    last_availability_doctor_id: UUID | None = None
+    last_availability_date: date | None = None
+    last_availability_query_time: time | None = None
     # Exact stale-id recovery inside this call: old token id -> its current
     # replacement. Never guess by picking an arbitrary later appointment.
     booking_replacements: dict[str, str] = field(default_factory=dict)
@@ -110,3 +116,4 @@ class SessionState:
     # the caller speaks again, so a caller who raises something new gets the full
     # window back (they are not done after all).
     closing: bool = False
+    awaiting_anything_else: bool = False

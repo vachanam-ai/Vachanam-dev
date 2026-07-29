@@ -56,6 +56,7 @@ class Lines:
     confirm_resched_slot: str = ""   # {date} {time}
     confirm_resched_token: str = ""  # {token} {date}
     confirm_cancelled: str = ""
+    anything_else: str = ""
 
 
 # Shared English brevity directive for non-Telugu languages (LLM instruction).
@@ -154,6 +155,7 @@ LINES: dict[str, Lines] = {
             "నంబర్ {token}. పాతది క్యాన్సిల్ అయింది. టైంకి రండి."
         ),
         confirm_cancelled="[softly] మీ అపాయింట్‌మెంట్ క్యాన్సిల్ అయిందండి.",
+        anything_else="[happily] ఇంకేమైనా సహాయం చేయనా అండి?",
     ),
 
     # ── English (Indian) — for per-caller language mapping (2026-07-03) ──────
@@ -222,6 +224,7 @@ LINES: dict[str, Lines] = {
             "number is {token}. The earlier one is cancelled. Please come on time."
         ),
         confirm_cancelled="[softly] Your appointment is cancelled.",
+        anything_else="[happily] Is there anything else I can help you with?",
     ),
 
     # ── Hindi — first-pass ────────────────────────────────────────────────────

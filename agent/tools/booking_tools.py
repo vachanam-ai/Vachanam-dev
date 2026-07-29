@@ -372,6 +372,7 @@ async def check_availability(
     query_end: time | None = None,
     caller_phone: str | None = None,
     held_slot_key: str | None = None,
+    branch_timezone: str | None = None,
 ) -> str:
     """Check whether the selected doctor has capacity on the given date.
 
@@ -410,7 +411,13 @@ async def check_availability(
     # DIFFERENT family member may continue.
     # Branch-local now: needed both to ignore already-PAST bookings below and to
     # drop past slots from same-day availability further down.
-    now = await _branch_now(branch_id, db)
+    if branch_timezone:
+        try:
+            now = datetime.now(ZoneInfo(branch_timezone))
+        except Exception:
+            now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    else:
+        now = await _branch_now(branch_id, db)
 
     # #430: this used to RETURN here, so the requested time's availability was
     # never computed and the model was told "do not run the booking flow" — on a
@@ -552,9 +559,16 @@ async def check_availability(
 
     available = []
     async with _redis() as r:
-        for slot in all_slots:
-            key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
-            reserved = int(await r.get(key) or 0)
+        # One Upstash round trip, not one per slot. A two-session 15-minute
+        # schedule can contain 28+ slots; serial GETs made every doctor-time
+        # question visibly pause even when the DB was warm.
+        keys = [
+            f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
+            for slot in all_slots
+        ]
+        reserved_values = await r.mget(keys) if keys else []
+        for slot, key, raw_reserved in zip(all_slots, keys, reserved_values):
+            reserved = int(raw_reserved or 0)
             if key == held_slot_key and reserved > 0:
                 reserved -= 1
             booked = max(reserved, db_counts.get(slot, 0))

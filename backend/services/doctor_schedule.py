@@ -142,34 +142,38 @@ async def resolve_doctor_schedule(
     db: AsyncSession,
 ) -> ResolvedDoctorSchedule:
     """Resolve one date, always scoped to the supplied branch."""
-    leave = (
+    # Leave and exact-date override are independent but share the same unique
+    # doctor/date key. Resolve both in one DB round trip; doing them serially
+    # added a visible network RTT to every spoken availability answer.
+    leave, row = (
         await db.execute(
-            select(DoctorUnavailability).where(
+            select(DoctorUnavailability, DoctorDateSchedule)
+            .select_from(Doctor)
+            .outerjoin(
+                DoctorUnavailability,
                 and_(
                     DoctorUnavailability.branch_id == branch_id,
                     DoctorUnavailability.doctor_id == doctor.id,
                     DoctorUnavailability.date == target_date,
-                )
+                ),
             )
+            .outerjoin(
+                DoctorDateSchedule,
+                and_(
+                    DoctorDateSchedule.branch_id == branch_id,
+                    DoctorDateSchedule.doctor_id == doctor.id,
+                    DoctorDateSchedule.date == target_date,
+                ),
+            )
+            .where(and_(Doctor.id == doctor.id, Doctor.branch_id == branch_id))
         )
-    ).scalar_one_or_none()
+    ).one()
     if leave is not None:
         return ResolvedDoctorSchedule(
             status="unavailable", source="leave", sessions=(), token_limit=None,
             notes=leave.reason,
         )
 
-    row = (
-        await db.execute(
-            select(DoctorDateSchedule).where(
-                and_(
-                    DoctorDateSchedule.branch_id == branch_id,
-                    DoctorDateSchedule.doctor_id == doctor.id,
-                    DoctorDateSchedule.date == target_date,
-                )
-            )
-        )
-    ).scalar_one_or_none()
     if row is not None:
         raw = validate_sessions(row.sessions)
         sessions = tuple(
