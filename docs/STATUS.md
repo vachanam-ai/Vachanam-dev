@@ -1,5 +1,18 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-29 — GEMINI PRIVATE-REASONING HOTFIX DEPLOYED.**
+> Production transcript evidence showed Gemini emitting literal English
+> `<thinking>...</thinking>` before the Telugu answer; the streaming speech
+> boundary sent it to Soniox and inflated audible response time. Release `v223`
+> now suppresses native thought parts, explicitly disables included thoughts,
+> strips split or unclosed private-reasoning blocks before TTS, removes the
+> ambiguous `[thinking]` Soniox expression, and instructs the model to output
+> caller-audible words only. The live/warm FAQ representation mismatch was also
+> normalized, restoring byte-identical clinic prompt-cache lookups. Proof: 83
+> focused and 822 complete unit tests passed; production has 4/4 prompt caches
+> ready, Soniox prewarmed, and LiveKit worker `AW_CHFiroHztnEe` registered in
+> India West on Fly image `deployment-01KYPS80C2XX69D19MFTCB2998`.
+
 > **2026-07-29 — MEASURED LOW-LATENCY VOICE PIPELINE.**
 > The production primary remains explicitly cached Gemini 2.5 Flash on Vertex
 > Mumbai: at the real prompt size its live median was about 606 ms, while a

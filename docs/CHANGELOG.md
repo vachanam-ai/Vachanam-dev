@@ -13,6 +13,30 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Gemini private reasoning spoken aloud hotfix
+
+The reported call was reproduced from its production transcript: Gemini 2.5
+Flash returned a literal English `<thinking>...</thinking>` paragraph before
+each Telugu answer. LiveKit treated that text as ordinary assistant output and
+the streaming TTS boundary passed it to Soniox, creating both the privacy leak
+and the extra audible delay. The call stayed on Vertex 2.5; no fallback model
+was involved.
+
+Removed `[thinking]` from the Soniox expression vocabulary and grounded prompt,
+added an output-only instruction, forced `include_thoughts=false`, rejected
+native Gemini thought parts, and added chunk-safe fail-closed removal of
+`thinking`, `analysis`, and `reasoning` blocks before TTS. The whole-text TTS
+sanitizer has the same guard. Also normalized live branch FAQ data through the
+same decoder used by proactive cache warmup; that raw-vs-decoded mismatch was
+why the reported call showed `prompt_cached_tokens=0` despite 4/4 warm caches.
+
+Proof: 83 focused regressions and all 822 unit tests passed, plus Ruff, compile,
+and diff checks. Commit `6152aab` was pushed to `origin/master`. Fly release
+`v223` is running in Mumbai on image
+`deployment-01KYPS80C2XX69D19MFTCB2998`; logs show four prompt caches ready,
+Soniox TTS prewarmed, the intended topology, and LiveKit India West worker
+`AW_CHFiroHztnEe` registered without startup errors.
+
 ## 2026-07-29 — Measured Gemini/Soniox latency optimization
 
 Benchmarked the real clinic prompt against the candidate Gemini models instead
