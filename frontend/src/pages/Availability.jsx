@@ -89,7 +89,7 @@ export default function Availability() {
                 <button type="button" key={id} onClick={() => setDoctorId(id)}
                   className={`rounded-xl border px-4 py-3 text-left transition ${
                     doctorId === id
-                      ? "border-accent bg-pill"
+                      ? "pick border-transparent"
                       : "border-hairline bg-surface hover:border-line2"
                   }`}>
                   <p className="font-ui font-medium">{d.name}</p>

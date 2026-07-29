@@ -127,7 +127,7 @@ export default function WalkIn() {
                     onClick={() => { setDoctorId(id); setSlot(""); }}
                     className={`rounded-xl border px-4 py-3 text-left transition ${
                       selected
-                        ? "border-accent bg-pill"
+                        ? "pick border-transparent"
                         : "border-hairline bg-surface hover:border-line2"
                     }`}
                   >
@@ -179,7 +179,7 @@ export default function WalkIn() {
                     <button type="button" key={t} onClick={() => setSlot(t)}
                       className={`rounded-lg border px-3 py-1.5 font-ui text-sm tabular-nums transition ${
                         slot === t
-                          ? "border-accent bg-pill text-ink"
+                          ? "pick border-transparent"
                           : "border-hairline bg-surface hover:border-line2"
                       }`}>
                       {t}

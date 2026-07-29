@@ -448,7 +448,7 @@ export default function Treatments() {
               const isOpen = p.patient_id === patientId && p.doctor_id === threadDoctorId;
               const hasUnread = (p.unread_messages || 0) > 0;
               return (
-                <li key={key} className={`flex items-center ${isOpen ? "bg-pill" : hasUnread ? "bg-warn/10 hover:bg-warn/20" : "hover:bg-pill/60"} transition-colors`}>
+                <li key={key} className={`flex items-center transition-colors ${isOpen ? "pick" : hasUnread ? "bg-warn/10 hover:bg-warn/20" : "hover:bg-pill/60"}`}>
                   {/* mass-select checkbox — separate hit target from the row */}
                   <label className="grid h-12 w-11 shrink-0 cursor-pointer place-items-center">
                     <input

@@ -168,119 +168,21 @@ function LifetimeStat({ label, value }) {
   );
 }
 
-/* This-month mini stats beside the minutes donut. */
-function MonthBlock({ month }) {
-  const rows = [
+/* This month — black band, same treatment as "Since day one". */
+function MonthBand({ month }) {
+  const ref = useRef(null);
+  useEffect(() => { revealNow(ref.current); });
+  const items = [
     ["Bookings", month?.bookings],
     ["Calls answered", month?.calls],
     ["New patients", month?.new_patients],
   ];
   return (
-    <div className="space-y-2.5">
-      {rows.map(([label, v]) => (
-        <MonthRow key={label} label={label} value={v ?? 0} />
+    <div ref={ref} data-reveal className="flex flex-wrap items-center gap-x-10 gap-y-3 rounded-2xl bg-sel px-6 py-4 text-sel-ink shadow-lift">
+      <p className="eyebrow !text-sel-muted">This month</p>
+      {items.map(([label, v]) => (
+        <LifetimeStat key={label} label={label} value={v ?? 0} />
       ))}
-    </div>
-  );
-}
-
-function MonthRow({ label, value }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    countUp(ref.current, value ?? 0, { duration: 1.0 });
-  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <div className="flex items-baseline justify-between rounded-lg bg-pill px-3 py-2">
-      <span className="font-ui text-xs text-slate">{label}</span>
-      <span ref={ref} className="numeral text-xl text-teal-deep">0</span>
-    </div>
-  );
-}
-
-/* Minutes-used donut: GSAP sweeps the arc, count-up in the middle. */
-function MinutesDonut({ minutes }) {
-  const arcRef = useRef(null);
-  const R = 54, C = 2 * Math.PI * R;
-  const frac = Math.min((minutes?.used ?? 0) / Math.max(minutes?.included ?? 1, 1), 1);
-  useEffect(() => {
-    if (!arcRef.current) return;
-    let mm;
-    import("gsap").then(({ gsap }) => {
-      mm = gsap.matchMedia();
-      mm.add("(prefers-reduced-motion: no-preference)", () => {
-        gsap.fromTo(
-          arcRef.current,
-          { strokeDashoffset: C },
-          { strokeDashoffset: C * (1 - frac), duration: 1.1, ease: "power3.out", delay: 0.2 }
-        );
-      });
-      mm.add("(prefers-reduced-motion: reduce)", () => {
-        gsap.set(arcRef.current, { strokeDashoffset: C * (1 - frac) });
-      });
-    });
-    return () => mm?.revert();
-  }, [frac]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <div className="flex items-center gap-5">
-      <svg viewBox="0 0 140 140" className="h-36 w-36 shrink-0" role="img" aria-label="Voice minutes used">
-        <circle cx="70" cy="70" r={R} fill="none" className="stroke-line2" strokeWidth="14" />
-        <circle ref={arcRef} cx="70" cy="70" r={R} fill="none" className="stroke-accent" strokeWidth="14"
-          strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C}
-          transform="rotate(-90 70 70)" />
-        <text x="70" y="66" textAnchor="middle" className="fill-teal-deep" fontSize="22"
-          fontWeight="600" fontFamily="ui-sans-serif">{minutes?.pct ?? 0}%</text>
-        <text x="70" y="84" textAnchor="middle" className="fill-slate" fontSize="10"
-          fontFamily="ui-sans-serif">of plan</text>
-      </svg>
-      <div className="font-ui text-sm">
-        <p className="numeral text-3xl text-teal-deep">{minutes?.used ?? 0}<span className="text-base text-slate"> min</span></p>
-        <p className="mt-1 text-slate">of {minutes?.included ?? 0} included this month</p>
-        <p className="mt-2 text-xs text-slate">AI call minutes across all numbers</p>
-      </div>
-    </div>
-  );
-}
-
-/* Busiest weekdays: 7 bars, tallest = peak day. */
-function WeekdayBars({ load }) {
-  const wrapRef = useRef(null);
-  const max = Math.max(1, ...(load ?? []).map((w) => w.bookings));
-  const peak = (load ?? []).reduce((a, b) => (b.bookings > (a?.bookings ?? -1) ? b : a), null);
-  useEffect(() => {
-    if (!wrapRef.current) return;
-    let mm;
-    import("gsap").then(({ gsap }) => {
-      mm = gsap.matchMedia();
-      mm.add("(prefers-reduced-motion: no-preference)", () => {
-        gsap.fromTo(
-          wrapRef.current.querySelectorAll("[data-wbar]"),
-          { scaleY: 0, transformOrigin: "center bottom" },
-          { scaleY: 1, duration: 0.5, ease: "power3.out", stagger: 0.05 }
-        );
-      });
-    });
-    return () => mm?.revert();
-  }, [load]); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <div>
-      <div ref={wrapRef} className="flex h-28 items-end gap-2">
-        {(load ?? []).map((w) => (
-          <div key={w.weekday} className="flex flex-1 flex-col items-center gap-1.5">
-            <div data-wbar
-              className={`w-full rounded-t-md ${w === peak && w.bookings > 0 ? "bg-teal" : "bg-teal-light/50"}`}
-              style={{ height: `${(w.bookings / max) * 100}%`, minHeight: w.bookings ? 6 : 2 }}
-              title={`${w.weekday}: ${w.bookings} bookings`} />
-            <span className={`font-ui text-[10px] ${w === peak && w.bookings > 0 ? "font-semibold text-teal-deep" : "text-slate"}`}>
-              {w.weekday}
-            </span>
-          </div>
-        ))}
-      </div>
-      {peak?.bookings > 0 && (
-        <p className="mt-2 font-ui text-xs text-slate">
-          Busiest day: <b className="text-teal-deep">{peak.weekday}</b> ({peak.bookings} bookings)
-        </p>
-      )}
     </div>
   );
 }
@@ -468,27 +370,9 @@ export default function Dashboard() {
       {/* Lifetime totals — since day one */}
       {an?.lifetime && <LifetimeBand lifetime={an.lifetime} />}
 
-      {/* Minutes + this month + busiest weekdays */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-pill px-5 py-3">
-            <h2 className="font-display text-lg font-semibold">Voice minutes · this month</h2>
-          </header>
-          <div className="px-5 py-4"><MinutesDonut minutes={an?.minutes} /></div>
-        </section>
-        <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-pill px-5 py-3">
-            <h2 className="font-display text-lg font-semibold">This month</h2>
-          </header>
-          <div className="px-5 py-4"><MonthBlock month={an?.month} /></div>
-        </section>
-        <section data-reveal className="card overflow-hidden">
-          <header className="border-b border-hairline bg-pill px-5 py-3">
-            <h2 className="font-display text-lg font-semibold">Busiest days · {days}d</h2>
-          </header>
-          <div className="px-5 py-4"><WeekdayBars load={an?.weekday_load} /></div>
-        </section>
-      </div>
+      {/* This month — black band, matching "Since day one" (minutes + busiest
+          weekdays removed: both already live in the stat band at the top) */}
+      <MonthBand month={an?.month} />
 
       {/* Trend — bookings, outcomes, show rate over time */}
       <section data-reveal className="card overflow-hidden">

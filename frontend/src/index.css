@@ -175,6 +175,16 @@ body {
   @apply flex items-center gap-4 px-4 py-3 border-b border-hairline last:border-b-0;
 }
 
+/* Selected list row — inverts to the black "since day one" treatment.
+   Reusable across pages: add `pick` to the selected row/item. */
+.pick { background: rgb(var(--sel)); color: rgb(var(--sel-ink)); }
+.pick .text-slate { color: rgb(var(--sel-muted)); }
+.pick .text-ink, .pick .text-ink-soft, .pick .text-warn { color: rgb(var(--sel-ink)); }
+.pick .chip-muted, .pick .chip-token, .pick .chip-slot, .pick .chip-danger {
+  background: rgb(var(--sel-line)); color: rgb(var(--sel-ink)); border-color: transparent;
+}
+.pick .bg-accent { background: rgb(var(--sel-ink)); color: rgb(var(--sel)); }
+
 /* Compact desktop density; 44px touch targets restored under coarse pointer. */
 .btn {
   @apply inline-flex items-center justify-center gap-2 font-ui font-semibold
