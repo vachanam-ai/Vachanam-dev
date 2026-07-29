@@ -1,22 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-/* Bookings chart v4 (2026-07-29 — Vinay: "chart is the odd one out").
-   Now a single clean idea: stacked outcome bars per day on a whole-number
-   axis, with totals. The dual curves / floating % / orange accent were what
-   clashed with the monochrome desk — gone. Show-rate stays in the tooltip.
-   GSAP grows the bars up; reduced motion = instant. */
+/* Bookings chart v5 (2026-07-29 — "best of the best" bar design).
+   Following modern dashboard practice: wide rounded-TOP columns, generous
+   spacing, light dashed gridlines with a solid 0-baseline, bold value labels,
+   one semantic accent (green = Seen), and a soft hover-column highlight
+   instead of a crosshair. GSAP grows the columns up; reduced motion = instant. */
 
 const COLORS = {
-  seen: "#3a8f60",
-  upcoming: "#a7b0ab",
-  noShow: "#c9922f",
+  seen: "#2f9e5f",
+  upcoming: "#9aa3a0",
+  noShow: "#cf9330",
   cancelled: "var(--chart-cancelled)",
   grid: "var(--chart-grid)",
   rate: "#c98a2e",
 };
 
-const W = 760, H = 250, PL = 32, PR = 14, PT = 16, PB = 28;
+const W = 760, H = 250, PL = 30, PR = 14, PT = 20, PB = 30;
 const IW = W - PL - PR, IH = H - PT - PB;
+
+/* Path for a column with rounded TOP corners and a flat base — the clean,
+   modern bar shape (only the topmost stacked segment uses it). */
+function topRoundedRect(x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h));
+  return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} `
+    + `L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
+}
 
 export default function TrendChart({ daily, calls }) {
   const svgRef = useRef(null);
@@ -24,7 +32,7 @@ export default function TrendChart({ daily, calls }) {
 
   const n = daily.length;
   const slot = IW / Math.max(n, 1);
-  const bw = Math.max(6, Math.min(slot * 0.5, 30));
+  const bw = Math.max(10, Math.min(slot * 0.58, 46));
   const cx = (i) => PL + i * slot + slot / 2;
 
   const model = useMemo(() => {
@@ -33,25 +41,28 @@ export default function TrendChart({ daily, calls }) {
     const axisMax = step * 4;
     const ticks = [0, 1, 2, 3, 4].map((k) => k * step);
     const yh = (v) => (v / axisMax) * IH;
+    const r = Math.min(bw * 0.42, 9);
 
     const bars = daily.map((d, i) => {
       const upcoming = Math.max(d.booked - d.attended - d.no_show, 0);
-      const segs = [];
-      let y = H - PB;
-      for (const [key, v, fill] of [
+      const stack = [
         ["seen", d.attended, COLORS.seen],
         ["upcoming", upcoming, COLORS.upcoming],
         ["noShow", d.no_show, COLORS.noShow],
         ["cancelled", d.cancelled, COLORS.cancelled],
-      ]) {
+      ].filter(([, v]) => v > 0);
+      const segs = [];
+      let y = H - PB;
+      stack.forEach(([key, v, fill], si) => {
         const h = yh(v);
-        if (h > 0) { y -= h; segs.push({ key, y, h, fill }); }
-      }
+        y -= h;
+        segs.push({ key, y, h, fill, top: si === stack.length - 1, r });
+      });
       return { segs, total: d.booked + d.cancelled, top: y, x: cx(i) - bw / 2 };
     });
 
     return { bars, ticks, axisMax };
-  }, [daily]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [daily, bw]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -60,19 +71,19 @@ export default function TrendChart({ daily, calls }) {
     import("gsap").then(({ gsap }) => {
       mm = gsap.matchMedia();
       const grids = svg.querySelectorAll("[data-grid]");
-      const rects = svg.querySelectorAll("rect[data-bar]");
+      const bars = svg.querySelectorAll("[data-bar]");
       const labels = svg.querySelectorAll("[data-blabel]");
 
       mm.add("(prefers-reduced-motion: no-preference)", () => {
         const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
         tl.fromTo(grids, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.25, stagger: 0.03 });
-        tl.fromTo(rects, { scaleY: 0, transformOrigin: "center bottom" },
-          { scaleY: 1, duration: 0.5, stagger: 0.045 }, 0.1);
-        tl.fromTo(labels, { scale: 0, autoAlpha: 0, transformOrigin: "center bottom" },
-          { scale: 1, autoAlpha: 1, duration: 0.3, ease: "back.out(1.7)", stagger: 0.045 }, 0.32);
+        tl.fromTo(bars, { scaleY: 0, transformOrigin: "center bottom" },
+          { scaleY: 1, duration: 0.55, ease: "power3.out", stagger: 0.06 }, 0.1);
+        tl.fromTo(labels, { y: 6, autoAlpha: 0 },
+          { y: 0, autoAlpha: 1, duration: 0.3, stagger: 0.06 }, 0.4);
       });
       mm.add("(prefers-reduced-motion: reduce)", () => {
-        gsap.set([grids, rects, labels], { clearProps: "all", autoAlpha: 1 });
+        gsap.set([grids, bars, labels], { clearProps: "all", autoAlpha: 1 });
       });
     });
     return () => mm?.revert();
@@ -94,35 +105,43 @@ export default function TrendChart({ daily, calls }) {
         role="img" aria-label="Daily bookings by outcome"
         onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
 
-        {/* whole-number left axis */}
+        {/* gridlines — dashed + light, solid emphasized 0-baseline */}
         {model.ticks.map((t, k) => {
           const y = H - PB - (t / model.axisMax) * IH;
+          const base = t === 0;
           return (
             <g key={k} data-grid>
-              <line x1={PL} x2={W - PR} y1={y} y2={y} stroke={COLORS.grid} strokeWidth="1" />
-              <text x={PL - 7} y={y + 3} textAnchor="end" fontSize="9.5"
-                fontFamily="ui-sans-serif" className="fill-slate" opacity="0.75">{t}</text>
+              <line x1={PL} x2={W - PR} y1={y} y2={y} stroke={COLORS.grid}
+                strokeWidth={base ? 1.4 : 1} strokeDasharray={base ? "0" : "2 5"}
+                opacity={base ? 1 : 0.9} />
+              <text x={PL - 8} y={y + 3} textAnchor="end" fontSize="10"
+                fontFamily="General Sans, ui-sans-serif" className="fill-slate"
+                opacity="0.8">{t}</text>
             </g>
           );
         })}
 
-        {/* crosshair */}
+        {/* soft hover column highlight */}
         {hover != null && (
-          <line x1={cx(hover)} x2={cx(hover)} y1={PT} y2={H - PB}
-            stroke="var(--chart-ghost)" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
+          <rect x={cx(hover) - bw / 2 - 10} y={PT - 6} width={bw + 20} height={IH + 12}
+            rx="12" className="fill-pill" opacity="0.65" />
         )}
 
-        {/* stacked bars + totals */}
+        {/* stacked rounded-top columns + totals */}
         {model.bars.map((b, i) => (
-          <g key={daily[i].date} opacity={hover == null || hover === i ? 1 : 0.4}
+          <g key={daily[i].date} opacity={hover == null || hover === i ? 1 : 0.35}
             style={{ transition: "opacity 0.15s" }}>
-            {b.segs.map((s, si) => (
-              <rect key={s.key} data-bar x={b.x} y={s.y} width={bw} height={s.h}
-                fill={s.fill} rx={si === b.segs.length - 1 ? 3 : 0} />
-            ))}
+            {b.segs.map((s) =>
+              s.top ? (
+                <path key={s.key} data-bar d={topRoundedRect(b.x, s.y, bw, s.h, s.r)} fill={s.fill} />
+              ) : (
+                <rect key={s.key} data-bar x={b.x} y={s.y} width={bw} height={s.h} fill={s.fill} />
+              )
+            )}
             {b.total > 0 && (
-              <text data-blabel x={b.x + bw / 2} y={b.top - 5} textAnchor="middle"
-                fontSize="10" fontWeight="600" fontFamily="ui-sans-serif" className="fill-slate">
+              <text data-blabel x={b.x + bw / 2} y={b.top - 8} textAnchor="middle"
+                fontSize="12" fontWeight="700" fontFamily="General Sans, ui-sans-serif"
+                className="fill-ink" style={{ fontVariantNumeric: "tabular-nums" }}>
                 {b.total}
               </text>
             )}
@@ -132,8 +151,10 @@ export default function TrendChart({ daily, calls }) {
         {/* x labels */}
         {daily.map((d, i) =>
           i % Math.ceil(n / 7) === 0 ? (
-            <text key={d.date} x={cx(i)} y={H - 8} textAnchor="middle" fontSize="10"
-              fontFamily="ui-sans-serif" className="fill-slate">{d.date.slice(5)}</text>
+            <text key={d.date} x={cx(i)} y={H - 8} textAnchor="middle" fontSize="10.5"
+              fontFamily="General Sans, ui-sans-serif"
+              className={hover === i ? "fill-ink" : "fill-slate"}
+              fontWeight={hover === i ? 600 : 400}>{d.date.slice(5)}</text>
           ) : null
         )}
       </svg>
@@ -172,7 +193,7 @@ export function ChartLegend() {
     <div className="flex flex-wrap gap-4">
       {items.map(([c, l]) => (
         <span key={l} className="flex items-center gap-1.5 font-ui text-xs text-slate">
-          <span className="h-2.5 w-2.5 rounded-sm" style={{ background: c }} /> {l}
+          <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: c }} /> {l}
         </span>
       ))}
     </div>
