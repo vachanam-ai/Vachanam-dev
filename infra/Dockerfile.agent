@@ -44,8 +44,8 @@ ENV SARVAM_API_KEY=build \
 RUN python -m agent.livekit_minimal.agent download-files
 
 # The real voice brain is the LiveKit Agents worker (agent/livekit_minimal/agent.py).
-# It dials OUT to LiveKit Cloud and registers as a worker — it has NO inbound HTTP
-# port (the retired Pipecat/Vobiz HTTP app was deleted in iter1). `start` is the
-# run-app subcommand exposed by agents.cli.run_app at the module __main__. A
-# process-level check (fly.agent.toml) covers liveness — no HTTP endpoint to probe.
+# It dials OUT to LiveKit Cloud and exposes no public HTTP service. `start` is the
+# run-app subcommand exposed by agents.cli.run_app at the module __main__.
+# LiveKit binds a private readiness server on 8081 after inference initializes;
+# fly.agent.toml probes it during blue/green deploys.
 CMD ["python", "-m", "agent.livekit_minimal.agent", "start"]

@@ -1,4 +1,5 @@
 # tests/unit/test_dockerfile_lint.py
+import tomllib
 from pathlib import Path
 
 DOCKERFILE = Path("infra/Dockerfile.agent")
@@ -55,3 +56,21 @@ def test_dockerfile_runs_as_non_root():
     """TD-014 must survive the retirement: the worker still drops root."""
     content = DOCKERFILE.read_text()
     assert "USER appuser" in content
+
+
+def test_fly_deploy_waits_for_livekit_worker_readiness():
+    config = tomllib.loads(Path("infra/fly.agent.toml").read_text())
+    assert config["deploy"]["strategy"] == "bluegreen"
+    assert config["deploy"]["wait_timeout"] == "5m"
+    ready = config["checks"]["worker_ready"]
+    assert ready["type"] == "tcp"
+    assert ready["port"] == 8081
+    assert ready["grace_period"] == "30s"
+
+
+def test_docs_only_push_does_not_restart_voice_worker():
+    workflow = Path(".github/workflows/ci.yml").read_text()
+    assert "Detect agent-runtime changes" in workflow
+    assert "git diff --quiet" in workflow
+    assert "agent backend infra/Dockerfile.agent infra/fly.agent.toml" in workflow
+    assert "if: steps.agent_runtime.outputs.changed == 'true'" in workflow

@@ -232,6 +232,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Detect agent-runtime changes
+        id: agent_runtime
+        shell: bash
+        run: |
+          BEFORE='${{ github.event.before }}'
+          if [[ "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "$BEFORE^{commit}"; then
+            BEFORE=HEAD^
+          fi
+          if git diff --quiet "$BEFORE" HEAD -- agent backend infra/Dockerfile.agent infra/fly.agent.toml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No agent-runtime change; skipping Fly deploy."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Compute next semver
         id: ver
         # Bump rule (Conventional Commits since last v-tag):
@@ -273,6 +288,7 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       - name: Deploy agent to Fly
+        if: steps.agent_runtime.outputs.changed == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         # Working tree == the just-pushed commit, so this ships the right ref

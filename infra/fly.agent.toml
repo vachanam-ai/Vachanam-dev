@@ -10,16 +10,26 @@ primary_region = "bom"  # Mumbai — lowest latency for India
   APP_ENV = "production"
   LOG_LEVEL = "info"
 
-# The LiveKit worker dials OUT to LiveKit Cloud and registers as a worker; it
-# serves NO inbound HTTP (the old http_service internal_port=8080 pointed at the
-# retired Pipecat/Vobiz uvicorn app — finding #32). The machine must stay warm
-# (a voice agent must never cold-start) so we keep it always-running and let Fly's
-# default process check cover liveness — there is no HTTP endpoint to probe.
+# The worker dials OUT to LiveKit Cloud and exposes no public HTTP service.
+# LiveKit binds a private readiness server on 8081 after inference initializes;
+# Fly probes it only to coordinate safe deployments.
 [deploy]
-  strategy = "rolling"
+  # The LiveKit worker takes ~75-95s to load inference models and bind its
+  # internal readiness server. Blue/green keeps the registered worker alive
+  # until the replacement passes worker_ready, preventing unanswered calls.
+  strategy = "bluegreen"
+  wait_timeout = "5m"
 
-# No [http_service]: this process has no listening socket. Keep exactly one
-# machine running at all times; never auto-stop on idle.
+[checks]
+  [checks.worker_ready]
+    type = "tcp"
+    port = 8081
+    grace_period = "30s"
+    interval = "5s"
+    timeout = "2s"
+
+# No public [http_service]. Keep exactly one machine running at all times;
+# never auto-stop on idle.
 [[vm]]
   cpu_kind = "shared"
   # 4 CPU / 4 GB: on 2x/2GB the forked per-call job processes hung loading models
