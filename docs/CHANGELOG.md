@@ -13,6 +13,26 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Prevent unanswered calls during voice-worker deploys
+
+The worker was healthy but unavailable during deployment. CI created Fly
+releases for both the hotfix push and the follow-up documentation push. With no
+readiness check, rolling deployment drained the only LiveKit-registered worker
+at 11:26:50Z while the replacement was merely in Fly's `started` state. The
+replacement spent 72 seconds loading inference and registered at 11:28:57Z,
+leaving a proven 127-second window in which nobody could answer calls.
+
+Fly now uses blue/green deployment and waits on LiveKit's private readiness
+server at port 8081 before replacing the old machine. The five-minute deploy
+timeout covers the measured cold start. CI separately detects changes under the
+agent/backend/agent-infrastructure paths; docs, tests, and frontend-only pushes
+no longer rebuild or restart the voice worker.
+
+Service was restored with India West worker `AW_q2tvhTX5UwiG`. The config passed
+`flyctl config validate`, 9 deployment guards passed, and Ruff/diff checks were
+clean. A manual blue/green attempt found no spare 4-CPU capacity in Mumbai and
+rolled back without touching the active worker—the intended safe behavior.
+
 ## 2026-07-29 — Gemini private reasoning spoken aloud hotfix
 
 The reported call was reproduced from its production transcript: Gemini 2.5

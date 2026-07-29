@@ -1,5 +1,15 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-29 — VOICE DEPLOYMENT OUTAGE CLOSED.**
+> CI restarted the sole voice worker for both the code push and its docs-only
+> follow-up. Rolling deploys drained the registered worker before the replacement
+> completed its ~72-second inference initialization, causing a measured
+> 127-second no-agent window. Worker `AW_q2tvhTX5UwiG` is registered and calls
+> are live again. Commit `c4a46ff` changes Fly to blue/green with a TCP readiness
+> gate on LiveKit's private port 8081 and makes docs/tests/frontend-only pushes
+> skip Fly. If Mumbai lacks capacity for a green machine, deployment now fails
+> safely while the old worker continues answering.
+
 > **2026-07-29 — GEMINI PRIVATE-REASONING HOTFIX DEPLOYED.**
 > Production transcript evidence showed Gemini emitting literal English
 > `<thinking>...</thinking>` before the Telugu answer; the streaming speech
