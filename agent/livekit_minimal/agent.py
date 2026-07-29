@@ -144,6 +144,26 @@ logger = logging.getLogger("vachanam-agent")
 
 AGENT_NAME = "vachanam-agent"
 
+
+class _NoThoughtGoogleLLM(google.LLM):
+    """Never expose Gemini thought parts as assistant speech."""
+
+    def chat(self, **kwargs):
+        stream = super().chat(**kwargs)
+        thinking = stream._extra_kwargs.get("thinking_config")
+        if thinking is not None:
+            if hasattr(thinking, "model_copy"):
+                thinking = thinking.model_copy(update={"include_thoughts": False})
+            else:
+                thinking = {**thinking, "include_thoughts": False}
+            stream._extra_kwargs["thinking_config"] = thinking
+        parse_part = stream._parse_part
+        stream._parse_part = lambda request_id, part: (
+            None if getattr(part, "thought", False) else parse_part(request_id, part)
+        )
+        return stream
+
+
 # The VAD must report a possible boundary quickly; it must not be the component
 # that decides a Telugu utterance is final. Soniox's semantic endpoint owns the
 # final boundary. This gives us a <=60 ms local signal without a second client
@@ -479,7 +499,7 @@ SONIOX_EXPRESSION_TAGS = frozenset({
     "[shouts]", "[angrily]", "[happily]", "[sadly]", "[crying]",
     "[sighs]", "[takes a deep breath]", "[gasps]", "[nervously]",
     "[excitedly]", "[confused]", "[surprised]", "[relieved]",
-    "[thinking]", "[hesitates]", "[pause]", "[long pause]",
+    "[hesitates]", "[pause]", "[long pause]",
     "[clears throat]", "[coughs]", "[yawns]", "[sobs]", "[sniffs]",
 })
 
@@ -535,6 +555,49 @@ async def _filter_soniox_expression_stream(text):
 
 _SPEECH_GUARD_CARRY = 24
 _SPEECH_BOUNDARY = re.compile(r"[.!?।\n]")
+_PRIVATE_REASONING_OPEN = re.compile(
+    r"<\s*(?:thinking|analysis|reasoning)\b[^>]*>",
+    re.IGNORECASE,
+)
+_PRIVATE_REASONING_CLOSE = re.compile(
+    r"</\s*(?:thinking|analysis|reasoning)\s*>",
+    re.IGNORECASE,
+)
+
+
+async def _strip_private_reasoning_stream(text):
+    """Drop chunk-split private reasoning blocks before they reach TTS."""
+    pending = ""
+    dropping = False
+    async for chunk in text:
+        pending += chunk
+        while pending:
+            if dropping:
+                closing = _PRIVATE_REASONING_CLOSE.search(pending)
+                if closing:
+                    pending = pending[closing.end():]
+                    dropping = False
+                    continue
+                last_open = pending.rfind("<")
+                pending = pending[last_open:] if last_open >= 0 else ""
+                break
+            opening = _PRIVATE_REASONING_OPEN.search(pending)
+            if opening:
+                if opening.start():
+                    yield pending[:opening.start()]
+                pending = pending[opening.end():]
+                dropping = True
+                continue
+            last_open = pending.rfind("<")
+            if last_open >= 0:
+                if last_open:
+                    yield pending[:last_open]
+                pending = pending[last_open:]
+                break
+            yield pending
+            pending = ""
+    if pending and not dropping and not re.fullmatch(r"<\s*/?\s*[A-Za-z]*", pending):
+        yield pending
 
 
 async def _guard_internal_speech_stream(text):
@@ -973,7 +1036,9 @@ async def _localize_message(message: str, lang_code: str) -> str:
             model="gemini-2.5-flash",
             contents=prompt,
             config=gt.GenerateContentConfig(
-                thinking_config=gt.ThinkingConfig(thinking_budget=0)
+                thinking_config=gt.ThinkingConfig(
+                    thinking_budget=0, include_thoughts=False
+                )
             ),
         )
         out = (resp.text or "").strip()
@@ -1404,26 +1469,32 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     if vertex is not None:
         _, project = vertex
         llms.append(
-            google.LLM(
+            _NoThoughtGoogleLLM(
                 vertexai=True,
                 project=project,
                 location="asia-south1",
                 model="gemini-2.5-flash",
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                thinking_config=genai_types.ThinkingConfig(
+                    thinking_budget=0, include_thoughts=False
+                ),
             )
         )
     else:
         logger.warning("vertex_creds_missing primary stays on global API")
     llms += [
-        google.LLM(
+        _NoThoughtGoogleLLM(
             api_key=settings.gemini_api_key,
             model=settings.gemini_fast_fallback_model,
-            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+            thinking_config=genai_types.ThinkingConfig(
+                thinking_level="minimal", include_thoughts=False
+            ),
         ),
-        google.LLM(
+        _NoThoughtGoogleLLM(
             api_key=settings.gemini_api_key,
             model=settings.gemini_quality_fallback_model,
-            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+            thinking_config=genai_types.ThinkingConfig(
+                thinking_level="minimal", include_thoughts=False
+            ),
         ),
     ]
     return lk_llm.FallbackAdapter(llm=llms, attempt_timeout=10.0)
@@ -1606,23 +1677,29 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
 
     _, project = vertex
     llms: list[lk_llm.LLM] = [
-        google.LLM(
+        _NoThoughtGoogleLLM(
             vertexai=True,
             project=project,
             location="asia-south1",
             model="gemini-2.5-flash",
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            thinking_config=genai_types.ThinkingConfig(
+                thinking_budget=0, include_thoughts=False
+            ),
             cached_content=entry[0],
         ),
-        google.LLM(
+        _NoThoughtGoogleLLM(
             api_key=settings.gemini_api_key,
             model=settings.gemini_fast_fallback_model,
-            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+            thinking_config=genai_types.ThinkingConfig(
+                thinking_level="minimal", include_thoughts=False
+            ),
         ),
-        google.LLM(
+        _NoThoughtGoogleLLM(
             api_key=settings.gemini_api_key,
             model=settings.gemini_quality_fallback_model,
-            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+            thinking_config=genai_types.ThinkingConfig(
+                thinking_level="minimal", include_thoughts=False
+            ),
         ),
     ]
     return lk_llm.FallbackAdapter(llm=llms, attempt_timeout=10.0)
@@ -1665,7 +1742,9 @@ async def _routing_llm_call(messages: list) -> str:
         model=settings.gemini_fast_fallback_model,
         contents="\n".join(m["content"] for m in messages),
         config=genai_types.GenerateContentConfig(
-            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+            thinking_config=genai_types.ThinkingConfig(
+                thinking_level="minimal", include_thoughts=False
+            ),
             response_mime_type="application/json",
         ),
     )
@@ -1834,7 +1913,8 @@ class VachanamAgent(Agent):
                     _trace.mark_guard_first_out()
                 yield chunk
 
-        safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
+        private_safe = _strip_private_reasoning_stream(_stamp_in(text))
+        safe_text = _stamp_out(_guard_internal_speech_stream(private_safe))
         expressive_text = _filter_soniox_expression_stream(safe_text)
         _first = True
         async for frame in super().tts_node(
@@ -5142,7 +5222,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     plan=state.plan or "clinic",
                     language=lc,
                     clinic_address=getattr(branch, "address", None),
-                    faq=getattr(branch, "faq", None),
+                    faq=_decode_branch_faq(getattr(branch, "faq", None)),
                     recording_active=_recording_active,
                 )
                 + get_lines(lc).brevity

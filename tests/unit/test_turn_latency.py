@@ -45,6 +45,32 @@ def test_llm_side_latency_work_stays():
     assert '"preemptive_tts": True' in SRC
     assert '"max_retries": 2' in SRC
     assert "await asyncio.gather(" in SRC               # #390 setup concurrency
+    assert SRC.count("include_thoughts=False") >= 7
+    assert SRC.count("_NoThoughtGoogleLLM(") == 7
+
+
+async def test_google_adapter_never_surfaces_native_thought_parts():
+    from google.genai import types
+    from livekit.agents import llm as lk_llm
+    from agent.livekit_minimal import agent as ag
+
+    model = ag._NoThoughtGoogleLLM(
+        api_key="test",
+        model="gemini-2.5-flash",
+        thinking_config=types.ThinkingConfig(
+            thinking_budget=0, include_thoughts=True
+        ),
+    )
+    stream = model.chat(chat_ctx=lk_llm.ChatContext.empty())
+    try:
+        assert stream._extra_kwargs["thinking_config"].include_thoughts is False
+        assert stream._parse_part(
+            "request", types.Part(text="private", thought=True)
+        ) is None
+        spoken = stream._parse_part("request", types.Part(text="hello"))
+        assert spoken.delta.content == "hello"
+    finally:
+        await stream.aclose()
 
 
 def test_tool_lookup_fillers_untouched():

@@ -19,11 +19,26 @@ _INTERNAL_TRACE = re.compile(
 _MODEL_CONTROL_TOKEN = re.compile(
     r"(?i)(?:<|\[)?\s*response_(?:start|end)\s*(?:>|\])?\s*:?[ \t\r\n]*"
 )
+_MODEL_PRIVATE_BLOCK = re.compile(
+    r"<\s*(thinking|analysis|reasoning)\b[^>]*>.*?</\s*\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_MODEL_PRIVATE_OPEN = re.compile(
+    r"<\s*(?:thinking|analysis|reasoning)\b[^>]*>",
+    re.IGNORECASE,
+)
 
 
 def strip_model_control_tokens(text: str) -> str:
     """Remove non-spoken response boundary labels from model output."""
     return _MODEL_CONTROL_TOKEN.sub("", text or "")
+
+
+def strip_model_private_blocks(text: str) -> str:
+    """Remove private model reasoning, failing closed on an unclosed block."""
+    text = _MODEL_PRIVATE_BLOCK.sub("", text or "")
+    opening = _MODEL_PRIVATE_OPEN.search(text)
+    return text[:opening.start()] if opening else text
 
 
 def internal_trace_match(text: str):
@@ -186,6 +201,7 @@ def spoken_phone_digits(text: str) -> str:
 
 
 def sanitize_for_tts(text: str) -> str:
+    text = strip_model_private_blocks(text)
     text = strip_model_control_tokens(text)
     text = strip_internal_tool_speech(text)
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)

@@ -451,7 +451,8 @@ def test_system_prompt_performance_prosody_rules():
     to preserve ... ! ? , so this markup reaches the TTS intact."""
     prompt = _make_prompt()
     assert "Break grammar like people do" in prompt
-    assert "[thinking]" in prompt
+    assert "[thinking]" not in prompt
+    assert "Never output private reasoning" in prompt
     # #438 (Vinay 2026-07-21: "why ok endi/avunu/alagey/ayyo unnecessarily"):
     # reaction words are gated to REAL feeling, and replies answer directly
     # instead of opening every turn with a filler ack.

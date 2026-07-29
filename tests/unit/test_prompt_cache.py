@@ -77,6 +77,7 @@ def test_exact_variant_and_agent_ride_source_guard():
     compose = src.split("def _compose_instructions", 1)[1].split(
         "def _compose_runtime_context", 1
     )[0]
+    assert '_decode_branch_faq(getattr(branch, "faq", None))' in compose
     assert "caller_prompt_extra" not in compose
     assert "date_context" not in compose
     runtime = src.split("def _compose_runtime_context", 1)[1][:1200]

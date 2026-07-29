@@ -21,7 +21,7 @@ def test_closed_soniox_allowlist_is_exact():
         "[shouts]", "[angrily]", "[happily]", "[sadly]", "[crying]",
         "[sighs]", "[takes a deep breath]", "[gasps]", "[nervously]",
         "[excitedly]", "[confused]", "[surprised]", "[relieved]",
-        "[thinking]", "[hesitates]", "[pause]", "[long pause]",
+        "[hesitates]", "[pause]", "[long pause]",
         "[clears throat]", "[coughs]", "[yawns]", "[sobs]", "[sniffs]",
     }
     assert ag.SONIOX_EXPRESSION_TAGS == expected
@@ -31,6 +31,7 @@ def test_soniox_filter_keeps_exact_supported_and_strips_invented_tags():
     assert ag._filter_soniox_expression_tags("[softly] hello") == "[softly] hello"
     assert ag._filter_soniox_expression_tags("[Concerned] hello") == "hello"
     assert ag._filter_soniox_expression_tags("[Happy] hello") == "hello"
+    assert ag._filter_soniox_expression_tags("[thinking] hello") == "hello"
     assert ag._filter_soniox_expression_tags("token [12]") == "token [12]"
 
 
@@ -47,10 +48,12 @@ def test_soniox_filter_is_chunk_split_safe():
 
 def test_prompt_teaches_job_scoped_expressions_and_phone_digit_rule():
     p = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
-    for tag in ("[softly]", "[happily]", "[relieved]", "[thinking]",
+    for tag in ("[softly]", "[happily]", "[relieved]",
                 "[hesitates]", "[confused]", "[sighs]", "[chuckles]",
                 "[pause]", "[long pause]"):
         assert tag in p, tag
+    assert "[thinking]" not in p
+    assert "Never output private reasoning" in p
     # v19 reworded the expressions block; the constraints survive verbatim below.
     assert "only these:" in p                        # the closed tag allowlist
     assert "No other tag exists" in p                # (was "...in this job")

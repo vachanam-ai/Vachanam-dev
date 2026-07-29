@@ -6,6 +6,7 @@ import pytest
 from agent.livekit_minimal.agent import (
     REMINDER_PROMPT_EXTRA,
     _guard_internal_speech_stream,
+    _strip_private_reasoning_stream,
 )
 from agent.prompts.system_prompt import DoctorContext, build_system_prompt
 from agent.services.tts_sanitizer import sanitize_for_tts
@@ -64,6 +65,32 @@ def test_whole_text_sanitizer_removes_tool_trace_but_keeps_safe_sentence():
 def test_whole_text_sanitizer_removes_response_control_labels():
     assert sanitize_for_tts("response_start సరే అండి.") == "సరే అండి."
     assert sanitize_for_tts("[response_end]") == ""
+
+
+def test_whole_text_sanitizer_removes_private_reasoning():
+    raw = "<thinking>private plan</thinking>సరే అండి."
+    assert sanitize_for_tts(raw) == "సరే అండి."
+    assert sanitize_for_tts("<analysis>private forever") == ""
+
+
+@pytest.mark.asyncio
+async def test_stream_guard_removes_split_private_reasoning():
+    async def chunks():
+        for chunk in ("<thin", "king>private ", "plan</thi", "nking>\n", "సరే అండి."):
+            yield chunk
+
+    out = "".join([part async for part in _strip_private_reasoning_stream(chunks())])
+    assert out == "\nసరే అండి."
+
+
+@pytest.mark.asyncio
+async def test_stream_guard_fails_closed_on_unclosed_private_reasoning():
+    async def chunks():
+        for chunk in ("సరే. <analysis>", "private forever"):
+            yield chunk
+
+    out = "".join([part async for part in _strip_private_reasoning_stream(chunks())])
+    assert out == "సరే. "
 
 
 @pytest.mark.asyncio
