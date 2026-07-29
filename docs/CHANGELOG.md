@@ -36,6 +36,13 @@ Proof: 818 unit tests plus 83 focused booking, availability, schedule, queue,
 cancellation, and reschedule integration tests passed. No frontend file was
 modified and the local backend on port 8000 was not restarted.
 
+Pushed commit `599e414` to `origin/master`, set the production latency secrets,
+and deployed Fly release `v220` in Mumbai. The active image is
+`deployment-01KYPQ3B3SEVCQNKDWAQFV0DFC`; logs prove endpoint level 2,
+sensitivity 0.3, 1,500 ms tail, manual finalization 0, 60 ms local VAD,
+Soniox TTS prewarm, all four clinic prompt-cache variants ready, and a fresh
+LiveKit India West worker registration. No startup error or traceback appeared.
+
 ## 2026-07-29 — Measured Gemini/Soniox latency optimization
 
 Benchmarked the real clinic prompt against the candidate Gemini models instead

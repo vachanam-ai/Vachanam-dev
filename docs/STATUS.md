@@ -15,6 +15,10 @@
 > grounded LLM path. Existing deterministic booking/reschedule/cancel success
 > speech is unchanged. Proof: 818 unit and 83 booking/schedule/queue/reschedule
 > integration tests passed; compile and diff checks passed. Frontend untouched.
+> Production Fly release `v220` is started in `bom` on image
+> `deployment-01KYPQ3B3SEVCQNKDWAQFV0DFC`; runtime logs confirm the exact
+> endpoint profile, Soniox TTS prewarm, 4/4 shared clinic prompt-cache hits,
+> and a fresh LiveKit India West worker registration with no startup errors.
 
 > **2026-07-29 — MEASURED LOW-LATENCY VOICE PIPELINE.**
 > The production primary remains explicitly cached Gemini 2.5 Flash on Vertex
