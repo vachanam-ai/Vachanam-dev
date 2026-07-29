@@ -93,7 +93,7 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, 
   return (
     <div className="flex h-full flex-col">
       <Link to={roleHome(role)} onClick={onNavigate}
-        className="mb-1 block px-2 py-1 font-brand text-[19px] font-semibold leading-none tracking-[-0.02em] text-ink">
+        className="mb-1 block px-2 pb-2 pt-1 font-brand text-[26px] leading-none text-ink">
         Vachanam
       </Link>
 
@@ -269,7 +269,7 @@ export default function Shell() {
               </svg>
             </button>
           )}
-          <Link to={roleHome(role)} className="font-brand text-lg font-semibold leading-none tracking-[-0.02em] text-ink">Vachanam</Link>
+          <Link to={roleHome(role)} className="font-brand text-2xl leading-none text-ink">Vachanam</Link>
           <div className="ml-auto"><ThemeToggle /></div>
         </header>
 

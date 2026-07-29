@@ -1,29 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-/* Bookings & show-rate chart v2 (2026-07-11 dashboard overhaul).
+/* Bookings & show-rate chart v3 (2026-07-29 — Vinay: "graph looks odd").
+   Simplified: clean stacked outcome bars on a whole-number left axis, plus ONE
+   smooth show-rate line on a 0–100% right axis. The old calls-answered area +
+   second curve + floating % labels were the clutter — removed. GSAP draws bars
+   up and the line left→right; reduced motion = instant. */
 
-   Design: smooth Catmull-Rom curves (no polyline corners), gradient area
-   under the calls curve, rounded stacked bars that grow from the baseline,
-   always-visible bar totals, crosshair + tooltip on hover, gold gradient
-   show-rate stroke. GSAP timeline draws everything left→right; a leading
-   dot rides each curve like a pen tip. Range switches re-run the entrance
-   (fade + redraw — deliberate, never a snap). Reduced motion = instant. */
-
-/* Categorical series — semantic where it means something (seen=good,
-   no-show=warn), neutral grays elsewhere, gold reserved for the show-rate
-   curve (the design's one warm accent). No teal. Fixed mid-tones chosen to
-   read on both the light and dark card grounds.
-   ponytail: fixed hexes, swap to per-theme CSS vars if dark contrast slips. */
 const COLORS = {
   seen: "#3a8f60",
   upcoming: "#a7b0ab",
   noShow: "#c9922f",
   cancelled: "var(--chart-cancelled)",
-  calls: "#6f6f68",
   grid: "var(--chart-grid)",
+  rate: "#c98a2e",
 };
 
-const W = 760, H = 264, PL = 36, PR = 16, PT = 20, PB = 30;
+const W = 760, H = 260, PL = 34, PR = 42, PT = 18, PB = 30;
 const IW = W - PL - PR, IH = H - PT - PB;
 
 /* Catmull-Rom → cubic Bézier path through points [{x,y}]. */
@@ -43,19 +35,22 @@ function smoothPath(pts) {
 }
 
 export default function TrendChart({ daily, calls }) {
-  const wrapRef = useRef(null);
   const svgRef = useRef(null);
-  const [hover, setHover] = useState(null); // day index or null
+  const [hover, setHover] = useState(null);
 
   const n = daily.length;
   const slot = IW / Math.max(n, 1);
-  const bw = Math.max(8, Math.min(slot * 0.55, 40));
+  const bw = Math.max(6, Math.min(slot * 0.5, 30));
   const cx = (i) => PL + i * slot + slot / 2;
 
   const model = useMemo(() => {
-    const maxStack = Math.max(1, ...daily.map((d) => d.booked + d.cancelled));
-    const maxCalls = Math.max(1, ...(calls ?? []).map((c) => c.calls));
-    const yh = (v) => (v / maxStack) * IH;
+    // Whole-number left axis: 5 evenly-spaced ticks, no fractional labels.
+    const rawMax = Math.max(1, ...daily.map((d) => d.booked + d.cancelled));
+    const step = Math.max(1, Math.ceil(rawMax / 4));
+    const axisMax = step * 4;
+    const ticks = [0, 1, 2, 3, 4].map((k) => k * step);
+    const yh = (v) => (v / axisMax) * IH;
+
     const bars = daily.map((d, i) => {
       const upcoming = Math.max(d.booked - d.attended - d.no_show, 0);
       const segs = [];
@@ -69,21 +64,16 @@ export default function TrendChart({ daily, calls }) {
         const h = yh(v);
         if (h > 0) { y -= h; segs.push({ key, y, h, fill }); }
       }
-      const total = d.booked + d.cancelled;
-      return { segs, total, top: y, x: cx(i) - bw / 2 };
+      return { segs, total: d.booked + d.cancelled, top: y, x: cx(i) - bw / 2 };
     });
-    const callPts = (calls ?? []).slice(0, n).map((c, i) => ({
-      x: cx(i), y: H - PB - (c.calls / maxCalls) * IH * 0.86, v: c.calls,
-    }));
+
+    // Show-rate line on the 0–100% right axis (full plot height).
     const ratePts = daily
       .map((d, i) => (d.show_rate === null ? null : { x: cx(i), y: H - PB - d.show_rate * IH, v: d.show_rate }))
       .filter(Boolean);
-    const callPath = smoothPath(callPts);
-    const areaPath = callPts.length >= 2
-      ? `${callPath} L ${callPts[callPts.length - 1].x} ${H - PB} L ${callPts[0].x} ${H - PB} Z`
-      : "";
-    return { bars, callPts, ratePts, callPath, ratePath: smoothPath(ratePts), areaPath };
-  }, [daily, calls]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    return { bars, ratePts, ratePath: smoothPath(ratePts), ticks, axisMax };
+  }, [daily]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -95,47 +85,25 @@ export default function TrendChart({ daily, calls }) {
       const rects = svg.querySelectorAll("rect[data-bar]");
       const labels = svg.querySelectorAll("[data-blabel]");
       const dots = svg.querySelectorAll("[data-dot]");
-      const rateLabels = svg.querySelectorAll("[data-rlabel]");
-      const area = svg.querySelector("[data-area]");
-      const paths = [svg.querySelector("[data-callpath]"), svg.querySelector("[data-ratepath]")];
-      const pens = [svg.querySelector("[data-pen-call]"), svg.querySelector("[data-pen-rate]")];
+      const line = svg.querySelector("[data-ratepath]");
 
       mm.add("(prefers-reduced-motion: no-preference)", () => {
         const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
         tl.fromTo(grids, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.25, stagger: 0.03 });
         tl.fromTo(rects, { scaleY: 0, transformOrigin: "center bottom" },
-          { scaleY: 1, duration: 0.55, stagger: 0.04 }, 0.1);
+          { scaleY: 1, duration: 0.5, stagger: 0.04 }, 0.1);
         tl.fromTo(labels, { scale: 0, autoAlpha: 0, transformOrigin: "center bottom" },
-          { scale: 1, autoAlpha: 1, duration: 0.35, ease: "back.out(1.7)", stagger: 0.04 }, 0.32);
-        paths.forEach((p, pi) => {
-          if (!p) return;
-          const len = p.getTotalLength();
-          if (!len) return;
-          tl.fromTo(p, { strokeDasharray: len, strokeDashoffset: len },
-            { strokeDashoffset: 0, duration: 0.8, ease: "none" }, 0.5 + pi * 0.25);
-          const pen = pens[pi];
-          if (pen) {
-            const proxy = { t: 0 };
-            tl.fromTo(pen, { autoAlpha: 1 }, { autoAlpha: 1, duration: 0.01 }, 0.5 + pi * 0.25);
-            tl.to(proxy, {
-              t: 1, duration: 0.8, ease: "none",
-              onUpdate: () => {
-                const pt = p.getPointAtLength(proxy.t * len);
-                pen.setAttribute("cx", pt.x); pen.setAttribute("cy", pt.y);
-              },
-            }, 0.5 + pi * 0.25);
-            tl.to(pen, { autoAlpha: 0, duration: 0.2 }, 1.3 + pi * 0.25);
-          }
-        });
-        if (area) tl.fromTo(area, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.4 }, 1.25);
+          { scale: 1, autoAlpha: 1, duration: 0.3, ease: "back.out(1.7)", stagger: 0.04 }, 0.3);
+        if (line) {
+          const len = line.getTotalLength();
+          if (len) tl.fromTo(line, { strokeDasharray: len, strokeDashoffset: len },
+            { strokeDashoffset: 0, duration: 0.8, ease: "none" }, 0.5);
+        }
         tl.fromTo(dots, { scale: 0, transformOrigin: "center center" },
           { scale: 1, duration: 0.3, ease: "back.out(2)", stagger: 0.03 }, 0.9);
-        tl.fromTo(rateLabels, { autoAlpha: 0, y: 4 }, { autoAlpha: 1, y: 0, duration: 0.3 }, 1.5);
       });
       mm.add("(prefers-reduced-motion: reduce)", () => {
-        gsap.set([grids, rects, labels, dots, rateLabels, area, ...paths.filter(Boolean)],
-          { clearProps: "all", autoAlpha: 1 });
-        pens.forEach((pen) => pen && gsap.set(pen, { autoAlpha: 0 }));
+        gsap.set([grids, rects, labels, dots, line].filter(Boolean), { clearProps: "all", autoAlpha: 1 });
       });
     });
     return () => mm?.revert();
@@ -152,41 +120,44 @@ export default function TrendChart({ daily, calls }) {
   const hc = hover != null ? (calls ?? [])[hover] : null;
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div className="relative">
       <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full"
-        role="img" aria-label="Daily bookings, calls and show rate"
+        role="img" aria-label="Daily bookings and show rate"
         onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
         <defs>
           <linearGradient id="rateGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#d97706" />
-            <stop offset="100%" stopColor="#f0b429" />
-          </linearGradient>
-          <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={COLORS.calls} stopOpacity="0.14" />
-            <stop offset="100%" stopColor={COLORS.calls} stopOpacity="0.02" />
+            <stop offset="0%" stopColor="#b8781f" />
+            <stop offset="100%" stopColor="#d7a53f" />
           </linearGradient>
         </defs>
 
-        {[0.25, 0.5, 0.75, 1].map((g) => (
-          <g key={g} data-grid>
-            <line x1={PL} x2={W - PR} y1={H - PB - g * IH} y2={H - PB - g * IH}
-              stroke={COLORS.grid} strokeWidth="1" />
-            <text x={PL - 6} y={H - PB - g * IH + 3} textAnchor="end" fontSize="9"
-              fontFamily="ui-sans-serif" className="fill-slate" opacity="0.7">
-              {Math.round(g * Math.max(1, ...daily.map((d) => d.booked + d.cancelled)))}
-            </text>
-          </g>
+        {/* left axis — whole-number booking ticks */}
+        {model.ticks.map((t, k) => {
+          const y = H - PB - (t / model.axisMax) * IH;
+          return (
+            <g key={k} data-grid>
+              <line x1={PL} x2={W - PR} y1={y} y2={y} stroke={COLORS.grid} strokeWidth="1" />
+              <text x={PL - 7} y={y + 3} textAnchor="end" fontSize="9.5"
+                fontFamily="ui-sans-serif" className="fill-slate" opacity="0.75">{t}</text>
+            </g>
+          );
+        })}
+
+        {/* right axis — show-rate % */}
+        {model.ratePts.length > 0 && [0, 50, 100].map((p) => (
+          <text key={p} x={W - PR + 7} y={H - PB - (p / 100) * IH + 3} textAnchor="start"
+            fontSize="9.5" fontFamily="ui-sans-serif" fill={COLORS.rate} opacity="0.85">{p}%</text>
         ))}
 
         {/* crosshair */}
         {hover != null && (
           <line x1={cx(hover)} x2={cx(hover)} y1={PT} y2={H - PB}
-            stroke="#94a3b8" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
+            stroke="var(--chart-ghost)" strokeWidth="1" strokeDasharray="3 3" opacity="0.6" />
         )}
 
-        {/* bars + totals */}
+        {/* stacked bars + totals */}
         {model.bars.map((b, i) => (
-          <g key={daily[i].date} opacity={hover == null || hover === i ? 1 : 0.45}
+          <g key={daily[i].date} opacity={hover == null || hover === i ? 1 : 0.4}
             style={{ transition: "opacity 0.15s" }}>
             {b.segs.map((s, si) => (
               <rect key={s.key} data-bar x={b.x} y={s.y} width={bw} height={s.h}
@@ -194,49 +165,28 @@ export default function TrendChart({ daily, calls }) {
             ))}
             {b.total > 0 && (
               <text data-blabel x={b.x + bw / 2} y={b.top - 5} textAnchor="middle"
-                fontSize="10.5" fontWeight="600" fontFamily="ui-sans-serif"
-                className="fill-slate">{b.total}</text>
-            )}
-          </g>
-        ))}
-
-        {/* calls curve: area + stroke + pen + dots */}
-        {model.areaPath && <path data-area d={model.areaPath} fill="url(#areaGrad)" />}
-        {model.callPath && (
-          <path data-callpath d={model.callPath} fill="none" stroke={COLORS.calls}
-            strokeWidth="2" strokeLinecap="round" />
-        )}
-        <circle data-pen-call r="3.5" fill={COLORS.calls} opacity="0" />
-        {model.callPts.map((p, i) => (
-          <circle key={`c${i}`} data-dot cx={p.x} cy={p.y} r={hover === i ? 4 : 2.5}
-            fill="#fff" stroke={COLORS.calls} strokeWidth="1.8" />
-        ))}
-
-        {/* show-rate curve */}
-        {model.ratePath && (
-          <path data-ratepath d={model.ratePath} fill="none" stroke="url(#rateGrad)"
-            strokeWidth="2.5" strokeLinecap="round" />
-        )}
-        <circle data-pen-rate r="3.5" fill="#f0b429" opacity="0" />
-        {model.ratePts.map((p, i) => (
-          <g key={`r${i}`}>
-            <circle data-dot cx={p.x} cy={p.y} r="2.8" fill="#f0b429" stroke="#fff" strokeWidth="1.2" />
-            {(i === 0 || i === model.ratePts.length - 1) && (
-              <text data-rlabel x={p.x} y={p.y - 8} textAnchor="middle" fontSize="10"
-                fontWeight="600" fontFamily="ui-sans-serif" fill="var(--rate-label)">
-                {Math.round(p.v * 100)}%
+                fontSize="10" fontWeight="600" fontFamily="ui-sans-serif" className="fill-slate">
+                {b.total}
               </text>
             )}
           </g>
+        ))}
+
+        {/* show-rate line + dots */}
+        {model.ratePath && (
+          <path data-ratepath d={model.ratePath} fill="none" stroke="url(#rateGrad)"
+            strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+        )}
+        {model.ratePts.map((p, i) => (
+          <circle key={`r${i}`} data-dot cx={p.x} cy={p.y} r={hover != null && daily[hover]?.show_rate != null && cx(hover) === p.x ? 4 : 2.6}
+            fill={COLORS.rate} stroke="#fff" strokeWidth="1.2" />
         ))}
 
         {/* x labels */}
         {daily.map((d, i) =>
           i % Math.ceil(n / 7) === 0 ? (
             <text key={d.date} x={cx(i)} y={H - 9} textAnchor="middle" fontSize="10"
-              fontFamily="ui-sans-serif" className="fill-slate">
-              {d.date.slice(5)}
-            </text>
+              fontFamily="ui-sans-serif" className="fill-slate">{d.date.slice(5)}</text>
           ) : null
         )}
       </svg>
@@ -244,21 +194,18 @@ export default function TrendChart({ daily, calls }) {
       {/* tooltip */}
       {hd && (
         <div className="pointer-events-none absolute z-10 w-44 rounded-xl border border-hairline bg-surface/95 px-3 py-2 shadow-lift backdrop-blur transition-all duration-150"
-          style={{
-            left: `${Math.min(Math.max((cx(hover) / W) * 100, 12), 82)}%`,
-            top: 0, transform: "translate(-50%, -6px)",
-          }}>
+          style={{ left: `${Math.min(Math.max((cx(hover) / W) * 100, 12), 82)}%`, top: 0, transform: "translate(-50%, -6px)" }}>
           <p className="font-ui text-[11px] font-semibold text-ink">
             {new Date(hd.date + "T00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
           </p>
           <div className="mt-1 space-y-0.5 font-ui text-[11px] text-slate">
-            <p><span className="inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.seen }} /> Seen <b className="numeral float-right">{hd.attended}</b></p>
-            <p><span className="inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.upcoming }} /> Upcoming <b className="numeral float-right">{Math.max(hd.booked - hd.attended - hd.no_show, 0)}</b></p>
-            <p><span className="inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.noShow }} /> No-show <b className="numeral float-right">{hd.no_show}</b></p>
-            <p><span className="inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.cancelled }} /> Cancelled <b className="numeral float-right">{hd.cancelled}</b></p>
-            <p><span className="inline-block h-2 w-2 rounded-full" style={{ background: COLORS.calls }} /> Calls <b className="numeral float-right">{hc?.calls ?? 0}</b></p>
+            <p><span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.seen }} /> Seen <b className="numeral float-right">{hd.attended}</b></p>
+            <p><span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.upcoming }} /> Upcoming <b className="numeral float-right">{Math.max(hd.booked - hd.attended - hd.no_show, 0)}</b></p>
+            <p><span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.noShow }} /> No-show <b className="numeral float-right">{hd.no_show}</b></p>
+            <p><span className="mr-1 inline-block h-2 w-2 rounded-sm" style={{ background: COLORS.cancelled }} /> Cancelled <b className="numeral float-right">{hd.cancelled}</b></p>
+            {hc != null && <p><span className="mr-1 inline-block h-2 w-2 rounded-full bg-slate" /> Calls <b className="numeral float-right">{hc.calls}</b></p>}
             {hd.show_rate !== null && (
-              <p><span className="inline-block h-2 w-2 rounded-full bg-warn" /> Show rate <b className="numeral float-right">{Math.round(hd.show_rate * 100)}%</b></p>
+              <p><span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ background: COLORS.rate }} /> Show rate <b className="numeral float-right">{Math.round(hd.show_rate * 100)}%</b></p>
             )}
           </div>
         </div>
@@ -273,8 +220,7 @@ export function ChartLegend() {
     [COLORS.upcoming, "Upcoming"],
     [COLORS.noShow, "No-show"],
     [COLORS.cancelled, "Cancelled"],
-    ["#f0b429", "Show-rate curve"],
-    [COLORS.calls, "Calls answered"],
+    [COLORS.rate, "Show-rate %"],
   ];
   return (
     <div className="flex flex-wrap gap-4">

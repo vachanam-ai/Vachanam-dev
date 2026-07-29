@@ -365,7 +365,7 @@ export default function Settings() {
       </div>
 
       {/* Plan & billing + Clinic details — side by side */}
-      <div className="grid items-start gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2">
       <Section id="plan" title="Plan & billing"
         sub="Your billing cycle starts the day you pay and runs 30 days. Plan switches take effect from your next cycle, so you never lose minutes you've already paid for.">
         <div className="flex flex-wrap items-center gap-3">
@@ -501,7 +501,7 @@ export default function Settings() {
       </div>
 
       {/* Doctors + Google Calendar — side by side */}
-      <div className="grid items-start gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2">
       <Section id="doctors" title="2 · Doctors" done={steps[1].done}
         sub={`${data?.doctors_count ?? 0} configured. The AI books patients against these profiles.`}>
         <InfoBox title="Two booking styles — pick per doctor:">
@@ -539,8 +539,8 @@ export default function Settings() {
       </div>
 
       {/* Phone · Agent language · Agent voice — cream row, side by side */}
-      <div className="grid items-start gap-6 lg:grid-cols-3">
-      <Section id="phone" title="4 · Phone number (AI line)" done={steps[3].done} tone="cream"
+      <div className="grid gap-6 lg:grid-cols-3">
+      <Section id="phone" title="4 · Phone number (AI line)" done={steps[3].done}
         sub="The number your AI answers. Your existing clinic number forwards to it — patients notice nothing.">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-64">
@@ -579,7 +579,7 @@ export default function Settings() {
       )}
 
       {/* 5 — Language */}
-      <Section id="language" title="Agent language" tone="cream"
+      <Section id="language" title="Agent language"
         sub="The language the AI speaks and understands on calls. Applies from the next call.">
         <select
           className="field"
@@ -600,7 +600,7 @@ export default function Settings() {
       </Section>
 
       {/* 6 — Voice (cloning REMOVED 2026-07-24 — catalog voices only) */}
-      <Section id="voice" title="Agent voice" tone="cream"
+      <Section id="voice" title="Agent voice"
         sub="Pick the voice your AI agent speaks with. Applies from the next call.">
         <select
           className="field mt-1"
@@ -625,13 +625,14 @@ export default function Settings() {
       </div>
 
       {/* Clinic FAQ + Team — side by side, compact */}
-      <div className="grid items-start gap-6 lg:grid-cols-2">
+      <div className="grid gap-6 lg:grid-cols-2">
       {/* Clinic FAQ — the agent answers these on calls */}
       <Section id="faq" title="Clinic FAQ"
         sub="Answers your AI agent gives when callers ask about fees, timings, parking, insurance, reports and more. Leave a row blank to skip it.">
         <div className="space-y-3">
+          <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
           {(faqRows ?? []).map((row, i) => (
-            <div key={i} className="rounded-xl border border-hairline p-3">
+            <div key={i} className="rounded-xl border border-hairline p-2.5">
               <div className="flex items-start justify-between gap-2">
                 <input className="field flex-1 !py-1.5 text-sm font-medium"
                   value={row.q}
@@ -646,7 +647,7 @@ export default function Settings() {
                   Remove
                 </button>
               </div>
-              <textarea className="field mt-2 min-h-[60px] text-sm"
+              <textarea className="field mt-1.5 min-h-[40px] text-sm" rows={2}
                 value={row.a}
                 placeholder="Your clinic's answer (spoken by the agent)…"
                 onChange={(e) => {
@@ -656,6 +657,7 @@ export default function Settings() {
                 }} />
             </div>
           ))}
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <button type="button" className="btn-ghost flex-1 min-h-[44px]"
               onClick={() => setFaqRows([...(faqRows ?? []), { q: "", a: "" }])}>
@@ -674,7 +676,7 @@ export default function Settings() {
                 The agent told them the clinic will get back after checking with the doctor.
                 Add an answer above so it's answered on the next call.
               </p>
-              <ul className="mt-2 space-y-1">
+              <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto pr-1">
                 {faqQuery.data.asked.map((a, i) => (
                   <li key={i} className="flex items-center justify-between gap-2">
                     <span className="font-ui text-sm">{a.question}</span>
@@ -786,7 +788,7 @@ export default function Settings() {
           </div>
           <div className="flex items-end">
             <button type="button"
-              className="w-full rounded-xl bg-[#8a0303] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-sm transition hover:bg-[#a30606] disabled:opacity-50"
+              className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
               disabled={nukeClinic.isPending || !delConfirm.trim()}
               onClick={() => {
                 if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))

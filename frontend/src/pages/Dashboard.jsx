@@ -538,8 +538,8 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Booking sources · Doctors · Doctor load — side by side */}
-      <div className="grid items-start gap-6 lg:grid-cols-3">
+      {/* Booking sources · Doctors · Doctor load — side by side, equal height */}
+      <div className="grid gap-6 lg:grid-cols-3">
         {/* Where bookings come from */}
         <section data-reveal className="card overflow-hidden">
           <header className="border-b border-hairline bg-pill px-5 py-3">

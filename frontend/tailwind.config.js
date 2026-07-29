@@ -42,7 +42,7 @@ export default {
         // class usages keep working without a per-file rename.
         display: ["General Sans", "ui-sans-serif", "system-ui", "sans-serif"],
         ui: ["General Sans", "ui-sans-serif", "system-ui", "sans-serif"],
-        brand: ["General Sans", "ui-sans-serif", "system-ui", "sans-serif"]
+        brand: ["Pacifico", "ui-serif", "cursive"]
       },
       boxShadow: {
         card: "0 1px 2px rgba(20,20,18,.05), 0 10px 30px -18px rgba(20,20,18,.14)",

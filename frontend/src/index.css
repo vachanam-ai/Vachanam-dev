@@ -38,8 +38,14 @@
   font-display: swap;
   src: url("/fonts/general-sans-700.woff2") format("woff2");
 }
-/* ponytail: Pacifico wordmark dropped — read "not good"; the approved mockup's
-   wordmark is General Sans 600 tight-tracked, so `font-brand` maps back to it. */
+/* Pacifico — the Vachanam signature wordmark (self-hosted, Vinay: "make it pacific"). */
+@font-face {
+  font-family: "Pacifico";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/pacifico.woff2") format("woff2");
+}
 
 /* Theme tokens as RGB triplets so Tailwind opacity modifiers keep working
    (bg-pill/60 etc.). The EXISTING Tailwind names (teal/cream/surface/…) are
