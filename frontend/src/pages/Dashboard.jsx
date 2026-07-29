@@ -28,22 +28,59 @@ function BandKpi({ k, cap }) {
   );
 }
 
-function StatBand({ title, weekday, pct, pctCap, waiting, booked }) {
+function StatBand({ title, weekday, pct, pctCap, remaining, waiting, booked }) {
   const days = weekday?.length ? weekday : [];
   const max = Math.max(1, ...days.map((w) => w.bookings));
-  const frac = Math.min(Math.max((pct ?? 0) / 100, 0), 1);
+  const target = Math.min(Math.max((pct ?? 0) / 100, 0), 1);
   const N = 46, cx = 85, cy = 84, ri = 52, ro = 68;
   const ticks = Array.from({ length: N }, (_, i) => {
-    const f = i / (N - 1), a = Math.PI - f * Math.PI, on = f <= frac;
-    return { x1: cx + ri * Math.cos(a), y1: cy - ri * Math.sin(a), x2: cx + ro * Math.cos(a), y2: cy - ro * Math.sin(a), on };
+    const f = i / (N - 1), a = Math.PI - f * Math.PI, on = f <= target;
+    return { f, on, x1: cx + ri * Math.cos(a), y1: cy - ri * Math.sin(a), x2: cx + ro * Math.cos(a), y2: cy - ro * Math.sin(a) };
   });
+
+  const gaugeRef = useRef(null);
+  const pctRef = useRef(null);
+  const chartRef = useRef(null);
+
+  // GSAP: gauge ticks light up progressively, the % counts 0→target, and the
+  // weekday bars grow from the baseline. Reduced motion = final state instantly.
+  useEffect(() => {
+    let mm;
+    import("gsap").then(({ gsap }) => {
+      mm = gsap.matchMedia();
+      const lines = gaugeRef.current ? [...gaugeRef.current.querySelectorAll("line")] : [];
+      const bars = chartRef.current ? [...chartRef.current.querySelectorAll(".val")] : [];
+      const paintTicks = (v) => lines.forEach((ln) => {
+        const on = parseFloat(ln.dataset.f) <= v + 1e-6;
+        ln.setAttribute("stroke", on ? "rgb(var(--ink))" : "rgb(var(--slate-light))");
+        ln.setAttribute("stroke-width", on ? "2" : "1.4");
+      });
+      mm.add("(prefers-reduced-motion: no-preference)", () => {
+        const proxy = { v: 0, p: 0 };
+        paintTicks(0);
+        if (pctRef.current) pctRef.current.textContent = "0%";
+        gsap.to(proxy, { v: target, duration: 1.15, ease: "power2.out", onUpdate: () => paintTicks(proxy.v) });
+        gsap.to(proxy, { p: pct ?? 0, duration: 1.15, ease: "power2.out",
+          onUpdate: () => { if (pctRef.current) pctRef.current.textContent = `${Math.round(proxy.p)}%`; } });
+        gsap.fromTo(bars, { scaleY: 0 },
+          { scaleY: 1, transformOrigin: "center bottom", duration: 0.7, ease: "power3.out", stagger: 0.06, delay: 0.15 });
+      });
+      mm.add("(prefers-reduced-motion: reduce)", () => {
+        paintTicks(target);
+        if (pctRef.current) pctRef.current.textContent = `${Math.round(pct ?? 0)}%`;
+        gsap.set(bars, { scaleY: 1 });
+      });
+    });
+    return () => mm?.revert();
+  }, [target, pct]);
+
   return (
     <div data-reveal className="band">
       <div>
         <div className="bt">{title}</div>
         <div className="chartwrap">
           <div className="yax"><span>{max}</span><span>{Math.round(max / 2)}</span><span>0</span></div>
-          <div className="chart">
+          <div ref={chartRef} className="chart">
             {days.map((w) => (
               <div className="day" key={w.weekday}>
                 <div className="stack">
@@ -58,14 +95,19 @@ function StatBand({ title, weekday, pct, pctCap, waiting, booked }) {
         </div>
       </div>
       <div className="gauge">
-        <svg viewBox="0 0 170 94" role="img" aria-label={`${pctCap} ${Math.round(pct)}%`}>
+        <svg ref={gaugeRef} viewBox="0 0 170 94" role="img" aria-label={`${pctCap} ${Math.round(pct)}%`}>
           {ticks.map((t, i) => (
-            <line key={i} x1={t.x1.toFixed(1)} y1={t.y1.toFixed(1)} x2={t.x2.toFixed(1)} y2={t.y2.toFixed(1)}
+            <line key={i} data-f={t.f.toFixed(4)} x1={t.x1.toFixed(1)} y1={t.y1.toFixed(1)} x2={t.x2.toFixed(1)} y2={t.y2.toFixed(1)}
               stroke={t.on ? "rgb(var(--ink))" : "rgb(var(--slate-light))"} strokeWidth={t.on ? 2 : 1.4} strokeLinecap="round" />
           ))}
         </svg>
-        <div className="pct numeral">{Math.round(pct)}%</div>
+        <div ref={pctRef} className="pct numeral">0%</div>
         <div className="cap">{pctCap}</div>
+        {remaining != null && (
+          <div className="cap" style={{ marginTop: 2, fontWeight: 600, color: "rgb(var(--ink))" }}>
+            {remaining.toLocaleString("en-IN")} min left
+          </div>
+        )}
       </div>
       <BandKpi k={waiting} cap="Waiting now" />
       <BandKpi k={booked} cap="Booked today" />
@@ -408,6 +450,7 @@ export default function Dashboard() {
         weekday={an?.weekday_load}
         pct={an?.minutes?.pct ?? 0}
         pctCap="Plan minutes used"
+        remaining={an?.minutes ? Math.max((an.minutes.included ?? 0) - (an.minutes.used ?? 0), 0) : null}
         waiting={s.remaining}
         booked={s.total} />
 
