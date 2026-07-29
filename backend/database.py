@@ -1,19 +1,51 @@
 import asyncio
 from weakref import WeakKeyDictionary
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from backend.config import settings
 
 
+def _engine_config(raw_url: str) -> tuple[object, dict]:
+    """Normalize PostgreSQL URLs and safely configure Supabase poolers."""
+    url = make_url(raw_url)
+    if url.drivername in {"postgres", "postgresql"}:
+        url = url.set(drivername="postgresql+asyncpg")
+
+    query = dict(url.query)
+    sslmode = query.pop("sslmode", None)
+    if sslmode and "ssl" not in query:
+        query["ssl"] = "require" if sslmode != "disable" else "disable"
+
+    host = url.host or ""
+    transaction_pooler = (
+        host.endswith(".pooler.supabase.com") and url.port == 6543
+    )
+    kwargs: dict = {}
+    if transaction_pooler:
+        query["prepared_statement_cache_size"] = "0"
+        kwargs = {
+            "poolclass": NullPool,
+            "connect_args": {"statement_cache_size": 0},
+        }
+    else:
+        kwargs = {
+            "pool_size": 10,
+            "max_overflow": 20,
+        }
+    return url.set(query=query), kwargs
+
+
 def _new_engine():
+    url, pool_kwargs = _engine_config(settings.database_url)
     return create_async_engine(
-        settings.database_url,
+        url,
         echo=settings.app_env == "development",
         pool_pre_ping=True,
-        pool_size=10,
-        max_overflow=20,
+        **pool_kwargs,
     )
 
 

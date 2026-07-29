@@ -12,7 +12,10 @@ from backend.database import Base
 from backend.models import schema  # noqa: F401 — registers all models
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# ConfigParser treats '%' as interpolation syntax. Database passwords commonly
+# contain percent-encoded reserved characters, so escape them for Alembic's
+# in-memory config while preserving the URL returned to SQLAlchemy.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
