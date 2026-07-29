@@ -2502,7 +2502,10 @@ class VachanamAgent(Agent):
                 self._state.language or self._lang_code,
                 availability,
             )
-            if self._speak_grounded_fast_path(context, text, "exact_availability"):
+            spoken = self._speak_grounded_fast_path(
+                context, text, "exact_availability"
+            )
+            if spoken or isinstance(getattr(context, "session", None), AgentSession):
                 raise StopResponse()
 
         return {"availability": availability}
@@ -2946,6 +2949,7 @@ class VachanamAgent(Agent):
                 operation,
                 exc,
             )
+            raise StopResponse() from exc
 
     def _speak_grounded_fast_path(
         self, context: RunContext, text: str, kind: str

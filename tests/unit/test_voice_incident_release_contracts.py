@@ -321,3 +321,19 @@ def test_every_critical_mutation_tool_has_a_rule_based_failure_exit():
     ):
         source = inspect.getsource(getattr(VachanamAgent, method_name))
         assert "_stop_on_mutation_failure" in source, method_name
+
+
+def test_live_mutation_speech_error_still_stops_before_gemini(monkeypatch):
+    class BrokenSession(_RecordingSession):
+        def say(self, text, *args, **kwargs):
+            raise RuntimeError("tts unavailable")
+
+    session = BrokenSession()
+    agent = _agent()
+    monkeypatch.setattr(agent_module, "AgentSession", BrokenSession)
+    context = SimpleNamespace(session=session)
+
+    with pytest.raises(StopResponse):
+        agent._stop_on_mutation_failure(
+            context, "book", {"success": False, "error": "unknown"}
+        )
