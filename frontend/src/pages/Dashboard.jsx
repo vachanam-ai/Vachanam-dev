@@ -8,21 +8,72 @@ import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
 import Heatmap from "../components/dash/Heatmap.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { countUp, revealNow, revealStagger } from "../lib/motion.js";
-import PageHeader from "../components/PageHeader.jsx";
+import PageHeader, { StatRow } from "../components/PageHeader.jsx";
 
-function Hero({ label, value, sub, gold, suffix = "" }) {
+/* Sage stat band — exact port of the approved mockup: hatched-ghost + solid
+   bar chart, radial-tick semicircle gauge, two arrow KPIs. */
+function BandKpi({ k, cap }) {
   const ref = useRef(null);
-  useEffect(() => {
-    countUp(ref.current, value ?? 0, { duration: 1.1, suffix });
-  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { countUp(ref.current, k ?? 0); }, [k]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div data-reveal className="card px-6 py-5">
-      <p className="eyebrow">{label}</p>
-      <p ref={ref} className={`numeral mt-1 text-5xl ${gold ? "text-gold-ink" : "text-teal-deep"}`}>0</p>
-      {sub && <p className="mt-1 font-ui text-xs text-slate">{sub}</p>}
+    <div className="kpi">
+      <div ref={ref} className="k numeral">0</div>
+      <div className="r">
+        <div className="kcap">{cap}</div>
+        <div className="arw">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M7 17 17 7M9 7h8v8" /></svg>
+        </div>
+      </div>
     </div>
   );
 }
+
+function StatBand({ title, weekday, pct, pctCap, waiting, booked }) {
+  const days = weekday?.length ? weekday : [];
+  const max = Math.max(1, ...days.map((w) => w.bookings));
+  const frac = Math.min(Math.max((pct ?? 0) / 100, 0), 1);
+  const N = 46, cx = 85, cy = 84, ri = 52, ro = 68;
+  const ticks = Array.from({ length: N }, (_, i) => {
+    const f = i / (N - 1), a = Math.PI - f * Math.PI, on = f <= frac;
+    return { x1: cx + ri * Math.cos(a), y1: cy - ri * Math.sin(a), x2: cx + ro * Math.cos(a), y2: cy - ro * Math.sin(a), on };
+  });
+  return (
+    <div data-reveal className="band">
+      <div>
+        <div className="bt">{title}</div>
+        <div className="chartwrap">
+          <div className="yax"><span>{max}</span><span>{Math.round(max / 2)}</span><span>0</span></div>
+          <div className="chart">
+            {days.map((w) => (
+              <div className="day" key={w.weekday}>
+                <div className="stack">
+                  <div className="ghost" style={{ height: "100%" }} />
+                  <div className="val" style={{ height: `${(w.bookings / max) * 100}%`, minHeight: w.bookings ? 4 : 0 }} />
+                </div>
+                <div className="dname">{w.weekday}</div>
+              </div>
+            ))}
+            {days.length === 0 && <p className="self-center font-ui text-sm text-slate">No bookings yet this period.</p>}
+          </div>
+        </div>
+      </div>
+      <div className="gauge">
+        <svg viewBox="0 0 170 94" role="img" aria-label={`${pctCap} ${Math.round(pct)}%`}>
+          {ticks.map((t, i) => (
+            <line key={i} x1={t.x1.toFixed(1)} y1={t.y1.toFixed(1)} x2={t.x2.toFixed(1)} y2={t.y2.toFixed(1)}
+              stroke={t.on ? "rgb(var(--ink))" : "rgb(var(--slate-light))"} strokeWidth={t.on ? 2 : 1.4} strokeLinecap="round" />
+          ))}
+        </svg>
+        <div className="pct numeral">{Math.round(pct)}%</div>
+        <div className="cap">{pctCap}</div>
+      </div>
+      <BandKpi k={waiting} cap="Waiting now" />
+      <BandKpi k={booked} cap="Booked today" />
+    </div>
+  );
+}
+
 
 /* Compact call-quality stat — smaller sibling of Hero, count-up on the value. */
 function QStat({ label, value, sub, suffix = "" }) {
@@ -353,17 +404,21 @@ export default function Dashboard() {
     <div ref={pageRef} className="space-y-6">
       <PageHeader eyebrow="Clinic overview" title="Today at a glance" />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-        <Hero label="Bookings today" value={s.total} sub="voice + walk-in" />
-        <Hero label="Calls answered" value={an?.calls_today ?? 0} sub="AI picked up today" />
-        <Hero label="Patients seen" value={s.attended} />
-        <Hero label="In queue now" value={s.remaining} gold />
-        <Hero label="Show rate today" value={todayRate ?? 100} suffix="%"
-          sub={todayRate === null ? "no outcomes marked yet" : "seen vs missed"} />
-        <Hero label={`Attendance · ${days}d`}
-          value={an?.attendance_rate != null ? Math.round(an.attendance_rate * 100) : 100}
-          suffix="%" sub="attended of seen-or-missed" />
-      </div>
+      <StatBand
+        title="Clinic this week"
+        weekday={an?.weekday_load}
+        pct={cq?.total_calls ? Math.round((cq.conversion_rate ?? 0) * 100)
+          : (an?.attendance_rate != null ? Math.round(an.attendance_rate * 100) : 100)}
+        pctCap={cq?.total_calls ? "Calls booked" : "Attendance"}
+        waiting={s.remaining}
+        booked={s.total} />
+
+      <StatRow items={[
+        { label: "Calls answered", value: an?.calls_today ?? 0 },
+        { label: "Patients seen", value: s.attended },
+        { label: "Show rate today", value: `${todayRate ?? 100}%` },
+        { label: `Attendance · ${days}d`, value: `${an?.attendance_rate != null ? Math.round(an.attendance_rate * 100) : 100}%` }
+      ]} />
 
       {/* Caller messages awaiting a callback (#349) — hidden when empty */}
       <MessagesCard branchId={branchId} />

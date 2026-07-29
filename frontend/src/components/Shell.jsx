@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
-import { fetchBranchSettings } from "../api/client.js";
+import { fetchBranchSettings, fetchDoctors, fetchStaff } from "../api/client.js";
 import ThemeToggle from "./ThemeToggle.jsx";
 
 /* Stroke-icon set (inline SVG, no dependency). Keyed to the nav routes so the
@@ -78,16 +79,25 @@ function initials(nameOrEmail) {
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || s.slice(0, 2).toUpperCase();
 }
 
+function Avatar({ name, dot }) {
+  return (
+    <span className="relative grid h-[30px] w-[30px] shrink-0 place-items-center rounded-full border border-line2 bg-pill text-[11px] font-semibold text-ink-soft">
+      {initials(name)}
+      {dot && <span className="absolute -bottom-px -right-px h-2.5 w-2.5 rounded-full bg-good" style={{ boxShadow: "0 0 0 2px rgb(var(--surface))" }} />}
+    </span>
+  );
+}
+
 /** Sidebar body — shared by the desktop rail and the mobile drawer. */
-function SidebarContent({ role, links, user, logout, branchChooser, onNavigate }) {
+function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, doctors, team, counts }) {
   return (
     <div className="flex h-full flex-col">
       <Link to={roleHome(role)} onClick={onNavigate}
-        className="mb-1 block px-3 py-1 font-brand text-lg font-semibold tracking-[-0.02em] text-ink">
+        className="mb-1 block px-3 py-1 font-brand text-2xl leading-none text-ink">
         Vachanam
       </Link>
 
-      <nav className="mt-2 flex flex-col gap-0.5">
+      <nav className="mt-3 flex flex-col gap-0.5">
         {links.map((l) => (
           <NavLink key={l.to} to={l.to} onClick={onNavigate}
             className={({ isActive }) =>
@@ -99,11 +109,50 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate }
             }>
             <NavIcon name={l.icon} />
             <span className="truncate">{l.label}</span>
+            {counts?.[l.to] > 0 && (
+              <span className="ml-auto font-ui text-xs font-semibold tabular-nums text-slate">{counts[l.to]}</span>
+            )}
           </NavLink>
         ))}
       </nav>
 
-      <div className="flex-1" />
+      {/* Doctors — mirrors the reference "Projects" section */}
+      {doctors?.length > 0 && (
+        <div className="mt-1 flex flex-col gap-0.5">
+          <p className="px-3 pb-1 pt-4 font-ui text-xs font-medium text-slate">Doctors</p>
+          {doctors.slice(0, 6).map((d) => {
+            const id = d.id ?? d.doctor_id;
+            return (
+              <NavLink key={id} to="/my-schedule" onClick={onNavigate}
+                className="flex items-center gap-2.5 rounded-[9px] px-2 py-1.5 hover:bg-pill">
+                <Avatar name={d.name} />
+                <span className="min-w-0 flex-1 truncate font-ui text-[13px] font-medium text-ink">{d.name}</span>
+                {counts?.doctors?.[id] > 0 && (
+                  <span className="font-ui text-xs font-semibold tabular-nums text-slate">{counts.doctors[id]}</span>
+                )}
+              </NavLink>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Team — mirrors the reference "Members" section */}
+      {team?.length > 0 && (
+        <div className="mt-1 flex flex-col gap-0.5">
+          <p className="px-3 pb-1 pt-4 font-ui text-xs font-medium text-slate">Team</p>
+          {team.slice(0, 6).map((m) => (
+            <div key={m.id ?? m.email} className="flex items-center gap-2.5 rounded-[9px] px-2 py-1.5">
+              <Avatar name={m.name ?? m.email} dot />
+              <span className="min-w-0 flex-1 leading-tight">
+                <span className="block truncate font-ui text-[13px] font-semibold text-ink">{m.name ?? m.email}</span>
+                <span className="block truncate font-ui text-[11px] capitalize text-slate">{(m.role ?? "").replace("_", " ")}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="min-h-4 flex-1" />
 
       {branchChooser && <div className="mb-3 px-1">{branchChooser}</div>}
 
@@ -130,10 +179,39 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate }
 
 export default function Shell() {
   const { user, role, logout, branchId, branchIds, selectBranch } = useAuth();
+  const qc = useQueryClient();
   const links = NAV[role] ?? [];
   const [menuOpen, setMenuOpen] = useState(false);
   const [branchNames, setBranchNames] = useState({});
   const location = useLocation();
+
+  // The reference sidebar carries a Doctors + Team roster. These queries are
+  // cheap and cache-shared with the pages (same keys), so the rail costs no
+  // extra network once a page has loaded them.
+  const hasBranch = ["org_admin", "receptionist", "doctor"].includes(role);
+  const { data: doctorsRaw } = useQuery({
+    queryKey: ["doctors", branchId], queryFn: () => fetchDoctors(branchId),
+    enabled: Boolean(branchId && hasBranch), staleTime: 60_000
+  });
+  const { data: team } = useQuery({
+    queryKey: ["staff", branchId], queryFn: () => fetchStaff(branchId),
+    enabled: Boolean(branchId && ["org_admin"].includes(role)), staleTime: 60_000
+  });
+  const doctors = Array.isArray(doctorsRaw) ? doctorsRaw : doctorsRaw?.doctors ?? [];
+
+  // Live counts read straight from the queue cache (no extra fetch): per-nav
+  // Queue waiting total + per-doctor waiting for the Doctors list.
+  const queue = qc.getQueryData(["queue", branchId]);
+  const counts = { doctors: {} };
+  if (queue?.doctors) {
+    let waiting = 0;
+    for (const d of queue.doctors) {
+      const w = d.patients.filter((p) => p.status !== "attended" && p.status !== "no_show").length;
+      counts.doctors[d.doctor_id] = w;
+      waiting += w;
+    }
+    if (waiting > 0) counts["/queue"] = waiting;
+  }
 
   useEffect(() => { setMenuOpen(false); }, [location.pathname]);
 
@@ -164,8 +242,9 @@ export default function Shell() {
   return (
     <div className="min-h-[100dvh] lg:grid lg:grid-cols-[248px_1fr]">
       {/* Desktop rail */}
-      <aside className="sticky top-0 hidden h-[100dvh] flex-col border-r border-hairline bg-surface px-4 py-5 lg:flex">
-        <SidebarContent role={role} links={links} user={user} logout={logout} branchChooser={branchChooser} />
+      <aside className="sticky top-0 hidden h-[100dvh] flex-col overflow-y-auto border-r border-hairline bg-surface px-4 py-5 lg:flex">
+        <SidebarContent role={role} links={links} user={user} logout={logout} branchChooser={branchChooser}
+          doctors={doctors} team={team} counts={counts} />
       </aside>
 
       {/* Main column */}
@@ -182,7 +261,7 @@ export default function Shell() {
               </svg>
             </button>
           )}
-          <Link to={roleHome(role)} className="font-brand text-lg font-semibold tracking-[-0.02em] text-ink">Vachanam</Link>
+          <Link to={roleHome(role)} className="font-brand text-xl leading-none text-ink">Vachanam</Link>
           <div className="ml-auto"><ThemeToggle /></div>
         </header>
 
@@ -201,7 +280,7 @@ export default function Shell() {
           className={`absolute inset-0 bg-ink/40 backdrop-blur-sm transition-opacity duration-300 ${menuOpen ? "opacity-100" : "opacity-0"}`} />
         <aside className={`absolute left-0 top-0 h-full w-[80%] max-w-[300px] border-r border-hairline bg-surface px-4 py-5 shadow-lift transition-transform duration-300 ease-out ${menuOpen ? "translate-x-0" : "-translate-x-full"}`}>
           <SidebarContent role={role} links={links} user={user} logout={logout} branchChooser={branchChooser}
-            onNavigate={() => setMenuOpen(false)} />
+            doctors={doctors} team={team} counts={counts} onNavigate={() => setMenuOpen(false)} />
         </aside>
       </div>
     </div>
