@@ -1211,6 +1211,30 @@ def _prewarm_soniox_tts(proc) -> None:
         logger.warning("prewarm_soniox_tts_failed: %s", e)
 
 
+async def _prime_soniox_tts_audio(tts, text: str) -> bool:
+    """Warm Soniox through its first audio frame without playing that audio.
+
+    ``prewarm()`` opens the WebSocket only. The first real synthesis can still
+    pay the voice/model cold start, which measured 1.90s versus 0.44s after this
+    one-frame prime. Run it under the cached call greeting, off the caller's
+    first conversational turn.
+    """
+    stream = tts.synthesize(sanitize_for_tts(text))
+    try:
+        async for _ in stream:
+            logger.info("soniox_tts_audio_primed")
+            return True
+        return False
+    except Exception as exc:  # noqa: BLE001 — live synthesis remains the fallback
+        logger.warning("soniox_tts_audio_prime_failed: %s", str(exc)[:120])
+        return False
+    finally:
+        try:
+            await stream.aclose()
+        except Exception:  # noqa: BLE001 — cleanup must not affect the call
+            pass
+
+
 # #464 (Vinay live 2026-07-26: switch felt ~5s; lat_switch showed synth=2.33s).
 # The switch-language ACK is a FIXED sentence per language, yet we synthesized its
 # full ~2s of audio LIVE on a cold Soniox connection on the switch critical path.
@@ -4412,6 +4436,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if _warm_tts is not None:
         try:
             _warm_tts.prewarm()
+            asyncio.create_task(
+                _prime_soniox_tts_audio(_warm_tts, _FALLBACK_FILLERS[0])
+            )
         except Exception as exc:  # noqa: BLE001 -- later TTS build retries
             logger.debug("early_soniox_prewarm_skipped: %s", exc)
 
@@ -5442,6 +5469,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         _session_tts = _build_session_tts(
             tts_voice, lang_cfg.tts_code, ctx.proc.userdata.get("tts_soniox")
         )
+        if _session_tts is not _warm_tts:
+            # A non-default language/voice gets a different TTS object, so prime
+            # that exact route too. The clinic greeting covers this work.
+            asyncio.create_task(
+                _prime_soniox_tts_audio(_session_tts, lines.fillers[0])
+            )
         _session_llm = ctx.proc.userdata.get("llm") or _build_fallback_llm()
 
         # The old per-call dummy Gemini request no longer earns its keep:

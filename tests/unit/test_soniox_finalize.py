@@ -3,13 +3,51 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from agent.livekit_minimal.agent import _SonioxFinalizeController
+from agent.livekit_minimal.agent import (
+    _SonioxFinalizeController,
+    _prime_soniox_tts_audio,
+)
 from backend.config import Settings
 
 
 class _FakeStream:
     def __init__(self) -> None:
         self.audio_queue = asyncio.Queue()
+
+
+class _PrimeStream:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self.closed:
+            raise StopAsyncIteration
+        return object()
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _PrimeTTS:
+    def __init__(self) -> None:
+        self.stream = _PrimeStream()
+        self.text = None
+
+    def synthesize(self, text):
+        self.text = text
+        return self.stream
+
+
+@pytest.mark.asyncio
+async def test_audio_prime_consumes_one_frame_and_closes_without_playout():
+    tts = _PrimeTTS()
+
+    assert await _prime_soniox_tts_audio(tts, "సరే అండి.") is True
+    assert tts.text == "సరే అండి."
+    assert tts.stream.closed is True
 
 
 @pytest.mark.asyncio
