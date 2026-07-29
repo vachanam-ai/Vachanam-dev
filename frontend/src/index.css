@@ -90,6 +90,12 @@
   --chart-ghost: #b7b8b4;
   --rate-label: #8b8d8c;
   --cell-empty: #f4f4f1;
+  /* Bookings chart palette (Vinay-chosen taupe set: 222831/393E46/948979/DFD0B8).
+     Ordered so no two adjacent stack segments collide. */
+  --book-seen: #222831;
+  --book-up: #948979;
+  --book-no: #393e46;
+  --book-can: #dfd0b8;
 }
 
 .dark {
@@ -128,6 +134,11 @@
   --chart-ghost: #5c5c56;
   --rate-label: #8f8f88;
   --cell-empty: #222220;
+  /* Dark ramp of the same taupe identity, kept readable on the dark card. */
+  --book-seen: #dfd0b8;
+  --book-up: #948979;
+  --book-no: #6e7580;
+  --book-can: #454b54;
 }
 
 html {
