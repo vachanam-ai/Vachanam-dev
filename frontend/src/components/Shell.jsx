@@ -93,11 +93,13 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, 
   return (
     <div className="flex h-full flex-col">
       <Link to={roleHome(role)} onClick={onNavigate}
-        className="mb-1 block px-2 pb-2 pt-1 font-brand text-[26px] leading-none text-ink">
+        className="mb-1 block shrink-0 overflow-visible px-2 pb-3 pt-2 font-brand text-[28px] leading-[1.25] text-ink">
         Vachanam
       </Link>
 
-      <nav className="mt-3 flex flex-col gap-0.5">
+      {/* Only the nav/roster scrolls — brand pinned above, owner pinned below. */}
+      <div className="-mr-1 mt-1 flex-1 space-y-1 overflow-y-auto pr-1">
+      <nav className="flex flex-col gap-0.5">
         {links.map((l) => (
           <NavLink key={l.to} to={l.to} onClick={onNavigate}
             className={({ isActive }) =>
@@ -152,26 +154,28 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, 
         </div>
       )}
 
-      <div className="min-h-4 flex-1" />
+      </div>
 
-      {branchChooser && <div className="mb-3 px-1">{branchChooser}</div>}
-
-      <div className="mt-2 flex items-center gap-2.5 border-t border-hairline pt-3">
-        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-line2 bg-pill text-[11px] font-semibold text-ink-soft">
-          {initials(user?.name ?? user?.email)}
-        </span>
-        <div className="min-w-0 flex-1 leading-tight">
-          <p className="truncate font-ui text-[13px] font-semibold text-ink">{user?.name ?? user?.email}</p>
-          <p className="truncate font-ui text-[11px] text-slate">{ROLE_LABEL[role] ?? role}</p>
+      {/* Pinned bottom — never scrolls with the roster. */}
+      <div className="shrink-0">
+        {branchChooser && <div className="mb-3 px-1">{branchChooser}</div>}
+        <div className="mt-2 flex items-center gap-2.5 border-t border-hairline pt-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-line2 bg-pill text-[11px] font-semibold text-ink-soft">
+            {initials(user?.name ?? user?.email)}
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="truncate font-ui text-[13px] font-semibold text-ink">{user?.name ?? user?.email}</p>
+            <p className="truncate font-ui text-[11px] text-slate">{ROLE_LABEL[role] ?? role}</p>
+          </div>
+          <ThemeToggle />
+          <button onClick={logout} aria-label="Sign out"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate transition-colors hover:bg-pill hover:text-ink">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+            </svg>
+          </button>
         </div>
-        <ThemeToggle />
-        <button onClick={logout} aria-label="Sign out"
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate transition-colors hover:bg-pill hover:text-ink">
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-          </svg>
-        </button>
       </div>
     </div>
   );
@@ -250,7 +254,7 @@ export default function Shell() {
   return (
     <div className="min-h-[100dvh] lg:grid lg:grid-cols-[248px_1fr]">
       {/* Desktop rail */}
-      <aside className="sticky top-0 hidden h-[100dvh] flex-col overflow-y-auto border-r border-hairline bg-surface px-4 py-5 lg:flex">
+      <aside className="sticky top-0 hidden h-[100dvh] flex-col overflow-hidden border-r border-hairline bg-surface px-4 py-5 lg:flex">
         <SidebarContent role={role} links={links} user={user} logout={logout} branchChooser={branchChooser}
           doctors={doctors} team={team} counts={counts} />
       </aside>

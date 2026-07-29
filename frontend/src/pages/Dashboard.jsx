@@ -450,7 +450,7 @@ export default function Dashboard() {
       {/* Trend — bookings, outcomes, show rate over time */}
       <section data-reveal className="card overflow-hidden">
         <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-pill px-5 py-3">
-          <h2 className="font-display text-lg font-semibold">Bookings &amp; show rate</h2>
+          <h2 className="font-display text-lg font-semibold">Bookings by day</h2>
           <div className="flex gap-1">
             {[7, 30, 90].map((d) => (
               <button key={d} onClick={() => setDays(d)}
