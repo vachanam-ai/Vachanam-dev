@@ -16,13 +16,13 @@ from pathlib import Path
 SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 
 
-def test_soniox_uses_isolated_conservative_latency_profile():
+def test_soniox_uses_documented_low_latency_profile():
     stt = SRC.split("def _build_stt")[1][:5000]
     assert "endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level" in stt
     assert "max_endpoint_delay_ms=settings.soniox_max_endpoint_delay_ms" in stt
     assert "endpoint_sensitivity=settings.soniox_endpoint_sensitivity" in stt
     assert "max_endpoint_delay_ms=800" not in stt
-    assert "endpoint_sensitivity=0.3" not in stt
+    assert "endpoint_sensitivity=settings.soniox_endpoint_sensitivity" in stt
 
 
 def test_delayed_finalize_is_session_scoped_and_thinking_ack_stays_removed():
@@ -100,10 +100,10 @@ def test_vertex_mumbai_primary_404(tmp_path, monkeypatch):
     assert opts[0].vertexai is True
     assert opts[0].project == "vachanam-498912"
     assert opts[0].location == "asia-south1"
-    # fallbacks: exactly the pre-#404 global chain
-    assert opts[1].model == "gemini-3.1-flash-lite"
+    # Global fallbacks: measured fast tier, then 3.6 quality tier.
+    assert opts[1].model == "gemini-3.5-flash-lite"
     assert opts[1].vertexai is False
-    assert opts[2].model == "gemini-2.5-flash"
+    assert opts[2].model == "gemini-3.6-flash"
     assert opts[2].vertexai is False
 
 
@@ -137,5 +137,5 @@ def test_vertex_missing_creds_falls_back_404(tmp_path, monkeypatch):
 
     adapter = ag._build_fallback_llm()
     opts = [llm._opts for llm in adapter._llm_instances]
-    assert [o.model for o in opts] == ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    assert [o.model for o in opts] == ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
     assert all(o.vertexai is False for o in opts)

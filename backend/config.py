@@ -10,21 +10,17 @@ class Settings(BaseSettings):
     # #406: Japan measured 4ms from Fly bom vs 230ms to the US endpoint.
     soniox_jp_stt_ws_url: str = "wss://stt-rt.jp.soniox.com/transcribe-websocket"
     sarvam_api_key: str           # Sarvam Saaras v3 — STT fallback
-    # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
-    # conservative production canary; 0 restores Soniox's default behavior.
-    # Tune one control at a time on real Telugu calls (0..3).
-    soniox_endpoint_latency_level: int = 1
-    # Hard tail ceiling only -- not the median-latency control. Keep the API
-    # default until isolated call evidence justifies lowering it.
-    soniox_max_endpoint_delay_ms: int = 2000
-    # Leave unset for the server default. Sensitivity is deliberately separate
-    # from the latency level so an experiment cannot silently combine knobs.
-    soniox_endpoint_sensitivity: float | None = None
+    # Soniox's documented low-latency endpoint profile. Server-side semantic
+    # finalization is the single owner of the boundary; the client timer below
+    # stays disabled so normal Telugu pauses are never finalized twice.
+    soniox_endpoint_latency_level: int = 2
+    soniox_max_endpoint_delay_ms: int = 1500
+    soniox_endpoint_sensitivity: float | None = 0.3
     # 0 disables client finalization. A value >=200 enables a cancellable
     # finalize after that much continuing VAD silence. Soniox recommends about
     # 200ms; values 1..199 are rejected to prevent the inaccurate immediate-
     # finalize behavior reverted in #399.
-    soniox_manual_finalize_delay_ms: int = 200
+    soniox_manual_finalize_delay_ms: int = 0
     # auto = Soniox when keyed, otherwise Sarvam; sarvam gives operations a
     # reversible provider A/B without deleting/rotating the Soniox credential.
     stt_provider: str = 'auto'
@@ -37,6 +33,10 @@ class Settings(BaseSettings):
     soniox_jp_tts_ws_url: str = "wss://tts-rt.jp.soniox.com/tts-websocket"
     soniox_tts_default_voice: str = "Priya"
     soniox_tts_sample_rate: int = 24000
+    # Emit complete short first sentences immediately instead of merging them
+    # into sentence two. These remain sentence boundaries, preserving prosody.
+    soniox_tts_min_sentence_len: int = 3
+    soniox_tts_stream_context_len: int = 1
 
     # #5 tool prefetch (2026-07-24): on a high-confidence booking turn, run the
     # doctor-routing call in parallel with the reply LLM on a dedicated session.
@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # Speak that outcome directly and skip the otherwise redundant second LLM
     # pass. Set false for an instant rollback to LLM-written confirmations.
     voice_deterministic_confirm: bool = True
+    # Exact positive availability and unambiguous single-booking queue results
+    # are already fully grounded by the DB. Speak them without a second LLM.
+    voice_grounded_fast_paths: bool = True
+    # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
+    # which is faster than either global model from the Fly Mumbai worker.
+    gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"
+    gemini_quality_fallback_model: str = "gemini-3.6-flash"
 
     # WhatsApp (Meta Cloud API — spec 2026-07-13). meta_phone_number_id is the
     # WABA test number for dev; per-clinic numbers live on Branch.wa_phone_number_id.
@@ -234,6 +241,13 @@ class Settings(BaseSettings):
     def _valid_soniox_finalize_delay(cls, value: int) -> int:
         if value != 0 and not 200 <= value <= 3000:
             raise ValueError('must be 0 (disabled) or between 200 and 3000 milliseconds')
+        return value
+
+    @field_validator('soniox_tts_min_sentence_len', 'soniox_tts_stream_context_len')
+    @classmethod
+    def _valid_soniox_tts_buffer(cls, value: int) -> int:
+        if not 1 <= value <= 50:
+            raise ValueError('must be between 1 and 50')
         return value
 
     @field_validator('stt_provider')

@@ -28,8 +28,10 @@ def test_soniox_short_first_sentence_is_not_merged_forward():
     tts = SRC.split("def _build_soniox_tts", 1)[1].split(
         "def _soniox_prewarm_matches", 1
     )[0]
-    assert "min_sentence_len=8" in tts
-    assert "stream_context_len=4" in tts
+    assert "min_sentence_len=settings.soniox_tts_min_sentence_len" in tts
+    assert "stream_context_len=settings.soniox_tts_stream_context_len" in tts
+    assert ag.settings.soniox_tts_min_sentence_len == 3
+    assert ag.settings.soniox_tts_stream_context_len == 1
     assert "retain_format=True" in tts
 
 

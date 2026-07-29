@@ -1,5 +1,37 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-29 — MEASURED LOW-LATENCY VOICE PIPELINE.**
+> The production primary remains explicitly cached Gemini 2.5 Flash on Vertex
+> Mumbai: at the real prompt size its live median was about 606 ms, while a
+> three-call global benchmark measured 2.5 Flash at 2,144 ms, Gemini 3.5
+> Flash-Lite at 1,398 ms, and Gemini 3.6 Flash at 1,845 ms. Gemini 3.5
+> Flash-Lite is therefore the fast global/routing fallback and 3.6 Flash the
+> quality fallback; neither is promoted across a global hop. Soniox now uses
+> its documented low-latency endpoint profile (level 2, sensitivity 0.3,
+> 1,500 ms tail) with the conflicting client finalizer disabled. Complete short
+> first sentences flush to TTS immediately. Exact positive availability and a
+> single caller-owned queue row skip the redundant post-tool model pass; all
+> ambiguous, negative, multi-row, or unsupported-language cases retain the
+> grounded LLM path. Existing deterministic booking/reschedule/cancel success
+> speech is unchanged. Proof: 818 unit and 83 booking/schedule/queue/reschedule
+> integration tests passed; compile and diff checks passed. Frontend untouched.
+
+> **2026-07-29 — MEASURED LOW-LATENCY VOICE PIPELINE.**
+> The production primary remains explicitly cached Gemini 2.5 Flash on Vertex
+> Mumbai: at the real prompt size its live median was about 606 ms, while a
+> three-call global benchmark measured 2.5 Flash at 2,144 ms, Gemini 3.5
+> Flash-Lite at 1,398 ms, and Gemini 3.6 Flash at 1,845 ms. Gemini 3.5
+> Flash-Lite is therefore the fast global/routing fallback and 3.6 Flash the
+> quality fallback; neither is promoted across a global hop. Soniox now uses
+> its documented low-latency endpoint profile (level 2, sensitivity 0.3,
+> 1,500 ms tail) with the conflicting client finalizer disabled. Complete short
+> first sentences flush to TTS immediately. Exact positive availability and a
+> single caller-owned queue row skip the redundant post-tool model pass; all
+> ambiguous, negative, multi-row, or unsupported-language cases retain the
+> grounded LLM path. Existing deterministic booking/reschedule/cancel success
+> speech is unchanged. Proof: 818 unit and 83 booking/schedule/queue/reschedule
+> integration tests passed; compile and diff checks passed. Frontend untouched.
+
 > **2026-07-29 — DATABASE-VERIFIED VOICE MUTATIONS + API SECURITY HARDENING.**
 > Booking, cancellation, and rescheduling outcomes are now read back through
 > the branch plus verified caller-number boundary before the agent can announce

@@ -100,8 +100,8 @@ line answers with the blocked line until the first payment activates. Legacy
 trial logic (TRIAL_MINUTES, call_blocked trial branches, trial jobs) stays for
 pre-existing trial orgs only.
 
-Cost (VARIABLE only): ~₹2.0/min typical, ₹2.6 worst (Vobiz + Soniox +
-smallest.ai + Gemini + LiveKit); pricing assumes ₹3/min for safety, + ₹1,000/mo
+Cost (VARIABLE only): ~₹2.0/min typical, ₹2.6 worst (Vobiz + Soniox STT/TTS +
+Gemini + LiveKit); pricing assumes ₹3/min for safety, + ₹1,000/mo
 per DID. Fixed overhead (servers, salaries) separate, dominates at low volume.
 Expected blended gross ≈58% at 60% bucket utilization (≈₹6k profit/clinic/mo).
 History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07-11.
@@ -114,7 +114,7 @@ History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07
 |---|---|
 | STT | Soniox Japan stt-rt-v5 primary → Sarvam Saaras v3 fallback when SONIOX_JP_API_KEY is unset |
 | TTS | Soniox Japan tts-rt-v1 (Priya default; Telugu script input) |
-| LLM | Gemini 2.5 Flash primary → GPT-4o mini auto-fallback |
+| LLM | Cached Gemini 2.5 Flash on Vertex Mumbai → Gemini 3.5 Flash-Lite fast global fallback → Gemini 3.6 Flash quality fallback |
 | Voice pipeline | LiveKit Agents (chosen 2026-06-10 over Pipecat: outbound works, jitter buffer, scale) |
 | Telephony | Vobiz (Indian DID, SIP trunks, ₹0.65/min) |
 | Token locking | Redis atomic INCR (Upstash in prod) |

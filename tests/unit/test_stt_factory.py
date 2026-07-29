@@ -42,19 +42,19 @@ def test_language_switch_handoff_gets_new_language_hint():
     assert stt._params.language_hints == ["hi"]
 
 
-def test_soniox_conservative_latency_profile_is_effective():
+def test_soniox_documented_low_latency_profile_is_effective():
     with patch.multiple(
         ag.settings,
         soniox_jp_api_key="sk-test",
         stt_provider="auto",
-        soniox_endpoint_latency_level=1,
-        soniox_max_endpoint_delay_ms=2000,
-        soniox_endpoint_sensitivity=None,
+        soniox_endpoint_latency_level=2,
+        soniox_max_endpoint_delay_ms=1500,
+        soniox_endpoint_sensitivity=0.3,
     ):
         stt = ag._build_stt(get_lang("te"))
-    assert stt._params.endpoint_latency_adjustment_level == 1
-    assert stt._params.max_endpoint_delay_ms == 2000
-    assert stt._params.endpoint_sensitivity is None
+    assert stt._params.endpoint_latency_adjustment_level == 2
+    assert stt._params.max_endpoint_delay_ms == 1500
+    assert stt._params.endpoint_sensitivity == 0.3
 
 
 def test_sarvam_can_be_forced_without_removing_soniox_key():

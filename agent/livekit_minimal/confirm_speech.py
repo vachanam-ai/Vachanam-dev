@@ -73,3 +73,46 @@ def build_confirm_text(
             return None
         values["time"] = _spoken_time(time_, lang_code)
     return template.format(**values)
+
+
+def build_exact_availability_text(
+    lang_code: str, *, date_: date_cls, time_: time_cls
+) -> str | None:
+    """Speak only an exact positive DB result; ambiguous windows stay with the LLM."""
+    lang = (lang_code or "").lower().strip()
+    values = {
+        "date": _spoken_date(date_, lang),
+        "time": _spoken_time(time_, lang),
+    }
+    templates = {
+        "te": "[happily] {date}, {time}కి డాక్టర్ గారు అందుబాటులో ఉన్నారండి. పేషెంట్ పేరు చెప్పండి.",
+        "en": "[happily] The doctor is available on {date} at {time}. May I have the patient's name?",
+        "hi": "[happily] डॉक्टर {date} को {time} बजे उपलब्ध हैं। मरीज का नाम बताइए।",
+    }
+    template = templates.get(lang)
+    return template.format(**values) if template else None
+
+
+def build_queue_status_text(lang_code: str, entry: dict) -> str | None:
+    """Render one caller-owned queue row without a creative model pass."""
+    lang = (lang_code or "").lower().strip()
+    token = entry.get("token_number")
+    ahead = entry.get("patients_ahead")
+    if token is None or ahead is None:
+        return None
+    now = entry.get("now_serving")
+    if now is None:
+        templates = {
+            "te": "[softly] మీ టోకెన్ నంబర్ {token}. క్యూ ఇంకా మొదలవలేదండి.",
+            "en": "[softly] Your token number is {token}. The queue has not started yet.",
+            "hi": "[softly] आपका टोकन नंबर {token} है। कतार अभी शुरू नहीं हुई है।",
+        }
+        template = templates.get(lang)
+        return template.format(token=token) if template else None
+    templates = {
+        "te": "[happily] ప్రస్తుతం టోకెన్ నంబర్ {now} నడుస్తోంది. మీది {token}. మీ ముందు {ahead} మంది ఉన్నారు.",
+        "en": "[happily] Token {now} is being seen now. Yours is {token}, with {ahead} ahead of you.",
+        "hi": "[happily] अभी टोकन नंबर {now} चल रहा है। आपका {token} है और आपसे पहले {ahead} लोग हैं।",
+    }
+    template = templates.get(lang)
+    return template.format(now=now, token=token, ahead=ahead) if template else None

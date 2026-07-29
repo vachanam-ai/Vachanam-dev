@@ -1,7 +1,7 @@
 """Vachanam LiveKit voice agent — production booking brain, inbound + outbound.
 
-Stack: Sarvam Saaras v3 STT (te-IN) + Gemini 2.5 Flash (GPT-4o-mini fallback,
-RULE 9) + Sarvam Bulbul v3 TTS (kavitha, Telugu script, pace 1.3).
+Stack: Soniox Japan STT/TTS + cached Gemini 2.5 Flash on Vertex Mumbai,
+with Gemini 3.5 Flash-Lite and 3.6 Flash global fallbacks.
 
 Booking brain (ported from agent/bot.py Pipecat implementation):
   - DID -> branch resolution from SIP participant attributes (RULE 5)
@@ -83,7 +83,11 @@ from backend.services.clinic_cache import (  # noqa: E402
     load_doctors,
 )
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
-from agent.livekit_minimal.confirm_speech import build_confirm_text  # noqa: E402
+from agent.livekit_minimal.confirm_speech import (  # noqa: E402
+    build_confirm_text,
+    build_exact_availability_text,
+    build_queue_status_text,
+)
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -141,9 +145,9 @@ logger = logging.getLogger("vachanam-agent")
 AGENT_NAME = "vachanam-agent"
 
 # The VAD must report a possible boundary quickly; it must not be the component
-# that decides a Telugu utterance is final. Soniox's cancellable 200 ms finalize
-# guard remains the quality gate. This gives us a <=60 ms local turn-detection
-# signal without committing normal mid-sentence pauses.
+# that decides a Telugu utterance is final. Soniox's semantic endpoint owns the
+# final boundary. This gives us a <=60 ms local signal without a second client
+# finalizer chopping normal mid-sentence pauses.
 VAD_TURN_DETECTION_S = 0.06
 
 
@@ -1063,13 +1067,12 @@ def _build_soniox_tts(voice_id: str, tts_lang: str) -> "soniox.TTS":
         sample_rate=settings.soniox_tts_sample_rate,
         api_key=settings.soniox_jp_api_key,
         websocket_url=settings.soniox_jp_tts_ws_url,
-        # The plugin default merges a short first sentence (<20 chars) into the
-        # next sentence. Voice replies often begin with a natural short Telugu
-        # acknowledgement; emitting it at 8 chars avoids waiting for sentence 2
-        # while preserving sentence-boundary prosody and exact text.
+        # Keep complete-sentence prosody, but do not merge a useful short first
+        # sentence into sentence two. This lets Soniox start from the first few
+        # generated words whenever the model closes that sentence promptly.
         tokenizer=_tokenize.blingfire.SentenceTokenizer(
-            min_sentence_len=8,
-            stream_context_len=4,
+            min_sentence_len=settings.soniox_tts_min_sentence_len,
+            stream_context_len=settings.soniox_tts_stream_context_len,
             retain_format=True,
         ),
     )
@@ -1389,11 +1392,10 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     model (404), so the regional win rides 2.5-flash — our pre-2026-07-08
     primary, quality-proven on this prompt family.
 
-    Fallbacks stay on the global API key path (RULE 8: Vertex outage, missing
-    SA creds, or region trouble must never kill a call): 3.1-flash-lite then
-    2.5-flash, both exactly as before. thinking minimised everywhere (gemini-3
-    uses thinking_level — #397: "low" still THINKS on ~half the turns, bimodal
-    ttft 1.2s/3.2s; 2.5-flash uses thinking_budget=0).
+    Global fallbacks keep calls alive when Vertex is unavailable: measured-fast
+    Gemini 3.5 Flash-Lite first, then Gemini 3.6 Flash as the quality tier.
+    Both use minimal thinking. Neither model is served from Vertex Mumbai yet,
+    so promoting either above the regional cached primary would add latency.
     """
     from google.genai import types as genai_types
 
@@ -1415,13 +1417,13 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     llms += [
         google.LLM(
             api_key=settings.gemini_api_key,
-            model="gemini-3.1-flash-lite",
+            model=settings.gemini_fast_fallback_model,
             thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
         ),
         google.LLM(
             api_key=settings.gemini_api_key,
-            model="gemini-2.5-flash",
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            model=settings.gemini_quality_fallback_model,
+            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
         ),
     ]
     return lk_llm.FallbackAdapter(llm=llms, attempt_timeout=10.0)
@@ -1614,13 +1616,13 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
         ),
         google.LLM(
             api_key=settings.gemini_api_key,
-            model="gemini-3.1-flash-lite",
+            model=settings.gemini_fast_fallback_model,
             thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
         ),
         google.LLM(
             api_key=settings.gemini_api_key,
-            model="gemini-2.5-flash",
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            model=settings.gemini_quality_fallback_model,
+            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
         ),
     ]
     return lk_llm.FallbackAdapter(llm=llms, attempt_timeout=10.0)
@@ -1654,13 +1656,13 @@ async def update_call_duration(call_log_id, seconds: int) -> None:
 
 async def _routing_llm_call(messages: list) -> str:
     """Plain-text JSON call used by route_to_doctor. Gemini-only (Vinay 2026-06-25:
-    no GPT): gemini-3.1-flash-lite (fast for complaint->doctor matching)."""
+    no GPT): use the measured-fast global fallback model for simple routing."""
     from google import genai
     from google.genai import types as genai_types
 
     client = genai.Client(api_key=settings.gemini_api_key)
     resp = await client.aio.models.generate_content(
-        model="gemini-3.1-flash-lite",
+        model=settings.gemini_fast_fallback_model,
         contents="\n".join(m["content"] for m in messages),
         config=genai_types.GenerateContentConfig(
             thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
@@ -1740,6 +1742,14 @@ def _is_booking_intent(text: str) -> bool:
     return any(term in low for term in _BOOKING_INTENT_TERMS)
 
 
+def _exact_availability_matches(
+    availability: str, doctor_name: str, query_start: time_cls
+) -> bool:
+    """True only when the DB's first free slot starts at the requested minute."""
+    requested = query_start.strftime("%I:%M %p").lstrip("0")
+    return availability.startswith(f"{doctor_name} is available {requested} to ")
+
+
 class VachanamAgent(Agent):
     """Booking receptionist with real tools. One instance per call."""
 
@@ -1760,6 +1770,7 @@ class VachanamAgent(Agent):
         tts=None,             # per-agent TTS override (language switch handoff)
         chat_ctx=None,        # conversation history carried across the handoff
         llm=None,             # #417 per-agent LLM (prompt-cache-backed primary)
+        doctor_names: dict[UUID, str] | None = None,
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
         # None would DISABLE the session-level pipeline, not inherit it.
@@ -1786,6 +1797,7 @@ class VachanamAgent(Agent):
         self._lang_code = lang_code
         self._agent_factory = agent_factory
         self._switch_ack = switch_ack
+        self._doctor_names = doctor_names or {}
         # Kept so switch_language can PRIME the new agent's TTS before handoff
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
@@ -2199,13 +2211,16 @@ class VachanamAgent(Agent):
             self._state.booking_for_other = True
         _say_wait_filler(context)  # slow: DB + calendar availability scan
         resolved = await self._resolve_doctor_id(doctor_id)
+        parsed_date = self._parse_date(booking_date)
+        parsed_start = self._parse_time(query_start)
+        parsed_end = self._parse_time(query_end)
         availability = await check_availability(
             doctor_id=resolved,
             branch_id=self._state.branch_id,
-            booking_date=self._parse_date(booking_date),
+            booking_date=parsed_date,
             db=self._db,
-            query_start=self._parse_time(query_start),
-            query_end=self._parse_time(query_end),
+            query_start=parsed_start,
+            query_end=parsed_end,
             # Availability is capacity only. Existing bookings are fetched by
             # find_my_bookings; mixing them into this answer made a family
             # member's booking sound like the requested doctor/time was full.
@@ -2218,6 +2233,25 @@ class VachanamAgent(Agent):
                 else None
             ),
         )
+        doctor_name = self._doctor_names.get(resolved, "")
+        exact_positive = (
+            parsed_start is not None
+            and (parsed_end is None or parsed_end <= parsed_start)
+            and bool(doctor_name)
+            and _exact_availability_matches(
+                availability, doctor_name, parsed_start
+            )
+        )
+        if exact_positive:
+            text = build_exact_availability_text(
+                self._state.language or self._lang_code,
+                date_=parsed_date,
+                time_=parsed_start,
+            )
+            if text and self._speak_grounded_fast_path(
+                context, text, "exact_availability"
+            ):
+                raise StopResponse()
         return {"availability": availability}
 
     @function_tool()
@@ -2601,6 +2635,23 @@ class VachanamAgent(Agent):
             logger.warning("deterministic_confirm_failed kind=%s: %s", kind, exc)
             return False
 
+    def _speak_grounded_fast_path(
+        self, context: RunContext, text: str, kind: str
+    ) -> bool:
+        """Speak a read-only, unambiguous DB result without post-tool LLM work."""
+        if not settings.voice_grounded_fast_paths:
+            return False
+        try:
+            sess = getattr(context, "session", None)
+            if not isinstance(sess, AgentSession):
+                return False
+            sess.say(sanitize_for_tts(text))
+            logger.info("grounded_fast_path_spoken kind=%s", kind)
+            return True
+        except Exception as exc:  # noqa: BLE001 — ordinary LLM path remains safe
+            logger.warning("grounded_fast_path_failed kind=%s: %s", kind, exc)
+            return False
+
     async def _load_caller_booking(self, token_id: str):
         """Read one booking through the caller-ID authorization boundary."""
         try:
@@ -2799,6 +2850,15 @@ class VachanamAgent(Agent):
             self._state.branch_id, self._state.patient_phone, self._db
         )
         if result.get("found"):
+            queue = result.get("queue") or []
+            if len(queue) == 1:
+                text = build_queue_status_text(
+                    self._state.language or self._lang_code, queue[0]
+                )
+                if text and self._speak_grounded_fast_path(
+                    context, text, "queue_status"
+                ):
+                    raise StopResponse()
             result["instruction"] = (
                 "Tell them which token is running now and how many people are "
                 "ahead of theirs. now_serving null means the queue has not "
@@ -5029,6 +5089,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             )
             for d in doctors
         ]
+        _doctor_names = {d.id: d.name for d in doctor_contexts}
 
         # #400: Soniox context biasing — the clinic's own vocabulary, so
         # recognition snaps to the real roster ("కరిష్మా") instead of phonetic
@@ -5203,6 +5264,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     ctx.proc.userdata.get("tts_soniox"),
                 ),
                 llm=switched_cached_llm,
+                doctor_names=_doctor_names,
             )
             if switched_cached_llm is None and switched_key not in _PROMPT_CACHE_PENDING:
                 _PROMPT_CACHE_PENDING.add(switched_key)
@@ -5244,6 +5306,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             lang_code=lang_code,
             agent_factory=_agent_for_lang,
             llm=_cached_llm,
+            doctor_names=_doctor_names,
         )
         if _cached_llm is not None:
             logger.info("llm_prompt_cache_hit key=%s", _cache_key)

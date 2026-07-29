@@ -13,6 +13,52 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Measured Gemini/Soniox latency optimization
+
+Benchmarked the real clinic prompt against the candidate Gemini models instead
+of accepting the “3.6 is twice as fast” claim. Global medians across three
+calls were 2,144 ms for 2.5 Flash, 1,398 ms for 3.5 Flash-Lite, and 1,845 ms
+for 3.6 Flash. The cached Vertex Mumbai 2.5 primary remains faster at roughly
+606 ms in production, so 3.5 Flash-Lite now handles simple global routing and
+fallback work and 3.6 Flash is the quality fallback. Both are reversible env
+settings; prompt caches remain shared per clinic/language/daily prompt digest.
+
+Applied Soniox's documented endpoint profile (level 2, sensitivity 0.3,
+1,500 ms tail) and disabled the separate 200 ms client finalizer, avoiding the
+double-finalization combination that previously chopped Telugu. Lowered the
+complete-sentence TTS buffer so a short useful first sentence streams without
+waiting for sentence two. Added narrow deterministic read paths for exact
+positive availability and one caller-owned queue result. A nearby slot can
+never be restated as the requested minute, and the booking flow proceeds to
+patient details without a duplicate “shall I book?” question.
+
+Proof: 818 unit tests plus 83 focused booking, availability, schedule, queue,
+cancellation, and reschedule integration tests passed. No frontend file was
+modified and the local backend on port 8000 was not restarted.
+
+## 2026-07-29 — Measured Gemini/Soniox latency optimization
+
+Benchmarked the real clinic prompt against the candidate Gemini models instead
+of accepting the “3.6 is twice as fast” claim. Global medians across three
+calls were 2,144 ms for 2.5 Flash, 1,398 ms for 3.5 Flash-Lite, and 1,845 ms
+for 3.6 Flash. The cached Vertex Mumbai 2.5 primary remains faster at roughly
+606 ms in production, so 3.5 Flash-Lite now handles simple global routing and
+fallback work and 3.6 Flash is the quality fallback. Both are reversible env
+settings; prompt caches remain shared per clinic/language/daily prompt digest.
+
+Applied Soniox's documented endpoint profile (level 2, sensitivity 0.3,
+1,500 ms tail) and disabled the separate 200 ms client finalizer, avoiding the
+double-finalization combination that previously chopped Telugu. Lowered the
+complete-sentence TTS buffer so a short useful first sentence streams without
+waiting for sentence two. Added narrow deterministic read paths for exact
+positive availability and one caller-owned queue result. A nearby slot can
+never be restated as the requested minute, and the booking flow proceeds to
+patient details without a duplicate “shall I book?” question.
+
+Proof: 818 unit tests plus 83 focused booking, availability, schedule, queue,
+cancellation, and reschedule integration tests passed. No frontend file was
+modified and the local backend on port 8000 was not restarted.
+
 ## 2026-07-29 — Database-grounded voice outcomes and warning-zero API surface
 
 Made Postgres—not model interpretation—the final authority for every voice
