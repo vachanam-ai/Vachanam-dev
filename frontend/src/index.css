@@ -38,14 +38,8 @@
   font-display: swap;
   src: url("/fonts/general-sans-700.woff2") format("woff2");
 }
-/* Pacifico — the Vachanam signature wordmark (self-hosted). */
-@font-face {
-  font-family: "Pacifico";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/pacifico.woff2") format("woff2");
-}
+/* ponytail: Pacifico wordmark dropped — read "not good"; the approved mockup's
+   wordmark is General Sans 600 tight-tracked, so `font-brand` maps back to it. */
 
 /* Theme tokens as RGB triplets so Tailwind opacity modifiers keep working
    (bg-pill/60 etc.). The EXISTING Tailwind names (teal/cream/surface/…) are
@@ -71,7 +65,8 @@
   --surface: 255 255 255; /* cards / panel */
   --hairline: 237 237 235;
   /* the one warm note + accents */
-  --band: 236 238 225;    /* sage-cream stat band */
+  --band: 236 238 225;    /* sage-cream — chip-token / small accents */
+  --panel: 250 247 240;   /* cream stat/settings panel (Vinay: band → cream) */
   --pill: 244 244 241;
   --line2: 228 228 224;   /* stronger hairline (chip/avatar borders) */
   --accent: 27 27 26;
@@ -113,6 +108,7 @@
   --surface: 21 21 19;
   --hairline: 38 38 34;
   --band: 28 28 23;
+  --panel: 30 30 26;
   --pill: 34 34 32;
   --line2: 47 47 42;
   --accent: 240 239 232;
@@ -253,7 +249,8 @@ h1, h2, h3 { text-wrap: balance; }
    Sage-cream panel: hatched-ghost + solid bar chart, radial-tick gauge, and
    arrow KPIs. Numerals are tabular General Sans. */
 .band {
-  background: rgb(var(--band));
+  background: rgb(var(--panel));
+  border: 1px solid rgb(var(--line2));
   border-radius: 18px;
   padding: 24px 28px;
   display: grid;

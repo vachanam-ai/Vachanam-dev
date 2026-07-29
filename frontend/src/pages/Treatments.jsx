@@ -684,57 +684,59 @@ export default function Treatments() {
               </div>
             </div>
 
-            <div>
-              <label className="label" htmlFor="steps">Steps performed</label>
-              <textarea
-                id="steps"
-                className="field"
-                rows={2}
-                value={stepsPerformed}
-                onChange={(e) => setStepsPerformed(e.target.value)}
-                placeholder="scaling, root canal session 1…"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label" htmlFor="steps">Steps performed</label>
+                <textarea
+                  id="steps"
+                  className="field"
+                  rows={2}
+                  value={stepsPerformed}
+                  onChange={(e) => setStepsPerformed(e.target.value)}
+                  placeholder="scaling, root canal session 1…"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="next">Next steps</label>
+                <textarea
+                  id="next"
+                  className="field"
+                  rows={2}
+                  value={nextSteps}
+                  onChange={(e) => setNextSteps(e.target.value)}
+                  placeholder="crown fitting next visit…"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="label" htmlFor="next">Next steps</label>
-              <textarea
-                id="next"
-                className="field"
-                rows={2}
-                value={nextSteps}
-                onChange={(e) => setNextSteps(e.target.value)}
-                placeholder="crown fitting next visit…"
-              />
-            </div>
-
-            <div>
-              <label className="label" htmlFor="followup-q">
-                Question to ask on the follow-up call (optional)
-              </label>
-              <textarea
-                id="followup-q"
-                className="field"
-                rows={2}
-                value={followupQuestion}
-                onChange={(e) => setFollowupQuestion(e.target.value)}
-                placeholder="e.g. Is the pain reducing? Any swelling?"
-              />
-              <p className="mt-1 font-ui text-xs text-slate">
-                The agent asks this on the next-visit reminder call, then helps them book.
-              </p>
-            </div>
-
-            <div>
-              <label className="label" htmlFor="next-date">Next reporting date (optional)</label>
-              <input
-                id="next-date"
-                type="date"
-                className="field w-full"
-                value={nextReportingDate}
-                onChange={(e) => setNextReportingDate(e.target.value)}
-                disabled={isFinal}
-              />
+            <div className="grid items-start gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label" htmlFor="followup-q">
+                  Question to ask on the follow-up call (optional)
+                </label>
+                <textarea
+                  id="followup-q"
+                  className="field"
+                  rows={2}
+                  value={followupQuestion}
+                  onChange={(e) => setFollowupQuestion(e.target.value)}
+                  placeholder="e.g. Is the pain reducing? Any swelling?"
+                />
+                <p className="mt-1 font-ui text-xs text-slate">
+                  The agent asks this on the next-visit reminder call, then helps them book.
+                </p>
+              </div>
+              <div>
+                <label className="label" htmlFor="next-date">Next reporting date (optional)</label>
+                <input
+                  id="next-date"
+                  type="date"
+                  className="field w-full"
+                  value={nextReportingDate}
+                  onChange={(e) => setNextReportingDate(e.target.value)}
+                  disabled={isFinal}
+                />
+              </div>
             </div>
 
             <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-hairline px-4 font-ui">

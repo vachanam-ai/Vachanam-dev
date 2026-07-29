@@ -51,16 +51,6 @@ const scheduleForForm = (doctor) => {
   return Object.fromEntries(days.map((day) => [String(day), [{ start, end }]]));
 };
 
-function Chevron({ open }) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden
-      className={`shrink-0 text-slate transition-transform duration-200 ${open ? "rotate-180" : ""}`}>
-      <path d="M6 9l6 6 6-6" />
-    </svg>
-  );
-}
-
 function SessionsEditor({ sessions, onChange }) {
   const update = (index, key, value) =>
     onChange(sessions.map((session, i) => i === index ? { ...session, [key]: value } : session));
@@ -391,13 +381,23 @@ function DateSchedulePublisher({ branchId, doctor }) {
   );
 }
 
-/** One doctor as a collapsed summary row that expands to reveal the editor +
- *  exact-date publisher. Only the header renders until opened — this is what
- *  keeps the page short (it was ~6700px with every publisher always open). */
-function DoctorAccordion({ doctor, id, waiting, role, branchId, onChanged }) {
+/* "Mon Tue Wed · 9–17" one-line summary of the doctor's weekly pattern. */
+function timingSummary(doctor) {
+  const sched = scheduleForForm(doctor);
+  const days = Object.keys(sched).map(Number).filter((d) => (sched[String(d)] || []).length).sort((a, b) => a - b);
+  if (!days.length) return "No weekly schedule set";
+  const first = sched[String(days[0])][0];
+  const hrs = first ? `${shortT(first.start)}–${shortT(first.end)}` : "";
+  return `${days.map((d) => WEEKDAYS[d]).join(" ")}${hrs ? ` · ${hrs}` : ""}`;
+}
+
+/** One doctor as a compact card. Clicking Edit expands the card horizontally
+ *  (GSAP, driven from DoctorsBoard) and fades in the day-wise editor + exact-
+ *  date publisher; the other cards compress to make room. */
+function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, onChanged, setRef }) {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const editorRef = useRef(null);
+  const isAdmin = role === "org_admin";
 
   const stop = useMutation({
     mutationFn: () => stopWalkinsToday(id, branchId),
@@ -410,64 +410,118 @@ function DoctorAccordion({ doctor, id, waiting, role, branchId, onChanged }) {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove doctor")
   });
 
+  // Fade the day-wise editor in AFTER the horizontal expand settles.
+  useEffect(() => {
+    if (!expanded || !editorRef.current) return;
+    let cancelled = false;
+    import("gsap").then(({ gsap }) => {
+      if (cancelled || !editorRef.current) return;
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      gsap.fromTo(editorRef.current, { opacity: 0, y: 8 },
+        { opacity: 1, y: 0, duration: reduce ? 0 : 0.4, delay: reduce ? 0 : 0.28, ease: "power2.out" });
+    });
+    return () => { cancelled = true; };
+  }, [expanded]);
+
   return (
-    <section data-reveal className="card overflow-hidden">
-      <button type="button" onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-4 p-4 text-left transition-colors hover:bg-pill/50">
-        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-line2 bg-pill font-ui text-sm font-semibold text-ink-soft">
-          {initials(doctor.name)}
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-ui text-base font-semibold text-ink">{doctor.name}</p>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className={doctor.booking_type === "token" ? "chip-token" : "chip-slot"}>
-              {doctor.booking_type === "token" ? "token queue" : "appointments"}
-            </span>
-            {doctor.specialization && <span className="font-ui text-xs text-slate">{doctor.specialization}</span>}
+    <div ref={setRef} data-docid={id} style={{ flexGrow: 1 }} className="min-w-0 md:basis-0">
+      <section data-reveal className={`card overflow-hidden ${expanded ? "ring-1 ring-accent/40" : ""}`}>
+        <div className="flex items-start gap-3 p-4">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-line2 bg-pill font-ui text-sm font-semibold text-ink-soft">
+            {initials(doctor.name)}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-ui text-base font-semibold text-ink">{doctor.name}</p>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className={doctor.booking_type === "token" ? "chip-token" : "chip-slot"}>
+                {doctor.booking_type === "token" ? "token queue" : "appointments"}
+              </span>
+              {doctor.specialization && <span className="truncate font-ui text-xs text-slate">{doctor.specialization}</span>}
+            </div>
+            <p className="mt-1.5 truncate font-ui text-xs text-slate" title={timingSummary(doctor)}>
+              {timingSummary(doctor)}
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="numeral text-2xl text-ink">{waiting}</p>
+            <p className="font-ui text-[10px] uppercase tracking-[0.12em] text-slate">waiting</p>
           </div>
         </div>
-        <div className="shrink-0 text-right">
-          <p className="numeral text-2xl text-ink">{waiting}</p>
-          <p className="font-ui text-[10px] uppercase tracking-[0.12em] text-slate">waiting</p>
-        </div>
-        <Chevron open={open} />
-      </button>
 
-      {open && (
-        <div className="space-y-4 border-t border-hairline p-4">
-          {role === "org_admin" && (
-            <div className="flex flex-wrap gap-2">
-              <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => setEditing((e) => !e)}>
-                {editing ? "Close editor" : "Edit details"}
-              </button>
-              {doctor.booking_type === "token" && (
-                <button onClick={() => stop.mutate()} disabled={stop.isPending} className="btn-gold px-3 py-1.5 text-sm">
-                  Stop walk-ins today
-                </button>
-              )}
-              <button className="btn-danger px-3 py-1.5 text-sm" disabled={remove.isPending}
-                onClick={() => {
-                  if (window.confirm(`Remove ${doctor.name}? Patients can no longer be booked with them; past bookings stay.`)) {
-                    remove.mutate();
-                  }
-                }}>
-                Remove
-              </button>
-            </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-3">
+          <button type="button" className="btn-ghost px-3 py-1.5 text-sm" onClick={onToggle}>
+            {expanded ? "Close" : isAdmin ? "Edit" : "Manage dates"}
+          </button>
+          {isAdmin && doctor.booking_type === "token" && (
+            <button onClick={() => stop.mutate()} disabled={stop.isPending} className="btn-gold px-3 py-1.5 text-sm">
+              Stop walk-ins today
+            </button>
           )}
-
-          {editing && (
-            <div className="rounded-2xl border border-hairline bg-pill/40 p-4 sm:p-5">
-              <AddDoctorForm branchId={branchId} doctorId={id} initial={doctor}
-                onCancel={() => setEditing(false)}
-                onDone={() => { setEditing(false); qc.invalidateQueries({ queryKey: ["doctors", branchId] }); }} />
-            </div>
+          {isAdmin && (
+            <button className="btn-danger px-3 py-1.5 text-sm" disabled={remove.isPending}
+              onClick={() => {
+                if (window.confirm(`Remove ${doctor.name}? Patients can no longer be booked with them; past bookings stay.`)) {
+                  remove.mutate();
+                }
+              }}>
+              Remove
+            </button>
           )}
-
-          <DateSchedulePublisher branchId={branchId} doctor={doctor} />
         </div>
-      )}
-    </section>
+
+        {expanded && (
+          <div ref={editorRef} className="space-y-4 border-t border-hairline p-4">
+            {isAdmin && (
+              <div className="rounded-2xl border border-hairline bg-pill/40 p-4 sm:p-5">
+                <AddDoctorForm branchId={branchId} doctorId={id} initial={doctor}
+                  onCancel={onToggle}
+                  onDone={() => { onToggle(); qc.invalidateQueries({ queryKey: ["doctors", branchId] }); }} />
+              </div>
+            )}
+            <DateSchedulePublisher branchId={branchId} doctor={doctor} />
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/** Side-by-side doctor board. One editing card grows and the others compress,
+ *  animated with GSAP flex-grow tweens (instant under reduced-motion). */
+function DoctorsBoard({ doctors, queue, role, branchId, onChanged }) {
+  const [editingId, setEditingId] = useState(null);
+  const cardRefs = useRef({});
+  const setRef = (id) => (el) => { if (el) cardRefs.current[id] = el; else delete cardRefs.current[id]; };
+
+  useEffect(() => {
+    let cancelled = false;
+    import("gsap").then(({ gsap }) => {
+      if (cancelled) return;
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      for (const d of doctors) {
+        const id = d.id ?? d.doctor_id;
+        const el = cardRefs.current[id];
+        if (!el) continue;
+        const target = editingId ? (id === editingId ? 2.6 : 0.7) : 1;
+        gsap.to(el, { flexGrow: target, duration: reduce ? 0 : 0.5, ease: "power3.out" });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [editingId, doctors.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="flex flex-col gap-4 md:flex-row md:items-start">
+      {doctors.map((d) => {
+        const id = d.id ?? d.doctor_id;
+        const todayEntry = queue?.doctors?.find((q) => q.doctor_id === id);
+        const waiting = todayEntry?.patients?.filter((p) => p.status === "confirmed").length ?? 0;
+        return (
+          <DoctorCard key={id} doctor={d} id={id} waiting={waiting} role={role} branchId={branchId}
+            expanded={editingId === id} onChanged={onChanged} setRef={setRef(id)}
+            onToggle={() => setEditingId((cur) => (cur === id ? null : id))} />
+        );
+      })}
+    </div>
   );
 }
 
@@ -525,15 +579,10 @@ export default function DoctorSchedule() {
         </div>
       )}
 
-      {visible.map((d) => {
-        const id = d.id ?? d.doctor_id;
-        const todayEntry = queue?.doctors?.find((q) => q.doctor_id === id);
-        const waiting = todayEntry?.patients?.filter((p) => p.status === "confirmed").length ?? 0;
-        return (
-          <DoctorAccordion key={id} doctor={d} id={id} waiting={waiting} role={role}
-            branchId={branchId} onChanged={invalidate} />
-        );
-      })}
+      {visible.length > 0 && (
+        <DoctorsBoard doctors={visible} queue={queue} role={role}
+          branchId={branchId} onChanged={invalidate} />
+      )}
 
       {visible.length === 0 && role !== "org_admin" && (
         <p className="font-ui text-sm text-slate">No doctor profile linked to your account yet.</p>

@@ -5,7 +5,6 @@ import {
   fetchTodayQueue, resolveMessage,
 } from "../api/client.js";
 import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
-import Heatmap from "../components/dash/Heatmap.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { countUp, revealNow, revealStagger } from "../lib/motion.js";
 import PageHeader, { StatRow } from "../components/PageHeader.jsx";
@@ -405,11 +404,10 @@ export default function Dashboard() {
       <PageHeader eyebrow="Clinic overview" title="Today at a glance" />
 
       <StatBand
-        title="Clinic this week"
+        title="Patient visits this week"
         weekday={an?.weekday_load}
-        pct={cq?.total_calls ? Math.round((cq.conversion_rate ?? 0) * 100)
-          : (an?.attendance_rate != null ? Math.round(an.attendance_rate * 100) : 100)}
-        pctCap={cq?.total_calls ? "Calls booked" : "Attendance"}
+        pct={an?.minutes?.pct ?? 0}
+        pctCap="Plan minutes used"
         waiting={s.remaining}
         booked={s.total} />
 
@@ -470,15 +468,6 @@ export default function Dashboard() {
           )}
           <ChartLegend />
         </div>
-      </section>
-
-      {/* Peak hours — when the phone actually rings */}
-      <section data-reveal className="card overflow-hidden">
-        <header className="flex items-center justify-between border-b border-hairline bg-pill px-5 py-3">
-          <h2 className="font-display text-lg font-semibold">Peak hours · {days}d</h2>
-          <span className="font-ui text-xs text-slate">calls by weekday &amp; hour</span>
-        </header>
-        <div className="px-5 py-4"><Heatmap cells={an?.hourly_by_weekday} /></div>
       </section>
 
       {/* Call quality — how the AI receptionist is actually performing */}
@@ -549,7 +538,8 @@ export default function Dashboard() {
         </section>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* Booking sources · Doctors · Doctor load — side by side */}
+      <div className="grid items-start gap-6 lg:grid-cols-3">
         {/* Where bookings come from */}
         <section data-reveal className="card overflow-hidden">
           <header className="border-b border-hairline bg-pill px-5 py-3">
@@ -612,13 +602,12 @@ export default function Dashboard() {
             <p className="px-5 py-6 font-ui text-sm text-slate">No bookings in this period yet.</p>
           )}
         </section>
-      </div>
 
-      {/* Live per-doctor queue (today) */}
-      <section data-reveal className="card overflow-hidden">
-        <header className="border-b border-hairline bg-pill px-5 py-3">
-          <h2 className="font-display text-lg font-semibold">Doctor load · live today</h2>
-        </header>
+        {/* Live per-doctor queue (today) */}
+        <section data-reveal className="card overflow-hidden">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
+            <h2 className="font-display text-lg font-semibold">Doctor load · live today</h2>
+          </header>
         {(queue?.doctors ?? []).map((d) => {
           const seen = d.patients.filter((p) => p.status === "attended").length;
           const pct = d.patients.length ? (seen / d.patients.length) * 100 : 0;
@@ -642,10 +631,11 @@ export default function Dashboard() {
             </div>
           );
         })}
-        {(queue?.doctors ?? []).length === 0 && (
-          <p className="px-5 py-6 font-ui text-sm text-slate">No doctors configured yet.</p>
-        )}
-      </section>
+          {(queue?.doctors ?? []).length === 0 && (
+            <p className="px-5 py-6 font-ui text-sm text-slate">No doctors configured yet.</p>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
