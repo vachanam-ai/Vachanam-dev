@@ -1,5 +1,17 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-29 — FIRST-TURN SONIOX COLD SYNTHESIS FIX DEPLOYED.**
+> The latest 12-turn production call was measured end to end: first reply 4.10s,
+> later replies mostly 1.53–2.17s, with the first Soniox audio frame delayed
+> 3.75s after final transcript. `prewarm()` had opened only the WebSocket, not
+> warmed the voice/model synthesis path. A Japan-endpoint benchmark reproduced
+> 1,898ms unprimed versus 436ms after a discarded one-frame prime. Release v228
+> now performs that prime underneath the cached greeting; its audio is never
+> played or stored. Commit `0a12050`, tag `v1.21.7`, image
+> `deployment-01KYQ2XQK87XCYRQ1PC1KYA0S4`. Blue/green readiness passed in Mumbai
+> and the durable LiveKit heartbeat reports `registered`. A new real call is
+> still required to record production after-values; no unmeasured claim is made.
+
 > **2026-07-29 — VOICE DEPLOYMENT OUTAGE CLOSED.**
 > CI restarted the sole voice worker for both the code push and its docs-only
 > follow-up. Rolling deploys drained the registered worker before the replacement

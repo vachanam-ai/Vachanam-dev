@@ -13,6 +13,29 @@ Format per session:
 
 ---
 
+## 2026-07-29 — Prime Soniox synthesis before the caller's first turn
+
+The newest 139-second production call was correlated to latency session
+`d5a5101b`: its first reply took 4.10 seconds and later replies were mostly
+1.53–2.17 seconds. The first turn reached its first Soniox audio frame 3.75
+seconds after the final transcript, while later turns reached it in roughly
+1.1–1.6 seconds. The prompt-cache miss was real but was not large enough to
+explain that first-turn spike.
+
+Soniox `prewarm()` opens only the WebSocket; it does not warm synthesis through
+the first audio frame. A direct Japan-endpoint benchmark measured 1,898 ms for
+an unprimed Telugu first frame and 436 ms for the same response after a discarded
+one-frame prime. The call entrypoint now performs that prime underneath the
+cached greeting. The generated warm-up audio is closed without playout and
+never enters conversation history. Non-default language/voice routes prime
+their exact TTS object as well.
+
+Commit `0a12050` passed 33 focused latency/grounding tests, Ruff, compile, and
+diff checks; the full CI gates passed and tagged `v1.21.7`. Fly release v228
+(`deployment-01KYQ2XQK87XCYRQ1PC1KYA0S4`) deployed blue/green in Mumbai. The
+old worker stayed live until v228's port-8081 readiness check passed, and the
+durable LiveKit heartbeat reports `registered`.
+
 ## 2026-07-29 — Prevent unanswered calls during voice-worker deploys
 
 The worker was healthy but unavailable during deployment. CI created Fly
