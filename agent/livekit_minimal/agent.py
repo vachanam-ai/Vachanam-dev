@@ -93,6 +93,10 @@ from agent.livekit_minimal.grounded_turns import (  # noqa: E402
     extract_exact_time,
     is_short_close_reply,
 )
+from agent.livekit_minimal.workflow_rules import (  # noqa: E402
+    build_exact_availability_failure_text,
+    build_mutation_failure_text,
+)
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
@@ -2493,6 +2497,14 @@ class VachanamAgent(Agent):
                 context, text, "exact_availability"
             ):
                 raise StopResponse()
+        if parsed_start is not None and not exact_positive:
+            text = build_exact_availability_failure_text(
+                self._state.language or self._lang_code,
+                availability,
+            )
+            if self._speak_grounded_fast_path(context, text, "exact_availability"):
+                raise StopResponse()
+
         return {"availability": availability}
 
     @function_tool()
@@ -2574,6 +2586,8 @@ class VachanamAgent(Agent):
                         "say a token or queue number."
                     ),
                 }
+        if not result.get("success"):
+            self._stop_on_mutation_failure(context, "reserve", result)
         return result
 
     @function_tool()
@@ -2614,7 +2628,9 @@ class VachanamAgent(Agent):
         _say_wait_filler(context)  # slow: DB write + Google Calendar create
         if self._calendar is None:
             logger.error("confirm_booking_no_calendar_service")
-            return {"success": False, "error": "booking_system_unavailable"}
+            result = {"success": False, "error": "booking_system_unavailable"}
+            self._stop_on_mutation_failure(context, "book", result)
+            return result
 
         # iter1 #11/#19: bound the untrusted, LLM-supplied free-text/numeric
         # fields at the tool boundary (mirror the walk-in desk Field limits).
@@ -2681,6 +2697,7 @@ class VachanamAgent(Agent):
                     appointment_time=parsed_time,
                 )
                 if not rehold.get("success"):
+                    self._stop_on_mutation_failure(context, "book", rehold)
                     return rehold  # slot full / past / off-grid — surfaced to LLM
                 self._state.token_held = True
                 self._state.token_confirmed = False  # B4: fresh hold, fresh state
@@ -2702,6 +2719,7 @@ class VachanamAgent(Agent):
                 appointment_time=parsed_time,
             )
             if not held.get("success"):
+                self._stop_on_mutation_failure(context, "book", held)
                 return held  # full / past_slot / outside_hours — surfaced to LLM
             self._state.token_held = True
             self._state.token_confirmed = False  # B4: fresh hold -> fresh latch
@@ -2752,6 +2770,11 @@ class VachanamAgent(Agent):
                 logger.error("booking_reconcile_read_failed: %s", verify_error)
                 recovered = None
             if recovered is None:
+                self._stop_on_mutation_failure(
+                    context,
+                    "book",
+                    {"success": False, "error": "booking_outcome_unverified"},
+                )
                 return {
                     "success": False,
                     "error": "booking_outcome_unverified",
@@ -2795,6 +2818,11 @@ class VachanamAgent(Agent):
                     "booking_success_readback_mismatch branch_id=%s",
                     str(self._state.branch_id),
                 )
+                self._stop_on_mutation_failure(
+                    context,
+                    "book",
+                    {"success": False, "error": "booking_outcome_unverified"},
+                )
                 return {
                     "success": False,
                     "error": "booking_outcome_unverified",
@@ -2834,6 +2862,8 @@ class VachanamAgent(Agent):
                 time_=parsed_time,
             ):
                 raise StopResponse()
+        if not result.get("success"):
+            self._stop_on_mutation_failure(context, "book", result)
         return result
 
     def _speak_deterministic_confirm(
@@ -2879,6 +2909,43 @@ class VachanamAgent(Agent):
         except Exception as exc:  # noqa: BLE001 — booking result still wins
             logger.warning("deterministic_confirm_failed kind=%s: %s", kind, exc)
             return False
+
+    def _stop_on_mutation_failure(
+        self,
+        context: RunContext,
+        operation: str,
+        result: dict,
+    ) -> None:
+        """End a critical tool turn with fixed fail-closed speech.
+
+        Simulation contexts keep the returned-dict path. In a live session a
+        failed mutation never goes back to Gemini for interpretation.
+        """
+        if result.get("success"):
+            return
+        try:
+            sess = getattr(context, "session", None)
+            if not isinstance(sess, AgentSession):
+                return
+            lang = self._state.language or self._lang_code
+            text = build_mutation_failure_text(lang, operation, result)
+            sess.say(sanitize_for_tts(text))
+            self._state.closing = False
+            self._state.awaiting_anything_else = False
+            logger.warning(
+                "deterministic_mutation_failure_spoken operation=%s code=%s",
+                operation,
+                result.get("error") or result.get("reason") or "unknown",
+            )
+            raise StopResponse()
+        except StopResponse:
+            raise
+        except Exception as exc:  # noqa: BLE001 - result remains authoritative
+            logger.warning(
+                "deterministic_mutation_failure_speech_failed operation=%s: %s",
+                operation,
+                exc,
+            )
 
     def _speak_grounded_fast_path(
         self, context: RunContext, text: str, kind: str
@@ -3527,6 +3594,11 @@ class VachanamAgent(Agent):
                     old_token_id[-8:],
                     str(self._state.branch_id),
                 )
+                self._stop_on_mutation_failure(
+                    context,
+                    "reschedule",
+                    {"success": False, "error": "reschedule_outcome_unverified"},
+                )
                 return {
                     "success": False,
                     "error": "reschedule_outcome_unverified",
@@ -3544,6 +3616,8 @@ class VachanamAgent(Agent):
                 time_=resolved_time,
             ):
                 raise StopResponse()
+        if not result.get("success"):
+            self._stop_on_mutation_failure(context, "reschedule", result)
         return result
 
     async def _do_reschedule(
@@ -3955,6 +4029,11 @@ class VachanamAgent(Agent):
                 token_id[-8:],
                 str(self._state.branch_id),
             )
+            self._stop_on_mutation_failure(
+                context,
+                "cancel",
+                {"success": False, "error": "cancellation_outcome_unverified"},
+            )
             return {
                 "success": False,
                 "error": "cancellation_outcome_unverified",
@@ -3969,6 +4048,8 @@ class VachanamAgent(Agent):
             and self._speak_deterministic_confirm(context, "cancelled")
         ):
             raise StopResponse()
+        if not result.get("success"):
+            self._stop_on_mutation_failure(context, "cancel", result)
         return result
 
     def _clear_hold(self) -> None:
