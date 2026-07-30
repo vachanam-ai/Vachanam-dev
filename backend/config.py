@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     # narrow tts_node clock-time tripwire backstop. Default OFF: with it off,
     # behaviour is identical to today until validated on real calls.
     voice_grounding_gate: bool = False
+    # Kill-switch for the Phase 3 phonetic STT clinic-term map (2026-07-30):
+    # before routing a turn, snap a transcript token that ALMOST matches a
+    # clinic-vocabulary term (doctor name / specialty / day word) to that term,
+    # so a Soniox mishear ("lakshmee") resolves to the real roster spelling.
+    # Conservative (token-wise, phonetic_fold + difflib >= threshold). Default
+    # OFF: with it off, transcripts reach routing byte-identical to today.
+    voice_stt_clinic_map: bool = False
     # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
     # which is faster than either global model from the Fly Mumbai worker.
     gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"

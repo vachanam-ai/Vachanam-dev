@@ -101,6 +101,41 @@ def phonetic_fold(s: str) -> str:
     return " ".join(s.split())
 
 
+def nearest_clinic_term(
+    token: str, vocab: list[str], *, threshold: float = 0.82
+) -> str | None:
+    """Return the clinic-vocabulary term whose ``phonetic_fold`` best matches
+    ``token``'s fold at or above ``threshold``, else None — the STT-mishear
+    corrector (Phase 3, 2026-07-30). Same tech as booking_tools._fuzzy_overlap:
+    fold both sides, compare with difflib.
+
+    Conservative by design (RULE 6/8, spec §4.2): an EXACT fold match returns
+    immediately (any length); a FUZZY match needs both folds >= 4 chars so a
+    short token ("me", "mon") can never be dragged onto a doctor name. On a tie
+    the first vocab term wins. Best-effort — an empty token or vocab yields None.
+    """
+    tok = phonetic_fold(token or "")
+    if not tok:
+        return None
+    from difflib import SequenceMatcher
+
+    best: str | None = None
+    best_ratio = threshold
+    for term in vocab or []:
+        folded = phonetic_fold(term or "")
+        if not folded:
+            continue
+        if folded == tok:
+            return term
+        if len(tok) < 4 or len(folded) < 4:
+            continue
+        ratio = SequenceMatcher(None, tok, folded).ratio()
+        if ratio >= best_ratio:
+            best_ratio = ratio
+            best = term
+    return best
+
+
 def romanize(text: str | None, src: str | None = None) -> str:
     """Indic → ASCII Latin (ISO-15919, diacritics stripped). A Latin/empty input
     returns unchanged. Best-effort: returns the input on any failure (RULE 8)."""
