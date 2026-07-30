@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     # Kill-switch for the rewritten v21 prompt scaffold (2026-07-30). Default OFF:
     # production keeps the proven v20 prompt until v21 is validated on real calls.
     voice_prompt_v21: bool = False
+    # Kill-switch for the Phase 2 structural grounding gate (2026-07-30): extends
+    # the pre-LLM grounded turn handler to fee/hours/booking-status intents
+    # (think-cue then tool/FAQ-only proof, abstain on no match) and arms the
+    # narrow tts_node clock-time tripwire backstop. Default OFF: with it off,
+    # behaviour is identical to today until validated on real calls.
+    voice_grounding_gate: bool = False
     # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
     # which is faster than either global model from the Fly Mumbai worker.
     gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"
