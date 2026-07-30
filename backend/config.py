@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     # Conservative (token-wise, phonetic_fold + difflib >= threshold). Default
     # OFF: with it off, transcripts reach routing byte-identical to today.
     voice_stt_clinic_map: bool = False
+    # Kill-switch for the Phase 4 language anti-drift (2026-07-30). When on:
+    # (1) a terse active-language anchor is refreshed as the last context item
+    # EVERY turn so a switch never decays back within 1-2 turns (#466), and
+    # (2) the switch carries a harder-trimmed old-language history (keep 4, not
+    # 8) with the pending question preserved. Default OFF: the one-time switch
+    # drift guard + keep-8 window behave exactly as today until real-call check.
+    voice_lang_anchor: bool = False
     # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
     # which is faster than either global model from the Fly Mumbai worker.
     gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"

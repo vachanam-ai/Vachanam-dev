@@ -757,7 +757,12 @@ def _guard_human_booking(state: SessionState) -> None:
         )
 
 
-def _append_switch_drift_guard(chat_ctx, code: str) -> None:
+# Task 4.2 (voice_lang_anchor): sentinel prefix so the per-turn active-language
+# anchor is found and replaced each turn instead of stacking.
+_LANG_ANCHOR_PREFIX = "[Active language:"
+
+
+def _append_switch_drift_guard(chat_ctx, code: str, keep: int | None = None) -> None:
     """Append a recency-salient language-lock as the LAST item of the history a
     language switch carries across the handoff.
 
@@ -776,9 +781,23 @@ def _append_switch_drift_guard(chat_ctx, code: str) -> None:
     # language — the booking flow survives on SessionState (doctor/slot/name/step),
     # so only stale conversational turns are cut, and the recent window keeps the
     # pending question + last exchange intact.
+    keep = _SWITCH_CTX_KEEP if keep is None else keep
     try:
-        if len(chat_ctx.items) > _SWITCH_CTX_KEEP:
-            chat_ctx.truncate(max_items=_SWITCH_CTX_KEEP)
+        items = list(getattr(chat_ctx, "items", []) or [])
+        if len(items) > keep:
+            # Task 4.3: the last USER turn is the pending question the new-language
+            # agent must answer — preserve it even if the recent window would drop
+            # it (a rare burst of assistant/tool items right before the switch).
+            last_user = next(
+                (it for it in reversed(items) if getattr(it, "role", None) == "user"),
+                None,
+            )
+            chat_ctx.truncate(max_items=keep)
+            if last_user is not None and last_user not in getattr(chat_ctx, "items", []):
+                try:
+                    chat_ctx.items.insert(0, last_user)
+                except Exception:  # noqa: BLE001
+                    pass
     except Exception:  # noqa: BLE001 — trimming is best-effort
         pass
     name = get_lang(code).name
@@ -2226,6 +2245,16 @@ class VachanamAgent(Agent):
         except Exception as e:  # noqa: BLE001 — a latency aid must never break a turn
             logger.warning("prefetch_routing_error: %s", e)
 
+        # Task 4.2 (voice_lang_anchor): re-anchor the active language as the last
+        # ctx item on EVERY turn that reaches a generation, so the switch signal
+        # never decays. Runs last (all deterministic StopResponse branches above
+        # already returned) so the anchor is the final thing read before the LLM.
+        if settings.voice_lang_anchor:
+            try:
+                self._refresh_lang_anchor(turn_ctx)
+            except Exception as e:  # noqa: BLE001 — an anti-drift aid must never break a turn
+                logger.warning("lang_anchor_error: %s", e)
+
     async def _read_availability(self, **kwargs) -> str:
         """Availability reads recover once on a fresh pooled connection."""
         async def _check(db):
@@ -2548,6 +2577,32 @@ class VachanamAgent(Agent):
             new_message.text_content = remapped
         if isinstance(getattr(new_message, "content", None), str):
             new_message.content = remapped
+
+    def _refresh_lang_anchor(self, ctx) -> None:
+        """Task 4.2 (voice_lang_anchor): keep ONE terse active-language directive
+        as the last context item EVERY turn, so a language switch never decays
+        back within 1-2 turns (#466: the one-time switch guard loses to the
+        old-language history on recency). Any prior anchor is removed first so it
+        never stacks. Best-effort — a missing/odd context is a no-op."""
+        if ctx is None:
+            return
+        items = getattr(ctx, "items", None)
+        if items is None:
+            return
+        try:
+            kept = [
+                it for it in items
+                if not self._message_text(it).lstrip().startswith(_LANG_ANCHOR_PREFIX)
+            ]
+            if len(kept) != len(items):
+                items[:] = kept
+        except Exception:  # noqa: BLE001 — best-effort de-dup
+            pass
+        name = get_lang(self._lang_code).name
+        ctx.add_message(
+            role="user",
+            content=f"{_LANG_ANCHOR_PREFIX} {name}. Reply only in {name}.]",
+        )
 
     @staticmethod
     def _normalize_for_echo(s: str) -> str:
@@ -3651,7 +3706,11 @@ class VachanamAgent(Agent):
         # item so the very next generation reads it immediately before answering.
         if _SWITCH_DRIFT_GUARD:
             try:
-                _append_switch_drift_guard(_cc, code)
+                # Task 4.3: with the anti-drift flag on, trim the carried
+                # old-language history harder (keep 4, not 8) so its recency mass
+                # can't out-vote the new language; off => today's keep-8 window.
+                _keep = 4 if settings.voice_lang_anchor else None
+                _append_switch_drift_guard(_cc, code, keep=_keep)
             except Exception:  # noqa: BLE001 — reminder is best-effort, switch anyway
                 pass
         new_agent = self._agent_factory(code, chat_ctx=_cc)
