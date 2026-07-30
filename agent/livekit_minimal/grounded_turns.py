@@ -206,35 +206,36 @@ def extract_exact_time(text: str, reference: time | None = None) -> time | None:
 # --------------------------------------------------------------------------
 # Task 2.3 (voice_grounding_gate tts_node tripwire, 2026-07-30): a NARROW,
 # conservative detector for "this text states a specific clock time" — used
-# ONLY to decide whether an ungrounded reply needs to be blocked. A bare
-# number (a token, an age, a phone digit) never trips it; only an explicit
-# digit clock (11:30, 9.45) or a digit/number-word paired with an explicit
-# am/pm/o'clock/day-part marker does. Err toward NOT matching — a missed
-# hallucination is a smaller harm than blocking a legitimate reply into dead
-# air (spec 2026-07-30-voice-prompt-redesign-design.md §4.1/§7).
+# ONLY to decide whether an ungrounded reply needs to be blocked. Matches ONLY
+# an explicit digit clock (11:30, 9.45) or a digit + am/pm (5 pm, 11am), both
+# word-bounded. A bare number (a token, an age, a phone digit) never trips it.
+# Err toward NOT matching — a missed hallucination is a smaller harm than
+# blocking a legitimate reply into dead air (spec §4.1/§7).
+#
+# The earlier hour-word + marker branch was REMOVED (final review C1,
+# 2026-07-30): it substring-matched short tokens ("am"⊂"name", "one"⊂"phone",
+# the Telugu datives "కి"/"కు"), so ordinary receptionist lines like "your name
+# and phone number" or "five hundred rupees" tripped it and the tts_node
+# tripwire swallowed them into the hold line. A spelled-out time ("eleven
+# thirty") now slips through instead — the safe (under-trip) failure mode, and
+# the agent speaks times as digits anyway.
 # --------------------------------------------------------------------------
 _CLOCK_DIGIT_RE = re.compile(
     r"(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)"          # 11:30 / 9.45
     r"|(?<!\d)([01]?\d|2[0-3])\s*(a\.?m\.?|p\.?m\.?)(?!\w)",  # 5 pm / 11am
     re.IGNORECASE,
 )
-_HOUR_WORDS = tuple({**_TELUGU_HOURS, **_ENGLISH_HOURS})
 
 
 def asserts_clock_time(text: str) -> bool:
-    """True only when TEXT states a specific clock time. Conservative by
-    design — a false negative (a hallucinated time slips through) is safer
-    than a false positive (a legitimate reply replaced by dead air)."""
+    """True only when TEXT states a specific clock time (explicit digit clock or
+    digit+am/pm). Conservative by design — a false negative (a hallucinated time
+    slips through) is safer than a false positive (a legitimate reply replaced
+    by dead air)."""
     low = (text or "").lower()
     if not low:
         return False
-    if _CLOCK_DIGIT_RE.search(low):
-        return True
-    if any(marker in low for marker in _TIME_MARKERS) and any(
-        word in low for word in _HOUR_WORDS
-    ):
-        return True
-    return False
+    return bool(_CLOCK_DIGIT_RE.search(low))
 
 
 # --------------------------------------------------------------------------
@@ -249,8 +250,14 @@ _BOOKING_STATUS_TERMS = (
     "నా టోకెన్", "ఎన్నో నంబర్", "క్యూ", "నా టర్న్", "ఎంతమంది ఉన్నారు",
     "मेरा टोकन", "कौन सा टोकन", "कतार", "मेरी बारी",
 )
+# NOTE (final review I3, 2026-07-30): bare "how much" was REMOVED — it
+# mis-classified "how much TIME will it take" as a fee question, and (worse)
+# match_faq_by_intent could then return a duration FAQ ("how much time for a
+# filling" → "about 45 minutes") as the FEE answer. Fee context now needs an
+# actual money word; "how much does it cost / what's the fee" still match on
+# "cost"/"fee", and a bare "how much?" falls through to the LLM.
 _FEE_TERMS = (
-    "fee", "fees", "charge", "charges", "cost", "price", "how much",
+    "fee", "fees", "charge", "charges", "cost", "price",
     "ఫీజు", "ఫీజు ఎంత", "డబ్బు ఎంత", "రేటు", "శుల్కం", "ఎంత తీసుకుంటారు",
     "फीस", "शुल्क", "कितना पैसा", "कितने पैसे", "रेट",
 )

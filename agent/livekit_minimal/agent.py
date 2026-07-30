@@ -2019,25 +2019,43 @@ class VachanamAgent(Agent):
                 _first = False
             yield frame
 
+    def _has_grounded_time_context(self) -> bool:
+        """True once THIS CALL has any real source for a clock time — an
+        availability read ran (this turn or earlier this call), a slot is
+        held, a booking is confirmed, or a time was already checked. The
+        tripwire only ever fires BEFORE such a source exists (the genuine
+        hallucination window: the model naming a time with nothing to back it).
+        Once a real time is established, restating it later — the confirmation
+        question, the booking readback, a follow-up — is grounded, so the
+        tripwire must NOT swallow it (final review C2/I1/I2, 2026-07-30). These
+        are session-level (not per-turn-reset), so they also survive a barge-in
+        that resets the per-turn flag mid-synthesis (M2)."""
+        st = self._state
+        return bool(
+            st.availability_tool_ran
+            or st.token_held
+            or st.token_confirmed
+            or st.last_availability_query_time is not None
+        )
+
     async def _grounding_tripwire_stream(self, text):
         """Task 2.3 (voice_grounding_gate, 2026-07-30): a narrow, conservative
-        backstop — a reply asserting a specific clock time when NO
-        availability tool ran THIS turn (self._state.availability_tool_ran)
-        cannot have gotten that time from anywhere real. Blocks it with the
-        hold line instead of letting an invented time reach the caller.
+        backstop — a reply asserting a specific clock time when this call has NO
+        grounded time source yet cannot have gotten that time from anywhere
+        real. Blocks it with the hold line instead of letting an invented time
+        reach the caller.
 
         Deliberately conservative (design spec §4.1/§7: "a false trip = dead
         air", "err toward passing"):
-          - a no-op pass-through whenever the flag is off, or the
-            availability tool DID run this turn — the overwhelming majority
-            of turns, streamed exactly as before, no added latency;
+          - a no-op pass-through whenever the flag is off, or a grounded time
+            context exists (see _has_grounded_time_context) — the overwhelming
+            majority of turns, streamed exactly as before, no added latency;
           - only a SMALL bounded carry (not the whole reply) is held back per
             chunk, so ordinary non-time speech keeps streaming near-live;
-          - asserts_clock_time is narrow by design (explicit digit clock, or
-            an hour-word paired with an explicit am/pm/day-part marker) — a
-            bare number (a token, an age) never trips it.
+          - asserts_clock_time is narrow by design (explicit digit clock or
+            digit+am/pm only) — a bare number (a token, an age) never trips it.
         """
-        if not settings.voice_grounding_gate or self._state.availability_tool_ran:
+        if not settings.voice_grounding_gate or self._has_grounded_time_context():
             async for chunk in text:
                 yield chunk
             return
@@ -2369,6 +2387,14 @@ class VachanamAgent(Agent):
         intent = clinic_fact_intent(text)
         if intent is None:
             return False
+
+        # This turn now answers a clinic fact ONLY from the FAQ/DB below — every
+        # line spoken here is grounded by construction. Mark the turn grounded so
+        # the tts_node clock-time tripwire never swallows a legitimate hours
+        # answer that contains an am/pm ("We are open 9 AM to 8 PM") — final
+        # review C2, 2026-07-30. (No effect with the gate off; nothing else on a
+        # fee/hours/booking-status turn asserts a clock time.)
+        self._state.availability_tool_ran = True
 
         # ask_doctor/hold_line are LangPack (grounded_prompt.PACKS) fields —
         # NOT agent.i18n.lines.Lines (get_lines), a different pack keyed the

@@ -14,6 +14,11 @@ from livekit.agents import StopResponse
 
 from agent.livekit_minimal import agent as agent_module
 from agent.livekit_minimal.agent import VachanamAgent
+from agent.livekit_minimal.grounded_turns import (
+    asserts_clock_time,
+    clinic_fact_intent,
+    match_faq_by_intent,
+)
 from agent.prompts.system_prompt import DoctorContext
 from agent.session_state import SessionState
 
@@ -336,6 +341,80 @@ async def test_tripwire_detects_a_clock_time_split_across_chunk_boundary(monkeyp
     )
     assert "11:30" not in out and "pm" not in out
     assert agent._state.availability_recheck_needed is True
+
+
+# ── Final-review fixes (2026-07-30): C1 detector, C2/I2 grounded context, I3 ──
+
+
+def test_asserts_clock_time_does_not_trip_on_ordinary_speech():
+    """C1: the detector must NOT fire on common receptionist lines. The old
+    substring branch matched 'am'⊂'name' and 'one'⊂'phone' — regression-locked."""
+    for line in [
+        "Can I have your name and phone number?",
+        "What is your name and phone?",
+        "that costs five hundred rupees",
+        "okay, booking for eleven thirty tomorrow morning",  # spelled-out: under-trip is safe
+        "your token number is eight",
+    ]:
+        assert asserts_clock_time(line) is False, line
+
+
+def test_asserts_clock_time_still_catches_real_clock_times():
+    for line in ["the slot is 11:30", "9 am works", "at 5 pm", "3:45 pm"]:
+        assert asserts_clock_time(line) is True, line
+
+
+@pytest.mark.asyncio
+async def test_hours_faq_answer_is_not_swallowed_by_tripwire(monkeypatch):
+    """C2: an hours answer ("9 AM to 8 PM") trips asserts_clock_time, so the
+    fact-turn must mark the turn grounded — otherwise the tripwire eats the
+    agent's own hours answer. Assert the grounded context is established."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", True)
+    session = _RecordingSession()
+    agent = _agent(faq=[{"q": "clinic timings", "a": "We are open 9 AM to 8 PM."}])
+    _attach_session(monkeypatch, session)
+
+    with pytest.raises(StopResponse):
+        await agent.on_user_turn_completed(
+            SimpleNamespace(items=[]), _message("what are your clinic hours")
+        )
+    assert agent._has_grounded_time_context() is True
+    # the hours answer, streamed through the tripwire now, survives
+    out = await _collect(agent._grounding_tripwire_stream(_stream("We are open 9 AM to 8 PM.")))
+    assert out == "We are open 9 AM to 8 PM."
+
+
+@pytest.mark.asyncio
+async def test_restated_time_passes_once_availability_was_checked(monkeypatch):
+    """I2: after a real availability check (last_availability_query_time set),
+    the LLM restating that time during name/age collection must pass, not be
+    swallowed — even though no tool ran on THIS turn."""
+    from backend.config import settings
+    from datetime import time
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", True)
+    agent = _agent()
+    agent._state.availability_tool_ran = False
+    agent._state.last_availability_query_time = time(11, 30)
+
+    out = await _collect(
+        agent._grounding_tripwire_stream(_stream("so, 11:30 with Dr Ravi — your name?"))
+    )
+    assert "11:30" in out
+    assert agent._state.availability_recheck_needed is False
+
+
+def test_how_much_time_is_not_a_fee_intent():
+    """I3: a duration question must not be classified as fee (and answered from
+    a duration FAQ as if it were a price)."""
+    assert clinic_fact_intent("how much time will it take") is None
+    assert clinic_fact_intent("what is the consultation fee") == "fee"
+    assert clinic_fact_intent("how much does it cost") == "fee"
+    # a duration FAQ is never returned as the fee answer
+    duration_faq = [{"q": "how much time for a filling", "a": "about 45 minutes"}]
+    assert match_faq_by_intent("fee", duration_faq) is None
 
 
 @pytest.mark.asyncio
