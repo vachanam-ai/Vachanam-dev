@@ -91,3 +91,37 @@ def test_v21_switch_section_minimal_no_full_native_dump(monkeypatch):
     p = _v21(monkeypatch, "te")
     # Devanagari (Hindi) native switch_affirm must NOT appear in a Telugu render.
     assert "हाँ जी, हिंदी में बात कर सकती हूँ." not in p
+
+
+# --------------------------------------------------------------------------
+# Task 1.4 — v21 behaviour-parity coverage gate
+# --------------------------------------------------------------------------
+
+
+def test_v21_keeps_core_rules(monkeypatch):
+    """The v21 render must still carry every load-bearing rule, positively
+    phrased. Anchors are paraphrase-independent: generic words the scaffold
+    can't drop without silently losing the behaviour, not exact v20 wording.
+    """
+    from agent.prompts.grounded_prompt import _pack
+    p = _v21(monkeypatch, "te")
+    pack = _pack("te")
+
+    # tool-first grounding: a fact this turn comes from a tool result, not a guess
+    assert "TOOL RESULT" in p and "tool" in p.lower()
+    # past-date guard: a gone time/date is never offered
+    assert "past" in p.lower()
+    # find-before-book: check existing bookings before offering a new one
+    assert "find_my_bookings" in p
+    # cancel readback: the explicit yes-gate before a one-way cancel
+    assert "cancel" in p.lower() and pack.cancel_ask in p
+    # one-question rule: exactly one yes-question per confirmation
+    assert "one" in p.lower() and "question" in p.lower()
+    # switch-in-new-language: the switch reply itself proves the new language
+    assert "NEW language" in p
+    # off-topic redirect: the pack's own rendered redirect line is present
+    assert pack.off_topic in p
+    # no-medical-advice: diagnosis/advice/triage stay with the doctor
+    assert "no diagnosis" in p and "no advice" in p
+    # emergency: real distress/danger surfaces the clinic's own emergency contact
+    assert "emergency" in p.lower()
