@@ -9,13 +9,13 @@ from backend.config import settings
 
 def test_settings_database_url_is_fused_to_test_db():
     assert settings.database_url == settings.test_database_url
-    assert "neon.tech" not in settings.database_url
+    assert "supabase.com" not in settings.database_url
     assert "_test" in settings.database_url or "test_" in settings.database_url
 
 
 def test_module_engine_points_at_test_db():
     url = str(dbm.engine.url)
-    assert "neon.tech" not in url
+    assert "supabase.com" not in url
     assert "_test" in url or "test_" in url
 
 
@@ -27,7 +27,7 @@ async def test_get_db_sessions_bind_to_test_engine():
     session = await agen.__anext__()
     try:
         url = str(session.bind.url)
-        assert "neon.tech" not in url
+        assert "supabase.com" not in url
         assert "_test" in url or "test_" in url
     finally:
         await agen.aclose()

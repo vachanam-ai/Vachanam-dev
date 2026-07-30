@@ -112,7 +112,7 @@ History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07
 
 | Layer | Tool |
 |---|---|
-| STT | Soniox Japan stt-rt-v5 primary → Sarvam Saaras v3 fallback when SONIOX_JP_API_KEY is unset |
+| STT | Soniox Japan stt-rt-v5 — SOLE provider (Sarvam removed 2026-07-30; a missing SONIOX_JP_API_KEY raises, no fallback) |
 | TTS | Soniox Japan tts-rt-v1 (Priya default; Telugu script input) |
 | LLM | Cached Gemini 2.5 Flash on Vertex Mumbai → Gemini 3.5 Flash-Lite fast global fallback → Gemini 3.6 Flash quality fallback |
 | Voice pipeline | LiveKit Agents (chosen 2026-06-10 over Pipecat: outbound works, jitter buffer, scale) |
@@ -120,7 +120,7 @@ History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07
 | Token locking | Redis atomic INCR (Upstash in prod) |
 | Calendar | Google Calendar API v3, service account |
 | WhatsApp | Meta Cloud API (MVP2) |
-| DB | Neon Postgres, SQLAlchemy 2.x async, Alembic |
+| DB | Supabase Postgres (Mumbai/ap-south-1 pooler; migrated off Neon 2026-07-30), SQLAlchemy 2.x async, Alembic |
 | Backend | FastAPI + APScheduler |
 | Agent host | Fly.io Mumbai · API host: Render · Frontend: React+Vite PWA on Cloudflare Pages |
 | Payments | Razorpay · Monitoring: UptimeRobot · Logs: structlog JSON · Retry: tenacity |
@@ -182,10 +182,10 @@ with conventional messages (`feat:`, `fix:`, `test:`, `docs:`, `perf:`).
 
 ## ENVIRONMENT VARIABLES
 
-`.env.example` is the canonical list (~26 vars: Sarvam/OpenAI/Gemini keys,
-LiveKit, Vobiz SIP + partner, Meta, Google OAuth + SA, DATABASE_URL,
-REDIS_URL, JWT, Razorpay, app config). Keep it in sync with
-`backend/config.py` — drift there has bitten us before.
+`.env.example` is the canonical list (~25 vars: OpenAI/Gemini keys,
+Soniox JP key, LiveKit, Vobiz SIP + partner, Meta, Google OAuth + SA,
+DATABASE_URL (Supabase), REDIS_URL, JWT, Razorpay, app config). Keep it in sync
+with `backend/config.py` — drift there has bitten us before.
 
 ---
 

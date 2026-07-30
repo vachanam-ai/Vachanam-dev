@@ -31,6 +31,10 @@ markdown>=3.6
 # PDF invoices attached to payment mails (#357). Pure Python, no system deps.
 fpdf2>=2.8,<3
 bcrypt>=5.0.0
+# Offline Latin<->Indic transliteration (agent voice path: name pronunciation
+# RULE 6 + cross-script identity #467; replaced the Sarvam API 2026-07-30).
+# Runtime-used only by the agent, but the CI suite imports agent.i18n here.
+indic-transliteration==2.3.82
 
 # LiveKit dispatch SDK — the reminder / cascade-rebook / follow-up jobs create
 # outbound agent dispatches via `from livekit import api`. Without this the

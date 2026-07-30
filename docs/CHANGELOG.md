@@ -13,6 +13,65 @@ Format per session:
 
 ---
 
+## 2026-07-30 — Migrate DB to Supabase; remove Neon and Sarvam entirely
+
+**Why (Vinay):** (1) latency — Supabase Postgres runs in Mumbai/ap-south-1,
+next to the Fly agent and India callers (Neon was Singapore/ap-southeast-1);
+(2) reliability — the voice agent frequently said "unable to connect to
+database". Root cause of #2 was the agent's direct-asyncpg helpers using
+`ssl=True` (full cert verification), which the Supabase pooler cert fails —
+already fixed to `ssl="require"` in a37f529; this session finished the cutover.
+
+**Neon → Supabase (fully removed):**
+- `.env` DATABASE_URL/SUPABASE_* already point at the Supabase Mumbai pooler;
+  removed the dead `NEON_ROLLBACK_URL` and the `neon` MCP server (`.mcp.json`).
+- Renamed the warm-keeper: `_neon_warm_loop`/`neon_warm_task` → `_db_warm_loop`/
+  `db_warm_task` (backend/main.py) and the agent heartbeat `_neon_tick` →
+  `_db_tick`, `neon_warm_ping_failed` → `db_warm_ping_failed`. Loop kept (still
+  useful: warm pooled connection + prevents Supabase's ~7-day idle pause).
+- **Safety:** the test-prod fuse (conftest.py, #324) now blocks `supabase.com`
+  (current prod) in addition to `neon.tech`; guard tests parametrized.
+- Verified live (read-only): all 3 Supabase URLs connect (PostgreSQL 17.6),
+  TLS 1.3 at the socket, schema at head `kk34_schema_alignment`, data present.
+
+**Sarvam → removed entirely; Soniox is the sole STT (Vinay's call):**
+- STT: `_build_stt` is Soniox-only; a missing `SONIOX_JP_API_KEY` now RAISES
+  (no fallback — loud > silent dead line). Removed the `sarvam` plugin import,
+  `livekit-plugins-sarvam` dep, `sarvam_api_key` + `stt_provider` config fields,
+  and SARVAM_API_KEY from `.env(.example)`, render.yaml, fly/Dockerfile, CI/ZAP.
+- **Transliteration (was Sarvam's real load-bearing use, NOT STT): replaced the
+  Sarvam Transliterate API with the OFFLINE `indic-transliteration` library.**
+  Correction to the premise "Soniox covers names": Soniox is speech; the
+  transliterate job is text→text script conversion (no Soniox/VAD equivalent).
+  Offline is deterministic, free, no network, and does Indic→Indic directly.
+  - `agent/i18n/transliterate.py` rewritten: `romanize` (Indic→ASCII ISO),
+    `phonetic_fold` (spelling-insensitive match key: ś/sh/s · v/w · aspiration-h
+    · doubles), `spoken_text`/`spoken_name` kept (async signatures unchanged).
+  - #467 cross-script identity (`caller_name_matches`): folds both sides +
+    `_fuzzy_overlap` (difflib ≥0.82) — proven on వినయ్/శ్రీనివాస్/లక్ష్మి/
+    వెంకటేశ్వర; distinct names still rejected.
+  - #294 doctor resolve (`_resolve_doctor_id`): fold-aware substring match.
+
+**Privacy (DPDP):** patient names no longer leave the process for
+transliteration; DB now in India (Mumbai). privacy-policy.md updated — one
+speech-recognition provider (backup removed), DB region Singapore → Mumbai.
+
+**Files:** backend/{config.py,main.py,requirements.txt}, backend/database.py
+(pooler config already present), agent/livekit_minimal/{agent.py,requirements.txt},
+agent/i18n/{transliterate.py,languages.py}, agent/tools/booking_tools.py,
+.env(.example), .mcp.json, render.yaml, infra/{Dockerfile.agent,fly.agent.toml},
+.github/workflows/{ci,zap-baseline}.yml, docs/legal/privacy-policy.md,
+tests/* (transliterate, stt_factory, july4-names, security_review_fixes,
+conftest+guards+prod_fuse, multilingual, language_switch, seed, legal, support_kb,
+attack_surface); deleted scripts/generate_clinic_greeting.py (obsolete Sarvam TTS).
+
+**Follow-ups:** (1) name-pronunciation (Latin→Indic TTS) is best-effort offline
+— needs a real-call check (Soniox TTS may handle Latin names anyway; kill-switch
+if bad). (2) Deploy: cut a release so Render+Fly pick up the ssl="require" fix +
+this cutover; confirm both hosts' DATABASE_URL = Supabase. (3) TD-028: stale
+Neon wake-gate comments + re-evaluate whether the #299 wake-gate machinery is
+still needed under Supabase (no per-wake billing).
+
 ## 2026-07-29 — Prime Soniox synthesis before the caller's first turn
 
 The newest 139-second production call was correlated to latency session

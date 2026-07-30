@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     soniox_jp_api_key: str = ""
     # #406: Japan measured 4ms from Fly bom vs 230ms to the US endpoint.
     soniox_jp_stt_ws_url: str = "wss://stt-rt.jp.soniox.com/transcribe-websocket"
-    sarvam_api_key: str           # Sarvam Saaras v3 — STT fallback
     # Soniox's documented low-latency endpoint profile. Server-side semantic
     # finalization is the single owner of the boundary; the client timer below
     # stays disabled so normal Telugu pauses are never finalized twice.
@@ -21,9 +20,6 @@ class Settings(BaseSettings):
     # 200ms; values 1..199 are rejected to prevent the inaccurate immediate-
     # finalize behavior reverted in #399.
     soniox_manual_finalize_delay_ms: int = 0
-    # auto = Soniox when keyed, otherwise Sarvam; sarvam gives operations a
-    # reversible provider A/B without deleting/rotating the Soniox credential.
-    stt_provider: str = 'auto'
     openai_api_key: str
     gemini_api_key: str
 
@@ -249,14 +245,6 @@ class Settings(BaseSettings):
         if not 1 <= value <= 50:
             raise ValueError('must be between 1 and 50')
         return value
-
-    @field_validator('stt_provider')
-    @classmethod
-    def _valid_stt_provider(cls, value: str) -> str:
-        normalized = value.strip().lower()
-        if normalized not in {'auto', 'soniox', 'sarvam'}:
-            raise ValueError('must be auto, soniox, or sarvam')
-        return normalized
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

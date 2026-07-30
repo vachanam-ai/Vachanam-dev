@@ -1,9 +1,9 @@
-"""Language registry: Branch.language code -> Sarvam codes + display names.
+"""Language registry: Branch.language code -> language codes + display names.
 
-Sarvam Saaras v3 (STT) and Bulbul v3 (TTS) both accept the *-IN language codes
-below. Bulbul speakers are language-agnostic — the SAME speaker (Branch.tts_voice)
-voices any target_language_code — so only the language code changes per clinic,
-not the speaker.
+`code` (short, e.g. "te") is what Soniox STT/TTS use. `stt_code` (*-IN, e.g.
+"te-IN") is a stable per-language identifier now used by offline transliteration
+(agent/i18n/transliterate.py); it dates from the Sarvam era (removed 2026-07-30)
+but the values are unchanged, so nothing that keys on it needed to move.
 """
 from dataclasses import dataclass
 
@@ -14,7 +14,7 @@ class LangConfig:
     name: str          # English name, used in the system prompt directive
     native_name: str   # endonym, shown in the Settings dropdown
     script: str        # script name, used in the system prompt directive
-    stt_code: str      # Sarvam Saaras language= (STT)
+    stt_code: str      # *-IN language identifier; used by offline transliteration
     tts_code: str      # Soniox TTS language code — same as internal `code`
     default_voice: str  # Soniox catalog voice when the clinic hasn't chosen one
 

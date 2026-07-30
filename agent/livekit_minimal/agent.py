@@ -59,7 +59,7 @@ from livekit.agents import (  # noqa: E402
 from livekit.agents import llm as lk_llm  # noqa: E402
 from livekit.agents import stt as lk_stt  # noqa: E402
 from livekit.agents.llm import ChatContext  # noqa: E402
-from livekit.plugins import google, noise_cancellation, sarvam, silero, soniox  # noqa: E402
+from livekit.plugins import google, noise_cancellation, silero, soniox  # noqa: E402
 from livekit.plugins.turn_detector.multilingual import MultilingualModel  # noqa: E402
 
 import redis.asyncio as aioredis  # noqa: E402
@@ -83,7 +83,7 @@ from backend.services.clinic_cache import (  # noqa: E402
     get_doctors,
     load_doctors,
 )
-from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
+from agent.i18n.transliterate import phonetic_fold, spoken_name, spoken_text  # noqa: E402
 from agent.livekit_minimal.confirm_speech import (  # noqa: E402
     build_confirm_text,
     build_exact_availability_text,
@@ -1371,14 +1371,15 @@ def _build_stt(
     context_terms: list | None = None,
     finalize_controller: _SonioxFinalizeController | None = None,
 ):
-    """STT factory (FIXLOG #300): Soniox stt-rt-v5 primary when SONIOX_JP_API_KEY
-    is set (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu vs
-    Sarvam), Sarvam Saaras v3 fallback otherwise so a missing/revoked Soniox
-    key can never take the clinic offline (RULE 8).
+    """STT factory (FIXLOG #300): Soniox stt-rt-v5, the SOLE STT provider
+    (Vinay 2026-07-10 — better accuracy, ~$0.12/hr real-time Telugu; Sarvam
+    removed 2026-07-30). A missing SONIOX_JP_API_KEY raises — there is no
+    fallback provider, so the failure is loud at call setup, not a silent dead
+    line.
 
-    language_hints_strict pins recognition to ONE language per call — same
-    strict-language rule as Sarvam's fixed `language=` (Vinay 2026-06-17:
-    auto-detect degrades on shared Indian-language words). Language change
+    language_hints_strict pins recognition to ONE language per call (Vinay
+    2026-06-17: auto-detect degrades on shared Indian-language words). Language
+    change
     happens ONLY via the switch_language agent handoff, which builds a new
     STT through this same factory. #442 changes one control at a time:
     semantic latency level 1 is the production canary; sensitivity is unset,
@@ -1394,9 +1395,14 @@ def _build_stt(
     real roster instead of phonetic lookalikes. Accuracy lever only — zero
     endpointing/latency risk.
     """
-    provider = settings.stt_provider
-    use_soniox = provider != 'sarvam' and bool(settings.soniox_jp_api_key)
-    if use_soniox:
+    # Soniox is the SOLE STT provider (Sarvam removed 2026-07-30). No fallback —
+    # a missing key is a hard config error, raised loudly at call setup rather
+    # than silently degrading to a dead line.
+    if not settings.soniox_jp_api_key:
+        raise RuntimeError(
+            "SONIOX_JP_API_KEY is required — STT has no fallback provider."
+        )
+    if settings.soniox_jp_api_key:
         ctx = None
         terms = [t for t in (context_terms or []) if t and t.strip()]
         if terms:
@@ -1448,16 +1454,6 @@ def _build_stt(
                 endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level,
             ),
         )
-    if provider == 'soniox':
-        logger.error('stt_provider=soniox requested without key; falling back to Sarvam')
-    else:
-        logger.info('stt_config provider=sarvam requested=%s', provider)
-    return sarvam.STT(
-        api_key=settings.sarvam_api_key,
-        model="saaras:v3",
-        language=lang_cfg.stt_code,
-        flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
-    )
 
 
 def _vertex_credentials() -> tuple[str, str] | None:
@@ -2367,9 +2363,11 @@ class VachanamAgent(Agent):
                 # LIVE 2026-07-08: patient asked for "డాక్టర్ లక్ష్మి" by name; the
                 # LLM passed the NATIVE-SCRIPT name, DB names are Latin
                 # ("Lakshmi") → substring never matched → "Unknown doctor" killed
-                # the whole booking. Transliterate the needle to Latin before
-                # matching (cached Sarvam hop; on failure returns input — RULE 8,
-                # we then fall through to the instructive error below).
+                # the whole booking. Transliterate the needle to ASCII Latin
+                # before matching (offline indic-transliteration; on failure
+                # returns input — RULE 8, we then fall through to the instructive
+                # error below). The comparison folds both sides (phonetic_fold)
+                # so ISO 'laksmi' still matches the stored 'Lakshmi'.
                 try:
                     _latin = await spoken_text(needle, "en")
                     _latin = _latin.strip().lower().removeprefix("dr.").removeprefix("dr").strip()
@@ -2395,7 +2393,11 @@ class VachanamAgent(Agent):
                         return list(result.scalars())
 
                     doctors = await run_db_read(_load_active)
-                matches = [doc for doc in doctors if needle in doc.name.lower()]
+                _needle_folded = phonetic_fold(needle)
+                matches = [
+                    doc for doc in doctors
+                    if _needle_folded and _needle_folded in phonetic_fold(doc.name)
+                ]
                 if len(matches) == 1:
                     return matches[0].id
                 if len(matches) > 1:
@@ -6760,7 +6762,7 @@ def _start_watchdog_heartbeat() -> None:
         import redis as _redis_sync
 
         client = None
-        _neon_tick = 0
+        _db_tick = 0
         while True:
             try:
                 if client is None:
@@ -6778,27 +6780,29 @@ def _start_watchdog_heartbeat() -> None:
             except Exception as e:  # noqa: BLE001
                 client = None  # rebuild next round — never reuse a dead socket
                 logger.warning("watchdog_heartbeat_failed: %s", str(e)[:120])
-            # #437: keep Neon warm FROM THE AGENT — the always-on process. The
+            # #437: keep the DB warm FROM THE AGENT — the always-on process. The
             # #435 Render job failed because Render (free tier) sleeps, so it
-            # could not hold Neon awake. The agent (Fly) never sleeps. A trivial
-            # SELECT 1 every 4th tick (~240s, under Neon's 300s scale-to-zero)
-            # holds the compute warm so branch-resolve on the NEXT call is fast.
-            _neon_tick += 1
+            # could not hold a warm connection. The agent (Fly) never sleeps. A
+            # trivial SELECT 1 every 4th tick (~240s) keeps a warm connection to
+            # Supabase so branch-resolve on the NEXT call skips the pooler
+            # cold-connect + TLS handshake.
+            _db_tick += 1
             # Warm on the FIRST tick (immediately after a restart) AND every 4th
             # (~240s) after. Without the first-tick ping a freshly-deployed agent
-            # waited up to 240s before warming Neon; a master push redeploys the
-            # agent AND the Render API together, so during that combined window
-            # neither warmer ran and Neon suspended → the next call paid the
-            # ~2-4s cold wake (Vinay live 2026-07-26, ~5s first reply).
-            if _neon_tick == 1 or _neon_tick % 4 == 0:
+            # waited up to 240s before warming; a master push redeploys the agent
+            # AND the Render API together, so during that combined window neither
+            # warmer ran and the first call paid the cold-connect (Vinay live
+            # 2026-07-26, ~5s first reply).
+            if _db_tick == 1 or _db_tick % 4 == 0:
                 try:
                     import asyncio as _aio
 
                     import asyncpg as _apg
 
                     # SQLAlchemy URL → plain asyncpg DSN: drop the +asyncpg
-                    # driver tag and the query string (sslmode/channel_binding
-                    # that asyncpg rejects — Neon needs SSL, forced via ssl=True).
+                    # driver tag and the query string. ssl="require" encrypts
+                    # without cert verification — the Supabase pooler presents a
+                    # cert that asyncpg's default verifying ssl=True rejects.
                     _dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
 
                     async def _ping():
@@ -6810,7 +6814,7 @@ def _start_watchdog_heartbeat() -> None:
 
                     _aio.run(_ping())
                 except Exception as e:  # noqa: BLE001 — warm ping is best-effort
-                    logger.warning("neon_warm_ping_failed: %s", str(e)[:120])
+                    logger.warning("db_warm_ping_failed: %s", str(e)[:120])
             _time.sleep(60)
 
     threading.Thread(target=_loop, name="watchdog-heartbeat", daemon=True).start()

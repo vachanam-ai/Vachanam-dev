@@ -42,18 +42,22 @@ def test_conftest_refuses_when_test_url_lacks_test_substring(monkeypatch):
         _refuse_unsafe_test_db()
 
 
-def test_conftest_refuses_when_url_targets_neon(monkeypatch):
+@pytest.mark.parametrize("prod_host", [
+    "aws-1-ap-south-1.pooler.supabase.com",  # current prod (Supabase Mumbai)
+    "db.neon.tech",                          # legacy prod
+])
+def test_conftest_refuses_when_url_targets_cloud_prod(monkeypatch, prod_host):
     """Guard 3: TEST_DATABASE_URL must not point at known cloud/prod hosts.
 
-    neon.tech, fly.dev, render.com, aws.com, rds.amazonaws.com are all
-    production-class hosts. A test DB should be on localhost or a
-    dedicated test container.
+    supabase.com (current prod), neon.tech (legacy), fly.dev, render.com,
+    aws.com, rds.amazonaws.com are all production-class hosts. A test DB
+    should be on localhost or a dedicated test container.
     """
     from backend.config import settings as s
     monkeypatch.setattr(
         s,
         "test_database_url",
-        "postgresql+asyncpg://x:y@db.neon.tech/vachanam_test",
+        f"postgresql+asyncpg://x:y@{prod_host}/vachanam_test",
     )
 
     from tests.conftest import _refuse_unsafe_test_db

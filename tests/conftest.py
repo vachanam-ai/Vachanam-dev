@@ -102,7 +102,9 @@ def _refuse_unsafe_test_db() -> None:
         )
 
     unsafe_hosts = [
-        "neon.tech",
+        "supabase.com",   # current prod (Supabase Mumbai pooler) — 2026-07-30
+        "supabase.co",
+        "neon.tech",      # legacy prod (kept: a stray old URL must still be caught)
         "fly.dev",
         "render.com",
         "aws.com",
@@ -137,7 +139,7 @@ def _sanitize_url(url: str) -> str:
 # ── HARD FUSE (FIXLOG #324): no test can EVER reach the real DATABASE_URL. ───
 # Root cause 2026-07-12: tests that hit the app through an ASGI client WITHOUT
 # requesting the `db` fixture left backend.database bound to .env DATABASE_URL
-# (which on the dev box is Neon PROD) — every full-suite run posted junk
+# (which on the dev box is Supabase PROD) — every full-suite run posted junk
 # "I am stuck, help" tickets into the LIVE support desk. The `db` fixture's
 # rebinding is opt-in per test; this fuse is unconditional and runs at conftest
 # import, before any test executes:

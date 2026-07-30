@@ -5,23 +5,6 @@ agent virtual environment active unless noted otherwise.
 
 ---
 
-## generate_clinic_greeting.py
-
-Generates a per-branch pre-cached greeting WAV via Sarvam Bulbul TTS.
-Called during clinic onboarding to pre-warm the <100ms first-word latency
-on SIP pickup (Component 4 of the voice call flow spec).
-
-Pre-reqs: `SARVAM_API_KEY` set in `.env`.
-
-```bash
-python scripts/generate_clinic_greeting.py \
-    --branch-id <uuid> --clinic-name "ABC Hospital"
-```
-
-Output: `backend/static/greetings/<branch_id>.wav`
-
----
-
 ## provision_vobiz_trunk.py
 
 One-shot idempotent Vobiz + LiveKit SIP trunk wiring. Run once after

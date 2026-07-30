@@ -11,7 +11,7 @@ from agent.prompts.system_prompt import build_system_prompt
 def test_english_is_a_supported_language():
     assert "en" in LANGUAGES
     cfg = get_lang("en")
-    assert cfg.stt_code == "en-IN"       # Sarvam Saaras
+    assert cfg.stt_code == "en-IN"       # transliteration *-IN code
     assert cfg.tts_code == "en"          # Soniox language code
     lines = get_lines("en")
     # Every spoken line the call paths use must exist in English.

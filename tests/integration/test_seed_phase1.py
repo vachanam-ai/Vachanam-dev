@@ -134,7 +134,6 @@ async def test_seed_phase1_missing_did_exits_cleanly(tmp_path):
         "DATABASE_URL=postgresql+asyncpg://vachanam:localdev123@localhost:5432/vachanam_dev\n"
         "REDIS_URL=redis://localhost:6379\n"
         "JWT_SECRET=fakesecretfortestonly\n"
-        "SARVAM_API_KEY=fake\n"
         "OPENAI_API_KEY=fake\n"
         "GEMINI_API_KEY=fake\n"
         "ADMIN_PHONE=+919000000001\n"

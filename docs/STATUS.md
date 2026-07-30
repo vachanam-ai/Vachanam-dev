@@ -1,5 +1,28 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-30 — DB MIGRATED TO SUPABASE (MUMBAI); NEON + SARVAM REMOVED.**
+> The database is now Supabase Postgres in ap-south-1 (Mumbai) — next to the Fly
+> agent and India callers (Neon was Singapore). Verified live read-only: all
+> three Supabase pooler URLs connect (PostgreSQL 17.6), the client socket is
+> TLS 1.3, schema at head `kk34_schema_alignment`, real data present (3 orgs,
+> 3 branches, 6 doctors, 92 tokens, 284 call_logs). Redis (Upstash) OK.
+> **Neon** is fully removed from code (rollback URL, `neon` MCP, warm-keeper
+> renamed `_db_*`); the test-prod fuse now blocks `supabase.com`. **Sarvam** is
+> fully removed: Soniox is the sole STT (a missing key now RAISES, no fallback),
+> and Sarvam's Transliterate API — which is load-bearing for cross-script cancel/
+> reschedule identity (#467) and name pronunciation (RULE 6), NOT just STT — was
+> replaced by the OFFLINE `indic-transliteration` library (deterministic, no
+> network, no key). **Full local suite (Postgres): 1450 passed, 2 skipped, 0
+> failed**; the #467 identity match is proven with real offline romanization
+> (వినయ్/శ్రీనివాస్/లక్ష్మి match a Latin record, an impostor is still
+> rejected). FIXLOG #476.
+> **PENDING:** (1) Latin→Indic name-TTS is best-effort offline — Vinay to confirm
+> on a live call. (2) Deploy: cut a release so Render (API) + Fly (agent) pick up
+> the `ssl="require"` pooler fix + this cutover, and confirm both hosts'
+> DATABASE_URL points at Supabase (the "can't connect to DB" symptom is a
+> deployed-old-code-vs-new-URL mismatch until then). No unverified claim is made
+> about production until a live call is measured.
+
 > **2026-07-29 — FIRST-TURN SONIOX COLD SYNTHESIS FIX DEPLOYED.**
 > The latest 12-turn production call was measured end to end: first reply 4.10s,
 > later replies mostly 1.53–2.17s, with the first Soniox audio frame delayed

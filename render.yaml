@@ -23,8 +23,6 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
-      - key: SARVAM_API_KEY
-        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: GEMINI_API_KEY

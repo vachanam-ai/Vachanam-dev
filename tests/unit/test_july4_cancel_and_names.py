@@ -38,32 +38,28 @@ async def test_spoken_text_noop_when_script_matches():
 
 
 @pytest.mark.asyncio
-async def test_spoken_text_romanizes_for_english(monkeypatch):
-    async def fake_hop(text, src, tgt):
-        assert (src, tgt) == ("te-IN", "en-IN")
-        return "Sri Venkateswara"
-    monkeypatch.setattr("agent.i18n.transliterate._sarvam_hop", fake_hop)
-    out = await spoken_text("శ్రీ వెంకటేశ్వర TEST1", "en")
-    assert out == "Sri Venkateswara"
+async def test_spoken_text_romanizes_for_english():
+    # Offline ISO→ASCII romanization: Telugu name becomes matchable Latin.
+    out = await spoken_text("శ్రీ వెంకటేశ్వర", "en")
+    assert out.isascii() and out.strip()
+    assert "sri" in out.lower() and "katesvara" in out.lower()
 
 
 @pytest.mark.asyncio
-async def test_spoken_text_indic_to_indic_hops_via_latin(monkeypatch):
-    hops = []
-    async def fake_hop(text, src, tgt):
-        hops.append((src, tgt))
-        return "Vinay" if tgt == "en-IN" else "विनय"
-    monkeypatch.setattr("agent.i18n.transliterate._sarvam_hop", fake_hop)
-    out = await spoken_text("వినయ్ TEST2", "hi")
-    assert out == "विनय"
-    assert hops == [("te-IN", "en-IN"), ("en-IN", "hi-IN")]
+async def test_spoken_text_indic_to_indic_is_direct():
+    # indic-transliteration converts Indic→Indic DIRECTLY (no Latin hop the way
+    # Sarvam needed). Telugu 'వినయ్' → Devanagari; the result is Devanagari and
+    # is no longer Telugu.
+    out = await spoken_text("వినయ్", "hi")
+    assert _detect_script(out) == "hi-IN"
 
 
 @pytest.mark.asyncio
 async def test_spoken_text_falls_back_to_original_on_failure(monkeypatch):
-    async def fake_hop(text, src, tgt):
-        return None
-    monkeypatch.setattr("agent.i18n.transliterate._sarvam_hop", fake_hop)
+    # RULE 8: a library failure must return the raw text, never raise.
+    def boom(*a, **k):
+        raise RuntimeError("sanscript down")
+    monkeypatch.setattr("agent.i18n.transliterate._sanscript", boom)
     assert await spoken_text("వినయ్ TEST3", "en") == "వినయ్ TEST3"
 
 

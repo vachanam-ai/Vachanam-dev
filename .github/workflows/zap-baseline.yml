@@ -56,7 +56,6 @@ jobs:
       FRONTEND_URL: http://localhost:3000
       LOG_LEVEL: warning
       ADMIN_PHONE: "+919999999999"
-      SARVAM_API_KEY: test-sarvam-key
       OPENAI_API_KEY: test-openai-key
       GEMINI_API_KEY: test-gemini-key
       LIVEKIT_URL: wss://test.livekit.local

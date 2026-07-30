@@ -12,10 +12,9 @@
 # Bump the whole block together; test_requirements_no_livekit_skew guards it.
 livekit-agents==1.6.6
 livekit-api>=1.1.1
-# STT: Soniox stt-rt-v5 primary (Vinay 2026-07-10), Sarvam Saaras v3 fallback
-# when SONIOX_JP_API_KEY is unset — see _build_stt in agent.py.
+# STT: Soniox stt-rt-v5, the SOLE provider (Sarvam removed 2026-07-30 — see
+# _build_stt in agent.py; a missing key now raises instead of falling back).
 livekit-plugins-soniox==1.6.6
-livekit-plugins-sarvam==1.6.6
 livekit-plugins-google==1.6.6
 livekit-plugins-silero==1.6.6
 livekit-plugins-noise-cancellation>=0.2.5
@@ -28,3 +27,6 @@ livekit-plugins-turn-detector==1.6.6
 # was missing here; would break the deployed image's import.
 livekit-plugins-openai==1.6.6
 python-dotenv>=1.0.0
+# Offline Latin<->Indic transliteration (replaced the Sarvam Transliterate API
+# 2026-07-30): name pronunciation (RULE 6) + cross-script identity match (#467).
+indic-transliteration==2.3.82

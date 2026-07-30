@@ -1641,28 +1641,36 @@ def _names_overlap(a: str, b: str) -> bool:
     return bool(set(a.split()) & set(b.split()))
 
 
+def _fuzzy_overlap(a: str, b: str) -> bool:
+    """_names_overlap plus a fuzzy fallback for single-token spelling variants
+    that survive romanization (e.g. 'vemkatesvara' vs 'venkatesvara' — the
+    anusvara/nasal that ISO and English spell differently). Used ONLY on the
+    cross-script romanized path, never on the same-script fast path."""
+    if _names_overlap(a, b):
+        return True
+    from difflib import SequenceMatcher
+
+    return len(a) >= 4 and len(b) >= 4 and SequenceMatcher(None, a, b).ratio() >= 0.82
+
+
 _romanize_cache: dict[str, str] = {}
 
 
-async def _romanize_name(name: str | None) -> str:
-    """Best-effort Latin romanization of a possibly Indic-script name, for
-    CROSS-SCRIPT identity comparison. A pure-Latin (or empty) name returns
-    unchanged; an Indic name is transliterated to Latin via Sarvam (the key
-    already configured for STT). On any failure returns the input (RULE 8) so
-    the caller is no worse off than before this bridge existed. Cached in-proc
-    (the Fly agent is long-lived), so repeat lookups for the same name are free."""
+def _romanize_name(name: str | None) -> str:
+    """Best-effort ASCII romanization + phonetic fold of a possibly Indic-script
+    name, for CROSS-SCRIPT identity comparison. Offline (indic-transliteration;
+    Sarvam removed 2026-07-30) — a Latin name folds in place, an Indic name is
+    romanized (ISO→ASCII) first. On any failure returns a fold of the input
+    (RULE 8) so the caller is no worse off than before this bridge existed.
+    Cached in-proc (the Fly agent is long-lived) so repeat lookups are free."""
     n = (name or "").strip()
     if not n:
         return ""
     if n in _romanize_cache:
         return _romanize_cache[n]
-    from agent.i18n.transliterate import _detect_script, _sarvam_hop
+    from agent.i18n.transliterate import phonetic_fold, romanize
 
-    src = _detect_script(n)
-    if src == "en-IN":
-        _romanize_cache[n] = n  # already Latin/other — nothing to romanize
-        return n
-    out = (await _sarvam_hop(n, src, "en-IN")) or n
+    out = phonetic_fold(romanize(n))
     _romanize_cache[n] = out
     return out
 
@@ -1721,12 +1729,12 @@ async def caller_name_matches(
         (_detect_script(sr) == "en-IN") != spoken_is_latin for sr in stored_raws
     ):
         return False
-    spoken_roman = _normalize_name(await _romanize_name(spoken_name))
+    spoken_roman = _normalize_name(_romanize_name(spoken_name))
     if len(spoken_roman) < 2:
         return False
     for stored_raw in stored_raws:
-        stored_roman = _normalize_name(await _romanize_name(stored_raw))
-        if _names_overlap(spoken_roman, stored_roman):
+        stored_roman = _normalize_name(_romanize_name(stored_raw))
+        if _fuzzy_overlap(spoken_roman, stored_roman):
             return True
     return False
 

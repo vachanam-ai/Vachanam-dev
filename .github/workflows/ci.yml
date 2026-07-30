@@ -87,7 +87,6 @@ jobs:
       ADMIN_PHONE: "+919999999999"
 
       # ── AI (test stubs — agent tests use mocks; no real API calls in CI) ────
-      SARVAM_API_KEY: test-sarvam-key
       OPENAI_API_KEY: test-openai-key
       GEMINI_API_KEY: test-gemini-key
       # test_streaming_tts_chain_405 constructs the smallest.ai plugin, whose

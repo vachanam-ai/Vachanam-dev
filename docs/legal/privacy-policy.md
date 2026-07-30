@@ -136,14 +136,13 @@ We use carefully selected third-party services to operate Vachanam. Each process
 
 | Service (by role) | What it processes | Where data is processed |
 |---|---|---|
-| **Speech-recognition provider (primary)** | Converts your voice to text during your call. Audio is streamed in real time and not stored beyond the duration of the call. | United States |
-| **Speech-recognition provider (backup)** | Used only when the primary is unavailable. Same real-time streaming, no storage beyond the call. | India |
+| **Speech-recognition provider** | Converts your voice to text during your call. Audio is streamed in real time and not stored beyond the duration of the call. | United States |
 | **Voice-synthesis provider** | Converts the AI agent's responses (which include your name) into natural speech during your call. Text is processed in real time and not stored after the call. | Global |
 | **Google (Calendar + sign-in)** | Creates a calendar event for your doctor with your first name and last 4 digits of your phone number; handles staff login via Google accounts. (Named because your clinic connects its own Google Calendar.) | Global (Google Cloud) |
 | **AI language-model provider** | Processes the conversation during your call to understand your request and route you to the right doctor; also performs automated, non-identifying quality scoring of transcripts. Used via paid enterprise APIs whose terms prohibit training on submitted data. | Global |
 | **Razorpay** | Processes clinic subscription payments (RBI-authorised payment aggregator). Sees billing amount and clinic owner email for invoicing. Does NOT see any patient data. | India |
 | **Transactional email provider** | Sends one-time verification codes and service emails to clinic staff. Sees only the staff/owner email address. Does NOT see any patient data. | Global (US) |
-| **Database hosting provider** | Hosts our database where appointment and user records are stored. All data encrypted at rest (AES-256). | Singapore |
+| **Database hosting provider** | Hosts our database where appointment and user records are stored. All data encrypted at rest (AES-256). | Mumbai, India |
 | **Cache provider** | Real-time token-number assignment (prevents double-booking). Stores only temporary counters that expire daily. | Mumbai, India |
 | **Voice-call infrastructure provider** | Connects your phone call to our AI agent. Handles audio routing only; does not store call content. | Mumbai, India |
 | **Voice compute host** | Runs the voice agent server during your call. | Mumbai, India |

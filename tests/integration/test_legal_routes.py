@@ -223,13 +223,13 @@ async def test_privacy_policy_matches_reality():
     from pathlib import Path
 
     text = Path("docs/legal/privacy-policy.md").read_text(encoding="utf-8")
-    # Both STT layers still disclosed, just role-named.
-    assert "Speech-recognition provider (primary)" in text
-    assert "Speech-recognition provider (backup)" in text
+    # STT disclosed, role-named (single provider — Sarvam backup removed 2026-07-30).
+    assert "Speech-recognition provider" in text
+    assert "(backup)" not in text
     assert "privacy@vachanam.in" in text  # named list on request
     # Stack vendors must NOT be named (Google/Razorpay are deliberate exceptions).
     for vendor in ("Soniox", "Sarvam", "Gemini", "smallest", "LiveKit",
-                   "Vobiz", "Neon", "Upstash", "Fly.io", "Resend"):
+                   "Vobiz", "Neon", "Supabase", "Upstash", "Fly.io", "Resend"):
         assert vendor not in text, f"vendor name leaked into public policy: {vendor}"
     assert "90 days" in text  # transcript retention disclosed
     assert "| Voice call transcripts | NOT STORED |" not in text

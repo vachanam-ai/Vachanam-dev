@@ -1,7 +1,7 @@
 """Multilingual voice-agent infra (Vinay 2026-06-15): per-clinic language.
 
 Proves the language seam is correct and SAFE:
-  - the registry covers the MVP languages with the right Sarvam codes
+  - the registry covers the MVP languages with the right language codes
   - an unknown/None Branch.language always falls back to Telugu (a bad value can
     never break a live call — RULE 8)
   - every language's spoken lines are present, complete, and in their OWN script
@@ -33,7 +33,7 @@ def test_registry_covers_mvp_languages():
 
 
 def test_stt_tts_codes_correct():
-    # STT = Sarvam Saaras (*-IN). Soniox TTS uses short language codes.
+    # stt_code (*-IN) feeds offline transliteration; Soniox STT/TTS use `code`.
     assert get_lang("te").stt_code == "te-IN"
     assert get_lang("te").tts_code == "te"
     assert get_lang("te").default_voice == "Priya"
