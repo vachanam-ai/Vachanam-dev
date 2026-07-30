@@ -54,3 +54,4 @@ def test_agent_heartbeat_also_warms_neon_437():
     assert "SELECT 1" in hb
     assert "asyncpg" in hb
     assert "neon_warm_ping_failed" in hb   # never crashes the heartbeat
+    assert 'ssl="require"' in hb
