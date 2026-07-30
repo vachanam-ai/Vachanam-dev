@@ -90,9 +90,11 @@ from agent.livekit_minimal.confirm_speech import (  # noqa: E402
     build_queue_status_text,
 )
 from agent.livekit_minimal.grounded_turns import (  # noqa: E402
+    clinic_fact_intent,
     doctor_roster_reply,
     extract_exact_time,
     is_short_close_reply,
+    match_faq_by_intent,
 )
 from agent.livekit_minimal.workflow_rules import (  # noqa: E402
     build_exact_availability_failure_text,
@@ -103,7 +105,7 @@ from agent.prompts.system_prompt import (  # noqa: E402
     build_date_context,
     build_system_prompt,
 )
-from agent.prompts.grounded_prompt import supported_codes  # noqa: E402
+from agent.prompts.grounded_prompt import PACKS, supported_codes  # noqa: E402
 # CalendarService (legacy-signature shim), NOT GoogleCalendarService —
 # booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
@@ -1898,6 +1900,7 @@ class VachanamAgent(Agent):
         llm=None,             # #417 per-agent LLM (prompt-cache-backed primary)
         doctor_names: dict[UUID, str] | None = None,
         doctor_facts: list[DoctorContext] | None = None,
+        faq: list[dict] | None = None,
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
         # None would DISABLE the session-level pipeline, not inherit it.
@@ -1926,6 +1929,11 @@ class VachanamAgent(Agent):
         self._switch_ack = switch_ack
         self._doctor_names = doctor_names or {}
         self._doctor_facts = doctor_facts or []
+        # Task 2.2 (voice_grounding_gate): the branch's own FAQ rows, so a
+        # gated fee/hours turn can be answered verbatim from clinic data
+        # without a second LLM pass. Same source the prompt's <clinic_faq>
+        # block renders from — never a different or invented list.
+        self._faq = faq or []
         # Kept so switch_language can PRIME the new agent's TTS before handoff
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
@@ -2160,66 +2168,149 @@ class VachanamAgent(Agent):
 
         doctor_id = self._state.last_availability_doctor_id
         booking_date = self._state.last_availability_date
-        if doctor_id is None or booking_date is None:
-            return False
-        requested = extract_exact_time(
-            text, self._state.last_availability_query_time
+        requested = (
+            extract_exact_time(text, self._state.last_availability_query_time)
+            if doctor_id is not None and booking_date is not None
+            else None
         )
-        if requested is None:
+        if requested is not None:
+            self._cancel_prefetch()
+            availability = await self._read_availability(
+                doctor_id=doctor_id,
+                branch_id=self._state.branch_id,
+                booking_date=booking_date,
+                query_start=requested,
+                query_end=requested,
+                caller_phone=None,
+                held_slot_key=(
+                    self._state.token_redis_key
+                    if self._state.token_held
+                    and not self._state.token_confirmed
+                    and (self._state.token_redis_key or "").startswith("slot:")
+                    else None
+                ),
+                branch_timezone=self._state.branch_timezone,
+            )
+            self._state.last_availability_query_time = requested
+            doctor_name = self._doctor_names.get(doctor_id, "")
+            if doctor_name and _exact_availability_matches(
+                availability, doctor_name, requested
+            ):
+                reply = build_exact_availability_text(
+                    lang, date_=booking_date, time_=requested
+                )
+            elif "SCHEDULE NOT PUBLISHED" in availability:
+                reply = {
+                    "te": "[softly] ఆ రోజు డాక్టర్ టైమింగ్ ఇంకా కన్ఫర్మ్ కాలేదండి.",
+                    "hi": "[softly] उस दिन डॉक्टर का समय अभी पक्का नहीं हुआ है।",
+                    "en": "[softly] The doctor's timing for that day is not confirmed yet.",
+                }.get(lang)
+            elif "NOT free" in availability or "fully booked" in availability:
+                reply = {
+                    "te": "[softly] ఆ టైమ్‌కి ఖాళీ లేదండి. ఇంకో టైమ్ చెక్ చేయనా?",
+                    "hi": "[softly] उस समय जगह खाली नहीं है। कोई और समय जाँचूँ?",
+                    "en": "[softly] That exact time is not free. Shall I check another time?",
+                }.get(lang)
+            elif "on leave" in availability or "unavailable" in availability:
+                reply = {
+                    "te": "[softly] ఆ రోజు డాక్టర్ అందుబాటులో లేరండి. ఇంకో రోజు చెక్ చేయనా?",
+                    "hi": "[softly] डॉक्टर उस दिन उपलब्ध नहीं हैं। कोई और दिन जाँचूँ?",
+                    "en": "[softly] The doctor is not available that day. Shall I check another day?",
+                }.get(lang)
+            else:
+                reply = None
+            if not reply:
+                raise RuntimeError(f"unrenderable availability result: {availability[:80]}")
+            self.session.say(sanitize_for_tts(reply))
+            logger.info(
+                "grounded_time_recheck_spoken doctor=%s date=%s time=%s",
+                str(doctor_id)[-8:], booking_date, requested,
+            )
+            return True
+
+        # Task 2.2 (voice_grounding_gate, 2026-07-30): fee/hours/booking-status
+        # turns answered from a tool/FAQ result only — never free-formed by
+        # the LLM. Kill-switched; flag off => identical to today (falls
+        # through below, same as always).
+        if settings.voice_grounding_gate:
+            handled = await self._handle_grounded_fact_turn(text, lang)
+            if handled:
+                return True
+
+        return False
+
+    async def _handle_grounded_fact_turn(self, text: str, lang: str) -> bool:
+        """Fee/hours/booking-status coverage (Task 2.2). One short native
+        "checking" cue keeps the caller engaged (spec 4.1 think-cue), then the
+        answer comes ONLY from the branch's own FAQ rows or a live DB read —
+        never a number/time the model invents. A genuinely unmatched
+        fee/hours question abstains with "{ask_doctor}" and logs it for the
+        clinic to fill the FAQ gap; an unrecognized turn (not this bucket at
+        all) returns False untouched so the ordinary LLM/tool path runs.
+
+        Availability's "is X available" coverage is intentionally NOT
+        duplicated here: the branch above already grounds the corrected-
+        exact-time continuation, and a fresh (not-yet-checked) availability
+        ask is grounded by check_availability's own exact-match fast path
+        plus the tts_node tripwire (Task 2.3) — adding a second, NLU-guessed
+        doctor/date extraction here would risk answering with a WRONG doctor
+        or date deterministically, which is worse than falling through."""
+        intent = clinic_fact_intent(text)
+        if intent is None:
             return False
 
-        self._cancel_prefetch()
-        availability = await self._read_availability(
-            doctor_id=doctor_id,
-            branch_id=self._state.branch_id,
-            booking_date=booking_date,
-            query_start=requested,
-            query_end=requested,
-            caller_phone=None,
-            held_slot_key=(
-                self._state.token_redis_key
-                if self._state.token_held
-                and not self._state.token_confirmed
-                and (self._state.token_redis_key or "").startswith("slot:")
-                else None
-            ),
-            branch_timezone=self._state.branch_timezone,
-        )
-        self._state.last_availability_query_time = requested
-        doctor_name = self._doctor_names.get(doctor_id, "")
-        if doctor_name and _exact_availability_matches(
-            availability, doctor_name, requested
-        ):
-            reply = build_exact_availability_text(
-                lang, date_=booking_date, time_=requested
+        # ask_doctor/hold_line are LangPack (grounded_prompt.PACKS) fields —
+        # NOT agent.i18n.lines.Lines (get_lines), a different pack keyed the
+        # same way but without these runtime-supplied think-cue/abstain lines.
+        p = PACKS.get((lang or "").lower(), PACKS["en"])
+
+        # One think-cue up front for EVERY recognized intent (spec 4.1:
+        # "checking" cue keeps the caller engaged BEFORE the read/lookup
+        # resolves) — emitted whether the answer turns out to be a match or
+        # an abstain, so the caller is never left wondering mid-check.
+        try:
+            self.session.say(sanitize_for_tts(p.hold_line))
+        except Exception as e:  # noqa: BLE001 — the cue is best-effort
+            logger.warning("grounding_gate_hold_line_failed: %s", e)
+
+        if intent == "booking_status":
+            result = await run_db_read(
+                lambda db: queue_position_by_phone(
+                    self._state.branch_id, self._state.patient_phone, db
+                )
             )
-        elif "SCHEDULE NOT PUBLISHED" in availability:
-            reply = {
-                "te": "[softly] ఆ రోజు డాక్టర్ టైమింగ్ ఇంకా కన్ఫర్మ్ కాలేదండి.",
-                "hi": "[softly] उस दिन डॉक्टर का समय अभी पक्का नहीं हुआ है।",
-                "en": "[softly] The doctor's timing for that day is not confirmed yet.",
-            }.get(lang)
-        elif "NOT free" in availability or "fully booked" in availability:
-            reply = {
-                "te": "[softly] ఆ టైమ్‌కి ఖాళీ లేదండి. ఇంకో టైమ్ చెక్ చేయనా?",
-                "hi": "[softly] उस समय जगह खाली नहीं है। कोई और समय जाँचूँ?",
-                "en": "[softly] That exact time is not free. Shall I check another time?",
-            }.get(lang)
-        elif "on leave" in availability or "unavailable" in availability:
-            reply = {
-                "te": "[softly] ఆ రోజు డాక్టర్ అందుబాటులో లేరండి. ఇంకో రోజు చెక్ చేయనా?",
-                "hi": "[softly] डॉक्टर उस दिन उपलब्ध नहीं हैं। कोई और दिन जाँचूँ?",
-                "en": "[softly] The doctor is not available that day. Shall I check another day?",
-            }.get(lang)
-        else:
-            reply = None
-        if not reply:
-            raise RuntimeError(f"unrenderable availability result: {availability[:80]}")
-        self.session.say(sanitize_for_tts(reply))
-        logger.info(
-            "grounded_time_recheck_spoken doctor=%s date=%s time=%s",
-            str(doctor_id)[-8:], booking_date, requested,
-        )
+            if result.get("found"):
+                queue = result.get("queue") or []
+                if len(queue) == 1:
+                    queue_text = build_queue_status_text(lang, queue[0])
+                    if queue_text:
+                        self._cancel_prefetch()
+                        self.session.say(sanitize_for_tts(queue_text))
+                        logger.info("grounding_gate_queue_status_spoken lang=%s", lang)
+                        return True
+            # Empty/multi-row/ambiguous is NOT "no fact" — it's a legitimate
+            # outcome get_queue_status already handles correctly. Fall
+            # through instead of mislabeling it a clinic-FAQ gap.
+            return False
+
+        # fee / hours
+        answer = match_faq_by_intent(intent, self._faq)
+        if answer:
+            self._cancel_prefetch()
+            self.session.say(sanitize_for_tts(answer))
+            logger.info("grounding_gate_faq_spoken intent=%s lang=%s", intent, lang)
+            return True
+
+        # No confident FAQ row for a recognized fee/hours question: abstain
+        # rather than guess, and log the gap (RULE 7-adjacent — never invent
+        # clinic facts either).
+        self._cancel_prefetch()
+        self.session.say(sanitize_for_tts(p.ask_doctor))
+        logger.info("grounding_gate_abstained intent=%s lang=%s", intent, lang)
+        try:
+            await self.log_clinic_question(None, text)
+        except Exception as e:  # noqa: BLE001 — logging must never break the call
+            logger.warning("grounding_gate_log_failed: %s", e)
         return True
 
     async def _handle_post_booking_close(self) -> None:
@@ -5478,6 +5569,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             for d in doctors
         ]
         _doctor_names = {d.id: d.name for d in doctor_contexts}
+        # Decoded once, shared by the prompt's <clinic_faq> render AND the
+        # gated pre-LLM fee/hours fast path (Task 2.2) — same source, never
+        # a second/diverging read of the branch row.
+        _branch_faq = _decode_branch_faq(getattr(branch, "faq", None))
 
         # #400: Soniox context biasing — the clinic's own vocabulary, so
         # recognition snaps to the real roster ("కరిష్మా") instead of phonetic
@@ -5530,7 +5625,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     plan=state.plan or "clinic",
                     language=lc,
                     clinic_address=getattr(branch, "address", None),
-                    faq=_decode_branch_faq(getattr(branch, "faq", None)),
+                    faq=_branch_faq,
                     recording_active=_recording_active,
                 )
                 + get_lines(lc).brevity
@@ -5654,6 +5749,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 llm=switched_cached_llm,
                 doctor_names=_doctor_names,
                 doctor_facts=doctor_contexts,
+                faq=_branch_faq,
             )
             if switched_cached_llm is None and switched_key not in _PROMPT_CACHE_PENDING:
                 _PROMPT_CACHE_PENDING.add(switched_key)
@@ -5697,6 +5793,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             llm=_cached_llm,
             doctor_names=_doctor_names,
             doctor_facts=doctor_contexts,
+            faq=_branch_faq,
         )
         if _cached_llm is not None:
             logger.info("llm_prompt_cache_hit key=%s", _cache_key)

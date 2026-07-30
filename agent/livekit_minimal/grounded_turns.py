@@ -203,6 +203,63 @@ def extract_exact_time(text: str, reference: time | None = None) -> time | None:
         return None
 
 
+# --------------------------------------------------------------------------
+# Task 2.2 (voice_grounding_gate, 2026-07-30): fee/hours/booking-status intent
+# classification + FAQ matching. Deliberately narrow — te/en/hi only, mirroring
+# doctor_roster_reply's language scope; an unrecognized/unsupported turn
+# returns None and the caller falls through to the unchanged LLM path.
+# --------------------------------------------------------------------------
+_BOOKING_STATUS_TERMS = (
+    "my token", "token number", "which token", "queue", "how many ahead",
+    "how many people", "my turn", "when is my turn",
+    "నా టోకెన్", "ఎన్నో నంబర్", "క్యూ", "నా టర్న్", "ఎంతమంది ఉన్నారు",
+    "मेरा टोकन", "कौन सा टोकन", "कतार", "मेरी बारी",
+)
+_FEE_TERMS = (
+    "fee", "fees", "charge", "charges", "cost", "price", "how much",
+    "ఫీజు", "ఫీజు ఎంత", "డబ్బు ఎంత", "రేటు", "శుల్కం", "ఎంత తీసుకుంటారు",
+    "फीस", "शुल्क", "कितना पैसा", "कितने पैसे", "रेट",
+)
+_HOURS_TERMS = (
+    "hours", "timing", "timings", "opening time", "closing time",
+    "when do you open", "when do you close", "what time do you open",
+    "what time do you close", "clinic hours",
+    "టైమింగ్స్", "టైమింగ", "ఎప్పుడు తెరుస్తారు", "ఎప్పుడు మూస్తారు", "పని వేళలు",
+    "समय", "टाइमिंग", "कब खुलते", "कब बंद होते", "क्लिनिक का समय",
+)
+
+
+def clinic_fact_intent(text: str) -> str | None:
+    """Classify a turn as a booking-status/fee/hours clinic-fact question, or
+    None. Order matters: booking-status phrasing ("my token") is checked
+    first so it can never be shadowed by a generic fee/hours word."""
+    low = (text or "").lower().strip()
+    if not low:
+        return None
+    if any(term in low for term in _BOOKING_STATUS_TERMS):
+        return "booking_status"
+    if any(term in low for term in _FEE_TERMS):
+        return "fee"
+    if any(term in low for term in _HOURS_TERMS):
+        return "hours"
+    return None
+
+
+def match_faq_by_intent(intent: str, faq: Iterable[dict] | None) -> str | None:
+    """Return the FIRST FAQ answer whose OWN question shares the same
+    fee/hours vocabulary as the caller's intent — never a different row, and
+    never anything not already verbatim in the clinic's own FAQ data."""
+    terms = {"fee": _FEE_TERMS, "hours": _HOURS_TERMS}.get(intent)
+    if not terms:
+        return None
+    for item in faq or []:
+        q = str((item or {}).get("q") or "").lower()
+        a = str((item or {}).get("a") or "").strip()
+        if a and any(term in q for term in terms):
+            return a
+    return None
+
+
 _CLOSE_REPLIES = {
     "no", "no thanks", "nothing", "nothing else", "that's all", "that is all",
     "thank you", "thanks", "okay thanks", "ok thanks", "bye",
