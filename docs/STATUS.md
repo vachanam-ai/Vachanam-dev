@@ -1,5 +1,30 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-30 — VOICE PROMPT REDESIGN (5 phases) BUILT ON `feat/monochrome-ui`;
+> ALL BEHIND DEFAULT-OFF FLAGS, NOT DEPLOYED.** Addresses Vinay's report: agent
+> hallucinated answers before checking the DB; prompt too long; language switch
+> drifted back to Telugu within 1-2 turns; STT mishears names. Spec+plan under
+> `docs/superpowers/{specs,plans}/2026-07-30-voice-prompt-redesign*`.
+> - **Phase 1** `voice_prompt_v21` — rebuilt system prompt (concise, front-loaded
+>   grounding, positive-framed ~9 sections); v20 preserved byte-identical as fallback.
+> - **Phase 2** `voice_grounding_gate` — pre-LLM grounded answers for fee/hours/
+>   booking-status (think-cue then tool/FAQ-only proof, abstain on no match) + a
+>   narrow tts_node clock-time tripwire (blocks a time asserted with no grounded
+>   source this call).
+> - **Phase 3** `voice_stt_clinic_map` — offline phonetic map (`phonetic_fold`+difflib)
+>   snaps a misheard token onto the clinic vocab pre-routing; every remap logged.
+> - **Phase 4** `voice_lang_anchor` — per-turn active-language anchor (never decays)
+>   + harder switch-history trim; fixes the #466 drift.
+> - **Phase 5** — stress battery (injection/fragment/correction/past-date/tool-fail)
+>   + `docs/superpowers/plans/voice-real-call-checklist.md` for the audio rows.
+> An independent Opus whole-branch review found the gate unusable once flipped
+> (tripwire swallowed ordinary speech + its own grounded answers); **5 Critical/
+> Important fixed** (commits through `0acdd59`), re-review APPROVED. Full suite
+> green: unit 927 · integration+edge 409/2skip · security 180/1skip · 0 failed.
+> **PENDING:** Vinay validates on real calls, ONE flag at a time (gate→anchor→map→
+> v21) per the checklist A/B, before any prod flip. Nothing merged/deployed.
+> Prod behaviour is unchanged (all flags off).
+
 > **2026-07-30 — DB MIGRATED TO SUPABASE (MUMBAI); NEON + SARVAM REMOVED.**
 > The database is now Supabase Postgres in ap-south-1 (Mumbai) — next to the Fly
 > agent and India callers (Neon was Singapore). Verified live read-only: all

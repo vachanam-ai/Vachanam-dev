@@ -13,6 +13,58 @@ Format per session:
 
 ---
 
+## 2026-07-30 — Voice prompt redesign (5 phases, all kill-switched default-off)
+
+**Why (Vinay):** the agent hallucinated answers before checking the DB; the
+prompt was too long; language switches drifted back to Telugu within 1-2 turns;
+STT mishears doctor names. Requested a researched, proof-backed rebuild that
+answers only from DB, small-talks like a receptionist but refuses out-of-scope,
+switches language fast and stays switched, books without re-asking, and maps
+misheard words to clinic context. Built via brainstorming → spec → plan →
+subagent-driven-development (the SDD loop went inline once an external session
+limit then repeated 529s blocked subagent dispatch).
+
+**Key decisions:**
+- Structural grounding over prompt exhortation (matches market leaders): a
+  pre-LLM gate answers time/fee/hours/booking-status only from a tool/FAQ result,
+  with a "think out loud, answer with proof" cue (Vinay's chosen gate). Prompt
+  rebuilt positive-framed, front-loaded (Lost-in-the-Middle), ~30% shorter, NEVER
+  count cut ~13→0. LangPacks unchanged. v20 kept byte-identical as fallback.
+- Language drift root cause: the one-time switch anchor decays on recency. Fix =
+  a persistent per-turn anchor as the last ctx item + harder old-language trim.
+- STT map is OFFLINE (phonetic_fold + difflib), conservative, logged, Latin-scope
+  (Indic tokens rely on Soniox biasing + downstream romanized matching).
+- Every phase behind its own default-OFF flag; enablement gated on Vinay's
+  real-call A/B (checklist doc), one flag at a time. Nothing merged/deployed.
+
+**Independent review + fixes:** an Opus whole-branch review found the grounding
+gate unusable once flipped — the tts_node clock-time tripwire substring-matched
+short tokens ("am"⊂"name", "one"⊂"phone") and also swallowed its own grounded
+answers/confirmations. Fixed: digit-clock-only detector + a session-level
+`_has_grounded_time_context` so only a time fabricated BEFORE any check/hold
+trips it; "how much" dropped from fee terms. (My inline tests had stubbed
+session.say past tts_node — the reason the interaction slipped; regression tests
+now route the real path signal.)
+
+**Files:** `backend/config.py` (4 flags); `agent/prompts/grounded_prompt.py`
+(v20/v21 split); `agent/livekit_minimal/agent.py` (gate, tripwire, clinic-map
+hook, lang anchor, confirm-grounding); `agent/livekit_minimal/grounded_turns.py`
+(fact-intent, faq match, clock detector); `agent/i18n/transliterate.py`
+(nearest_clinic_term); `agent/session_state.py` (grounding flags); new tests
+`test_grounded_prompt_v21|grounding_gate|stt_clinic_map|lang_anchor|prompt_stress`;
+`docs/superpowers/{specs,plans}/2026-07-30-voice-prompt-redesign*`,
+`docs/superpowers/plans/voice-real-call-checklist.md`.
+
+**Commits:** be82c07·0cd454b·8935377·2c6543c (P1) · ddd0f00·26601f6·1be9430·1abb93e
+(P2+fix) · 89c483e·26f8c84 (P3) · 10d5799 (P4) · b93df92 (P5) · 0acdd59 (final-
+review fixes). All on `feat/monochrome-ui`.
+
+**Tests:** unit 927 · integration+edge 409/2skip · security 180/1skip · 0 failed.
+
+**Follow-ups:** Vinay real-call validation per the checklist (gate→anchor→map→
+v21); then flip flags in prod and record here + memory. Deferred minors: clinic-
+map over-map threshold (mental→dental) and the v21 `warmth` inert param.
+
 ## 2026-07-30 — Migrate DB to Supabase; remove Neon and Sarvam entirely
 
 **Why (Vinay):** (1) latency — Supabase Postgres runs in Mumbai/ap-south-1,
