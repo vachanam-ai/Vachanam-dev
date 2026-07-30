@@ -2279,15 +2279,13 @@ class VachanamAgent(Agent):
         """Route on a DEDICATED session — async sessions are not concurrency-safe,
         so the prefetch must never share the call's self._db with the live turn.
         Still strictly branch-scoped (RULE 1)."""
-        async def _route(pdb):
+        async with AsyncSessionLocal() as pdb:
             return await route_to_doctor(
                 complaint=complaint,
                 branch_id=self._state.branch_id,
                 db=pdb,
                 llm_call=_routing_llm_call,
             )
-
-        return await run_db_read(_route)
 
     async def _consume_or_route(self, complaint: str) -> dict:
         """Return the prefetched routing result when it matches this complaint (the
@@ -2305,15 +2303,12 @@ class VachanamAgent(Agent):
                 logger.warning("prefetch_route_failed_refetch: %s", e)
         elif task is not None and not task.done():
             task.cancel()
-        async def _route(db):
-            return await route_to_doctor(
-                complaint=complaint,
-                branch_id=self._state.branch_id,
-                db=db,
-                llm_call=_routing_llm_call,
-            )
-
-        return await run_db_read(_route)
+        return await route_to_doctor(
+            complaint=complaint,
+            branch_id=self._state.branch_id,
+            db=self._db,
+            llm_call=_routing_llm_call,
+        )
 
     async def _handle_lost_connection(self) -> None:
         """#lost: the caller said "hello" 3 times running — they almost
