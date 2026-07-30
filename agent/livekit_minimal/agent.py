@@ -90,6 +90,7 @@ from agent.livekit_minimal.confirm_speech import (  # noqa: E402
     build_queue_status_text,
 )
 from agent.livekit_minimal.grounded_turns import (  # noqa: E402
+    asserts_clock_time,
     clinic_fact_intent,
     doctor_roster_reply,
     extract_exact_time,
@@ -572,6 +573,11 @@ async def _filter_soniox_expression_stream(text):
 
 _SPEECH_GUARD_CARRY = 24
 _SPEECH_BOUNDARY = re.compile(r"[.!?।\n]")
+# Task 2.3: bounded trailing carry so a clock-time pattern split across LLM
+# chunks ("11" + ":30 pm") is still detected, without buffering the whole
+# reply — the longest pattern asserts_clock_time looks for is well under 20
+# characters in every supported script.
+_TRIPWIRE_CARRY = 20
 _PRIVATE_REASONING_OPEN = re.compile(
     r"<\s*(?:thinking|analysis|reasoning)\b[^>]*>",
     re.IGNORECASE,
@@ -1971,7 +1977,9 @@ class VachanamAgent(Agent):
                 yield chunk
 
         private_safe = _strip_private_reasoning_stream(_stamp_in(text))
-        safe_text = _stamp_out(_guard_internal_speech_stream(private_safe))
+        guarded = _guard_internal_speech_stream(private_safe)
+        tripwire_checked = self._grounding_tripwire_stream(guarded)
+        safe_text = _stamp_out(tripwire_checked)
         expressive_text = _filter_soniox_expression_stream(safe_text)
         _first = True
         async for frame in super().tts_node(
@@ -1981,6 +1989,50 @@ class VachanamAgent(Agent):
                 _trace.mark_tts_first_frame()  # first synthesized audio frame
                 _first = False
             yield frame
+
+    async def _grounding_tripwire_stream(self, text):
+        """Task 2.3 (voice_grounding_gate, 2026-07-30): a narrow, conservative
+        backstop — a reply asserting a specific clock time when NO
+        availability tool ran THIS turn (self._state.availability_tool_ran)
+        cannot have gotten that time from anywhere real. Blocks it with the
+        hold line instead of letting an invented time reach the caller.
+
+        Deliberately conservative (design spec §4.1/§7: "a false trip = dead
+        air", "err toward passing"):
+          - a no-op pass-through whenever the flag is off, or the
+            availability tool DID run this turn — the overwhelming majority
+            of turns, streamed exactly as before, no added latency;
+          - only a SMALL bounded carry (not the whole reply) is held back per
+            chunk, so ordinary non-time speech keeps streaming near-live;
+          - asserts_clock_time is narrow by design (explicit digit clock, or
+            an hour-word paired with an explicit am/pm/day-part marker) — a
+            bare number (a token, an age) never trips it.
+        """
+        if not settings.voice_grounding_gate or self._state.availability_tool_ran:
+            async for chunk in text:
+                yield chunk
+            return
+
+        pending = ""
+        tripped = False
+        async for chunk in text:
+            pending += chunk
+            if asserts_clock_time(pending):
+                tripped = True
+                break
+            if len(pending) > _TRIPWIRE_CARRY:
+                release = pending[: -_TRIPWIRE_CARRY]
+                pending = pending[-_TRIPWIRE_CARRY:]
+                yield release
+        if tripped:
+            lang = self._state.language or self._lang_code
+            logger.warning("grounding_tripwire_blocked lang=%s", lang)
+            self._state.availability_recheck_needed = True
+            p = PACKS.get((lang or "").lower(), PACKS["en"])
+            yield sanitize_for_tts(p.hold_line)
+            return
+        if pending:
+            yield pending
 
     async def on_enter(self) -> None:
         """Fires when this agent becomes active. For the initial agent it's a
@@ -2053,6 +2105,11 @@ class VachanamAgent(Agent):
         Thresholds are deliberately strict (long text, ~85% match) so a REAL
         patient turn is never discarded — a false negative (occasional echo slips
         through) is far safer than a false positive (ignoring the patient)."""
+        # Task 2.3 (voice_grounding_gate tts_node tripwire): this flag must
+        # reflect only what happens on THIS turn's tool calls, never carry a
+        # stale True over from an earlier turn.
+        self._state.availability_tool_ran = False
+
         # #lost: a caller repeating "hello" hears nothing back → likely one-way
         # audio. Count consecutive lone-hello turns; on the 3rd, speak the
         # reconnect notice and hang up (a dead line only burns minutes). Any
@@ -2154,7 +2211,12 @@ class VachanamAgent(Agent):
         async def _check(db):
             return await check_availability(db=db, **kwargs)
 
-        return await run_db_read(_check)
+        result = await run_db_read(_check)
+        # Task 2.3: mark THIS turn as tool-grounded so the tts_node tripwire
+        # (a genuinely rare, conservative backstop) never has to trip on a
+        # reply that legitimately came from a real availability read.
+        self._state.availability_tool_ran = True
+        return result
 
     async def _handle_grounded_user_turn(self, text: str) -> bool:
         """Speak unambiguous roster and corrected-time answers without an LLM."""
@@ -5569,9 +5631,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             for d in doctors
         ]
         _doctor_names = {d.id: d.name for d in doctor_contexts}
-        # Decoded once, shared by the prompt's <clinic_faq> render AND the
-        # gated pre-LLM fee/hours fast path (Task 2.2) — same source, never
-        # a second/diverging read of the branch row.
+        # For the gated pre-LLM fee/hours fast path (Task 2.2) — the SAME
+        # branch.faq rows _compose_instructions decodes for the <clinic_faq>
+        # prompt block below, just also handed to the agent instance so
+        # _handle_grounded_fact_turn can answer without a second LLM pass.
         _branch_faq = _decode_branch_faq(getattr(branch, "faq", None))
 
         # #400: Soniox context biasing — the clinic's own vocabulary, so
@@ -5625,7 +5688,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     plan=state.plan or "clinic",
                     language=lc,
                     clinic_address=getattr(branch, "address", None),
-                    faq=_branch_faq,
+                    faq=_decode_branch_faq(getattr(branch, "faq", None)),
                     recording_active=_recording_active,
                 )
                 + get_lines(lc).brevity

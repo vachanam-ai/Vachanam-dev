@@ -204,6 +204,40 @@ def extract_exact_time(text: str, reference: time | None = None) -> time | None:
 
 
 # --------------------------------------------------------------------------
+# Task 2.3 (voice_grounding_gate tts_node tripwire, 2026-07-30): a NARROW,
+# conservative detector for "this text states a specific clock time" — used
+# ONLY to decide whether an ungrounded reply needs to be blocked. A bare
+# number (a token, an age, a phone digit) never trips it; only an explicit
+# digit clock (11:30, 9.45) or a digit/number-word paired with an explicit
+# am/pm/o'clock/day-part marker does. Err toward NOT matching — a missed
+# hallucination is a smaller harm than blocking a legitimate reply into dead
+# air (spec 2026-07-30-voice-prompt-redesign-design.md §4.1/§7).
+# --------------------------------------------------------------------------
+_CLOCK_DIGIT_RE = re.compile(
+    r"(?<!\d)([01]?\d|2[0-3])[:.]([0-5]\d)(?!\d)"          # 11:30 / 9.45
+    r"|(?<!\d)([01]?\d|2[0-3])\s*(a\.?m\.?|p\.?m\.?)(?!\w)",  # 5 pm / 11am
+    re.IGNORECASE,
+)
+_HOUR_WORDS = tuple({**_TELUGU_HOURS, **_ENGLISH_HOURS})
+
+
+def asserts_clock_time(text: str) -> bool:
+    """True only when TEXT states a specific clock time. Conservative by
+    design — a false negative (a hallucinated time slips through) is safer
+    than a false positive (a legitimate reply replaced by dead air)."""
+    low = (text or "").lower()
+    if not low:
+        return False
+    if _CLOCK_DIGIT_RE.search(low):
+        return True
+    if any(marker in low for marker in _TIME_MARKERS) and any(
+        word in low for word in _HOUR_WORDS
+    ):
+        return True
+    return False
+
+
+# --------------------------------------------------------------------------
 # Task 2.2 (voice_grounding_gate, 2026-07-30): fee/hours/booking-status intent
 # classification + FAQ matching. Deliberately narrow — te/en/hi only, mirroring
 # doctor_roster_reply's language scope; an unrecognized/unsupported turn

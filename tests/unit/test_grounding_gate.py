@@ -240,3 +240,99 @@ async def test_gate_on_existing_roster_and_exact_time_branches_unaffected(monkey
     assert handled is True
     assert len(session.spoken) == 1
     assert "Dr. Ravi" in session.spoken[0][0]
+
+
+# ── Task 2.3: narrow tts_node tripwire backstop ──────────────────────────────
+
+
+async def _stream(*chunks):
+    for chunk in chunks:
+        yield chunk
+
+
+async def _collect(agen):
+    return "".join([chunk async for chunk in agen])
+
+
+@pytest.mark.asyncio
+async def test_tripwire_off_flag_always_passes_through(monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", False)
+    agent = _agent()
+    agent._state.availability_tool_ran = False
+
+    out = await _collect(
+        agent._grounding_tripwire_stream(_stream("Doctor is free at ", "11:30 today."))
+    )
+    assert out == "Doctor is free at 11:30 today."
+    assert agent._state.availability_recheck_needed is False
+
+
+@pytest.mark.asyncio
+async def test_tripwire_on_with_availability_tool_ran_passes_through_untouched(monkeypatch):
+    """The turn-flag set (a real read happened this turn) → untouched, even
+    though the text asserts a clock time."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", True)
+    agent = _agent()
+    agent._state.availability_tool_ran = True
+
+    out = await _collect(
+        agent._grounding_tripwire_stream(_stream("Doctor is free at ", "11:30 today."))
+    )
+    assert out == "Doctor is free at 11:30 today."
+    assert agent._state.availability_recheck_needed is False
+
+
+@pytest.mark.asyncio
+async def test_tripwire_blocks_ungrounded_clock_time_and_flags_recheck(monkeypatch):
+    """No availability tool ran this turn + the reply asserts a clock time →
+    replaced with the hold line, and a recheck-needed flag is set."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", True)
+    agent = _agent()
+    agent._state.availability_tool_ran = False
+
+    out = await _collect(
+        agent._grounding_tripwire_stream(_stream("Doctor is free at ", "11:30 today."))
+    )
+    assert "11:30" not in out
+    assert out == "one minute"  # en LangPack hold_line
+    assert agent._state.availability_recheck_needed is True
+
+
+@pytest.mark.asyncio
+async def test_tripwire_passes_ordinary_non_time_reply_untouched(monkeypatch):
+    """Gate on, tool did NOT run this turn, but the reply names no clock
+    time — conservative default: passes through unchanged (err toward
+    passing, per spec)."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", True)
+    agent = _agent()
+    agent._state.availability_tool_ran = False
+
+    out = await _collect(
+        agent._grounding_tripwire_stream(_stream("Thank you for calling, ", "have a nice day."))
+    )
+    assert out == "Thank you for calling, have a nice day."
+    assert agent._state.availability_recheck_needed is False
+
+
+@pytest.mark.asyncio
+async def test_tripwire_detects_a_clock_time_split_across_chunk_boundary(monkeypatch):
+    """A pattern split mid-token across two LLM chunks must still be caught."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", True)
+    agent = _agent()
+    agent._state.availability_tool_ran = False
+
+    out = await _collect(
+        agent._grounding_tripwire_stream(_stream("The slot is at 11", ":30 pm exactly."))
+    )
+    assert "11:30" not in out and "pm" not in out
+    assert agent._state.availability_recheck_needed is True

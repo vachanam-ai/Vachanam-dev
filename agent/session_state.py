@@ -117,3 +117,15 @@ class SessionState:
     # window back (they are not done after all).
     closing: bool = False
     awaiting_anything_else: bool = False
+
+    # Task 2.3 (voice_grounding_gate tts_node tripwire, 2026-07-30): true only
+    # for the turn in which an availability DB read actually ran (set in
+    # _read_availability, reset per-turn in on_user_turn_completed). The
+    # tripwire only ever inspects THIS turn's value — never a stale one from
+    # an earlier turn — so it can tell "the reply is grounded in a real read"
+    # from "the model is asserting a time out of nowhere".
+    availability_tool_ran: bool = False
+    # Set when the tripwire actually blocks a reply, so a caller-facing
+    # surface (logging/QA) can see a real turn needed a fresh recheck instead
+    # of being answered from the (blocked) reply.
+    availability_recheck_needed: bool = False
