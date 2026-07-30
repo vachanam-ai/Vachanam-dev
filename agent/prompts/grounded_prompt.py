@@ -976,6 +976,12 @@ def build_grounded_prompt(
     the runtime MUST re-render with the new code and replace the system prompt
     in place — see rebuild_on_switch. Without that, the model keeps reading the
     old language's register table and drifts back within a few turns.
+
+    Dispatches to `_build_v21` (concise, front-loaded, positive-framed scaffold
+    — docs/superpowers/specs/2026-07-30-voice-prompt-redesign-design.md §4.3)
+    when `settings.voice_prompt_v21` is set, else the proven `_build_v20`.
+    Kill-switch default OFF: production stays on v20 until v21 is validated on
+    real calls.
     """
     if call_type not in _CALL_TYPES:
         raise ValueError(f"call_type {call_type!r} not in {_CALL_TYPES}")
@@ -983,6 +989,40 @@ def build_grounded_prompt(
         raise ValueError(f"warmth {warmth!r} not in {_WARMTH_LEVELS}")
     language = _resolve(language)
     p = _pack(language)
+
+    from backend.config import settings
+
+    if settings.voice_prompt_v21:
+        return _build_v21(
+            p, language, clinic_name, doctors, emergency_contact, plan,
+            is_rebook, cancelled_date, clinic_address, faq, recording_active,
+            warmth, call_type,
+        )
+    return _build_v20(
+        p, language, clinic_name, doctors, emergency_contact, plan,
+        is_rebook, cancelled_date, clinic_address, faq, recording_active,
+        warmth, call_type,
+    )
+
+
+def _build_v20(
+    p: LangPack,
+    language: str,
+    clinic_name: str,
+    doctors: list[DoctorContext],
+    emergency_contact: str,
+    plan: str,
+    is_rebook: bool,
+    cancelled_date: str | None,
+    clinic_address: str | None,
+    faq: list[dict] | None,
+    recording_active: bool,
+    warmth: str,
+    call_type: str,
+) -> str:
+    """The proven production prompt (~1260 lines of POML). Untouched by the
+    v21 split — see `build_grounded_prompt` for the dispatch and
+    `_build_v21` for the rewritten scaffold."""
     booking_block = _booking_steps(p) if call_type == "inbound" else (
         "BOOKING: outbound calls do not open new bookings. If they ask for one, treat it as a "
         "normal booking request and follow <facts> — existing bookings first, then live "
