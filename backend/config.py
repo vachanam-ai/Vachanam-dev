@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Exact positive availability and unambiguous single-booking queue results
     # are already fully grounded by the DB. Speak them without a second LLM.
     voice_grounded_fast_paths: bool = True
+    # Kill-switch for the rewritten v21 prompt scaffold (2026-07-30). Default OFF:
+    # production keeps the proven v20 prompt until v21 is validated on real calls.
+    voice_prompt_v21: bool = False
     # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
     # which is faster than either global model from the Fly Mumbai worker.
     gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"
