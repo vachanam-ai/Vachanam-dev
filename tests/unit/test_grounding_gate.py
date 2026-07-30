@@ -336,3 +336,38 @@ async def test_tripwire_detects_a_clock_time_split_across_chunk_boundary(monkeyp
     )
     assert "11:30" not in out and "pm" not in out
     assert agent._state.availability_recheck_needed is True
+
+
+@pytest.mark.asyncio
+async def test_slot_confirmation_survives_tripwire(monkeypatch):
+    """Regression (inline review, 2026-07-30): a deterministic slot booking /
+    reschedule confirmation restates a clock time ("...booked for 11:30 AM"),
+    but the confirm turn runs confirm_booking — NOT _read_availability — so
+    nothing else marks the turn grounded. Without the confirm path setting the
+    flag, the tts_node tripwire (gate on) swallows the confirmation and the
+    caller hears "one minute" after a successful booking. The confirm chokepoint
+    must mark the turn grounded so the real confirmation passes untouched."""
+    from datetime import date, time
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "voice_grounding_gate", True)
+    monkeypatch.setattr(settings, "voice_deterministic_confirm", True)
+    session = _RecordingSession()
+    monkeypatch.setattr(agent_module, "AgentSession", _RecordingSession)
+    agent = _agent()
+    agent._state.availability_tool_ran = False
+    context = SimpleNamespace(session=session)
+
+    spoke = agent._speak_deterministic_confirm(
+        context, "booked_slot", token=8, date_=date(2026, 8, 1), time_=time(11, 30),
+    )
+    assert spoke is True
+    confirm_text = session.spoken[0][0]
+    assert "11:30" in confirm_text  # the confirm really does assert a clock time
+    # The fix: the confirm marks THIS turn grounded...
+    assert agent._state.availability_tool_ran is True
+    # ...so the same confirmation streams through the tripwire untouched
+    # instead of being replaced by the hold line.
+    out = await _collect(agent._grounding_tripwire_stream(_stream(confirm_text)))
+    assert out == confirm_text
+    assert agent._state.availability_recheck_needed is False

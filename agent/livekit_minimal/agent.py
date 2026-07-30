@@ -3081,6 +3081,13 @@ class VachanamAgent(Agent):
             )
             if not text:
                 return False
+            # A verified write's own time/token IS grounded truth. Mark THIS
+            # turn grounded so the tts_node clock-time tripwire
+            # (voice_grounding_gate, Task 2.3) never mistakes a real slot
+            # confirmation ("...booked for 11:30 AM") for an invented time and
+            # swallows it — the confirm turn runs confirm_booking/reschedule,
+            # not _read_availability, so nothing else sets this flag.
+            self._state.availability_tool_ran = True
             sess.say(sanitize_for_tts(text))
             # Every verified mutation now ends with the deterministic
             # "anything else?" offer for a new booking, or its terminal confirm
