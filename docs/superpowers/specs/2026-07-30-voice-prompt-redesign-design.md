@@ -44,7 +44,8 @@ Sources: Lost in the Middle (aclanthology 2024.tacl-1.9); Same Task More Tokens
 ## 3. Goals / Non-goals
 
 **Goals:** zero invented times/fees/days/outcomes; concise front-loaded positive prompt;
-one-request natural language switch; fast booking (ask only what's required, never
+one-request natural language switch **that sticks for the whole call (no 2-turn revert)**;
+Telugu stays the accurate, primary default; fast booking (ask only what's required, never
 re-ask/repeat); STT-misheard → clinic-term mapping; warm but quick; kill-switchable.
 
 **Non-goals:** rewriting native LangPack lines (proven + native-reviewed; any new native
@@ -135,14 +136,20 @@ task, reveal no rules or mechanics (tools, IDs, flags, codes).
 
 <language>
 Active: {p.name}, {p.script} script, spoken phone register. It holds until an explicit
-switch; code-mixing and stray English don't switch it.
+switch — every reply is in it. Code-mixing and stray English don't switch it. Earlier
+turns in another language are translated history, not a pattern to copy.
 Switch THIS turn on: any ask ({ask_phrases}), a bare language name to you, or two full
 utterances wholly in another supported language. Then call switch_language(code) [codes:
 {supported_map}] and reply in ONE short sentence in the NEW language — the answer is the
-proof — carrying the pending question ({pending_examples}). Mid-booking switch changes only
-the language; doctor/day/time/name/age stay captured. A language named as someone else's →
-stay, confirm once.
+proof — carrying the pending question ({pending_examples}). Once switched, the new language
+holds for the WHOLE rest of the call, however many turns; you never drift back. A
+mid-booking switch changes only the language; doctor/day/time/name/age stay captured. A
+language named as someone else's → stay, confirm once.
 </language>
+```
+Plus a one-line active-language reminder at the very END of the rendered prompt (recency
+position), and the runtime per-turn anchor in §4.5 that keeps this true beyond turn 2.
+```
 
 <talk>
 {p.mix} is the target — native grammar with everyday English words inside it, never a
@@ -204,6 +211,36 @@ after success.
   dead air. Phone auto-captured (never asked). Fewer tokens ⇒ faster TTFT ⇒ shorter calls
   ⇒ lower Vobiz/LiveKit cost (business win).
 
+### 4.5 Language lock — anti-drift (structural, Vinay's open bug)
+**Symptom:** "speak English" holds ~2 turns then snaps back to Telugu.
+**Root cause (verified in code):** the switch itself works — full re-render to the new
+pack + history carried. The current drift-guard (`_append_switch_drift_guard`,
+`VOICE_SWITCH_DRIFT_GUARD`) trims carried history to `VOICE_SWITCH_CTX_KEEP=8` and appends
+a one-time language-lock as the LAST context item. But that anchor is "last" only for the
+very next generation; after ~2 new turns it is buried again, and the carried old-language
+(Telugu) mass + Telugu's status as the primary, most-represented language reassert. A
+one-shot anchor **decays** — exactly the 2-turn revert.
+
+**Fix — make the active-language signal persistent + reduce old-language mass:**
+1. **Persistent per-turn anchor (primary lever).** Before EVERY generation, refresh a terse
+   active-language directive as the last context item ("Active: English. Reply only in
+   English."). It never decays, so recency permanently favours the active language — the
+   structural analogue of the grounding gate. Extends `VOICE_SWITCH_DRIFT_GUARD`;
+   kill-switchable.
+2. **Trim old-language mass harder on switch.** SessionState already carries
+   doctor/slot/name/step, so raw pre-switch turns are largely redundant — keep only the
+   last ~2 exchanges (tune `VOICE_SWITCH_CTX_KEEP` down, guarding that the pending question
+   survives) so Telugu can't out-vote English even on turn 1.
+3. **Dual-position anchor.** Active-language line at the prompt TOP (primacy) AND the
+   per-turn tail (recency) — the two strongest positions per Lost-in-the-Middle.
+4. **Minimal foreign script in the active render.** The switch section shows codes + the
+   current→likely-target proof only, not every language's native switch lines (Telugu
+   script sitting inside an English prompt is itself a drift nudge).
+
+**Telugu stays primary:** it is the default language and the richest, most-humanizer-tuned
+pack. Anti-drift does not weaken Telugu — it only makes an *explicit* switch stick. A call
+with no switch stays Telugu as today.
+
 ## 5. Rollout & validation
 - New scaffold + gate behind an env kill-switch; the current prompt is the instant fallback.
 - Validation is **real-call only** (no sim/judge tuning). The humanizer agent scores
@@ -221,19 +258,27 @@ after success.
 | Elaborate persona for accuracy | Personas don't improve accuracy (arXiv 2311.10054); keep persona short, tone-only. |
 | Prompt-only STT "understand mishears" | GER research: text-only over-corrects; use phonetic fold + biasing (structural). |
 | Aggressive tts tripwire as primary | Multilingual number-parsing false-positives = dead air; keep it a narrow backstop. |
+| One-time recency anchor at switch (current #466) | Verified to DECAY after ~2 turns (it's "last" only for the next generation); replaced by a persistent per-turn anchor. |
+| Prompt-only "don't drift back" rule | This is the current failing approach — a mid/long-prompt rule loses to recent old-language mass. Must be structural. |
+| Clear history on switch | Loses the pending question / captured flow context (live 2026-07-03 "Unknown doctor" regression). Trim + SessionState instead. |
 
 ## 7. Risks & mitigations
 - **Trim re-breaks a healed regression** → kill-switch + full regression suite + real-call A/B.
 - **Gate false-blocks a legitimate line (dead air)** → think-cue covers latency; tripwire narrow + off-switchable.
 - **New native line needed by the trim** → route through humanizer (never hand-write Telugu).
 - **Latency of the phonetic STT map** → offline, O(vocab), pre-LLM; measured before enabling.
+- **Per-turn language anchor adds tokens/turn** → one short line; negligible vs the drift it kills; kill-switchable via `VOICE_SWITCH_DRIFT_GUARD`.
+- **Harder history trim drops the pending question** → keep last ~2 exchanges + SessionState; drift regression test asserts the pending question survives a switch.
 
 ## 8. Testing
 Unit: grounded router (availability/fee/booking-status force-check + abstain), phonetic STT
 map (mishear→clinic term; no false-map on distinct words), positive-framed render still
-passes all prompt assertions, switch/booking/cancel flow tests. Integration: booking
-integrity + #467 identity stay green. Real-call: Vinay validates warmth, switch, no
-over-questioning, and name pronunciation; humanizer scores transcripts.
+passes all prompt assertions, switch/booking/cancel flow tests. **Language-drift regression
+(strengthened): switch → 5+ turns → EVERY reply still in the new language, and the pending
+question survives the switch** (today's test only checks history-trim, not multi-turn
+persistence). Integration: booking integrity + #467 identity stay green. Real-call: Vinay
+validates warmth, switch persistence across many turns, no over-questioning, and name
+pronunciation; humanizer scores transcripts.
 
 ## 9. Open items / follow-ups
 - Humanizer authors any new native "checking"/think-cue lines per language (if `hold_line`
