@@ -83,7 +83,12 @@ from backend.services.clinic_cache import (  # noqa: E402
     get_doctors,
     load_doctors,
 )
-from agent.i18n.transliterate import phonetic_fold, spoken_name, spoken_text  # noqa: E402
+from agent.i18n.transliterate import (  # noqa: E402
+    nearest_clinic_term,
+    phonetic_fold,
+    spoken_name,
+    spoken_text,
+)
 from agent.livekit_minimal.confirm_speech import (  # noqa: E402
     build_confirm_text,
     build_exact_availability_text,
@@ -1907,6 +1912,7 @@ class VachanamAgent(Agent):
         doctor_names: dict[UUID, str] | None = None,
         doctor_facts: list[DoctorContext] | None = None,
         faq: list[dict] | None = None,
+        clinic_vocab: list[str] | None = None,
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
         # None would DISABLE the session-level pipeline, not inherit it.
@@ -1940,6 +1946,10 @@ class VachanamAgent(Agent):
         # without a second LLM pass. Same source the prompt's <clinic_faq>
         # block renders from — never a different or invented list.
         self._faq = faq or []
+        # Task 3.3 (voice_stt_clinic_map): the clinic's own rare-word vocabulary
+        # (doctor names + specialties + day words) a misheard transcript token
+        # can be snapped onto before routing. Empty => the remap is a no-op.
+        self._clinic_vocab = clinic_vocab or []
         # Kept so switch_language can PRIME the new agent's TTS before handoff
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
@@ -2109,6 +2119,16 @@ class VachanamAgent(Agent):
         # reflect only what happens on THIS turn's tool calls, never carry a
         # stale True over from an earlier turn.
         self._state.availability_tool_ran = False
+
+        # Task 3.3 (voice_stt_clinic_map): snap a misheard transcript token onto
+        # the real clinic vocabulary BEFORE any routing/grounding reads it, so a
+        # Soniox lookalike ("lakshmee") resolves to the roster spelling. Guarded;
+        # off => the transcript is untouched.
+        if settings.voice_stt_clinic_map and self._clinic_vocab:
+            try:
+                self._apply_clinic_map(new_message)
+            except Exception as e:  # noqa: BLE001 — a mishear aid must never break a turn
+                logger.warning("stt_clinic_map_error: %s", e)
 
         # #lost: a caller repeating "hello" hears nothing back → likely one-way
         # audio. Count consecutive lone-hello turns; on the 3rd, speak the
@@ -2492,6 +2512,42 @@ class VachanamAgent(Agent):
         if isinstance(c, list):
             return " ".join(x for x in c if isinstance(x, str))
         return ""
+
+    def _apply_clinic_map(self, new_message) -> None:
+        """Task 3.3 (voice_stt_clinic_map): snap misheard transcript tokens onto
+        the clinic vocabulary. Token-wise and conservative — only a single token
+        is ever replaced (never a phrase), only above nearest_clinic_term's
+        threshold, and only when the mapped term actually differs. Punctuation
+        and whitespace are preserved; every replacement is logged so the real
+        false-map rate is measurable (project rule: real-call evidence only).
+        phonetic_fold is Latin-only, so Indic-script tokens fold to empty and
+        pass through untouched — cross-script name resolution stays with Soniox
+        context-biasing and the downstream romanized matching."""
+        text = self._message_text(new_message)
+        if not text:
+            return
+        out: list[str] = []
+        changed = False
+        for part in re.split(r"(\s+)", text):
+            if not part or part.isspace():
+                out.append(part)
+                continue
+            m = re.match(r"^(\W*)(.*?)(\W*)$", part, re.UNICODE)
+            pre, core, post = m.group(1), m.group(2), m.group(3)
+            if core:
+                mapped = nearest_clinic_term(core, self._clinic_vocab)
+                if mapped and mapped.lower() != core.lower():
+                    logger.info("stt_clinic_remap from=%s to=%s", core, mapped)
+                    core = mapped
+                    changed = True
+            out.append(pre + core + post)
+        if not changed:
+            return
+        remapped = "".join(out)
+        if isinstance(getattr(new_message, "text_content", None), str):
+            new_message.text_content = remapped
+        if isinstance(getattr(new_message, "content", None), str):
+            new_message.content = remapped
 
     @staticmethod
     def _normalize_for_echo(s: str) -> str:
@@ -5668,6 +5724,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             "speak English", "language",
         ]
 
+        # Task 3.3 (voice_stt_clinic_map): the rare-word vocabulary the phonetic
+        # pre-routing map snaps a mishear onto — doctor names, specialties,
+        # routing keywords, day words. phonetic_fold is Latin-only, so only the
+        # Latin/romanizable entries participate (intentional; see
+        # _apply_clinic_map). Generic filler ("appointment"/"token") is left out
+        # so an ordinary word can't be dragged onto it.
+        _clinic_vocab = [d.name for d in doctor_contexts]
+        for d in doctor_contexts:
+            _clinic_vocab.extend([d.specialization, *(d.routing_keywords or [])])
+        _clinic_vocab += [
+            "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+            "Saturday", "Sunday", "today", "tomorrow",
+        ]
+        _clinic_vocab = list(dict.fromkeys(t for t in _clinic_vocab if t))
+
         # (now_b/date_context + caller identification moved ABOVE the greeting —
         # the instant opening needs the caller's name and branch-local clock.)
 
@@ -5820,6 +5891,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 doctor_names=_doctor_names,
                 doctor_facts=doctor_contexts,
                 faq=_branch_faq,
+                clinic_vocab=_clinic_vocab,
             )
             if switched_cached_llm is None and switched_key not in _PROMPT_CACHE_PENDING:
                 _PROMPT_CACHE_PENDING.add(switched_key)
@@ -5864,6 +5936,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             doctor_names=_doctor_names,
             doctor_facts=doctor_contexts,
             faq=_branch_faq,
+            clinic_vocab=_clinic_vocab,
         )
         if _cached_llm is not None:
             logger.info("llm_prompt_cache_hit key=%s", _cache_key)
