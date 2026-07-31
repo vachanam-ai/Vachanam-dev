@@ -1,5 +1,17 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-31 — FIX PUSHED (deploy in flight).** `20e5fad` pushed to `master`
+> (FF, 27 commits) → CI deploys agent (Fly) + API (Render) + frontend. This
+> carries `a37f529`'s `ssl="require"` — the actual fix for the stale-deploy
+> incident below — PLUS a full Neon→Supabase reference purge (51→19 files; the
+> 19 survivors are correct migration records, protective `neon.tech` guards, or
+> dated history). Connect layer verified Supabase-correct on both paths
+> (database.py + 3 raw asyncpg warm sites). Full suite 1524 passed / 3 skipped.
+> Voice-prompt-redesign also ships (flags default-OFF, real-call-gated).
+> VERIFY after deploy: `fly logs -a vachanam-agent | Select-String cert` — the
+> `db_warm_ping_failed`/CERTIFICATE_VERIFY_FAILED lines must STOP; place a test
+> call; the "unable to fetch" line must be gone.
+
 > **2026-07-31 — ROOT CAUSE CONFIRMED from Fly logs: STALE DEPLOY.** The Fly
 > agent build is OLDER than origin/master (logs the pre-rename `neon_warm_ping`)
 > and predates `a37f529 fix(db): support Supabase pooler certificates`. It
