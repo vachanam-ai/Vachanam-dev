@@ -11,7 +11,7 @@ const num = (v) => (v == null ? "—" : v);
 const COMP_LABELS = {
   agent: "Voice agent (Fly)",
   redis: "Redis (Upstash)",
-  database: "Database (Neon)",
+  database: "Database (Supabase)",
   api_memory: "API memory",
   calendar_queue: "Calendar queue",
 };

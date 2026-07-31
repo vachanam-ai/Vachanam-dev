@@ -4,12 +4,12 @@
 about them will be true and accurate all the time. make necessary actions to
 decrease latency."
 
-WHY: Neon scale-to-zero (#299, a deliberate cost saving) means the first query
-after ~5 idle minutes pays a multi-second wake — and a clinic's phone rings
-sporadically, so nearly every call paid it. The doctor roster is read on the
-call's critical path (it builds the system prompt before the agent can speak).
-Redis (Upstash) is always warm at ~1-5ms from Fly bom, so serving the roster
-from cache takes that read off the critical path entirely.
+WHY: the first DB query on a fresh call loop pays a TLS + connection handshake,
+and a clinic's phone rings sporadically so nearly every call paid it. The
+doctor roster is read on the call's critical path (it builds the system prompt
+before the agent can speak). Redis (Upstash) is always warm at ~1-5ms from Fly
+bom, so serving the roster from cache takes that read off the critical path
+entirely.
 
 ACCURACY (the explicit requirement): the cache is invalidated on EVERY write
 that can change a roster or a timing — add/edit/delete doctor, and the branch

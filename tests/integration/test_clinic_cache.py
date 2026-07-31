@@ -5,8 +5,8 @@ timings per every clinic registers. so details about them will be true and
 accurate all the time."
 
 The roster is read on the call's critical path (it builds the system prompt
-before the agent can speak) and, with Neon scale-to-zero (#299), that read
-often paid a multi-second cold wake. Cached in Redis it is ~1-5ms.
+before the agent can speak) and, on a cold call loop, that read often paid a
+multi-second DB connect handshake. Cached in Redis it is ~1-5ms.
 
 ACCURACY is the hard requirement here: a stale roster would make the agent
 quote wrong hours. So every doctor write must drop the key.

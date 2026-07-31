@@ -47,11 +47,12 @@ def test_pool_size_configured() -> None:
 
 
 def test_pool_pre_ping_enabled() -> None:
-    """pool_pre_ping must be True to detect stale connections in Neon serverless.
+    """pool_pre_ping must be True to detect stale connections behind the pooler.
 
-    Neon Postgres closes idle connections after ~5 minutes. Without pool_pre_ping,
-    a stale pooled connection causes a cryptic 'SSL connection has been closed unexpectedly'
-    error on the next query. pool_pre_ping sends a cheap SELECT 1 before checkout.
+    The Supabase pooler (Supavisor/pgbouncer) closes idle connections. Without
+    pool_pre_ping, a stale pooled connection causes a cryptic 'SSL connection has
+    been closed unexpectedly' error on the next query. pool_pre_ping sends a cheap
+    SELECT 1 before checkout.
     """
     import backend.database as _db_module
 
@@ -59,7 +60,7 @@ def test_pool_pre_ping_enabled() -> None:
     pool = engine.sync_engine.pool
 
     assert pool._pre_ping is True, (
-        "pool_pre_ping must be True for Neon serverless compatibility. "
+        "pool_pre_ping must be True for pooled-connection compatibility. "
         "Fix: add pool_pre_ping=True to create_async_engine() in backend/database.py"
     )
 

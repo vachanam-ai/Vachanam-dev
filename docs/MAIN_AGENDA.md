@@ -45,7 +45,7 @@ A typical Indian clinic misses 20–30% of inbound calls when the receptionist i
 | Token locking | Upstash Redis 7 | Atomic INCR; no double-booking |
 | Calendar | Google Calendar API v3 | Doctors already use it; free |
 | Messaging | Meta Cloud API (WhatsApp) | No BSP fee; direct; ₹0.115/message |
-| Database | Neon Postgres | Serverless; pooler URL; $5/month |
+| Database | Supabase Postgres (Mumbai) | Supavisor pooler URL; in-region for India callers |
 | Backend | FastAPI + SQLAlchemy 2.x async | Async Python; Pydantic types |
 | Voice agent host | Fly.io bom (Mumbai) | Only India-region PaaS; always-on |
 | API host | Render (Singapore) | Reliable HTTP; $7/month |

@@ -673,7 +673,7 @@ async def _end_call_with_notice(ctx, reason: str, t_answer: float | None = None)
     unreachable we cannot resolve the branch, its language, or anything else —
     so answer the call, speak the default-language 'service unavailable, please
     call the clinic directly' line on a raw track (no DB, no LLM, no session),
-    and hang up. Live 2026-07-09: Neon hit its data-transfer quota, every
+    and hang up. Live 2026-07-09: the database went unreachable, every
     entrypoint DB query raised, and callers heard endless ringing (FIXLOG #298).
 
     Best-effort throughout — a failure here must still end the call, never raise.
@@ -4875,8 +4875,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # LATENCY: warm a DB connection NOW, before the outbound dial / SIP wait below
     # (both are dead time — the phone is ringing). Every call runs on a FRESH event
-    # loop, so the pool is COLD and the first query otherwise pays a ~1.8s Neon
-    # TLS+auth handshake right before the greeting. For OUTBOUND this matters most:
+    # loop, so the pool is COLD and the first query otherwise pays a ~1.8s
+    # Supabase TLS+auth handshake right before the greeting. For OUTBOUND this matters most:
     # branch resolution runs the instant the patient answers, so the handshake must
     # already be done. Fire-and-forget; never blocks or fails the call.
     from sqlalchemy import text as _sql_text
@@ -5062,7 +5062,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     # A job process already loaded this public DID->clinic greeting map before
     # accepting work. Start the real clinic intro now, in parallel with the
-    # authoritative Neon lookup. Never use the configured-DID fallback here:
+    # authoritative Supabase lookup. Never use the configured-DID fallback here:
     # without the actual SIP DID it is not safe in a multi-tenant deployment.
     _early_greeting_task: asyncio.Task | None = None
     _early_greeting_texts: list[str] | None = None
@@ -5161,8 +5161,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # the DID fallback would resolve the WRONG tenant the moment a second
     # clinic exists (caller's number must never pick the branch).
     #
-    # RULE 8 (#298): if the DB is unreachable (Neon transfer quota exhausted,
-    # live 2026-07-09) EVERY query below raises and kills the entrypoint before
+    # RULE 8 (#298): if the DB is unreachable (as on 2026-07-09) EVERY query
+    # below raises and kills the entrypoint before
     # the call is ever answered — the caller hears endless ringing. Catch it,
     # answer, speak the "call the clinic directly" notice, and hang up.
     branches = []
@@ -5230,7 +5230,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         await _end_call_with_notice(ctx, "did_resolution_failed", _t_answer)
         return
     branch = branches[0]
-    _t_branch = _perf.monotonic()  # #393: stage timing (branch resolve = first Neon wake)
+    _t_branch = _perf.monotonic()  # #393: stage timing (branch resolve = first DB round)
 
     # Per-clinic voice language (Branch.language → Sarvam STT/TTS codes + the
     # spoken lines + system-prompt directive). Resolved ONCE here so both the
@@ -5272,9 +5272,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # LATENCY (#390, real call 2026-07-17: lat_pre_session_build=4.66s → first
     # audio 5.81s): the three independent pre-call DB reads — per-caller
     # language, service gate, caller identification — used to run SERIALLY on
-    # the call session, so a sleeping Neon (#299) plus 7+ round-trips all
+    # the call session, so a cold DB connection plus 7+ round-trips all
     # stacked in front of the greeting. They now run CONCURRENTLY on their own
-    # pooled sessions: the cold-DB wake is paid once across all three, and the
+    # pooled sessions: the cold-connect cost is paid once across all three, and the
     # greeting starts sooner. Semantics unchanged — the gate still decides
     # BEFORE the greeting plays, fail-closed rules intact.
 
@@ -5805,8 +5805,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ctx.add_shutdown_callback(_cancel_on_shutdown(_hb_task))
 
         # #432: roster + timings come from the per-clinic Redis cache (~1-5ms)
-        # instead of a Neon round-trip that, after scale-to-zero (#299), often
-        # paid a multi-second cold wake on the call's critical path. Falls back
+        # instead of a DB round-trip that, on a cold call loop, often paid a
+        # multi-second connect handshake on the call's critical path. Falls back
         # to the DB on any miss/failure, and every doctor/settings write
         # invalidates the key, so the hours quoted are always current.
         doctors = await _doctors_task
@@ -6084,7 +6084,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _cache_key, instructions, vachanam_agent.tools))
 
         # #393: per-stage breakdown so a slow build names its culprit —
-        # branch_resolve = DID lookup incl any Neon wake; reads = the
+        # branch_resolve = DID lookup incl any DB connect; reads = the
         # concurrent gate/pref-lang/caller gather; rest = greeting prep +
         # prompt + agent build.
         _t_done = _perf.monotonic()
@@ -7121,7 +7121,7 @@ def _start_watchdog_heartbeat() -> None:
     every 60s — but ONLY while this worker is registered with LiveKit (#411).
     If the beacon goes >180s stale, the watchdog declares the voice plane
     down, emails Vinay, and auto-restarts this machine via the Fly API. Redis
-    only — never touches Neon (#299). Best-effort daemon thread, same pattern
+    only — never touches Postgres (#299). Best-effort daemon thread, same pattern
     as render_keepalive: a heartbeat failure must never affect a call."""
     global _heartbeat_started, _lk_registered
     if _heartbeat_started:
@@ -7214,8 +7214,8 @@ def _prewarm_greeting_routes(proc) -> None:
     """Load the tiny DID->greeting map before this job process accepts a call.
 
     The authoritative tenant query still runs on every call. This copy is used
-    only to start the public clinic opening while Neon's first TLS/query round
-    trip is in flight. It contains no patient data and cannot select tools or
+    only to start the public clinic opening while Supabase's first TLS/query
+    round trip is in flight. It contains no patient data and cannot select tools or
     booking state.
     """
     try:
@@ -7502,12 +7502,11 @@ if __name__ == "__main__":
     _start_render_keepalive()
     _start_watchdog_heartbeat()  # #306: backend watchdog watches this beacon
     _start_prompt_cache_warmer()
-    # NO db keepalive (#299). It existed to stop Neon suspending its compute so
-    # the first call after idle skipped a ~2-4s cold wake (#285) — but Neon only
-    # suspends after 5 min of total query silence, so a 3-min ping pinned the
-    # compute ON 24/7: ~$19/month at 0.25 CU with zero calls, which exhausted the
-    # plan and took the clinic offline on 2026-07-09. The cold wake is paid only
-    # on the first call after a quiet stretch; a busy clinic never sees it.
+    # NO db keepalive (#299). It existed to stop the old serverless DB from
+    # suspending its compute so the first call after idle skipped a ~2-4s cold
+    # wake (#285) — but a 3-min ping kept the DB busy 24/7 (~$19/month with zero
+    # calls) and took the clinic offline on 2026-07-09. The Supabase pooler is
+    # always-on now; per-loop pool warming (below) covers first-call latency.
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,

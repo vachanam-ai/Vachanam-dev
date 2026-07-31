@@ -1,12 +1,12 @@
-"""One hourly Postgres wake for all unconditional housekeeping (FIXLOG #299).
+"""One hourly Postgres tick for all unconditional housekeeping (FIXLOG #299).
 
-Neon keeps compute running for 5 minutes after ANY query. So the cost of a
-periodic job is not its frequency but the number of distinct wakes it causes:
-four hourly jobs on different offsets = four wakes = ~20 min of compute per
-hour. Running them back-to-back inside ONE wake costs ~5 min per hour instead.
+Each distinct periodic job opens its own DB round; four hourly jobs on
+different offsets keep a connection churning most of the hour. Running them
+back-to-back inside ONE tick collapses that to a single hourly round of
+queries.
 
-Before this, `run_vobiz_cdr_sync` alone (every 3 min) pinned the compute on
-permanently. These four now share a single hourly tick.
+Before this, `run_vobiz_cdr_sync` alone (every 3 min) kept the DB busy
+around the clock. These four now share a single hourly tick.
 
 Each step is isolated: one failing job must never skip the others.
 """
@@ -25,7 +25,7 @@ async def run_hourly_maintenance() -> None:
         ("requeue_stale_in_progress", requeue_stale_in_progress),
         ("finalize_stale_calls", run_finalize_stale_calls),
         ("call_scoring", run_call_scoring),
-        # Support SLA escalation rides this wake (#299 — no extra Neon wake).
+        # Support SLA escalation rides this tick (#299 — no extra Postgres round).
         ("support_sla_escalation", run_sla_escalation),
     ]
 
@@ -50,8 +50,8 @@ async def run_hourly_maintenance() -> None:
     if mem:
         logger.info("maintenance_mem", rss_mb=mem["rss"], peak_mb=mem["peak"])
 
-    # #306: deep health checks ride this wake — Neon is already awake, so the
-    # DB probe and calendar-backlog check cost zero extra compute wakes.
+    # #306: deep health checks ride this tick — the DB probe and
+    # calendar-backlog check share the same hourly Postgres round.
     try:
         from backend.watchdog import run_watchdog_deep
 

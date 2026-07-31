@@ -321,8 +321,8 @@ export default function Dashboard() {
     queryFn: () => fetchAnalytics(branchId, days),
     enabled: Boolean(branchId),
     // Real-time feel (Vinay 2026-07-17): 60s while the tab is focused
-    // (refetchIntervalInBackground stays off — an idle tab must let Neon
-    // sleep, #299). Mutations that change the numbers invalidate directly.
+    // (refetchIntervalInBackground stays off — an idle tab must not poll the
+    // DB needlessly, #299). Mutations that change the numbers invalidate directly.
     refetchInterval: 60_000
   });
   const { data: cq } = useQuery({

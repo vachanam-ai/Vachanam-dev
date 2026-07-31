@@ -4,7 +4,7 @@ Contracts that matter:
   * alerts fire on state CHANGE only (no email spam while a component stays down)
   * a stale/missing agent heartbeat triggers the Fly-restart remediation
   * the Fly restart honors its cooldown (no flap-restart loop on a broken deploy)
-  * the 60s tick is Redis-only (never wakes Neon — #299 discipline)
+  * the 60s tick is Redis-only (never touches Postgres — #299 discipline)
   * a dead Redis cannot crash the tick (the watchdog itself must not be fragile)
 """
 import json

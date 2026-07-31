@@ -1,7 +1,7 @@
 """Autonomous health watchdog (FIXLOG #306) — the agent that replaces a human
 watching dashboards.
 
-Every 60s (Redis-only — never wakes Neon, #299 discipline):
+Every 60s (Redis-only — never touches Postgres, #299 discipline):
   * agent-plane liveness  — the Fly agent writes `watchdog:hb:agent` every 60s;
     a stale/missing key means the voice plane is down. REMEDIATION: restart the
     Fly machine via the Machines API (FLY_API_TOKEN), 10-min cooldown so a
@@ -12,7 +12,7 @@ Every 60s (Redis-only — never wakes Neon, #299 discipline):
     >CRIT_MB triggers a CLEAN self-restart (os._exit) so Render reboots us
     between requests instead of OOM-killing us mid-request (#305 history).
 
-Hourly (piggybacks the existing maintenance wake — zero extra Neon wakes):
+Hourly (piggybacks the existing maintenance tick — zero extra Postgres load):
   * db probe              — SELECT 1.
   * calendar queue        — pending backlog / oldest-age; REMEDIATION: run the
     requeue job immediately, then re-measure.
@@ -203,7 +203,7 @@ async def run_watchdog_tick() -> None:
             await _email_alert(
                 "redis DOWN",
                 f"Upstash unreachable: {str(e)[:200]}\n"
-                "Impact: wake-gates fail open (more Neon wakes), token locking degraded.\n"
+                "Impact: wake-gates fail open (more Postgres load), token locking degraded.\n"
                 "Automatic action: none possible from here — check Upstash status.",
             )
         return  # everything below needs Redis
@@ -237,7 +237,7 @@ async def run_watchdog_tick() -> None:
             await _transition("api_memory", True, f"rss {rss}MB")
 
 
-# ── hourly deep checks (piggyback the maintenance wake — Neon already awake) ─
+# ── hourly deep checks (piggyback the maintenance tick — one Postgres round) ─
 
 async def run_watchdog_deep() -> None:
     import backend.database as _db_module
@@ -251,7 +251,7 @@ async def run_watchdog_deep() -> None:
         await _transition("database", True, "SELECT 1 ok")
     except Exception as e:  # noqa: BLE001
         await _transition("database", False, f"probe failed: {str(e)[:160]}",
-                          "callers degrade gracefully (#298); check Neon console")
+                          "callers degrade gracefully (#298); check Supabase console")
         return  # backlog check needs the DB
 
     # 2) calendar queue backlog — remediate by requeueing stale tasks NOW

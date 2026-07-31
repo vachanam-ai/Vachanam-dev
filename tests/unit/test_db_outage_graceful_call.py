@@ -1,4 +1,4 @@
-"""FIXLOG #298 — live 2026-07-09: Neon hit its data-transfer quota, every
+"""FIXLOG #298 — live 2026-07-09: the database went unreachable, every
 entrypoint DB query raised, the agent died before answering, and callers heard
 endless ringing. RULE 8 says a caller must ALWAYS get a coherent next step.
 

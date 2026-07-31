@@ -109,8 +109,8 @@ Avoid:
 
 ## Backup discipline
 
-- Neon: daily backup automatic, 7-day retention on Launch plan, 14-day on Scale
-- Quarterly drill: provision a fresh Neon branch from yesterday's backup, run `pg_dump` schema diff vs. main — must be zero diff
+- Supabase: daily automatic backups (retention per plan; PITR on Pro+)
+- Quarterly drill: restore yesterday's backup into a scratch Supabase project, run `pg_dump` schema diff vs. main — must be zero diff
 - Restore runbook tested by `devops-engineer` from your `docs/runbooks/db-restore.md`
 
 ## Query review (when reviewing other specialists' code)

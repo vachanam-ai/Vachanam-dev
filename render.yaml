@@ -4,15 +4,15 @@ services:
     runtime: python
     # FREE to start: $0 but the service SPINS DOWN after ~15min idle and
     # cold-starts (~50s) on the next request. This does NOT affect live calls /
-    # bookings — the Fly voice agent talks to Neon + LiveKit + Calendar directly,
+    # bookings — the Fly voice agent talks to Supabase + LiveKit + Calendar directly,
     # never through this backend; only the owner web dashboard/login/OTP pays the
     # cold start. Upgrade to `starter` ($7/mo, always-on) before paying traffic.
     plan: free           # was starter ($7/mo always-on) — flip back when scaling
     region: singapore    # closest to India in Render's network
     buildCommand: pip install -r backend/requirements.txt
     # NOTE: no preDeployCommand — Render REJECTS it on `free` (paid-only feature).
-    # So migrations are NOT auto-applied. Neon is already stamped at head, so this
-    # is fine now; when a new migration ships, run `alembic upgrade head` manually
+    # So migrations are NOT auto-applied. Supabase is already stamped at head, so
+    # this is fine now; when a new migration ships, run `alembic upgrade head` manually
     # (or move to `starter` and re-add `preDeployCommand: alembic upgrade head`).
     # (TD-027: never an upgrade-from-base.)
     # 1 worker on free (512MB) — 2 would risk OOM. Bump with the plan.

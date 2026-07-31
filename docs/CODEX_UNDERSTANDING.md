@@ -615,7 +615,7 @@ Current deployment topology:
 - Voice worker: Fly.io Mumbai, Python 3.12, 4 shared CPUs / 4 GB, always on,
   rolling deployment, no HTTP service.
 - React SPA: Cloudflare static/Workers hosting with SPA fallback.
-- Neon Postgres and Upstash Redis.
+- Supabase Postgres (Mumbai pooler) and Upstash Redis.
 - Vobiz/LiveKit, Google Calendar, Razorpay, Meta WhatsApp, Resend/SMTP/MSG91,
   and Cloudflare Turnstile integrations.
 

@@ -33,7 +33,7 @@ This runbook is designed so that anyone at 2 AM can follow it without asking que
 |---|---|
 | Log anomaly | Spike in 403s on data-isolation endpoints; unusual query patterns in structlog |
 | Customer report | Clinic owner emails/calls: "I see data that is not mine" or "a patient says they got a call they did not make" |
-| Vendor notification | Razorpay notifies a webhook secret was compromised; Neon notifies a credential rotation; Sarvam reports a data incident |
+| Vendor notification | Razorpay notifies a webhook secret was compromised; Supabase notifies a credential rotation; Sarvam reports a data incident |
 | Audit log anomaly | Unexpected `user.login.success` from unknown IP; bulk `token.attend` actions outside clinic hours; `rate_limit.exceeded` from an authenticated user |
 | CI secret scan | Gitleaks CI job (`.github/workflows/ci.yml`) flags a secret in a commit |
 | External security researcher | Email to security@vachanam.in reporting a vulnerability |
@@ -99,14 +99,14 @@ A single user account is being used by an unauthorized person.
 Someone may have read access to the entire database.
 
 1. **Rotate the compromised database credentials immediately:**
-   - Go to Neon dashboard > your project > Connection Details
+   - Go to Supabase dashboard > your project > Settings > Database (reset the DB password / rotate the pooler role credentials)
    - Reset the password for the compromised role
-   - Update `DATABASE_URL` env var in Render dashboard
-   - Render will automatically redeploy
+   - Update `DATABASE_URL` env var in Render dashboard AND the Fly agent secret
+   - Render will automatically redeploy; run `fly deploy`/`fly secrets set` for the agent
 2. **Pause writes if the main application role is compromised:**
    - In Render dashboard, set env var `READ_ONLY_MODE=true` and redeploy
    - This prevents additional data from being written while you investigate
-3. **Query Neon query log** (if available on your plan) to see what queries the attacker ran
+3. **Query Supabase logs** (Dashboard > Logs) to see what queries the attacker ran
 4. **This is LIKELY a reportable breach.** Proceed to Step 3 to assess scope.
 
 #### Scenario D: Webhook secret leaked (Razorpay)
@@ -137,9 +137,9 @@ Someone tried to UPDATE or DELETE audit_log entries to cover their tracks.
      ```
 2. **If UPDATE/DELETE succeeded** (permissions were wrong):
    - This is a SERIOUS incident. The audit trail may be unreliable.
-   - Check if you have Neon point-in-time recovery (PITR) available
+   - Check if you have Supabase point-in-time recovery (PITR) available (Dashboard > Database > Backups)
    - Restore audit_log from the most recent backup before the tamper
-3. **Investigate who did it:** The tamper itself should show in Neon's connection logs or the application logs.
+3. **Investigate who did it:** The tamper itself should show in Supabase's logs or the application logs.
 
 #### Scenario F: Cross-tenant data leak (Branch A sees Branch B data)
 
@@ -343,7 +343,7 @@ Create a file at `docs/incidents/YYYY-MM-DD-<slug>.md` with:
 |---|---|---|---|
 | Acting DPO / Grievance Officer | Vinay Rongala | hello@vachanam.in, ADMIN_PHONE | Any breach, any time |
 | Data Protection Board of India | DPB | dpb.gov.in | Within 72 hours of confirmed breach |
-| Neon (database) | Neon Support | neon.tech support portal | Database credential compromise |
+| Supabase (database) | Supabase Support | supabase.com/dashboard support | Database credential compromise |
 | Razorpay | Razorpay Support | dashboard.razorpay.com | Webhook secret compromise, payment fraud |
 | Render | Render Support | render.com support | Backend environment compromise |
 | Fly.io | Fly.io Support | fly.io support | Voice agent environment compromise |

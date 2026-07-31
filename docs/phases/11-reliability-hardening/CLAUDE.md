@@ -49,7 +49,7 @@ These are NOT deferred. They ship in their planned phases:
 - Health-check gating on deploys: `/health` must return 200 or rollout fails
 - HTTPS + HSTS + TLS 1.2+ via Cloudflare edge
 - DDoS protection via Cloudflare free tier
-- Daily Neon backup with 7-day retention
+- Daily Supabase backup (retention per plan)
 - 2-min UptimeRobot pings → SMS to ADMIN_PHONE
 - Structlog JSON to Render + Fly log streams
 - Dependabot weekly PRs for security patches (manual review + merge)

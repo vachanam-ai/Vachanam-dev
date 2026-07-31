@@ -229,7 +229,7 @@ async def test_privacy_policy_matches_reality():
     assert "privacy@vachanam.in" in text  # named list on request
     # Stack vendors must NOT be named (Google/Razorpay are deliberate exceptions).
     for vendor in ("Soniox", "Sarvam", "Gemini", "smallest", "LiveKit",
-                   "Vobiz", "Neon", "Supabase", "Upstash", "Fly.io", "Resend"):
+                   "Vobiz", "Supabase", "Upstash", "Fly.io", "Resend"):
         assert vendor not in text, f"vendor name leaked into public policy: {vendor}"
     assert "90 days" in text  # transcript retention disclosed
     assert "| Voice call transcripts | NOT STORED |" not in text

@@ -223,8 +223,8 @@ async def run_calendar_writer() -> None:
     Each call to _process_one_task commits independently; a failure in one
     task does not roll back others.
 
-    #299: an empty queue must not wake Postgres every 30s (that alone pinned
-    Neon's compute on 24/7). The next attemptable time is parked in Redis;
+    #299: an empty queue must not hit Postgres every 30s (that alone kept the
+    DB busy 24/7). The next attemptable time is parked in Redis;
     ticks before it are a Redis read only. Enqueue clears the key, so a fresh
     task is still picked up on the very next tick.
     """

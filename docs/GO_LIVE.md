@@ -62,7 +62,7 @@ unless marked otherwise. External items are blocking — the software cannot do 
 - [ ] **Sarvam / Gemini / OpenAI**: prod API keys with quota.
 - [ ] **Google**: `google-service-account.json` on the API host; each clinic shares its
   calendar with the service account (the Settings page guides this + "Test connection").
-- [ ] **Neon / Upstash**: prod Postgres + Redis → `DATABASE_URL`, `REDIS_URL`.
+- [ ] **Supabase / Upstash**: prod Postgres (Mumbai pooler) + Redis → `DATABASE_URL`, `REDIS_URL`. `DATABASE_URL` must use the Supabase pooler host with `?sslmode=require` (the app maps it to asyncpg `ssl=require` — full cert verification fails the pooler cert).
 - [ ] **MSG91 (SMS)** — `MSG91_AUTH_KEY` + approved `MSG91_SENDER_ID`. **HARD-REQUIRED
   in production**: signup verification is **mobile-only** (decision 2026-06-14). With no
   SMS provider in prod the code is neither sent nor echoed → **nobody can sign up**.

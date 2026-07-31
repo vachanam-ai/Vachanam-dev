@@ -966,7 +966,7 @@ async def admin_health_board(
     current_user: CurrentUser = Depends(require_admin),
 ) -> dict:
     """Realtime component states + recent incident feed for the Monitoring
-    page. States come from Redis (O(1), no Neon wake); the incident history is
+    page. States come from Redis (O(1), no Postgres hit); the incident history is
     the audit trail the watchdog writes on every transition. Aggregates only —
     no PII (RULE 1/9: health metadata never contains patient data)."""
     from backend.models.schema import AuditLog

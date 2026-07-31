@@ -4,8 +4,8 @@ export const getKb = () => api.get("/support/kb").then((r) => r.data);
 
 export const sendChat = ({ question, history = [], ticketId = null, captcha = "" }) =>
   api
-    // 30s: a Neon cold-wake + Gemini call can overrun the client's global 15s
-    // and surface as a bogus "something went wrong" (2026-07-12).
+    // 30s: a cold DB connection + Gemini call can overrun the client's global
+    // 15s and surface as a bogus "something went wrong" (2026-07-12).
     .post(
       "/support/chat",
       { question, history, ticket_id: ticketId },

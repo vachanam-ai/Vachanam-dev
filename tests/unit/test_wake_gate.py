@@ -1,8 +1,8 @@
-"""FIXLOG #299 — Postgres must sleep when there is no work.
+"""FIXLOG #299 — don't hit Postgres when there is no work.
 
-Neon suspends compute only after 5 min of total query silence (not shortenable),
-so a 30-60s poller pinned it awake 24/7: ~$19/mo at 0.25 CU with zero calls.
-That exhausted the plan on 2026-07-09 and took the clinic offline.
+A 30-60s poller that always queried the DB kept it busy 24/7 for nothing; on
+the old serverless plan that also pinned compute awake (~$19/mo with zero
+calls), exhausted the tier on 2026-07-09, and took the clinic offline.
 
 wake_gate answers "must I touch Postgres?" from Redis alone. The contract that
 matters: it FAILS OPEN. A missed reminder costs a patient their appointment; an
@@ -110,8 +110,8 @@ async def test_clear_next_at_forces_a_db_pass():
 
 # ── never let the keepalive come back ───────────────────────────────────────
 def test_db_keepalive_is_gone_and_not_started():
-    """#285's keepalive pinged every 3 min purely to defeat Neon's 5-min
-    scale-to-zero. It IS the 24/7 cost. It must not return."""
+    """#285's keepalive pinged every 3 min purely to defeat the old serverless
+    DB's scale-to-zero. It IS the 24/7 cost. It must not return."""
     import inspect
 
     import agent.livekit_minimal.agent as ag

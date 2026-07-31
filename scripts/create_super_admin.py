@@ -9,7 +9,7 @@ Google sign-in the server binds google_sub to it (see backend/routers/auth.py).
 Usage:
     python scripts/create_super_admin.py <email> "<Full Name>"
 
-Runs against whatever DATABASE_URL is set (so point it at prod/Neon to seed prod).
+Runs against whatever DATABASE_URL is set (so point it at prod/Supabase to seed prod).
 Idempotent: if the email already exists it is PROMOTED to super_admin.
 """
 import asyncio

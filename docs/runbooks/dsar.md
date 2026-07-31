@@ -116,7 +116,7 @@ This will output a JSON file containing all personal data associated with the ph
 
 **Manual fallback (MVP1, until the script is available):**
 
-Connect to the Neon database and run the following queries:
+Connect to the Supabase database and run the following queries:
 
 ```sql
 -- 1. Find the patient record

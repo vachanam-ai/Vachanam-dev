@@ -126,9 +126,9 @@ async def lifespan(app: FastAPI):
         # #299: calendar_writer / pre_appt_reminders / cascade_rebook keep their
         # fast ticks, but each now answers "is there work?" from Redis
         # (backend/jobs/wake_gate.py) and touches Postgres only when there is.
-        # Neon's compute stays awake 5 min after ANY query, so an unconditional
-        # 30s poll pinned it on 24/7 (~$19/mo at 0.25 CU with zero calls) and
-        # exhausted the plan on 2026-07-09.
+        # An unconditional 30s poll would hammer Postgres 24/7 for nothing;
+        # gating each tick on Redis keeps the DB quiet when there's no work
+        # (the #299 discipline that ended the runaway-poll cost on 2026-07-09).
         # 60s, not 30s: each tick is now a Redis GET, and this is only the RETRY
         # queue — a booking's calendar event is written inline at confirm_booking
         # (RULE 4). Halving the tick halves the Upstash command spend for no
@@ -218,13 +218,11 @@ async def lifespan(app: FastAPI):
             run_data_retention, IntervalTrigger(hours=24),
             id="data_retention", replace_existing=True,
         )
-        # #299 ONE HOURLY POSTGRES WAKE for everything unconditional:
+        # #299 ONE HOURLY POSTGRES TICK for everything unconditional:
         # requeue_stale_in_progress (was 5 min), finalize_stale_calls (was
-        # 30 min), call_scoring (was 1 h) and vobiz_cdr_sync (was 3 min — on its
-        # own enough to pin Neon's compute on permanently). Neon keeps compute
-        # running 5 min after ANY query, so what costs money is the NUMBER of
-        # distinct wakes, not the frequency: four staggered jobs burned ~20 min
-        # of compute per hour, one shared tick burns ~5.
+        # 30 min), call_scoring (was 1 h) and vobiz_cdr_sync (was 3 min — four
+        # staggered jobs kept a DB connection churning all hour). One shared
+        # tick collapses that to a single hourly round of queries.
         scheduler.add_job(
             run_hourly_maintenance, IntervalTrigger(hours=1),
             id="hourly_maintenance", replace_existing=True,
@@ -232,8 +230,8 @@ async def lifespan(app: FastAPI):
         # #306 autonomous watchdog: 60s Redis-only tick (agent heartbeat,
         # redis, own memory) with auto-remediation (Fly restart / clean
         # self-restart) + change-triggered email. Deep checks (DB probe,
-        # calendar backlog) ride the hourly maintenance wake — zero extra
-        # Neon wakes.
+        # calendar backlog) ride the hourly maintenance tick — zero extra
+        # Postgres load.
         from backend.watchdog import run_watchdog_tick
 
         scheduler.add_job(

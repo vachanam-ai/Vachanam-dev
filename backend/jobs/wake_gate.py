@@ -1,9 +1,11 @@
-"""Keep Postgres asleep when there is no work to do (FIXLOG #299).
+"""Skip Postgres when there is no work to do (FIXLOG #299).
 
-Neon suspends its compute only after 5 minutes of TOTAL query silence, and that
-timeout is not shortenable. So a scheduler that polls every 30-60s pins the
-database awake 24/7 — roughly $19/month at 0.25 CU even with zero calls, which
-is what exhausted the free tier on 2026-07-09 and took the clinic offline.
+A scheduler that polls every 30-60s hammers the database 24/7 for nothing. On
+the old serverless DB plan that also pinned compute awake around the clock
+(~$19/month even with zero calls) and exhausted the tier on 2026-07-09, taking
+the clinic offline. The current Supabase pooler is always-on, so there is no
+scale-to-zero left to defeat — but the gate still keeps needless query load off
+the DB, so it stays as cheap insurance.
 
 These helpers let a job decide, using Redis alone, whether it must touch
 Postgres at all. One primitive, used by every gated job:
@@ -31,7 +33,7 @@ import structlog
 logger = structlog.get_logger()
 
 # Never let a job sleep longer than this without one real Postgres pass, so a
-# lost producer signal self-heals. One wake/hour ≈ 5 min of compute ≈ $1.6/mo.
+# lost producer signal self-heals within the hour.
 SAFETY_SECONDS = 3600
 
 _NEXT_AT_KEY = "wake:next_at:{job}"

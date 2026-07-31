@@ -39,7 +39,7 @@ def test_knowledge_doc_names_no_stack_vendors():
     from backend.services import support_kb
     k = support_kb.knowledge_text()
     for vendor in ("Soniox", "Sarvam", "Gemini", "smallest", "LiveKit",
-                   "Vobiz", "Neon", "Supabase", "Upstash", "Fly.io", "Resend"):
+                   "Vobiz", "Supabase", "Upstash", "Fly.io", "Resend"):
         assert vendor not in k, f"vendor leaked into bot knowledge: {vendor}"
 
 

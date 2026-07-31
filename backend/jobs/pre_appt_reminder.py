@@ -65,7 +65,7 @@ async def _next_due_epoch(db, branches) -> float | None:
     appointment is within WINDOW_MAX minutes, so due = appointment - WINDOW_MAX.
 
     Used to park the job in Redis until that moment, so idle ticks never touch
-    Postgres and Neon's compute can suspend (FIXLOG #299)."""
+    Postgres and add no needless DB load (FIXLOG #299)."""
     soonest: float | None = None
     for branch in branches:
         tz = ZoneInfo(branch.timezone or "Asia/Kolkata")

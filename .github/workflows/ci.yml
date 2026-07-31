@@ -156,7 +156,7 @@ jobs:
       - name: Alembic fresh-database upgrade
         # This is deliberately an upgrade from an empty database. It catches
         # duplicate DDL, missing parents, enum drift, and split heads before a
-        # migration reaches Neon or blocks the ZAP environment.
+        # migration reaches Supabase or blocks the ZAP environment.
         run: |
           alembic upgrade head
           test "$(alembic heads | wc -l)" -eq 1
