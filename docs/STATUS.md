@@ -36,14 +36,22 @@
 > calls are confirmed healthy. NEVER diagnose a prod incident by hammering the
 > prod DB from a laptop again — use Fly/Render/Supabase logs.
 >
-> **MEANTIME hardening done this session (ships with the merge, `de6c5e9`):**
-> - Frontend (monochrome UI) build verified locally: **exit 0** — deploy safe.
-> - NEW `voice_db_failure_grace` kill-switch (default OFF): on a real DB-read
->   outage the agent now speaks a warm "sorry, couldn't check just now, shall I
->   try again" instead of the LLM improvising "unable to fetch data from
->   database" at the patient (read-side mirror of `_stop_on_mutation_failure`,
->   wraps check_availability / find_my_bookings / get_queue_status). ENABLE it
->   (`VOICE_DB_FAILURE_GRACE=1`) after a real-call check, alongside the infra fix.
+> **CODE-SIDE DB HARDENING done this session (ships with the merge, `f2db821`):**
+> Vinay: "it should never answer db is unreachable." Two layers so a raw DB
+> error can NEVER reach a caller (unit 935 + integ/sec/edge 589 = 1524 green):
+> - **Self-heal:** `is_transient_database_error` now also retries a pool-checkout
+>   timeout + Supabase pooler-overload / auth-breaker / "server closed the
+>   connection" messages; `run_db_read` retries **3×** (was 2) on a fresh
+>   connection. Most transient blips recover silently.
+> - **Never surface:** `voice_db_failure_grace` is now **default ON** (kill-switch
+>   kept). A read outage surviving the retries → warm native line ("sorry,
+>   couldn't check just now, shall I try again"), never the LLM improvising
+>   "unable to fetch data from database". Covers ALL read tools (route_to_doctor,
+>   check_availability, find_my_bookings, get_queue_status); writes already
+>   covered by `_stop_on_mutation_failure`.
+> - Frontend (monochrome UI) build verified: **exit 0** — deploy safe.
+> This makes the CODE never leak a DB error; TRUE never-fails still needs the
+> agent on the 6543 transaction pooler (removes the session-pool ceiling).
 
 > **2026-07-30 — VOICE PROMPT REDESIGN (5 phases) BUILT ON `feat/monochrome-ui`;
 > ALL BEHIND DEFAULT-OFF FLAGS, NOT DEPLOYED.** Addresses Vinay's report: agent
