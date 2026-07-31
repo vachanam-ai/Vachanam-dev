@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     # 8) with the pending question preserved. Default OFF: the one-time switch
     # drift guard + keep-8 window behave exactly as today until real-call check.
     voice_lang_anchor: bool = False
+    # Kill-switch for graceful DB-read failure speech (2026-07-31). When a
+    # read tool's DB connection fails even after run_db_read's retries (a real
+    # backend outage / pooler breaker — NOT a data condition), speak a fixed
+    # warm native line ("sorry, couldn't check just now, shall I try again")
+    # and stop, instead of letting the LLM improvise a raw "unable to fetch
+    # data from database" at the patient. Default OFF: enable after a real-call
+    # check (mirrors the fail-closed pattern already used for writes).
+    voice_db_failure_grace: bool = False
     # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
     # which is faster than either global model from the Fly Mumbai worker.
     gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"

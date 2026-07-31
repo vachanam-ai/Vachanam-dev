@@ -81,6 +81,19 @@ def build_mutation_failure_text(
     return messages.get(lang, messages["en"])[key]
 
 
+def build_read_failure_text(lang_code: str) -> str:
+    """Fixed warm line for when a read's DB connection FAILS outright (outage /
+    pooler breaker), not a data condition. Offers a retry rather than leaking a
+    technical error. Same wording already used by the grounded-turn read-failure
+    handler, kept here so tool-level guards reuse it (2026-07-31)."""
+    messages = {
+        "en": "[softly] Sorry, I could not check that just now. Shall I try again?",
+        "te": "[softly] క్షమించండి, ఇప్పుడది కరెక్ట్‌గా చెక్ చేయలేకపోయాను. మళ్ళీ చెక్ చేయనా?",
+        "hi": "[softly] माफ़ कीजिए, मैं अभी यह सही तरह जाँच नहीं पाई। फिर से जाँचूँ?",
+    }
+    return messages.get((lang_code or "").lower(), messages["en"])
+
+
 def build_exact_availability_failure_text(
     lang_code: str,
     availability: str,

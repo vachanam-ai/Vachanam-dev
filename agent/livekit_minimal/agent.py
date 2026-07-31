@@ -105,6 +105,7 @@ from agent.livekit_minimal.grounded_turns import (  # noqa: E402
 from agent.livekit_minimal.workflow_rules import (  # noqa: E402
     build_exact_availability_failure_text,
     build_mutation_failure_text,
+    build_read_failure_text,
 )
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
@@ -156,6 +157,7 @@ from backend.database import (  # noqa: E402
     AsyncSessionLocal,
     dispose_loop_engine,
     get_loop_engine,
+    is_transient_database_error,
     run_db_read,
 )
 from backend.models.schema import Branch, Doctor  # noqa: E402
@@ -2779,25 +2781,31 @@ class VachanamAgent(Agent):
         parsed_date = self._parse_date(booking_date)
         parsed_start = self._parse_time(query_start)
         parsed_end = self._parse_time(query_end)
-        availability = await self._read_availability(
-            doctor_id=resolved,
-            branch_id=self._state.branch_id,
-            booking_date=parsed_date,
-            query_start=parsed_start,
-            query_end=parsed_end,
-            # Availability is capacity only. Existing bookings are fetched by
-            # find_my_bookings; mixing them into this answer made a family
-            # member's booking sound like the requested doctor/time was full.
-            caller_phone=None,
-            held_slot_key=(
-                self._state.token_redis_key
-                if self._state.token_held
-                and not self._state.token_confirmed
-                and (self._state.token_redis_key or "").startswith("slot:")
-                else None
-            ),
-            branch_timezone=self._state.branch_timezone,
-        )
+        try:
+            availability = await self._read_availability(
+                doctor_id=resolved,
+                branch_id=self._state.branch_id,
+                booking_date=parsed_date,
+                query_start=parsed_start,
+                query_end=parsed_end,
+                # Availability is capacity only. Existing bookings are fetched by
+                # find_my_bookings; mixing them into this answer made a family
+                # member's booking sound like the requested doctor/time was full.
+                caller_phone=None,
+                held_slot_key=(
+                    self._state.token_redis_key
+                    if self._state.token_held
+                    and not self._state.token_confirmed
+                    and (self._state.token_redis_key or "").startswith("slot:")
+                    else None
+                ),
+                branch_timezone=self._state.branch_timezone,
+            )
+        except Exception as _dberr:  # noqa: BLE001
+            # A real DB outage on the booking-critical read → warm line + stop
+            # (kill-switched); otherwise re-raise for today's behaviour.
+            self._stop_on_db_read_failure(context, _dberr)
+            raise
         self._state.last_availability_doctor_id = resolved
         self._state.last_availability_date = parsed_date
         self._state.last_availability_query_time = parsed_start
@@ -3281,6 +3289,36 @@ class VachanamAgent(Agent):
             )
             raise StopResponse() from exc
 
+    def _stop_on_db_read_failure(
+        self, context: RunContext, error: BaseException
+    ) -> None:
+        """A read tool's DB connection failed even after run_db_read's retries — a
+        real backend outage (pooler breaker / unreachable DB), NOT a data
+        condition. Speak a fixed warm line and stop, so the model never
+        improvises a raw "unable to fetch data from database" at the patient
+        (the read-side mirror of _stop_on_mutation_failure).
+
+        Fully kill-switched: a no-op unless voice_db_failure_grace is on, the
+        error is a transient/connection failure, and this is a live session —
+        otherwise the caller re-raises the original error (today's behaviour)."""
+        if not settings.voice_db_failure_grace:
+            return
+        if not is_transient_database_error(error):
+            return
+        sess = getattr(context, "session", None)
+        if not isinstance(sess, AgentSession):
+            return
+        try:
+            lang = self._state.language or self._lang_code
+            sess.say(sanitize_for_tts(build_read_failure_text(lang)))
+            logger.warning("db_read_failure_spoken error=%s", type(error).__name__)
+            raise StopResponse()
+        except StopResponse:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never mask the original outage
+            logger.warning("db_read_failure_speech_failed: %s", exc)
+            raise StopResponse() from exc
+
     def _speak_grounded_fast_path(
         self, context: RunContext, text: str, kind: str
     ) -> bool:
@@ -3456,9 +3494,13 @@ class VachanamAgent(Agent):
         # booking being moved (FIXLOG #281).
         _say_wait_filler(context)  # slow: booking lookup (#361 dead air; silent-minute 07-20)
         self._state.existing_booking_intent = True
-        rows = await run_db_read(
-            lambda db: find_bookings_by_phone(self._state.branch_id, phone, db)
-        )
+        try:
+            rows = await run_db_read(
+                lambda db: find_bookings_by_phone(self._state.branch_id, phone, db)
+            )
+        except Exception as _dberr:  # noqa: BLE001
+            self._stop_on_db_read_failure(context, _dberr)
+            raise
         confirmed_rows = [r for r in rows if r[0].status == "confirmed"]
         if len(confirmed_rows) == 1:
             rows_single = confirmed_rows
@@ -3494,11 +3536,15 @@ class VachanamAgent(Agent):
         Token-queue doctors only — for a slot-doctor booking just restate
         their appointment time from find_my_bookings instead."""
         _guard_human_booking(self._state)
-        result = await run_db_read(
-            lambda db: queue_position_by_phone(
-                self._state.branch_id, self._state.patient_phone, db
+        try:
+            result = await run_db_read(
+                lambda db: queue_position_by_phone(
+                    self._state.branch_id, self._state.patient_phone, db
+                )
             )
-        )
+        except Exception as _dberr:  # noqa: BLE001
+            self._stop_on_db_read_failure(context, _dberr)
+            raise
         if result.get("found"):
             queue = result.get("queue") or []
             if len(queue) == 1:
