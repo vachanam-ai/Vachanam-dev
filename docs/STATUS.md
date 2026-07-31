@@ -1,7 +1,19 @@
 # Vachanam — Status (single source of truth)
 
-> **2026-07-31 — OPEN INCIDENT: calls say "unable to fetch data from database".
-> ROOT CAUSE IS INFRA/ENV, NOT CODE — needs Vinay (Fly/Render access).**
+> **2026-07-31 — ROOT CAUSE CONFIRMED from Fly logs: STALE DEPLOY.** The Fly
+> agent build is OLDER than origin/master (logs the pre-rename `neon_warm_ping`)
+> and predates `a37f529 fix(db): support Supabase pooler certificates`. It
+> connects with `asyncpg.connect(..., ssl=True)` = FULL cert verification, which
+> the Supabase pooler cert fails: `CERTIFICATE_VERIFY_FAILED: self-signed
+> certificate in certificate chain`. Every DB connect dies → "unable to fetch".
+> `a37f529` changed it to `ssl="require"` (encrypt, no verify — correct for the
+> pooler) and IS in current HEAD but was never deployed. **FIX = DEPLOY current
+> code to Fly (+ Render).** Not a password/6543/env change. The 6543 pooler move
+> is a SEPARATE reliability nicety, not required for this fix. (Earlier
+> "root cause is env, not code" was WRONG — Fly runs older-than-origin/master.)
+>
+> _Prior (superseded) analysis below._
+> **2026-07-31 — (superseded) thought root cause was infra/env.**
 > Verified this session:
 > - Deployed `origin/master` (`a8a949a`) ALREADY has the full Supabase DB layer —
 >   `backend/database.py` is byte-identical to the feature branch (pooler config
