@@ -3317,7 +3317,16 @@ class VachanamAgent(Agent):
         try:
             lang = self._state.language or self._lang_code
             sess.say(sanitize_for_tts(build_read_failure_text(lang)))
-            logger.warning("db_read_failure_spoken error=%s", type(error).__name__)
+            # Log enough to diagnose WHY (a pool-checkout timeout, a pooler
+            # breaker, a Redis blip mis-seen as a DB failure, …) — the bare type
+            # was not enough to pin the Hindi-turn loop (Vinay live 2026-07-31).
+            _cause = getattr(error, "__cause__", None) or getattr(error, "__context__", None)
+            logger.warning(
+                "db_read_failure_spoken type=%s detail=%s cause=%s",
+                type(error).__name__,
+                str(error)[:200],
+                f"{type(_cause).__name__}: {str(_cause)[:160]}" if _cause else "none",
+            )
             raise StopResponse()
         except StopResponse:
             raise
@@ -6616,11 +6625,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                     branch_id=state.branch_id,
                                     patient_id=_net_pid,
                                     caller_phone=state.patient_phone,
+                                    # message column is VARCHAR(500); the captured
+                                    # transcript can exceed it — truncate or the
+                                    # INSERT raises StringDataRightTruncationError
+                                    # and the message is lost (Vinay live 2026-07-31).
                                     message=(
                                         "[auto-captured — the agent promised to pass this on "
                                         "but no message was recorded on the call] "
                                         + _caller_words
-                                    ),
+                                    )[:500],
                                     urgent=False,
                                 ))
                                 await db.commit()
