@@ -1,5 +1,28 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-31 — TELUGU-FIRST (Vinay directive). Multilingual DEFERRED.** After
+> live testing, Telugu is production-ready (booking, roster, availability all
+> work; `cache_hit=True`, fast). **Hindi + mid-call language switching are NOT**
+> and are deferred to a proper validated pass. ROOT CAUSE (from live logs, agent
+> v247): every Hindi turn logs `cache_hit=False` — the Hindi Vertex prompt cache
+> never warms for a Telugu-default clinic, so Hindi runs UNCACHED + slow (~17s
+> commit) on a degraded prompt → the LLM HALLUCINATES "unable to connect to DB,
+> shall I try again" (the DB is FINE — Telugu reads the same DB) and eventually
+> refuses ("I don't know Hindi"). Switching itself is unreliable (repeated asks,
+> drift — long-known, never validated). SHIPPED SAFE FIXES (master 0f12f02):
+> `voice_doctor_name_spoken` now default OFF + env `VOICE_DOCTOR_NAME_SPOKEN=false`
+> LIVE (offline en→te/hi transliteration GARBLED real doctor names — worse than
+> the English accent; the right fix is a human-set per-doctor spoken name, like
+> Branch.name_spoken); safety-net message truncated to 500 (was overflowing
+> patient_messages VARCHAR(500) → StringDataRightTruncationError, message lost);
+> db-read-failure guard now logs type+detail+cause. Availability past-time +
+> next-slot (#477) and end-call grace (#478) are LIVE in v247. NEXT (multilingual
+> pass): find why the switched-language prompt cache never stores (cache_hit=False
+> every Hindi turn), warm all-language caches, validate each language's grounding,
+> fix switch reliability, land the flag-gated grounding redesign. DEPLOY NOTE: bom
+> capacity keeps refusing zero-downtime bluegreen — deploying in-place via
+> `fly deploy --strategy immediate` (~90s restart).
+
 > **2026-07-31 — FIX LIVE + VERIFIED on both planes.** `20e5fad` pushed to
 > `master` (FF, 27 commits), carrying `a37f529`'s `ssl="require"` + the full
 > Neon→Supabase purge. Deploy reality that bit us: **CI/GitHub Actions did NOT
