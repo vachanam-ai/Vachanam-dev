@@ -18,6 +18,11 @@ class DoctorContext:
     working_hours_start: str = ""  # HH:MM (24h) or empty when unset
     working_hours_end: str = ""
     available_weekdays: list[int] | None = None  # 0=Mon..6=Sun; None/[] = all
+    # Name rendered in the call language's script so TTS pronounces it natively
+    # (Latin `name` reads with an English accent through the Telugu voice). Empty
+    # ⇒ fall back to `name`. Internal matching (availability string, STT biasing)
+    # always uses `name`, never this.
+    name_spoken: str = ""
 
 
 # DPDP s.5 disclosure. The call site sanitizes this before TTS.

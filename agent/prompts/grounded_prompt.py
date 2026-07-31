@@ -716,9 +716,10 @@ def _doctor_rows(doctors: list[DoctorContext]) -> str:
             if d.booking_type == "token"
             else "appointment times"
         )
+        spoken = _one_line(getattr(d, "name_spoken", "") or d.name, 120)
         rows.append(
             "<doctor "
-            f'id="{_one_line(getattr(d, "id", ""), 80)}" name="{_one_line(d.name, 120)}" '
+            f'id="{_one_line(getattr(d, "id", ""), 80)}" name="{spoken}" '
             f'specialization="{_one_line(d.specialization, 120)}" '
             f'booking="{_one_line(d.booking_type, 20)}" '
             f'default="{str(bool(d.is_default)).lower()}">'

@@ -78,6 +78,18 @@ class Settings(BaseSettings):
     # is likewise always on. Default ON so a technical error can never reach a
     # caller; kill-switch kept for an instant rollback.
     voice_db_failure_grace: bool = True
+    # After the goodbye plays, hold the line open for a short grace and abort the
+    # hangup if the caller starts speaking (Vinay live 2026-07-31: said "one
+    # minute" right after the goodbye and got cut off). Default ON; kill-switch
+    # reverts to hanging up immediately after playout.
+    voice_end_call_grace: bool = True
+    voice_end_call_grace_seconds: float = 1.8
+    # Speak each doctor's name in the CALL language's script (Telugu/Hindi) so
+    # TTS pronounces it natively instead of reading the Latin spelling with an
+    # English accent (Vinay live 2026-07-31). Latin name is kept internally for
+    # the availability-string match + STT biasing. Default ON; flip to fall back
+    # to the raw Latin name in the prompt roster.
+    voice_doctor_name_spoken: bool = True
     # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
     # which is faster than either global model from the Fly Mumbai worker.
     gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"

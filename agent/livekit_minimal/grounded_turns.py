@@ -93,7 +93,11 @@ def doctor_roster_reply(
         return None
 
     def detail(d: Any) -> str:
-        name = str(getattr(d, "name", "") or "").strip()
+        # Speak the call-language-script name so TTS pronounces it natively;
+        # fall back to the Latin name (RULE 6).
+        name = str(
+            getattr(d, "name_spoken", "") or getattr(d, "name", "") or ""
+        ).strip()
         spec = str(getattr(d, "specialization", "") or "").strip()
         return f"{name} — {spec}" if spec else name
 

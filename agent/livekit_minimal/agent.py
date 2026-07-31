@@ -4740,6 +4740,29 @@ class VachanamAgent(Agent):
             await context.wait_for_playout()
         except Exception:
             pass
+        # GRACE: give the caller a beat AFTER the goodbye to add "wait / one
+        # minute" — hanging up on a talking caller reads as rude (Vinay live
+        # 2026-07-31). If they start speaking within the window, abort the
+        # hangup; the live session then handles their turn normally.
+        sess = getattr(context, "session", None)
+        if settings.voice_end_call_grace and isinstance(sess, AgentSession):
+            _loop = asyncio.get_running_loop()
+            deadline = _loop.time() + max(
+                0.0, settings.voice_end_call_grace_seconds
+            )
+            while _loop.time() < deadline:
+                if getattr(sess, "user_state", None) == "speaking":
+                    self._state.closing = False
+                    logger.info(
+                        "end_call_aborted_caller_spoke room=%s", self._room.name
+                    )
+                    return {
+                        "success": False,
+                        "aborted": "caller_spoke",
+                        "next": "The caller started speaking after the goodbye — "
+                                "listen and answer them; do NOT hang up.",
+                    }
+                await asyncio.sleep(0.1)
         try:
             lkapi = api.LiveKitAPI()
             await lkapi.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
@@ -5814,10 +5837,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Prefetch failed (or genuinely empty): never build a prompt with an
             # empty roster off a transient error — re-read authoritatively.
             doctors = await load_doctors(branch_id, db)
+        # Telugu/Hindi-script name for TTS (RULE 6) — spoken by the LLM from the
+        # roster. Latin `name` is kept for the availability-string match + STT.
+        if settings.voice_doctor_name_spoken:
+            _spoken_names = await asyncio.gather(
+                *[spoken_name(d["name"], lang_code) for d in doctors]
+            )
+        else:
+            _spoken_names = ["" for _ in doctors]
         doctor_contexts = [
             DoctorContext(
                 id=d["id"],
                 name=d["name"],
+                name_spoken=sp,
                 specialization=d["specialization"],
                 routing_keywords=d["routing_keywords"],
                 booking_type=d["booking_type"],
@@ -5828,7 +5860,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 working_hours_end=d["working_hours_end"],
                 available_weekdays=d["available_weekdays"],
             )
-            for d in doctors
+            for d, sp in zip(doctors, _spoken_names)
         ]
         _doctor_names = {d.id: d.name for d in doctor_contexts}
         # For the gated pre-LLM fee/hours fast path (Task 2.2) — the SAME
@@ -7382,11 +7414,27 @@ async def _warm_all_clinic_prompt_caches() -> None:
         languages.add(row["language"] if row["language"] in serviceable else DEFAULT_LANG)
         recording_variants = (False, True) if settings.recording_allowed else (False,)
         for language in sorted(languages):
+            # Per-language doctor roster: names transliterated into THIS
+            # language's script so the cached prompt speaks them natively (the
+            # Latin name is kept for internal matching). RULE 6.
+            _base_docs = doctors_by_branch.get(branch_id, [])
+            if settings.voice_doctor_name_spoken and _base_docs:
+                from dataclasses import replace as _dc_replace
+
+                _sp = await asyncio.gather(
+                    *[spoken_name(dc.name, language) for dc in _base_docs]
+                )
+                _lang_docs = [
+                    _dc_replace(dc, name_spoken=sp)
+                    for dc, sp in zip(_base_docs, _sp)
+                ]
+            else:
+                _lang_docs = _base_docs
             for recording_active in recording_variants:
                 instructions = (
                     build_system_prompt(
                         clinic_name=clinic_name,
-                        doctors=doctors_by_branch.get(branch_id, []),
+                        doctors=_lang_docs,
                         emergency_contact=row["emergency_contact"] or "",
                         plan=row["plan"] or "clinic",
                         language=language,
