@@ -293,6 +293,53 @@ def test_exact_time_failures_are_fixed_database_categories():
     )
 
 
+def test_past_time_request_is_not_reported_as_not_free():
+    """Vinay live 2026-07-31: 6pm asked at 8:30pm must say the time PASSED, not
+    'not free'. The no-upcoming-slots form carries no clock times."""
+    out = build_exact_availability_failure_text(
+        "en",
+        "REQUESTED TIME PASSED: 6:00 PM is already past (it is now 8:30 PM) and "
+        "Dr. X has no more slots today. Offer another day.",
+    )
+    assert "already passed" in out.lower()
+    assert "not free" not in out.lower()
+
+
+def test_failure_text_offers_concrete_next_slots_to_break_the_loop():
+    """When the DB hands us upcoming/nearest slots, speak THEM — the generic
+    'shall I check another time?' with no time made the caller loop."""
+    passed = build_exact_availability_failure_text(
+        "en",
+        "REQUESTED TIME PASSED: 6:00 PM is already past (it is now 8:30 PM). "
+        "Next upcoming free times: 8:45 PM or 9:00 PM. Offer the next upcoming time.",
+    )
+    assert "8:45 PM" in passed and "9:00 PM" in passed
+    # the passed/unavailable time must never be offered as a free slot
+    assert "6:00 PM" not in passed
+
+    not_free = build_exact_availability_failure_text(
+        "en",
+        "Dr. X is NOT free between 6:00 PM and 6:30 PM. "
+        "NEAREST free times to their request: 7:15 PM or 7:30 PM. "
+        "Full availability 7:15 PM to 8:00 PM on 31 July. Offer the nearest time FIRST.",
+    )
+    assert "7:15 PM" in not_free and "7:30 PM" in not_free
+    assert "6:00 PM" not in not_free  # the asked (taken) time is not offered
+
+
+def test_past_time_and_offer_localised():
+    te = build_exact_availability_failure_text(
+        "te", "REQUESTED TIME PASSED: 6:00 PM is already past. Offer another day."
+    )
+    assert "అయిపోయింద" in te  # Telugu 'already over/passed' (stem of అయిపోయిందండి)
+    te_offer = build_exact_availability_failure_text(
+        "te",
+        "REQUESTED TIME PASSED: 6:00 PM is already past. "
+        "Next upcoming free times: 8:45 PM or 9:00 PM.",
+    )
+    assert "8:45 PM" in te_offer
+
+
 def test_live_mutation_failure_stops_before_gemini(monkeypatch):
     session = _RecordingSession()
     agent = _agent()

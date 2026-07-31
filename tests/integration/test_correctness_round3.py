@@ -452,6 +452,37 @@ async def test_availability_does_not_count_callers_own_hold(clinic, db, redis):
     assert "NOT free" not in owner
 
 
+async def test_same_day_past_time_reads_as_passed_not_unavailable(
+    clinic, db, redis, monkeypatch
+):
+    """Vinay live 2026-07-31: asking a slot doctor for 10am when it is already
+    noon must return REQUESTED TIME PASSED (+ the next upcoming slots), not a
+    generic 'not free' that makes the caller loop."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    import agent.tools.booking_tools as bt
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    day = date.today()
+    while day.weekday() == 6:  # avoid a non-working Sunday
+        day += timedelta(days=1)
+    fixed_now = datetime.combine(day, time(12, 0), ZoneInfo("Asia/Kolkata"))
+
+    async def _fake_branch_now(*_a, **_k):
+        return fixed_now
+
+    monkeypatch.setattr(bt, "_branch_now", _fake_branch_now)
+
+    out = await check_availability(
+        doc.id, branch.id, day, db, query_start=time(10, 0), query_end=time(10, 30)
+    )
+    assert "REQUESTED TIME PASSED" in out
+    assert "10:00 AM" in out
+    # a still-upcoming time TODAY must be offered, and never called "not free"
+    assert "12:30 PM" in out or "1:00 PM" in out
+
+
 # ── B4: a NEW hold must clear token_confirmed ────────────────────────────────
 
 

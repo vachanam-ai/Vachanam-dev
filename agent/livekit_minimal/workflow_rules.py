@@ -5,6 +5,8 @@ as refusals; ambiguous database outcomes are explicitly left unclaimed.
 """
 from __future__ import annotations
 
+import re
+
 
 def build_mutation_failure_text(
     lang_code: str,
@@ -94,6 +96,34 @@ def build_read_failure_text(lang_code: str) -> str:
     return messages.get((lang_code or "").lower(), messages["en"])
 
 
+_AVAIL_TIME_RE = re.compile(r"\d{1,2}:\d{2}\s*[AP]M", re.IGNORECASE)
+
+
+def _nearest_free_times(raw: str) -> str:
+    """Pull the concrete next free clock-times out of a grounded availability
+    string, so the fast-path can OFFER them instead of a dead-end "shall I
+    check another time?" (which made a caller loop — Vinay live 2026-07-31).
+
+    Only reads the segment AFTER the nearest/upcoming marker so the requested
+    (unavailable) time in the sentence is never mistaken for a free one."""
+    for marker in (
+        "Next upcoming free times:",
+        "NEAREST free times to their request:",
+    ):
+        idx = raw.find(marker)
+        if idx == -1:
+            continue
+        segment = raw[idx + len(marker):].split(".")[0]
+        seen: list[str] = []
+        for match in _AVAIL_TIME_RE.findall(segment):
+            normalized = re.sub(r"\s+", " ", match).strip().upper()
+            if normalized not in seen:
+                seen.append(normalized)
+        if seen:
+            return " or ".join(seen[:2])
+    return ""
+
+
 def build_exact_availability_failure_text(
     lang_code: str,
     availability: str,
@@ -102,30 +132,50 @@ def build_exact_availability_failure_text(
     raw = availability or ""
     if "SCHEDULE NOT PUBLISHED" in raw or "schedule is not configured" in raw:
         key = "unpublished"
+    elif "REQUESTED TIME PASSED" in raw:
+        key = "past_time"
     elif "on leave" in raw or "unavailable" in raw:
         key = "leave"
     elif "NOT free" in raw or "fully booked" in raw:
         key = "not_free"
     else:
         key = "unverified"
+
+    # For the two cases where the DB handed us concrete upcoming slots, speak
+    # them — that is what breaks the "shall I check another time?" loop.
+    nearest = _nearest_free_times(raw) if key in ("past_time", "not_free") else ""
+
     messages = {
         "en": {
             "unpublished": "[softly] The doctor's timing for that day is not confirmed yet.",
             "leave": "[softly] The doctor is not available that day. Shall I check another day?",
             "not_free": "[softly] That exact time is not free. Shall I check another time?",
+            "past_time": "[softly] That time has already passed today. Shall I check a later time or another day?",
             "unverified": "[softly] I could not verify that exact time, so I will not guess. Shall I check again?",
         },
         "te": {
             "unpublished": "[softly] ఆ రోజు డాక్టర్ టైమింగ్ ఇంకా కన్ఫర్మ్ కాలేదండి.",
             "leave": "[softly] ఆ రోజు డాక్టర్ అందుబాటులో లేరండి. ఇంకో రోజు చెక్ చేయనా?",
             "not_free": "[softly] ఆ టైమ్‌కి ఖాళీ లేదండి. ఇంకో టైమ్ చెక్ చేయనా?",
+            "past_time": "[softly] ఆ టైమ్ ఇవాళ అయిపోయిందండి. తర్వాత టైమ్ చూడనా, లేక వేరే రోజు చూడనా?",
             "unverified": "[softly] ఆ టైమ్‌ని డేటాబేస్‌లో నిర్ధారించలేకపోయాను. నేను ఊహించి చెప్పను. మళ్లీ చెక్ చేయనా?",
         },
         "hi": {
             "unpublished": "[softly] उस दिन डॉक्टर का समय अभी तय नहीं हुआ है।",
             "leave": "[softly] डॉक्टर उस दिन उपलब्ध नहीं हैं। कोई और दिन जाँचूँ?",
             "not_free": "[softly] उस समय जगह खाली नहीं है। कोई और समय जाँचूँ?",
+            "past_time": "[softly] वह समय आज निकल चुका है। बाद का कोई समय देखूँ या कोई और दिन?",
             "unverified": "[softly] उस समय की पुष्टि नहीं हुई। मैं अनुमान नहीं लगाऊँगी। फिर से जाँचूँ?",
         },
     }
-    return messages.get((lang_code or "").lower(), messages["en"])[key]
+    # When we have concrete upcoming slots, replace the trailing question with a
+    # direct offer of those real times.
+    offer = {
+        "en": "[softly] That time is not free. The next free times are {t}. Shall I book one?",
+        "te": "[softly] ఆ టైమ్ ఖాళీ లేదండి. తర్వాత ఖాళీ ఉన్న టైమ్‌లు {t}. ఏదైనా ఒకటి బుక్ చేయనా?",
+        "hi": "[softly] वह समय खाली नहीं है। अगले खाली समय {t} हैं। कोई एक बुक करूँ?",
+    }
+    lang = (lang_code or "").lower()
+    if nearest:
+        return offer.get(lang, offer["en"]).format(t=nearest)
+    return messages.get(lang, messages["en"])[key]

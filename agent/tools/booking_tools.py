@@ -576,6 +576,20 @@ async def check_availability(
                 available.append(slot)
 
     if not available:
+        if (
+            query_start is not None
+            and booking_date == now.date()
+            and query_start <= now.time()
+        ):
+            # Same-day request whose time is already past AND the day is over —
+            # "fully booked" is misleading (nothing is booked, the day just
+            # ended). Say it plainly (Vinay live 2026-07-31).
+            return _ret(
+                f"REQUESTED TIME PASSED: "
+                f"{query_start.strftime('%I:%M %p').lstrip('0')} is already past "
+                f"(it is now {now.strftime('%I:%M %p').lstrip('0')}) and "
+                f"{doctor.name} has no more slots today. Offer another day."
+            )
         return _ret(f"{doctor.name} is fully booked on {booking_date.strftime('%d %B')}.")
 
     def _ranges_str(slot_list: list) -> str:
@@ -586,6 +600,21 @@ async def check_availability(
         )
 
     if query_start:
+        # Same-day request whose time has already passed: say so explicitly and
+        # lead with the next UPCOMING free times. A generic "not free" made a
+        # caller (Vinay live 2026-07-31) think 6pm was full at 8:30pm, then loop
+        # on "check another slot" because no concrete next time was offered.
+        if booking_date == now.date() and query_start <= now.time():
+            upcoming = " or ".join(
+                s.strftime("%I:%M %p").lstrip("0") for s in available[:2]
+            )
+            return _ret(
+                f"REQUESTED TIME PASSED: "
+                f"{query_start.strftime('%I:%M %p').lstrip('0')} is already past "
+                f"(it is now {now.strftime('%I:%M %p').lstrip('0')}). "
+                f"Next upcoming free times: {upcoming}. "
+                f"Offer the next upcoming time or another day; do NOT say 'not free'."
+            )
         # LLMs pass "4pm to 4pm" for an exact-time ask — a zero-width window
         # matched nothing and the patient heard "not free" for a FREE slot.
         # Guarantee the window spans at least one slot.
