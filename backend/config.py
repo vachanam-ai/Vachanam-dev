@@ -84,12 +84,14 @@ class Settings(BaseSettings):
     # reverts to hanging up immediately after playout.
     voice_end_call_grace: bool = True
     voice_end_call_grace_seconds: float = 1.8
-    # Speak each doctor's name in the CALL language's script (Telugu/Hindi) so
-    # TTS pronounces it natively instead of reading the Latin spelling with an
-    # English accent (Vinay live 2026-07-31). Latin name is kept internally for
-    # the availability-string match + STT biasing. Default ON; flip to fall back
-    # to the raw Latin name in the prompt roster.
-    voice_doctor_name_spoken: bool = True
+    # Speak each doctor's name in the CALL language's script so TTS pronounces
+    # it natively instead of reading the Latin spelling with an English accent.
+    # DEFAULT OFF (Vinay live 2026-07-31): offline en→te/hi transliteration
+    # GARBLED real doctor names — worse than the English accent it replaced. The
+    # right fix is a per-doctor, human-set spoken name (like Branch.name_spoken),
+    # not machine transliteration. Latin name is kept internally for the
+    # availability-string match + STT biasing regardless.
+    voice_doctor_name_spoken: bool = False
     # Global fallbacks only. The primary remains cached Vertex Mumbai 2.5 Flash,
     # which is faster than either global model from the Fly Mumbai worker.
     gemini_fast_fallback_model: str = "gemini-3.5-flash-lite"
