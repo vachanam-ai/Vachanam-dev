@@ -1,5 +1,41 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-07-31 — OPEN INCIDENT: calls say "unable to fetch data from database".
+> ROOT CAUSE IS INFRA/ENV, NOT CODE — needs Vinay (Fly/Render access).**
+> Verified this session:
+> - Deployed `origin/master` (`a8a949a`) ALREADY has the full Supabase DB layer —
+>   `backend/database.py` is byte-identical to the feature branch (pooler config
+>   incl. 6543 handling, the SSL/cert fix `a37f529`, `run_db_read` retry, the
+>   availability hardening `2ee7c06`). So the "unable to fetch" is NOT missing
+>   code. (My first read — "prod runs old Neon code" — was WRONG; corrected.)
+> - The configured `DATABASE_URL` uses the correct pooler user
+>   `postgres.ldpuoklomtklgpaalyvf` @ `aws-1-ap-south-1.pooler.supabase.com`, and
+>   the DB connected fine with it early in the session.
+> - This Supabase project has an AGGRESSIVE auth circuit breaker: repeated auth
+>   FAILURES → `ECIRCUITBREAKER: too many authentication failures, new connections
+>   temporarily blocked`. (I tripped it myself with a buggy local test that masked
+>   the password — it auto-resets in minutes; MAY be per-project, so it could have
+>   briefly blocked prod new-connections too. I stopped all prod-DB probing.)
+>
+> **MOST LIKELY CAUSE + FIX (Vinay, ~5 min, no code deploy needed):**
+> 1. Supabase dashboard → Database → **Logs/Pooler**: look for auth-failure /
+>    circuit-breaker events. If present, a host's `DATABASE_URL` has a WRONG or
+>    ROTATED PASSWORD → its connections fail auth → breaker → "unable to fetch."
+> 2. **Reset the DB password** in Supabase and set the SAME correct
+>    `DATABASE_URL` on BOTH hosts: `fly secrets set DATABASE_URL=... -a <agent>`
+>    and Render env. Confirm neither still points at Neon.
+> 3. **Agent → transaction pooler (Vinay's chosen fix):** the Fly agent's
+>    `DATABASE_URL` host stays the same but port **6543** (not 5432); Render/API
+>    stays **5432**. Deployed code already handles 6543 (NullPool +
+>    statement_cache=0), and it sidesteps the session-pooler 15-client free-tier
+>    ceiling under concurrent calls. Then place a test call.
+>
+> **HOLDING the `feat/monochrome-ui` → `master` merge** (FF-ready at `03b3ed9`,
+> unpushed): it changes NO DB behaviour (Sarvam removal + voice flags-OFF + UI +
+> docs) so it does NOT fix this, and deploying mid-incident adds risk. Push it
+> only AFTER calls are confirmed healthy. NEVER diagnose a prod incident by
+> hammering the prod DB from a laptop again — use Fly/Render/Supabase logs.
+
 > **2026-07-30 — VOICE PROMPT REDESIGN (5 phases) BUILT ON `feat/monochrome-ui`;
 > ALL BEHIND DEFAULT-OFF FLAGS, NOT DEPLOYED.** Addresses Vinay's report: agent
 > hallucinated answers before checking the DB; prompt too long; language switch
