@@ -5,7 +5,12 @@ from typing import TypeVar
 from weakref import WeakKeyDictionary
 
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
+from sqlalchemy.exc import (
+    DBAPIError,
+    InterfaceError,
+    OperationalError,
+    TimeoutError as PoolCheckoutTimeout,
+)
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
@@ -114,15 +119,41 @@ class _LoopAwareSessionFactory:
 AsyncSessionLocal = _LoopAwareSessionFactory()
 
 
+# Supabase/Supavisor pooler pressure surfaces as a plain message on an
+# otherwise-unclassified error (e.g. the auth circuit breaker, or the session
+# pooler's client ceiling). Repeating on a fresh connection is safe and often
+# succeeds once a slot frees, so treat these as transient too.
+_POOLER_OVERLOAD_HINTS = (
+    "too many",                 # too many connections / auth failures
+    "temporarily blocked",      # ECIRCUITBREAKER new connections blocked
+    "circuit breaker",
+    "max client",               # pgbouncer max_client_conn
+    "connection slots",         # postgres remaining connection slots
+    "server closed the connection",
+    "connection was closed",
+    "connection is closed",
+    "connection reset",
+)
+
+
 def is_transient_database_error(error: BaseException) -> bool:
-    """Whether a failed read is safe to repeat on a fresh connection."""
+    """Whether a failed read is safe to repeat on a fresh connection.
+
+    Covers connection-level SQLAlchemy/asyncpg failures, a pool checkout
+    timeout (the session pool was momentarily saturated), and Supabase pooler
+    overload/breaker messages — all of which a fresh attempt can clear."""
     current: BaseException | None = error
     while current is not None:
-        if isinstance(current, (InterfaceError, OperationalError)):
+        if isinstance(
+            current, (InterfaceError, OperationalError, PoolCheckoutTimeout)
+        ):
             return True
         if isinstance(current, DBAPIError) and current.connection_invalidated:
             return True
         if isinstance(current, (ConnectionError, OSError, asyncio.TimeoutError)):
+            return True
+        text = str(current).lower()
+        if text and any(hint in text for hint in _POOLER_OVERLOAD_HINTS):
             return True
         current = current.__cause__ or current.__context__
     return False
@@ -131,13 +162,16 @@ def is_transient_database_error(error: BaseException) -> bool:
 async def run_db_read(
     operation: Callable[[AsyncSession], Awaitable[T]],
     *,
-    attempts: int = 2,
+    attempts: int = 3,
 ) -> T:
     """Run a read in a short session and retry only connection-level failures.
 
-    A fresh session prevents one dropped long-lived call connection from
-    poisoning every later availability/lookup turn. Writes deliberately do not
-    use this helper because repeating an uncertain commit can duplicate data.
+    A fresh session each attempt prevents one dropped long-lived call
+    connection — or a momentarily saturated pool / a transient pooler blip —
+    from poisoning a lookup: the retry reconnects and usually succeeds. Three
+    attempts (was two) so a single reconnect + one pooler slot-free both get a
+    chance before the caller is told anything. Writes deliberately do not use
+    this helper because repeating an uncertain commit can duplicate data.
     """
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
@@ -153,7 +187,7 @@ async def run_db_read(
                 attempt,
                 type(error).__name__,
             )
-            await asyncio.sleep(0.05 * attempt)
+            await asyncio.sleep(0.1 * attempt)
     raise AssertionError("unreachable")
 
 

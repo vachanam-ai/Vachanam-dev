@@ -2751,7 +2751,13 @@ class VachanamAgent(Agent):
         self._state.complaint = complaint
         # #5: consume the parallel prefetch if it matches this complaint, else
         # route fresh on the live session.
-        result = await self._consume_or_route(complaint)
+        try:
+            result = await self._consume_or_route(complaint)
+        except Exception as _dberr:  # noqa: BLE001
+            # Routing reads the roster from the DB — a real outage must degrade
+            # to a warm line, never surface as a technical error to the caller.
+            self._stop_on_db_read_failure(context, _dberr)
+            raise
         if result.get("doctor_id"):
             # Single match — safe to pre-select for later tools.
             self._state.doctor_id = UUID(result["doctor_id"])

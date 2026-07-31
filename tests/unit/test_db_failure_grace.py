@@ -42,10 +42,12 @@ def _agent():
     )
 
 
-def test_flag_defaults_off():
+def test_flag_defaults_on():
+    """Vinay directive: a caller must never hear a raw DB error, so the grace
+    path is ON by default (kill-switch kept for rollback)."""
     from backend.config import settings
 
-    assert settings.voice_db_failure_grace is False
+    assert settings.voice_db_failure_grace is True
 
 
 def test_guard_speaks_and_stops_when_grace_on(monkeypatch):
@@ -111,6 +113,9 @@ def test_guard_is_noop_off_a_live_session(monkeypatch):
 def test_read_tools_wrap_db_reads_with_the_guard():
     """The booking-critical read tools must route a DB outage through the guard
     (not let it escape to the LLM as a raw error)."""
-    for name in ("check_availability", "find_my_bookings", "get_queue_status"):
+    for name in (
+        "check_availability", "find_my_bookings", "get_queue_status",
+        "route_to_doctor",
+    ):
         src = inspect.getsource(getattr(VachanamAgent, name))
         assert "_stop_on_db_read_failure" in src, name
