@@ -6025,11 +6025,12 @@ def _start_watchdog_heartbeat() -> None:
 
                     # SQLAlchemy URL → plain asyncpg DSN: drop the +asyncpg
                     # driver tag and the query string (sslmode/channel_binding
-                    # that asyncpg rejects — Neon needs SSL, forced via ssl=True).
+                    # that asyncpg rejects). Supabase pooler needs ssl="require"
+                    # (encrypt, skip the cert verify that asyncpg's ssl=True does).
                     _dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
 
                     async def _ping():
-                        _c = await _apg.connect(dsn=_dsn, timeout=10, ssl=True)
+                        _c = await _apg.connect(dsn=_dsn, timeout=10, ssl="require")
                         try:
                             await _c.fetchval("SELECT 1")
                         finally:
@@ -6070,7 +6071,7 @@ def _prewarm_greeting_routes(proc) -> None:
         dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
 
         async def _load() -> list:
-            conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl=True)
+            conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl="require")
             try:
                 return await conn.fetch(
                     """
@@ -6118,7 +6119,7 @@ async def _warm_all_clinic_prompt_caches() -> None:
     import asyncpg
 
     dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
-    conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl=True)
+    conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl="require")
     try:
         branches = await conn.fetch(
             """
