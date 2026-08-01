@@ -18,6 +18,11 @@ def test_telugu_booking_and_reschedule_use_punctuality_wording():
     assert moved and "టైంకి రండి" in moved and "పాతది" in moved
 
 
+def test_booking_confirmation_offers_help_once():
+    text = build_confirm_text('te', 'booked_slot', date_=D, time_=T)
+    assert text and 'ఇంకేమైనా సహాయం కావాలా అండి?' in text
+
+
 def test_cancel_is_not_happy_and_does_not_say_come_on_time():
     text = build_confirm_text("te", "cancelled")
     assert text and "[softly]" in text

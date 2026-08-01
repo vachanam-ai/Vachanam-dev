@@ -47,6 +47,6 @@ def test_prompt_handles_garbled_switch_requests():
         clinic_name="C", doctors=[], emergency_contact="+911234567890",
         plan="clinic", language="te", faq=None,
     )
-    assert "any explicit ask" in p
-    assert "TWO consecutive COMPLETE utterances wholly in another supported language" in p
-    assert "switch_language(code) at once" in p
+    assert "EXPLICIT SWITCH TRIGGER" in p
+    assert "TWO consecutive full utterances in another language" in p
+    assert "Execute tool `switch_language(code)` IMMEDIATELY" in p

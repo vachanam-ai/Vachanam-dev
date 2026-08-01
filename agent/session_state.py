@@ -41,6 +41,14 @@ class SessionState:
 
     token_redis_key: str | None = None
     token_number: int | None = None
+    # The latest finalized caller utterance is copied here before the LLM runs.
+    # Mutation tools use it as a deterministic authorization boundary: an LLM
+    # tool call alone is never proof that the caller asked to book/cancel.
+    last_user_utterance: str | None = None
+    # Exact durable booking created most recently in THIS call. If the caller
+    # immediately says the booking was accidental, cancellation is pinned to
+    # this id instead of trusting an older/arbitrary id selected by the LLM.
+    last_confirmed_token_id: UUID | None = None
     appointment_time: str | None = None  # "HH:MM" for appointment-type
     # Exact stale-id recovery inside this call: old token id -> its current
     # replacement. Never guess by picking an arbitrary later appointment.

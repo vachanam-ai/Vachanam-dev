@@ -504,7 +504,7 @@ SONIOX_EXPRESSION_TAGS = frozenset({
     "[shouts]", "[angrily]", "[happily]", "[sadly]", "[crying]",
     "[sighs]", "[takes a deep breath]", "[gasps]", "[nervously]",
     "[excitedly]", "[confused]", "[surprised]", "[relieved]",
-    "[thinking]", "[hesitates]", "[pause]", "[long pause]",
+    "[hesitates]", "[pause]", "[long pause]",
     "[clears throat]", "[coughs]", "[yawns]", "[sobs]", "[sniffs]",
 })
 
@@ -1761,6 +1761,11 @@ def _extract_call_record(session) -> tuple[int, str | None]:
             txt = (txt or "").strip()
             if not txt:
                 continue
+            if role == 'assistant':
+                # Store what could reach TTS, not raw model scratch text.
+                txt = sanitize_for_tts(txt)
+                if not txt:
+                    continue
             who = "patient" if role == "user" else "agent"
             if role == "user":
                 patient_turns += 1
@@ -1788,6 +1793,162 @@ def _is_booking_intent(text: str) -> bool:
     negative just skips the prefetch (correctness unaffected either way)."""
     low = (text or "").lower()
     return any(term in low for term in _BOOKING_INTENT_TERMS)
+
+
+# Deterministic caller-authorization vocabulary. These checks run at the tool
+# boundary; they are intentionally narrower than conversational intent routing.
+# Read-only questions and negated actions are rejected before these terms are
+# considered, so a plausible model tool call is still not authorization.
+_BOOKING_AUTH_TERMS = (
+    'schedule it', 'make the appointment',
+    'బుక్ చేయ', 'బుక్ చెయ', 'బుక్ చేస', 'కన్ఫర్మ్ చేయ',
+    'అపాయింట్మెంట్ కావాలి', 'అపాయింట్‌మెంట్ కావాలి',
+    'बुक कर', 'बुक कीजिए', 'कन्फर्म कर',
+    'புக் செய', 'ಬುಕ್ ಮಾಡ', 'बुक करा',
+)
+_AFFIRMATIVE_REPLIES = {
+    'yes', 'yes please', 'yeah', 'yep', 'ok', 'okay', 'sure', 'confirm',
+    'go ahead', 'do it', 'okay do it', 'ok do it',
+    'అవును', 'అవునండి', 'సరే చేయండి', 'చేసేయండి', 'ఓకే చేయండి',
+    'हाँ', 'हां', 'जी हाँ', 'कर दीजिए',
+    'ஆம்', 'ஆமாம்', 'ಹೌದು', 'हो',
+}
+_CANCEL_AUTH_TERMS = (
+    'remove the appointment', 'క్యాన్సిల్', 'రద్దు', 'కాన్సిల్',
+    'कैंसल', 'रद्द', 'ரத்து', 'ರದ್ದು', 'रद्द करा',
+)
+_RESCHEDULE_AUTH_TERMS = (
+    'reschedule', 'change the appointment', 'move the appointment', 'shift it',
+    'change it to', 'move it to', 'మార్చండి', 'మార్చేయండి', 'టైమ్ మార్చ',
+    'తేదీ మార్చ', 'रीशेड्यूल', 'बदल दीजिए', 'மாற்றுங்கள்', 'ಬದಲಿಸಿ',
+)
+_ACCIDENTAL_BOOKING_TERMS = (
+    'did not ask', 'didn''t ask', 'never asked', 'i only asked',
+    'by mistake', 'your mistake', 'wrong booking', 'undo that',
+    'చెప్పలేదు', 'అడగలేదు', 'పొరపాటు', 'బుక్ చేయమని కాదు',
+    'मैंने नहीं कहा', 'गलती से', 'நான் கேட்கவில்லை', 'ನಾನು ಕೇಳಲಿಲ್ಲ',
+)
+
+
+def _normalised_utterance(text: str) -> str:
+    return re.sub(r'[^\w\u0900-\u0d7f]+', ' ', (text or '').casefold()).strip()
+
+
+
+def _caller_authorized_booking(text: str) -> bool:
+    low = (text or '').casefold()
+    # A negative instruction or a request to confirm *availability* is not
+    # permission to mutate. Keep this at the tool boundary so prompt drift
+    # cannot turn a read-only question into a booking.
+    if re.search(
+        r"\b(?:do not|don't|dont|never|not to)\s+"
+        r"(?:want to\s+)?(?:book|confirm|schedule)\b",
+        low,
+    ):
+        return False
+    if re.search(
+        r'\bconfirm\s+(?:if|whether|availability|the availability)\b', low
+    ):
+        return False
+    if re.search(
+        r'\b(?:did you|have you|was it|is it)\s+(?:already\s+)?book', low
+    ):
+        return False
+    english_action = (
+        re.search(r'\bbook\b', low) is not None
+        or re.search(
+            r'\bconfirm\s+(?:(?:my|the|this|that|our)\s+)?'
+            r'(?:booking|appointment|slot|it)\b',
+            low,
+        ) is not None
+    )
+    non_english_or_phrase = any(term in low for term in _BOOKING_AUTH_TERMS)
+    return english_action or non_english_or_phrase
+
+
+
+def _caller_affirmed(text: str) -> bool:
+    return _normalised_utterance(text) in {
+        _normalised_utterance(value) for value in _AFFIRMATIVE_REPLIES
+    }
+
+
+
+def _caller_authorized_cancellation(text: str) -> bool:
+    raw = (text or '').casefold()
+    if re.search(
+        r"\b(?:do not|don't|dont|never|not to)\s+"
+        r"(?:want to\s+)?(?:cancel|remove)\b",
+        raw,
+    ):
+        return False
+    if re.search(
+        r'\b(?:did you|have you|was it|is it)\s+(?:already\s+)?cancel',
+        raw,
+    ):
+        return False
+    if any(term in raw for term in (
+        'క్యాన్సిల్ చేయొద్దు', 'క్యాన్సిల్ చేయవద్దు', 'రద్దు చేయొద్దు',
+        'कैंसल मत', 'रद्द मत', 'ரத்து செய்ய வேண்டாம்', 'ರದ್ದು ಮಾಡಬೇಡಿ',
+    )):
+        return False
+    low = _normalised_utterance(text)
+    english_action = re.search(r'\bcancel\b', raw) is not None
+    return english_action or any(
+        _normalised_utterance(term) in low for term in _CANCEL_AUTH_TERMS
+    )
+
+
+def _caller_authorized_reschedule(text: str) -> bool:
+    raw = (text or '').casefold()
+    if re.search(
+        r"\b(?:do not|don't|dont|never|not to)\s+"
+        r'(?:want to\s+)?(?:reschedule|change|move|shift)\b',
+        raw,
+    ):
+        return False
+    if re.search(
+        r'\b(?:did you|have you|was it|is it)\s+(?:already\s+)?resched',
+        raw,
+    ):
+        return False
+    if re.search(r'\bwhat (?:is|are).*\breschedul(?:e|ing)\b', raw):
+        return False
+    low = _normalised_utterance(text)
+    return any(_normalised_utterance(term) in low for term in _RESCHEDULE_AUTH_TERMS)
+
+
+
+def _caller_rejected_accidental_booking(text: str) -> bool:
+    low = _normalised_utterance(text)
+    return any(
+        _normalised_utterance(term) in low
+        for term in _ACCIDENTAL_BOOKING_TERMS
+    )
+
+
+
+def _explicit_language_request(text: str) -> str | None:
+    '''Return a language code only for an explicit request to speak it.'''
+    low = (text or '').casefold()
+    request = any(term in low for term in (
+        'speak', 'talk in', 'మాట్లాడ', 'చెప్పండి', 'बात', 'बोल',
+        'பேச', 'ಮಾತನಾಡ', 'बोला',
+    ))
+    if not request:
+        return None
+    language_terms = (
+        ('te', ('telugu', 'తెలుగు', 'तेलुगु')),
+        ('en', ('english', 'ఇంగ్లీష్', 'अंग्रेजी', 'ஆங்கிலம்', 'ಇಂಗ್ಲಿಷ್')),
+        ('hi', ('hindi', 'హిందీ', 'हिंदी', 'हिन्दी')),
+        ('ta', ('tamil', 'తమిళం', 'தமிழ்')),
+        ('kn', ('kannada', 'కన్నడ', 'ಕನ್ನಡ')),
+        ('mr', ('marathi', 'మరాఠీ', 'मराठी')),
+    )
+    for code, terms in language_terms:
+        if any(term in low for term in terms):
+            return code
+    return None
 
 
 class VachanamAgent(Agent):
@@ -1991,6 +2152,22 @@ class VachanamAgent(Agent):
         # reconnect notice and hang up (a dead line only burns minutes). Any
         # non-hello turn resets the counter. Runs BEFORE the echo guard because a
         # lone "hello" is too short for that guard anyway.
+        utterance = self._message_text(new_message).strip()
+        self._state.last_user_utterance = utterance
+
+        # Language selection is infrastructure state, not a creative LLM choice.
+        # Switch the active prompt/STT/TTS agent before generating any reply.
+        requested_language = _explicit_language_request(utterance)
+        if requested_language:
+            try:
+                if self._handoff_explicit_language(turn_ctx, requested_language):
+                    raise StopResponse()
+            except StopResponse:
+                raise
+            except Exception as exc:
+                logger.error('language_request_handoff_failed: %s', exc)
+                self._sync_runtime_language(requested_language)
+
         try:
             from livekit.agents import StopResponse
 
@@ -2158,6 +2335,123 @@ class VachanamAgent(Agent):
 
         return re.sub(r"[\s\W_]+", "", (s or "").lower())
 
+    def _last_assistant_requested_booking_confirmation(self) -> bool:
+        '''True only when the previous audible turn explicitly asked to book.'''
+        try:
+            items = list(getattr(self.chat_ctx, 'items', None) or [])
+            for item in reversed(items):
+                if getattr(item, 'role', None) != 'assistant':
+                    continue
+                text = sanitize_for_tts(self._message_text(item)).casefold()
+                if not text:
+                    continue
+                return any(term in text for term in (
+                    'shall i book', 'should i book', 'confirm the appointment',
+                    'book it for you', 'బుక్ చేయమంటారా', 'బుక్ చేయనా',
+                    'కన్ఫర్మ్ చేయనా', 'అపాయింట్‌మెంట్ తీసుకోవాలా',
+                    'बुक कर दूँ', 'कन्फर्म कर दूँ', 'புக் செய்யவா',
+                    'ಬುಕ್ ಮಾಡಲಾ', 'बुक करू का',
+                ))
+        except Exception:
+            return False
+        return False
+
+    def _last_assistant_requested_cancellation(self) -> bool:
+        try:
+            for item in reversed(list(getattr(self.chat_ctx, 'items', None) or [])):
+                if getattr(item, 'role', None) != 'assistant':
+                    continue
+                text = sanitize_for_tts(self._message_text(item)).casefold()
+                if not text:
+                    continue
+                return any(term in text for term in (
+                    'shall i cancel', 'should i cancel', 'confirm cancellation',
+                    'క్యాన్సిల్ చేయనా', 'రద్దు చేయనా', 'कैंसल कर दूँ',
+                    'ரத்து செய்யவா', 'ರದ್ದು ಮಾಡಲಾ',
+                ))
+        except Exception:
+            return False
+        return False
+
+    def _last_assistant_requested_reschedule(self) -> bool:
+        try:
+            for item in reversed(list(getattr(self.chat_ctx, 'items', None) or [])):
+                if getattr(item, 'role', None) != 'assistant':
+                    continue
+                text = sanitize_for_tts(self._message_text(item)).casefold()
+                if not text:
+                    continue
+                return any(term in text for term in (
+                    'shall i reschedule', 'should i reschedule', 'confirm the change',
+                    'మార్చనా', 'మార్చేయనా', 'रीशेड्यूल कर दूँ',
+                    'மாற்றவா', 'ಬದಲಾಯಿಸಲಾ',
+                ))
+        except Exception:
+            return False
+        return False
+
+    def _sync_runtime_language(self, code: str) -> None:
+        '''Synchronize every non-LLM language consumer immediately.'''
+        self._state.language = code
+        self._state.preferred_language = code
+        try:
+            ud = getattr(self.session, 'userdata', None)
+            if isinstance(ud, dict):
+                ud['language'] = code
+                ud['fillers'] = get_lines(code).fillers
+                ud['filler_clips'] = []
+                ud['wait_fillers'] = get_wait_fillers(code)
+                ud['wait_clips'] = []
+                trace = ud.get('turn_trace')
+                if trace is not None:
+                    trace.set_context(language=code)
+        except Exception:
+            pass
+
+    def _handoff_explicit_language(self, turn_ctx, code: str) -> bool:
+        '''Switch the active pipeline without waiting for the LLM to call a tool.'''
+        self._sync_runtime_language(code)
+        if code == self._lang_code or self._agent_factory is None:
+            return False
+        try:
+            carried = turn_ctx.copy()
+        except Exception:
+            carried = None
+        if carried is not None and _SWITCH_DRIFT_GUARD:
+            _append_switch_drift_guard(carried, code)
+        new_agent = self._agent_factory(code, chat_ctx=carried)
+        try:
+            cached = _SWITCH_ACK_CLIPS.get(code)
+            cache_tts = getattr(new_agent, '_tts_override', None)
+            cache_voice = getattr(getattr(cache_tts, '_opts', None), 'voice', None)
+            if (
+                cached
+                and cache_voice
+                == _resolve_soniox_voice(settings.soniox_tts_default_voice)
+            ):
+                new_agent._switch_ack_frames = cached
+        except Exception:
+            pass
+        self.session.update_agent(new_agent)
+        logger.info(
+            'language_request_handoff from=%s to=%s branch_id=%s',
+            self._lang_code, code, str(self._state.branch_id),
+        )
+
+        async def _persist() -> None:
+            if not self._state.patient_phone:
+                return
+            try:
+                async with AsyncSessionLocal() as pdb:
+                    await set_preferred_language(
+                        self._state.branch_id, self._state.patient_phone, code, pdb
+                    )
+            except Exception as exc:
+                logger.warning('language_request_persist_failed: %s', exc)
+
+        asyncio.create_task(_persist())
+        return True
+
     async def _resolve_doctor_id(self, doctor_id: str | None) -> UUID:
         """Never trust the LLM to echo a UUID. Accept a real UUID, else match a
         doctor name within this branch, else fall back to the doctor selected by
@@ -2236,6 +2530,13 @@ class VachanamAgent(Agent):
     def _parse_time(value: str | None) -> time_cls | None:
         if not value:
             return None
+        raw = value.strip().upper().replace('.', '')
+        raw = re.sub(r'\s+', ' ', raw)
+        for fmt in ('%I:%M %p', '%I:%M%p', '%I %p', '%I%p', '%H'):
+            try:
+                return datetime_cls.strptime(raw, fmt).time()
+            except ValueError:
+                continue
         try:
             return time_cls.fromisoformat(value)
         except ValueError:
@@ -2419,6 +2720,23 @@ class VachanamAgent(Agent):
         # booking. Non-blocking + fully guarded (never affects the booking).
         # Handle pinned: a "hello?" over the write must not discard the booked
         # result and make the LLM re-book or claim failure (FIXLOG #361).
+        # The model may propose a tool call, but only the caller can authorize a
+        # write. A bare availability question is never authorization. A short
+        # yes is accepted only after an audible booking-confirmation question.
+        utterance = self._state.last_user_utterance
+        if utterance is not None and not (
+            _caller_authorized_booking(utterance)
+            or (
+                _caller_affirmed(utterance)
+                and self._last_assistant_requested_booking_confirmation()
+            )
+        ):
+            logger.warning('booking_blocked_no_caller_authorization session=%s', self._state.session_id)
+            raise ToolError(
+                'Booking blocked: the caller did not ask to book or confirm. '
+                'Answer availability only. Wait for an explicit booking request.'
+            )
+
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB write + Google Calendar create
         if self._calendar is None:
@@ -2554,6 +2872,10 @@ class VachanamAgent(Agent):
         if result.get("success"):
             self._state.token_confirmed = True
             self._state.any_booking_confirmed = True
+            try:
+                self._state.last_confirmed_token_id = UUID(str(result['token_id']))
+            except (KeyError, TypeError, ValueError):
+                logger.error('confirmed_booking_missing_token_id')
             try:  # audit #9: doctor-scoped completion for follow-up teardown
                 self._state.confirmed_doctor_ids.append(str(doctor_id))
             except Exception:  # noqa: BLE001
@@ -3096,6 +3418,19 @@ class VachanamAgent(Agent):
         and only after the new booking is confirmed cancels the old one. Use
         this instead of manual assign/confirm/cancel for every reschedule.
         new_time (HH:MM) required only for schedule (appointment) doctors."""
+        utterance = self._state.last_user_utterance
+        if utterance is not None and not (
+            _caller_authorized_reschedule(utterance)
+            or (
+                _caller_affirmed(utterance)
+                and self._last_assistant_requested_reschedule()
+            )
+        ):
+            logger.warning('reschedule_blocked_no_caller_authorization session=%s', self._state.session_id)
+            raise ToolError(
+                'Reschedule blocked: the caller did not ask to change the booking. '
+                'Answer availability only and wait for explicit confirmation.'
+            )
         _guard_human_booking(self._state)
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
@@ -3415,6 +3750,37 @@ class VachanamAgent(Agent):
         for reschedules PREFER the reschedule_booking tool (atomic). If you do
         cancel manually for a reschedule, the NEW booking must already be
         confirmed."""
+        utterance = self._state.last_user_utterance
+        accidental = (
+            utterance is not None
+            and _caller_rejected_accidental_booking(utterance)
+        )
+        if utterance is not None and not (
+            accidental
+            or _caller_authorized_cancellation(utterance)
+            or (
+                _caller_affirmed(utterance)
+                and self._last_assistant_requested_cancellation()
+            )
+        ):
+            logger.warning('cancellation_blocked_no_caller_authorization session=%s', self._state.session_id)
+            raise ToolError(
+                'Cancellation blocked: the caller did not ask to cancel. '
+                'Do not call cancel_booking until they explicitly request it.'
+            )
+        if accidental:
+            if self._state.last_confirmed_token_id is None:
+                raise ToolError(
+                    'There is no booking created in this call to undo. '
+                    'Do not cancel any older appointment.'
+                )
+            requested_id = token_id
+            token_id = str(self._state.last_confirmed_token_id)
+            if token_id != requested_id:
+                logger.warning(
+                    'accidental_booking_cancel_retargeted requested=%s exact=%s',
+                    requested_id[-8:], token_id[-8:],
+                )
         _guard_human_booking(self._state)
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled

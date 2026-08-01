@@ -20,6 +20,15 @@ _KIND_FIELD = {
     "cancelled": "confirm_cancelled",
 }
 
+_BOOKING_HELP = {
+    'te': 'ఇంకేమైనా సహాయం కావాలా అండి?',
+    'en': 'Is there anything else I can help you with?',
+    'hi': 'और कुछ मदद चाहिए जी?',
+    'ta': 'வேற ஏதாவது உதவி வேணுமாங்?',
+    'kn': 'ಇನ್ನೇನಾದರೂ ಸಹಾಯ ಬೇಕಾ?',
+    'mr': 'आणखी काही मदत हवी आहे का?',
+}
+
 
 def _spoken_date(value: date_cls, lang_code: str) -> str:
     return (
@@ -68,4 +77,9 @@ def build_confirm_text(
         if time_ is None:
             return None
         values["time"] = _spoken_time(time_, lang_code)
-    return template.format(**values)
+    spoken = template.format(**values)
+    if kind in {'booked_token', 'booked_slot'}:
+        help_line = _BOOKING_HELP.get(lang_code)
+        if help_line:
+            spoken = f'{spoken} {help_line}'
+    return spoken

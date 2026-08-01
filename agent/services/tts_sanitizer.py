@@ -19,6 +19,17 @@ _INTERNAL_TRACE = re.compile(
     r"route_to_doctor|assign_token|find_my_bookings|get_queue_status)\b)"
 )
 
+# Wider fail-closed classifier for free-form meta narration. These are
+# structural reasoning forms, not clinic-facing speech.
+_INTERNAL_META = re.compile(
+    r"(?i)(?:(?:the|this) (?:user|caller|patient)|"
+    r"(?:i|we) (?:need|should|must|have|plan) to|"
+    r"(?:i|we) (?:will|would|can|cannot|can not|do not) "
+    r"(?:use|call|retrieve|look up|proceed)|"
+    r"the [a-z_ -]+ tool|(?:available|provided) information|"
+    r"`[^`]+`|<[a-z/][^>]*>)"
+)
+
 # Model/provider transport labels are not speech.  Some Gemini routes emitted
 # this exact token before otherwise valid replies; strip only the label so the
 # patient-facing sentence is preserved (unlike the fail-closed tool guard).
@@ -32,6 +43,12 @@ _MODEL_CONTROL_TOKEN = re.compile(
 # LLM chunk. The old unconditional 24-character carry delayed all safe speech
 # (often until a short reply had fully generated) before Soniox could start.
 _INTERNAL_STREAM_MARKERS = (
+    "the user", "this user", "the caller", "this caller",
+    "the patient", "this patient", "we need to", "we should",
+    "we must", "we have to", "i plan to", "we plan to",
+    "i will use", "i would use", "i can use", "i cannot use",
+    "i can not use", "i do not use", "we will use",
+    "available information", "provided information", "the tool", "<", "`",
     "executing", "tool call", "tool_call", "tool-call",
     "the user is", "the user has", "the user asked", "the user wants",
     "the user requested", "the user provided", "the user mentioned",
@@ -73,7 +90,11 @@ def strip_model_control_tokens(text: str) -> str:
 
 def internal_trace_match(text: str):
     """Return the first private-execution marker in speech, if present."""
-    return _INTERNAL_TRACE.search(text or "")
+    value = text or ""
+    return (
+        _INTERNAL_TRACE.search(value)
+        or _INTERNAL_META.search(value)
+    )
 
 
 def strip_internal_tool_speech(text: str) -> str:

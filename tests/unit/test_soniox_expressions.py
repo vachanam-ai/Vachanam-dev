@@ -21,7 +21,7 @@ def test_closed_soniox_allowlist_is_exact():
         "[shouts]", "[angrily]", "[happily]", "[sadly]", "[crying]",
         "[sighs]", "[takes a deep breath]", "[gasps]", "[nervously]",
         "[excitedly]", "[confused]", "[surprised]", "[relieved]",
-        "[thinking]", "[hesitates]", "[pause]", "[long pause]",
+        "[hesitates]", "[pause]", "[long pause]",
         "[clears throat]", "[coughs]", "[yawns]", "[sobs]", "[sniffs]",
     }
     assert ag.SONIOX_EXPRESSION_TAGS == expected
@@ -47,17 +47,20 @@ def test_soniox_filter_is_chunk_split_safe():
 
 def test_prompt_teaches_job_scoped_expressions_and_phone_digit_rule():
     p = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
-    for tag in ("[softly]", "[happily]", "[relieved]", "[thinking]",
+    for tag in ("[softly]", "[happily]", "[relieved]",
                 "[hesitates]", "[confused]", "[sighs]", "[chuckles]",
-                "[pause]", "[long pause]"):
+                "[pause]"):
         assert tag in p, tag
-    # v19 reworded the expressions block; the constraints survive verbatim below.
-    assert "only these:" in p                        # the closed tag allowlist
-    assert "No other tag exists" in p                # (was "...in this job")
-    assert "replies carry neither" in p              # (was "...neither instrument")
-    assert "Never two emotions in one reply" in p
-    assert "[chuckles] only if they" in p and "laughed first" in p  # no laughter over pain
-    assert "PLAIN DIGITS" in p
-    assert "runtime supplies the hold line" in p
-    assert "never generate" in p
-    assert "routine [long pause] yourself" in p
+    assert "[thinking]" not in p
+    assert "Max ONE emotion tag per reply" in p
+    assert "ALLOWED EMOTION TAGS:" in p
+    assert "[chuckles] only if caller joked first" in p
+    assert "Phone numbers are single spoken digits" in p
+
+    # Long pauses are deterministic runtime hold audio, not model-generated
+    # content. Every supported language must have at least one such filler.
+    from agent.i18n.lines import WAIT_FILLERS
+
+    assert WAIT_FILLERS
+    for code, fillers in WAIT_FILLERS.items():
+        assert any("[long pause]" in line for line in fillers), code
