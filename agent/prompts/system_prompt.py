@@ -1,8 +1,10 @@
-"""Stable public entry points for Vachanam's production voice prompt."""
+"""Public entry points and runtime date-table builder for Vachanam."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
+import zoneinfo
 
 from agent.prompts.grounded_prompt import build_grounded_prompt
 
@@ -20,28 +22,32 @@ class DoctorContext:
     available_weekdays: list[int] | None = None  # 0=Mon..6=Sun; None/[] = all
 
 
-# DPDP s.5 disclosure. The call site sanitizes this before TTS.
-DISCLOSURE_TELUGU = (
-    "idi AI assistant. mee appointment kosam mee peru mariyu phone number vadatamu."
-)
-DISCLOSURE_ENGLISH = (
-    "This is an AI assistant. We collect your name and phone for your appointment."
-)
-DISCLOSURE_HINDI = (
-    "yeh AI assistant hai. aapke appointment ke liye aapka naam aur phone number lenge."
-)
-DISCLOSURE_UTTERANCE = (
-    f"{DISCLOSURE_TELUGU} {DISCLOSURE_ENGLISH} {DISCLOSURE_HINDI}"
-)
+# Generalized, privacy-safe disclosures per active language
+DISCLOSURES: dict[str, str] = {
+    "te": "ఇది క్లినిక్ AI అసిస్టెంట్ అండి. మీ అపాయింట్‌మెంట్ ప్రాసెస్ చేయడం కోసం ఈ కాల్ రికార్డ్ అవుతుంది.",
+    "hi": "यह क्लिनिक की AI असिस्टेंट है. आपके अपॉइंटमेंट के लिए यह कॉल रिकॉर्ड की जा रही है जी.",
+    "ta": "இது கிளினிக் AI அசிஸ்டன்ட்ங்க. உங்க அப்பாயிண்ட்மென்ட் ப்ராசஸ் பண்ண இந்த கால் ரெக்கார்ட் செய்யப்படுதுங்க.",
+    "kn": "ಇದು ಕ್ಲಿನಿಕ್ AI ಅಸಿಸ್ಟೆಂಟ್ ರೀ. ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಪ್ರೊಸೆಸ್ ಮಾಡೋಕೆ ಈ ಕಾಲ್ ರೆಕಾರ್ಡ್ ಆಗ್ತಿದೆ ರೀ.",
+    "mr": "हे क्लिनिकचं AI असिस्टंट आहे. तुमच्या अपॉइंटमेंटसाठी हा कॉल रेकॉर्ड केला जात आहे.",
+    "en": "This is the clinic AI assistant. This call is processed for your appointment.",
+}
+
+_FALLBACK_DISCLOSURE = "en"
 
 
-def build_disclosure_utterance() -> str:
-    """Return the disclosure; the call site owns the TTS-sanitization boundary."""
-    return DISCLOSURE_UTTERANCE
+def build_disclosure_utterance(language: str = "te") -> str:
+    """Return a single, generalized disclosure line in the caller's active language."""
+    code = (language or "").strip().lower()
+    return DISCLOSURES.get(code, DISCLOSURES[_FALLBACK_DISCLOSURE])
 
 
-def build_date_context(now_local) -> str:
-    """Give the model an explicit eight-day table instead of date arithmetic."""
+def get_clinic_now(tz_identifier: str = "Asia/Kolkata") -> datetime:
+    """Guarantee time accuracy in the clinic's local timezone."""
+    return datetime.now(tz=zoneinfo.ZoneInfo(tz_identifier))
+
+
+def build_date_context(now_local: datetime) -> str:
+    """Give the model an explicit eight-day date table to eliminate LLM date arithmetic errors."""
     today = now_local.date()
     labels = {0: "today ", 1: "tomorrow "}
     rows = [
@@ -63,8 +69,7 @@ def build_date_context(now_local) -> str:
         "July eight'), verify the pair against ONE row of the list above — if the "
         "pair is not a row, you are wrong. If the caller corrects your date or "
         "weekday, NEVER argue: re-read the list and use the row matching THEIR "
-        "weekday. (Live failure: agent insisted 'this Wednesday is July ninth' "
-        "while the list said Wednesday = July 8.)"
+        "weekday."
     )
 
 
@@ -79,9 +84,15 @@ def build_system_prompt(
     clinic_address: str | None = None,
     faq: list[dict] | None = None,
     recording_active: bool = False,
+    warmth: str = "standard",
+    call_type: str = "inbound",
+    tz_identifier: str = "Asia/Kolkata",
 ) -> str:
-    """Render the sole priority-ordered, grounded production prompt."""
-    return build_grounded_prompt(
+    """Render the grounded production prompt combined with the live date context."""
+    now_local = get_clinic_now(tz_identifier)
+    date_table = build_date_context(now_local)
+    
+    prompt = build_grounded_prompt(
         clinic_name=clinic_name,
         doctors=doctors,
         emergency_contact=emergency_contact,
@@ -92,4 +103,8 @@ def build_system_prompt(
         clinic_address=clinic_address,
         faq=faq,
         recording_active=recording_active,
+        warmth=warmth,
+        call_type=call_type,
     )
+    
+    return prompt + date_table
