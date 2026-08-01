@@ -311,7 +311,7 @@ _is_prod = settings.app_env == "production"
 
 app = FastAPI(
     title="Vachanam API",
-    version="1.0.0",
+    version="1.2.0",
     description="AI-powered appointment booking for Indian clinics",
     lifespan=lifespan,
     docs_url=None if _is_prod else "/docs",

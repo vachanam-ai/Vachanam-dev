@@ -232,30 +232,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute next semver
+      - name: Compute release version
         id: ver
-        # Bump rule (Conventional Commits since last v-tag):
-        #   BREAKING CHANGE / `type!:` → major · `feat:` → minor · else → patch.
-        # No prior tag → seed v1.0.0 (prod is already live at 1.x).
+        # VERSION pins the canonical release series. This restored product line
+        # intentionally starts at 1.2.0 even though historical side branches
+        # retain higher tags. Only tags in the declared major.minor series count.
         run: |
           set -euo pipefail
-          LAST=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1)
-          if [ -z "$LAST" ]; then
-            NEXT="v1.0.0"
-            echo "no prior semver tag -> $NEXT"
+          DECLARED=$(tr -d '[:space:]' < VERSION)
+          echo "$DECLARED" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'
+          SERIES=${DECLARED%.*}
+          EXACT=$(git tag --points-at HEAD --list "v${SERIES}.*" --sort=-v:refname | head -n1)
+          if [ -n "$EXACT" ]; then
+            NEXT="$EXACT"
+            echo "HEAD already carries canonical tag $NEXT"
           else
-            LOG=$(git log --format='%B' "${LAST}..HEAD")
-            V=${LAST#v}
-            MAJ=${V%%.*}; REST=${V#*.}; MIN=${REST%%.*}; PAT=${REST#*.}
-            if echo "$LOG" | grep -qE 'BREAKING CHANGE|^[a-z]+(\(.+\))?!:'; then
-              MAJ=$((MAJ+1)); MIN=0; PAT=0
-            elif echo "$LOG" | grep -qE '^feat(\(.+\))?:'; then
-              MIN=$((MIN+1)); PAT=0
+            LAST=$(git tag --merged HEAD --list "v${SERIES}.*" --sort=-v:refname | head -n1)
+            if [ -z "$LAST" ]; then
+              NEXT="v${DECLARED}"
+              echo "starting canonical series at $NEXT"
             else
-              PAT=$((PAT+1))
+              LOG=$(git log --format='%B' "${LAST}..HEAD")
+              V=${LAST#v}
+              MAJ=${V%%.*}; REST=${V#*.}; MIN=${REST%%.*}; PAT=${REST#*.}
+              if echo "$LOG" | grep -qE 'BREAKING CHANGE|^[a-z]+(\(.+\))?!:'; then
+                MAJ=$((MAJ+1)); MIN=0; PAT=0
+              elif echo "$LOG" | grep -qE '^feat(\(.+\))?:'; then
+                MIN=$((MIN+1)); PAT=0
+              else
+                PAT=$((PAT+1))
+              fi
+              NEXT="v${MAJ}.${MIN}.${PAT}"
+              echo "${LAST} -> ${NEXT}"
             fi
-            NEXT="v${MAJ}.${MIN}.${PAT}"
-            echo "${LAST} -> ${NEXT}"
           fi
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
 
@@ -265,9 +274,17 @@ jobs:
         run: |
           set -euo pipefail
           TAG='${{ steps.ver.outputs.tag }}'
-          git tag "$TAG"
-          git push origin "$TAG"
-          gh release create "$TAG" --generate-notes --title "$TAG"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n1 "$TAG")" = "$GITHUB_SHA" || {
+              echo "::error::$TAG exists on another commit"; exit 1;
+            }
+            echo "$TAG already identifies this release"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --generate-notes --title "$TAG"
 
       - name: Setup flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
