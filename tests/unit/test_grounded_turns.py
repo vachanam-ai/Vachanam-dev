@@ -46,6 +46,23 @@ def test_doctor_list_is_grounded_but_normal_booking_turn_is_not_hijacked():
     assert doctor_roster_reply("I need a doctor appointment tomorrow", "te", _roster()) is None
 
 
+def test_hindi_roster_question_is_grounded_not_handed_to_llm():
+    """Vinay live 2026-08-01: Hindi 'who are the doctors' fell through to the
+    uncached Hindi LLM, which hallucinated 'unable to connect to DB' x3. The
+    fast-path MUST answer it from cache so the LLM never sees the turn."""
+    reply = doctor_roster_reply("कौन कौन डॉक्टर उपलब्ध हैं?", "hi", _roster())
+    assert reply is not None
+    assert all(name in reply for name in ("Dr. Lakshmi", "Vishnu", "Dr. Srinivas"))
+    assert "उपलब्ध हैं" in reply
+
+
+def test_hindi_specialty_question_is_grounded():
+    reply = doctor_roster_reply("क्या कोई त्वचा डॉक्टर है?", "hi", _roster())
+    assert reply is not None
+    assert "Dr. Lakshmi" in reply
+    assert "जी हाँ" in reply
+
+
 def test_exact_time_correction_inherits_prior_evening_period():
     assert extract_exact_time("no, I said 7", time(19, 30)) == time(19, 0)
     assert extract_exact_time("ఏడు గంటలకి", time(19, 30)) == time(19, 0)

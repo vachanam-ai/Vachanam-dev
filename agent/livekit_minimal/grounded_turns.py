@@ -7,15 +7,15 @@ from typing import Any, Iterable
 
 
 _SPECIALTIES: dict[str, tuple[str, ...]] = {
-    "skin": ("dermatologist", "dermatology", "skin specialist", "skin", "స్కిన్", "చర్మ"),
+    "skin": ("dermatologist", "dermatology", "skin specialist", "skin", "స్కిన్", "చర్మ", "त्वचा", "स्किन", "चर्म"),
     "orthopedic": (
         "orthopaedic", "orthopedic", "orthopedics", "orthopaedics",
         "ortho", "ఆర్థో", "ఆర్తో", "ఎముక",
     ),
-    "dental": ("dentist", "dental", "tooth", "teeth", "దంత", "పంటి", "పళ్ళ", "పళ్ల"),
+    "dental": ("dentist", "dental", "tooth", "teeth", "దంత", "పంటి", "పళ్ళ", "పళ్ల", "दाँत", "दांत", "दंत"),
     "children": (
         "paediatric", "pediatric", "children specialist", "child specialist",
-        "children", "child", "kids", "పిల్లల", "పిల్ల",
+        "children", "child", "kids", "పిల్లల", "పిల్ల", "बच्चों", "बच्चे", "बाल",
     ),
     "cardiology": ("cardiologist", "cardiology", "cardiac", "heart", "గుండె"),
     "ent": ("ear nose throat", "e.n.t", "ent", "చెవి", "ముక్కు", "గొంతు"),
@@ -32,11 +32,17 @@ _SPECIALTIES: dict[str, tuple[str, ...]] = {
     "pulmonology": ("pulmonologist", "pulmonology", "chest specialist", "పల్మనాలజ"),
 }
 
-_DOCTOR_TERMS = ("doctor", "doctors", "డాక్టర్", "వైద్యుడు", "డాక్టర్లు")
+_DOCTOR_TERMS = (
+    "doctor", "doctors", "డాక్టర్", "వైద్యుడు", "డాక్టర్లు",
+    "डॉक्टर", "डाक्टर", "डॉक्टरों", "चिकित्सक",  # hi: grounding must fire, else the
+    # uncached Hindi LLM hallucinates a DB failure (Vinay live 2026-08-01)
+)
 _LIST_TERMS = (
     "what doctors", "which doctors", "doctor list", "doctors available",
     "who are the doctors", "any doctors", "ఏ డాక్టర్లు", "ఎవరెవరు",
     "ఎవరు ఉన్నారు", "డాక్టర్ల లిస్ట్", "డాక్టర్స్ లిస్ట్",
+    "कौन से डॉक्टर", "कौन डॉक्टर", "कौन कौन", "डॉक्टरों की सूची",
+    "डॉक्टर उपलब्ध", "उपलब्ध डॉक्टर", "कौन उपलब्ध",  # hi
 )
 
 
