@@ -5042,16 +5042,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # Native-script doctor names/roles for THIS clinic + language. Cached in
         # Redis (agent/services/pronunciation.py), so this is a cache read on
         # every call after the first; a miss/failure just speaks Latin names.
+        # Cache-ONLY here: this is the critical path to answering the phone, so
+        # it must never wait on a generation. On a miss, prime in the background
+        # and install when ready — until then the stored spelling is spoken.
         try:
-            from agent.services.pronunciation import spoken_map as _spoken_map
-
-            vachanam_agent.set_pronunciations(
-                await _spoken_map(
-                    branch.id,
-                    lang_code,
-                    [(d.name, d.specialization) for d in doctor_contexts],
-                )
+            from agent.services.pronunciation import (
+                cached_only as _pron_cached,
+                spoken_map as _spoken_map,
             )
+
+            _pron_pairs = [(d.name, d.specialization) for d in doctor_contexts]
+            _pron_hit = await _pron_cached(branch.id, lang_code, _pron_pairs)
+            if _pron_hit is not None:
+                vachanam_agent.set_pronunciations(_pron_hit)
+            else:
+                async def _late_pronunciations() -> None:
+                    try:
+                        vachanam_agent.set_pronunciations(
+                            await _spoken_map(branch.id, lang_code, _pron_pairs)
+                        )
+                    except Exception as _e2:  # noqa: BLE001
+                        logger.warning("pronunciation_late_failed: %s", str(_e2)[:140])
+
+                asyncio.create_task(_late_pronunciations())
         except Exception as _e:  # noqa: BLE001 — never block answering a call
             logger.warning("pronunciation_setup_failed: %s", str(_e)[:140])
         if _cached_llm is not None:

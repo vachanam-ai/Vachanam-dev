@@ -150,6 +150,36 @@ async def _generate(pairs: list[tuple[str, str]], lang: str) -> dict[str, str]:
     return out
 
 
+async def cached_only(
+    branch_id, lang: str, pairs: list[tuple[str, str]], timeout: float = 0.25
+) -> dict[str, str] | None:
+    """Cache-ONLY lookup for the call-setup path. Never calls the LLM.
+
+    Call setup is on the critical path to answering the phone, so it must never
+    wait on a generation. Returns the map on a hit, or None on a miss/slow
+    Redis — the caller then speaks stored spellings and primes in background.
+    """
+    pairs = [(_clean(n), _clean(r)) for n, r in pairs if _clean(n)]
+    if not pairs or not needs_conversion(" ".join(n for n, _ in pairs), lang):
+        return {}
+    key = cache_key(branch_id, lang, roster_digest(pairs))
+    if key in _LOCAL:
+        return _LOCAL[key]
+    try:
+        from backend.redis_client import get_redis
+
+        redis = get_redis()
+        cached = await asyncio.wait_for(redis.get(key), timeout=timeout)
+        if cached:
+            data = json.loads(cached)
+            if isinstance(data, dict):
+                _LOCAL[key] = data
+                return data
+    except Exception as e:  # noqa: BLE001 — a slow cache must not delay answering
+        logger.warning("pronunciation_cache_fast_read_failed: %s", str(e)[:140])
+    return None
+
+
 async def spoken_map(branch_id, lang: str, pairs: list[tuple[str, str]]) -> dict[str, str]:
     """{original_text: native_script_text} for this clinic + language.
 
