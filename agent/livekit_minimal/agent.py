@@ -6807,10 +6807,18 @@ def _start_prompt_cache_warmer() -> None:
     import threading
     import time as _time
 
+    async def _warm_with_http_context() -> None:
+        # Soniox obtains its aiohttp session from LiveKit's job context. This
+        # warmer runs in a plain thread, so it must open that context itself.
+        from livekit.agents.utils import http_context
+
+        async with http_context.open():
+            await _warm_all_clinic_prompt_caches()
+
     def _loop() -> None:
         while True:
             try:
-                asyncio.run(_warm_all_clinic_prompt_caches())
+                asyncio.run(_warm_with_http_context())
             except Exception as exc:  # noqa: BLE001 — calls retain plain fallback
                 logger.warning("prompt_cache_warm_failed: %s", str(exc)[:180])
             _time.sleep(6 * 60 * 60)

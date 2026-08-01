@@ -157,3 +157,12 @@ def test_private_reasoning_and_markup_never_reach_tts():
     assert 'available information' not in spoken
     assert 'private_context' not in spoken
     assert 'Dr Rao is available' in spoken
+
+
+def test_background_greeting_warmer_opens_livekit_http_context():
+    import inspect
+    import agent.livekit_minimal.agent as agent_module
+
+    source = inspect.getsource(agent_module._start_prompt_cache_warmer)
+    assert 'async with http_context.open()' in source
+    assert 'asyncio.run(_warm_with_http_context())' in source
