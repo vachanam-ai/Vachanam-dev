@@ -1,5 +1,30 @@
+import logging
 import re
 import unicodedata
+
+logger = logging.getLogger(__name__)
+
+# A caller must NEVER hear the word "database" (or a raw connection/fetch error)
+# — it is the single most enraging leak (Vinay live 2026-07-31: "unable to
+# connect to DB … ragebaiting"). The deterministic fallback lines that used to
+# say it are fixed, but the LLM can still PARROT a tool-result instruction
+# ("the database did not verify…") or hallucinate one. This strips the term at
+# the TTS boundary in all three scripts, model-independent (RULE 6). English
+# "in/from/to the database" drops the whole phrase; the attached Telugu locative
+# (డేటాబేస్‌లో) and Hindi "डेटाबेस में" go with the word.
+_TTS_TECH_LEAK = re.compile(
+    r"(?i)\s*(?:(?:in|from|to|with)\s+the\s+)?"
+    r"(?:database|data\s?base|డేటాబేస్\S*|डेटाबेस(?:\s*में)?)"
+)
+
+
+def scrub_technical_leak(text: str) -> str:
+    """Remove any spoken 'database' mention. Belt-and-suspenders over the fixed
+    fallback lines; the source wording is the primary fix."""
+    if not text or not _TTS_TECH_LEAK.search(text):
+        return text
+    logger.warning("tts_technical_leak_scrubbed")
+    return _TTS_TECH_LEAK.sub("", text)
 
 # Internal execution language must never reach a caller. This is a deterministic
 # boundary check, not a request to the LLM. Keep patient-safe words such as
@@ -204,6 +229,7 @@ def sanitize_for_tts(text: str) -> str:
     text = strip_model_private_blocks(text)
     text = strip_model_control_tokens(text)
     text = strip_internal_tool_speech(text)
+    text = scrub_technical_leak(text)
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
     text = re.sub(r'^\*\s+', '', text, flags=re.MULTILINE)
