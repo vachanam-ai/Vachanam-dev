@@ -20,6 +20,10 @@ class SessionState:
     # Token / slot tracking
     token_held: bool = False
     token_confirmed: bool = False
+    # Per-CALL latch. token_confirmed is intentionally reset for every fresh
+    # hold; this one remembers that at least one durable booking succeeded so a
+    # later abandoned family booking cannot erase the earlier outcome.
+    any_booking_confirmed: bool = False
     # Audit #9: which doctors got a CONFIRMED booking this call — the
     # follow-up teardown completes a next_visit_book task only when ITS
     # doctor is in here (a sibling's unrelated booking must not complete it).

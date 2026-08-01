@@ -267,3 +267,52 @@ query amplification, sanitizer buffering, and runaway tool tails; they do not
 make a Tokyo provider co-located with Mumbai. Production before/after calls are
 required for honest p50/p95 savings. The next trace now has the fields needed to
 measure that comparison correctly.
+## 7. Real-call verification after v1.2.0
+
+A 417-second production call produced 24 complete latency summaries. The
+patient-facing median was 2,047 ms from the caller's last recognized word to
+first agent audio; p95 was 2,883 ms. Component medians were:
+
+| Stage | p50 | p95 |
+|---|---:|---:|
+| Soniox final transcript after VAD end | 368 ms | 497 ms |
+| Final transcript to committed turn | 30 ms | 1,078 ms |
+| Gemini first token | 511 ms | 779 ms |
+| Soniox TTS first audio | 511 ms | 875 ms |
+| Complete reply from VAD end | 1,897 ms | 2,763 ms |
+
+The slow tail was language/turn-detection dependent. Later turns paid roughly
+835-1,079 ms between the final transcript and committed turn, producing
+1.27-1.57 second EOU delays. The tool itself was usually not the bottleneck:
+median tool execution was 65 ms. `confirm_booking` was the exception at 1,597
+ms because it includes the durable database/calendar mutation and is covered by
+a spoken wait line.
+
+The call also proved the trace's static `cache_hit` tag was misleading after a
+language handoff: provider metrics reported about 5,003 cached prompt tokens on
+later turns even though the call-level tag remained false. Language handoffs now
+refresh both the language and cache-hit telemetry context.
+
+Correctness defects found in the same call and fixed in the hotfix:
+
+- private English reasoning and prompt/tool narration reached TTS;
+- a Redis slot hold was announced as a tentative booking;
+- a successful first family booking was erased from call analytics when a
+  second booking was held and abandoned;
+- doctor roster questions could be misclassified as off-topic;
+- availability could be claimed before an exact date was checked;
+- the trace continued labeling later English turns as Hindi.
+- the turn detector also remained tied to the call's starting language; a
+  Hindi-started call kept the slower semantic detector after switching to
+  Telugu/English.
+
+The low-level hold operation is no longer exposed to the model. The final
+booking tool acquires the identical atomic Redis hold internally after details
+and explicit confirmation, so concurrency protection remains while one model
+and tool round-trip is removed. Private-reasoning text is now blocked at the TTS
+boundary with streaming chunk-split tests; normal speech remains unbuffered.
+
+Turn detection now belongs to each active-language agent: Hindi retains semantic
+protection, while explicit Telugu/English handoffs select the measured faster
+VAD path. This removes the inherited ~1 second semantic tail without globally
+enabling the Hindi partial-transcript regression.

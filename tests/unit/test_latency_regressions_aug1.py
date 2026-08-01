@@ -33,7 +33,7 @@ async def test_stream_guard_still_holds_and_drops_split_private_marker():
     ])
     assert "check" not in out.lower()
     assert "doctor_id" not in out.lower()
-    assert out == "సరే.  తర్వాత చెబుతాను."
+    assert out == "సరే. తర్వాత చెబుతాను."
 
 
 def test_prefix_carry_is_targeted_not_unconditional():
@@ -99,3 +99,25 @@ def test_tool_loop_is_bounded_without_breaking_two_step_booking_flows():
     source = open(agent_mod.__file__, encoding="utf-8").read()
     main_session = source.split("        session = AgentSession(", 1)[1]
     assert "max_tool_steps=2" in main_session[:500]
+
+def test_call_booking_latch_survives_a_later_unconfirmed_hold():
+    from agent.session_state import SessionState
+
+    state = SessionState()
+    state.token_confirmed = True
+    state.any_booking_confirmed = True
+    # Starting another family booking resets only the per-hold latch.
+    state.token_confirmed = False
+    assert state.any_booking_confirmed is True
+
+    source = open(agent_mod.__file__, encoding="utf-8").read()
+    assert "self._state.any_booking_confirmed = True" in source
+    assert source.count("booking_made=state.any_booking_confirmed") == 3
+
+
+def test_language_switch_updates_latency_trace_context():
+    source = open(agent_mod.__file__, encoding="utf-8").read()
+    switch = source.split("async def switch_language", 1)[1].split("async def", 1)[0]
+    assert "trace.set_context(language=code)" in switch
+    factory = source.split("def _agent_for_lang", 1)[1].split("# The switched language", 1)[0]
+    assert "cache_hit=switched_cached_llm is not None" in factory

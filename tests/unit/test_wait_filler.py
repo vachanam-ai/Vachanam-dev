@@ -99,10 +99,9 @@ def test_slow_tools_use_the_wait_phrase():
 
 
 def test_quick_tools_do_not_use_the_wait_phrase():
-    # assign_token is a Redis INCR — no filler at all.
-    src = _tool_src("assign_token")
-    assert "_say_wait_filler" not in src
-    assert "_say_lookup_filler" not in src
+    # Atomic reservation now happens inside confirm_booking; the low-level
+    # hold operation is deliberately not exposed as an agent method/tool.
+    assert "@function_tool" not in _tool_src("assign_token")
     # route_to_doctor keeps the SHORT ack, not the wait phrase.
     routing = _tool_src("route_to_doctor")
     assert "_say_lookup_filler(context)" in routing

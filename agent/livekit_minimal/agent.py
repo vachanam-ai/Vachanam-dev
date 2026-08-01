@@ -570,6 +570,12 @@ async def _guard_internal_speech_stream(text):
     """
     pending = ""
     dropping = False
+    # Once private narration is detected, buffer subsequent sentences until we
+    # find the first patient-facing one. This prevents a multi-sentence chain
+    # such as "The user asked... I should... However..." from resuming after
+    # only its first full stop. Normal replies never enter this path, so their
+    # time-to-first-audio is unchanged.
+    recovering = False
     async for chunk in text:
         pending += chunk
         pending = strip_model_control_tokens(pending)
@@ -579,8 +585,20 @@ async def _guard_internal_speech_stream(text):
                 if boundary is None:
                     pending = ""
                     break
-                pending = pending[boundary.end():]
+                pending = pending[boundary.end():].lstrip()
                 dropping = False
+                recovering = True
+                continue
+            if recovering:
+                boundary = _SPEECH_BOUNDARY.search(pending)
+                if boundary is None:
+                    break
+                sentence = pending[:boundary.end()]
+                pending = pending[boundary.end():].lstrip()
+                if internal_trace_match(sentence):
+                    continue
+                yield sentence
+                recovering = False
                 continue
             marker = internal_trace_match(pending)
             if marker:
@@ -1808,6 +1826,15 @@ class VachanamAgent(Agent):
         # a stale-language cache can never be applied to a switched call.
         if llm is not None:
             overrides["llm"] = llm
+        # Turn detection follows the ACTIVE language, not the language that
+        # happened to start the call. Agent handoffs otherwise inherited the
+        # initial session detector (a Hindi-started call kept ~1s semantic
+        # delay even after explicit switches to Telugu/English).
+        overrides["turn_detection"] = (
+            None
+            if (_TELUGU_STYLE_TURNS or lang_code in ("te", "en"))
+            else MultilingualModel()
+        )
         super().__init__(instructions=instructions, **overrides)
         self._state = state
         self._db = db
@@ -2275,7 +2302,9 @@ class VachanamAgent(Agent):
         )
         return {"availability": availability}
 
-    @function_tool()
+    # Deliberately not decorated: tests and server-side recovery may call this
+    # helper, but it is absent from the model tool schema. Final confirmation
+    # acquires the same atomic hold when this helper was not called.
     async def assign_token(
         self,
         context: RunContext,
@@ -2524,6 +2553,7 @@ class VachanamAgent(Agent):
             return {"success": False, "error": "booking_failed"}
         if result.get("success"):
             self._state.token_confirmed = True
+            self._state.any_booking_confirmed = True
             try:  # audit #9: doctor-scoped completion for follow-up teardown
                 self._state.confirmed_doctor_ids.append(str(doctor_id))
             except Exception:  # noqa: BLE001
@@ -2927,6 +2957,9 @@ class VachanamAgent(Agent):
             if isinstance(ud, dict):
                 ud["fillers"] = get_lines(code).fillers
                 ud["language"] = code
+                trace = ud.get("turn_trace")
+                if trace is not None:
+                    trace.set_context(language=code)
                 ud["filler_clips"] = []
                 # #429: same staleness rule for the "one minute" waits.
                 ud["wait_fillers"] = get_wait_fillers(code)
@@ -4959,6 +4992,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             switched_cached_llm = _cached_primary_llm(
                 switched_key, switched_instructions
             )
+            try:
+                session.userdata["turn_trace"].set_context(
+                    language=lc, cache_hit=switched_cached_llm is not None
+                )
+            except Exception:
+                pass
             switched_agent = VachanamAgent(
                 instructions=switched_instructions,
                 chat_ctx=chat_ctx,
@@ -5183,11 +5222,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # committed before Hindi finished transcribing and the LLM answered
                 # a partial ("namaskar…"). VOICE_TELUGU_STYLE_TURNS=1 forces
                 # VAD-only on every language (revert lever / further experiments).
-                "turn_detection": (
-                    None
-                    if (_TELUGU_STYLE_TURNS or lang_cfg.stt_code in ("te-IN", "en-IN"))
-                    else MultilingualModel()
-                ),
+                # VachanamAgent owns this per active language, so a handoff can
+                # replace the detector. The session fallback stays disabled.
+                "turn_detection": None,
                 "endpointing": {
                     "mode": "fixed",
                     "min_delay": 0.05,
@@ -5464,7 +5501,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             .values(
                                 call_type=state.call_type or "inbound",
                                 duration_seconds=duration,
-                                booking_made=state.token_confirmed,
+                                booking_made=state.any_booking_confirmed,
                             )
                         )
                         await db.commit()
@@ -5480,7 +5517,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 answered=True,
                                 started_at=started,
                                 duration_seconds=duration,
-                                booking_made=state.token_confirmed,
+                                booking_made=state.any_booking_confirmed,
                             )
                         )
                         await db.commit()
@@ -5509,7 +5546,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             language=state.language,
                             duration_seconds=duration,
                             turns=turns,
-                            booking_made=state.token_confirmed,
+                            booking_made=state.any_booking_confirmed,
                             booking_abandoned=abandoned,
                             transfer_requested=state.transfer_requested,
                             fail_reason=fail_reason,

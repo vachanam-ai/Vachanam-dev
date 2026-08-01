@@ -7,7 +7,13 @@ import unicodedata
 # identifiers and explicit execution narration.
 _INTERNAL_TRACE = re.compile(
     r"(?i)(?:\bexecuting\b|\btool[ _-]?call\b|\bfunction[ _-]?call\b|"
-    r"calendar\.tool|\b(?:old_token_id|new_date|new_time|token_id|doctor_id|"
+    r"\bthe user (?:is|has|asked|wants|requested|provided|mentioned)\b|"
+    r"\bI (?:need|must|have) to\b|\bI should\b|"
+    r"\b(?:this|that) information (?:is|comes)\b|"
+    r"\b(?:my|our) (?:task|instructions?|reasoning)\b|"
+    r"\b(?:based on|according to) (?:the )?(?:context|instructions?|clinic_facts|tool)\b|"
+    r"\bclinic_facts\b|<\/?(?:doctors?|clinic_facts)\b|"
+    r"calendar\.tool|\b(?:old_token_id|new_date|new_time|booking_date|appointment_time|token_id|doctor_id|patient_name|"
     r"patient_phone|different_person|booking_for_other)\b\s*[:=]?|"
     r"\b(?:confirm_booking|reschedule_booking|cancel_booking|check_availability|"
     r"route_to_doctor|assign_token|find_my_bookings|get_queue_status)\b)"
@@ -27,8 +33,17 @@ _MODEL_CONTROL_TOKEN = re.compile(
 # (often until a short reply had fully generated) before Soniox could start.
 _INTERNAL_STREAM_MARKERS = (
     "executing", "tool call", "tool_call", "tool-call",
+    "the user is", "the user has", "the user asked", "the user wants",
+    "the user requested", "the user provided", "the user mentioned",
+    "i need to", "i should", "i must", "i have to", "this information",
+    "that information", "my task", "our task", "my instructions",
+    "our instructions", "my reasoning", "our reasoning", "based on the context",
+    "according to the context", "based on the instructions",
+    "according to the instructions", "clinic_facts", "<doctor", "</doctor",
+    "<clinic_facts", "</clinic_facts",
     "function call", "function_call", "function-call", "calendar.tool",
-    "old_token_id", "new_date", "new_time", "token_id", "doctor_id",
+    "old_token_id", "new_date", "new_time", "booking_date",
+    "appointment_time", "patient_name", "token_id", "doctor_id",
     "patient_phone", "different_person", "booking_for_other",
     "confirm_booking", "reschedule_booking", "cancel_booking",
     "check_availability", "route_to_doctor", "assign_token",

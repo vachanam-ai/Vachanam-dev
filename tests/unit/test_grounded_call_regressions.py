@@ -92,3 +92,61 @@ def test_route_tool_clears_stale_doctor_before_await():
     # stale doctor cleared BEFORE the routing await (now routed via _consume_or_route,
     # #5 — prefetch consumption also happens after the clear).
     assert method.index("self._state.doctor_id = None") < method.index("await self._consume_or_route(")
+
+@pytest.mark.asyncio
+async def test_stream_guard_drops_real_call_meta_reasoning_chain():
+    async def chunks():
+        for chunk in (
+            "The us",
+            "er is asking for a list of available doctors. ",
+            "This information is directly available in the `clinic_facts`. ",
+            "I should list the doctors and their specializations. ",
+            "We have Dr Lakshmi for skin and Dr Srinivas for dental.",
+        ):
+            yield chunk
+
+    out = "".join([part async for part in _guard_internal_speech_stream(chunks())])
+    assert out == "We have Dr Lakshmi for skin and Dr Srinivas for dental."
+
+
+@pytest.mark.asyncio
+async def test_stream_guard_drops_tool_reasoning_before_patient_answer():
+    async def chunks():
+        for chunk in (
+            "I need to use check_availability with booking_",
+            "date first. However, the user has not supplied a date. ",
+            "Which day would you like to visit?",
+        ):
+            yield chunk
+
+    out = "".join([part async for part in _guard_internal_speech_stream(chunks())])
+    assert out == "Which day would you like to visit?"
+
+
+def test_whole_text_sanitizer_drops_meta_reasoning():
+    raw = (
+        "The user requested Friday. I should call check_availability. "
+        "Dr Srinivas is free from 9 AM to 12 PM."
+    )
+    assert sanitize_for_tts(raw) == "Dr Srinivas is free from 9 AM to 12 PM."
+
+
+def test_prompt_makes_roster_in_scope_and_hold_non_speakable():
+    prompt = _prompt()
+    assert "DOCTOR ROSTER IS IN SCOPE" in prompt
+    assert "OUTPUT ONLY THE EXACT WORDS THE CALLER SHOULD HEAR" in prompt
+    assert "Only confirm_booking may create or announce a booking" in prompt
+
+
+def test_low_level_hold_is_not_exposed_to_the_model():
+    from agent.livekit_minimal.agent import VachanamAgent
+    from agent.services.meta_stub import MetaService
+    from agent.session_state import SessionState
+
+    schema_agent = VachanamAgent(
+        instructions="schema", state=SessionState(), db=None, room=None,
+        calendar_service=None, meta_service=MetaService(), transfer_to="",
+    )
+    names = {tool.info.name for tool in schema_agent.tools}
+    assert "assign_token" not in names
+    assert "confirm_booking" in names
