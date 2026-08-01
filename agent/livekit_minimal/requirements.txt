@@ -18,7 +18,7 @@ livekit-plugins-soniox==1.6.6
 livekit-plugins-sarvam==1.6.6
 livekit-plugins-google==1.6.6
 livekit-plugins-silero==1.6.6
-livekit-plugins-noise-cancellation>=0.2.5
+livekit-plugins-noise-cancellation>=0.3.0
 # Semantic end-of-turn detection (latency: commit the turn on a complete
 # utterance instead of waiting out VAD silence). Model weights are downloaded
 # at build time in Dockerfile.agent via `agents download-files`. Runs an
