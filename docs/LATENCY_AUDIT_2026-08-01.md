@@ -181,3 +181,89 @@ remaining wins are structural, not incremental knob-turning.
   the source for a wider sample.
 - The [E] savings for co-location are inferred from the measured Tokyo-carrying
   stages, not from a Mumbai-hosted A/B. Only the A/B settles it.
+
+## 6. Implementation follow-up — code verification
+
+The code trace found four latency defects not visible from the single production
+turn, plus one measurement error in the original interpretation.
+
+### Fixed — shared voice caches were silently bypassed
+
+`backend.redis_client.get_redis()` is a synchronous accessor that returns an
+async Redis client. The voice worker incorrectly used `await get_redis()` in the
+shared prompt cache, greeting cache, clinic roster cache, switch telemetry, call
+setup telemetry, and turn telemetry. The resulting `TypeError` was swallowed by
+best-effort cache handlers. Consequences:
+
+- another worker's Vertex CachedContent resource was not reused;
+- cached greeting audio was not read or written;
+- the clinic roster cache fell back to PostgreSQL on every call;
+- durable latency evidence could silently disappear.
+
+All callers now obtain the shared client synchronously and await only Redis
+commands. Regression tests exercise the real contract instead of source-only
+assertions.
+
+### Fixed — Redis connection and slot-query amplification
+
+Booking tools created a new `rediss://` client for every operation and closed it
+again. That repeatedly pays connection-pool/TLS/AUTH setup against Upstash. They
+now reuse the existing event-loop-local client. Appointment availability also
+performed one sequential Redis `GET` per generated slot; a doctor with several
+sessions could therefore turn one availability check into dozens of network
+round trips. It now issues one `MGET` for every slot counter.
+
+This does not change availability semantics: DB-confirmed occupancy is still
+the authoritative floor, Redis remains the atomic hold gate, and held-slot
+adjustment is applied after the batched read exactly as before.
+
+### Fixed — the safety stream delayed clean speech
+
+The internal-tool-speech firewall retained the first 24 characters of every LLM
+reply before releasing anything to TTS. Short answers could finish generation
+before Soniox received their first text. It now retains only a trailing fragment
+that can still become a protected marker on the next chunk (for example
+`check_avai`), while ordinary patient-safe text streams immediately. Split-marker
+and immediate-first-chunk tests both pass.
+
+### Fixed — pathological tool-loop ceiling
+
+LiveKit 1.6.6 defaults to three consecutive tool steps. Production now allows
+two: enough for the valid `route -> availability` and `hold -> confirm` pairs,
+but a third same-turn tool step is forced to a final response instead of paying
+another avoidable Gemini round trip.
+
+Important correction: `llm_runs=3` does **not** prove three tool steps. It may be
+a cancelled preemptive draft, the committed tool-call generation, and the
+required post-tool response. Therefore `max_tool_steps=1` would risk breaking
+bookings and would not remove the required post-tool pass.
+
+### Fixed — `unaccounted_ms` was not a valid wall-clock gap
+
+The old formula subtracted LLM TTFT and TTS TTFB as if they were sequential.
+With preemptive TTS those durations overlap, so the 638 ms figure could be an
+arithmetic residual rather than idle time. The trace now partitions exact,
+non-overlapping spans and emits `commit_to_tts_ms` and `tool_span_ms`. Provider
+TTFT/TTFB remain useful diagnostics but are not added together as wall time.
+
+### Deliberately not implemented
+
+- Speculative `check_availability` parsing was not added. The measured tool is
+  39 ms; guessing multilingual doctor/date/time arguments to save at most that
+  amount adds a correctness risk to a legally sensitive path.
+- Endpoint silence was not reduced below the current 60 ms VAD signal plus the
+  Soniox-supported 200 ms finalization guard. The previous more aggressive
+  combination damaged Telugu names and split utterances.
+- Sarvam was not promoted without a real Telugu A/B. It remains a reversible
+  STT-only experiment, but prior calls found it slower and Soniox quality is a
+  stated product requirement.
+
+### Remaining structural floor
+
+The largest irreducible costs in the current stack remain Soniox Japan
+finalization and first audio, plus the two model passes required by a generic
+LLM-mediated tool turn. These code fixes remove cache misses, connection setup,
+query amplification, sanitizer buffering, and runaway tool tails; they do not
+make a Tokyo provider co-located with Mumbai. Production before/after calls are
+required for honest p50/p95 savings. The next trace now has the fields needed to
+measure that comparison correctly.

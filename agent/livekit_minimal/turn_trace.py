@@ -27,7 +27,7 @@ SUMMARY_ALLOWED_KEYS = frozenset({
     "total_ms", "stt_finalize_ms", "commit_ms", "eou_delay_ms",
     "transcription_delay_ms", "llm_ttft_ms", "llm_runs", "safety_buffer_ms",
     "llm_total_ms", "tts_ttfb_ms", "tool", "tool_ms", "pre_tool_ms",
-    "post_tool_ms", "unaccounted_ms",
+    "post_tool_ms", "tool_span_ms", "commit_to_tts_ms", "unaccounted_ms",
     # exact-timestamp ladder (2026-07-22): split the parts total_ms hid
     "speak_dur_ms", "vad_hangover_ms", "tts_synth_ms", "playout_gap_ms",
     "from_last_word_ms",
@@ -200,8 +200,36 @@ class TurnLatencyTrace:
         llm_total_ms = round(t.get("llm_total_s", 0.0) * 1000, 1)
         ttfb_ms = None if "ttfb" not in t else round(t["ttfb"] * 1000, 1)
         tool_ms = round(t.get("tool_s", 0.0) * 1000, 1)
-        known = sum(v for v in (stt_final, commit, ttft_ms, guard, ttfb_ms, tool_ms)
-                    if v is not None)
+        # Provider TTFT/TTFB overlap under preemptive generation, so adding them
+        # as serial stages produced a misleading "unaccounted" gap. Exact
+        # timestamp spans below form a non-overlapping wall-clock partition.
+        commit_to_tts = _ms(t.get("t_committed"), t.get("t_tts_first"))
+        playout_gap = _ms(t.get("t_tts_first"), t["t_playout"])
+        pre_tool = _ms(t.get("t_committed"), t.get("t_first_tool_start"))
+        tool_span = _ms(t.get("t_first_tool_start"), t.get("t_last_tool_end"))
+        post_tool = _ms(t.get("t_last_tool_end"), t.get("t_playout"))
+        if "tool" in t and all(
+            value is not None
+            for value in (total, stt_final, commit, pre_tool, tool_span, post_tool)
+        ):
+            residual = round(
+                total - stt_final - commit - pre_tool - tool_span - post_tool, 1
+            )
+        elif "tool" not in t and all(
+            value is not None
+            for value in (total, stt_final, commit, commit_to_tts, playout_gap)
+        ):
+            residual = round(
+                total - stt_final - commit - commit_to_tts - playout_gap, 1
+            )
+        else:
+            # Backward-compatible estimate for incomplete/legacy traces only.
+            known = sum(
+                value
+                for value in (stt_final, commit, ttft_ms, guard, ttfb_ms, tool_ms)
+                if value is not None
+            )
+            residual = None if total is None else round(total - known, 1)
         summary = {
             "session": self._session,
             "turn": self._seq,
@@ -219,26 +247,23 @@ class TurnLatencyTrace:
             "llm_total_ms": llm_total_ms,
             "safety_buffer_ms": guard,
             "tts_ttfb_ms": ttfb_ms,
-            "unaccounted_ms": None if total is None
-            else round(total - known, 1),
+            "commit_to_tts_ms": commit_to_tts,
+            "unaccounted_ms": residual,
         }
         # exact-timestamp ladder: isolate the parts total_ms structurally hides
         summary["speak_dur_ms"] = _ms(t.get("t_speech_start"), t["t_speech_end"])
         summary["vad_hangover_ms"] = _ms(t.get("t_last_interim"), t["t_speech_end"])
         summary["tts_synth_ms"] = _ms(t.get("t_final_transcript"), t.get("t_tts_first"))
-        summary["playout_gap_ms"] = _ms(t.get("t_tts_first"), t["t_playout"])
+        summary["playout_gap_ms"] = playout_gap
         # the internal figure closest to perceived latency: caller's real last
         # word -> first audio queued. Residual to their ear = pure telephony.
         summary["from_last_word_ms"] = _ms(t.get("t_last_interim"), t["t_playout"])
         if "tool" in t:
             summary["tool"] = t["tool"]
             summary["tool_ms"] = tool_ms
-            summary["pre_tool_ms"] = _ms(
-                t.get("t_committed"), t.get("t_first_tool_start")
-            )
-            summary["post_tool_ms"] = _ms(
-                t.get("t_last_tool_end"), t.get("t_playout")
-            )
+            summary["pre_tool_ms"] = pre_tool
+            summary["tool_span_ms"] = tool_span
+            summary["post_tool_ms"] = post_tool
         self._emit(summary)
 
 

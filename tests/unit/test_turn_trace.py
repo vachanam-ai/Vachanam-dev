@@ -184,6 +184,8 @@ def test_tool_lifecycle_attributes_pre_tool_tool_and_post_tool(trace_and_out):
     (summary,) = out
     assert summary["pre_tool_ms"] == pytest.approx(300, abs=1)
     assert summary["tool_ms"] == pytest.approx(600, abs=1)
+    assert summary["tool_span_ms"] == pytest.approx(600, abs=1)
+    assert summary["unaccounted_ms"] == pytest.approx(0, abs=1)
     assert summary["post_tool_ms"] == pytest.approx(400, abs=1)
 
 
@@ -251,6 +253,8 @@ def test_full_timeline_ladder_isolates_hangover_and_from_last_word(trace_and_out
     assert s["vad_hangover_ms"] == pytest.approx(300, abs=1)   # 101.2-100.9
     assert s["tts_synth_ms"] == pytest.approx(400, abs=1)      # 101.8-101.4
     assert s["playout_gap_ms"] == pytest.approx(200, abs=1)    # 102.0-101.8
+    assert s["commit_to_tts_ms"] == pytest.approx(400, abs=1)
+    assert s["unaccounted_ms"] == pytest.approx(0, abs=1)
     assert s["from_last_word_ms"] == pytest.approx(1100, abs=1)  # 102.0-100.9
 
 

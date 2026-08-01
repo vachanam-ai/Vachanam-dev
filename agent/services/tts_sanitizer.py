@@ -21,6 +21,36 @@ _MODEL_CONTROL_TOKEN = re.compile(
 )
 
 
+# Literal cores of every private marker. Their prefixes let the streaming
+# firewall retain only a suffix that could still become a marker on the next
+# LLM chunk. The old unconditional 24-character carry delayed all safe speech
+# (often until a short reply had fully generated) before Soniox could start.
+_INTERNAL_STREAM_MARKERS = (
+    "executing", "tool call", "tool_call", "tool-call",
+    "function call", "function_call", "function-call", "calendar.tool",
+    "old_token_id", "new_date", "new_time", "token_id", "doctor_id",
+    "patient_phone", "different_person", "booking_for_other",
+    "confirm_booking", "reschedule_booking", "cancel_booking",
+    "check_availability", "route_to_doctor", "assign_token",
+    "find_my_bookings", "get_queue_status", "response_start", "response_end",
+)
+_INTERNAL_STREAM_PREFIXES = frozenset(
+    marker[:size]
+    for marker in _INTERNAL_STREAM_MARKERS
+    for size in range(1, len(marker) + 1)
+)
+_INTERNAL_STREAM_MAX_PREFIX = max(map(len, _INTERNAL_STREAM_MARKERS))
+
+
+def internal_trace_prefix_len(text: str) -> int:
+    """Return the trailing length that may complete a private marker."""
+    folded = (text or "").casefold()
+    for size in range(min(len(folded), _INTERNAL_STREAM_MAX_PREFIX), 0, -1):
+        if folded[-size:] in _INTERNAL_STREAM_PREFIXES:
+            return size
+    return 0
+
+
 def strip_model_control_tokens(text: str) -> str:
     """Remove non-spoken response boundary labels from model output."""
     return _MODEL_CONTROL_TOKEN.sub("", text or "")

@@ -299,7 +299,7 @@ async def _greeting_cache_get(key: str) -> list[bytes] | None:
 
         from backend.redis_client import get_redis
 
-        r = await get_redis()
+        r = get_redis()
         raw = await r.get(key)
         if not raw:
             return None
@@ -318,7 +318,7 @@ async def _greeting_cache_set(key: str, wavs: list[bytes]) -> None:
 
         from backend.redis_client import get_redis
 
-        r = await get_redis()
+        r = get_redis()
         await r.set(
             key, _json.dumps([base64.b64encode(w).decode("ascii") for w in wavs]),
             ex=7 * 24 * 3600,

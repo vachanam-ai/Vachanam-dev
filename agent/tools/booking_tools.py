@@ -1,16 +1,15 @@
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from datetime import date, timedelta, datetime, time, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-import redis.asyncio as aioredis
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, text, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from backend.config import settings
 from backend.models.schema import Doctor, Token, Patient, Branch
 from backend.services.audit_service import write_audit_row
 from backend.services.doctor_schedule import (
@@ -66,17 +65,26 @@ def _sanitize_complaint_for_prompt(complaint: str) -> str:
     return cleaned[:_MAX_COMPLAINT_FOR_ROUTING].strip()
 
 
-def _redis():
-    """Create a fresh Redis client. Use as `async with _redis() as r:`.
+@asynccontextmanager
+async def _redis():
+    """Yield the loop-local shared Redis client without closing it.
 
-    Per-call client (not module-level) avoids event-loop binding bugs:
-    a module-level client created at import time becomes invalid after
-    its loop closes (visible in tests with one loop per function, and
-    possible in production if uvicorn ever resets the loop). Cost is
-    ~1-2ms per call on localhost — negligible vs LLM/STT on the call path.
+    Voice tools previously created and closed a rediss:// client for every
+    operation. On Upstash that repeatedly pays TCP/TLS/AUTH setup and makes
+    availability latency grow with call volume. ``get_redis`` already handles
+    pytest's per-loop isolation, so sharing is both faster and loop-safe.
     """
-    return aioredis.from_url(settings.redis_url, decode_responses=True)
+    from backend.redis_client import get_redis
 
+    yield get_redis()
+
+
+async def _redis_int_values(redis, keys: list[str]) -> list[int]:
+    """Fetch many integer counters in one network round trip."""
+    if not keys:
+        return []
+    values = await redis.mget(keys)
+    return [int(value or 0) for value in values]
 
 async def _branch_now(branch_id: UUID, db: AsyncSession) -> datetime:
     """Clock in the BRANCH's timezone — server may run UTC (Fly.io)."""
@@ -551,15 +559,18 @@ async def check_availability(
         db_counts[t] = db_counts.get(t, 0) + 1
 
     available = []
+    slot_keys = [
+        f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
+        for slot in all_slots
+    ]
     async with _redis() as r:
-        for slot in all_slots:
-            key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{slot.strftime('%H%M')}"
-            reserved = int(await r.get(key) or 0)
-            if key == held_slot_key and reserved > 0:
-                reserved -= 1
-            booked = max(reserved, db_counts.get(slot, 0))
-            if booked < (doctor.max_concurrent_per_slot or 1):
-                available.append(slot)
+        reserved_counts = await _redis_int_values(r, slot_keys)
+    for slot, key, reserved in zip(all_slots, slot_keys, reserved_counts):
+        if key == held_slot_key and reserved > 0:
+            reserved -= 1
+        booked = max(reserved, db_counts.get(slot, 0))
+        if booked < (doctor.max_concurrent_per_slot or 1):
+            available.append(slot)
 
     if not available:
         return _ret(f"{doctor.name} is fully booked on {booking_date.strftime('%d %B')}.")

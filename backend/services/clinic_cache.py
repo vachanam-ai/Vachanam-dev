@@ -66,7 +66,7 @@ def serialize_doctors(rows) -> list[dict]:
 async def _redis():
     from backend.redis_client import get_redis  # shared client (#305: never per-call)
 
-    return await get_redis()
+    return get_redis()
 
 
 async def get_doctors(branch_id: UUID | str) -> list[dict] | None:

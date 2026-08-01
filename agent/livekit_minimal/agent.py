@@ -111,6 +111,7 @@ from agent.livekit_minimal.turn_trace import (  # noqa: E402
 )
 from agent.services.tts_sanitizer import (  # noqa: E402
     internal_trace_match,
+    internal_trace_prefix_len,
     sanitize_for_tts,
     strip_model_control_tokens,
 )
@@ -557,7 +558,6 @@ async def _filter_soniox_expression_stream(text):
             yield pending
 
 
-_SPEECH_GUARD_CARRY = 24
 _SPEECH_BOUNDARY = re.compile(r"[.!?।\n]")
 
 
@@ -590,10 +590,14 @@ async def _guard_internal_speech_stream(text):
                 pending = pending[marker.start():]
                 dropping = True
                 continue
-            if len(pending) <= _SPEECH_GUARD_CARRY:
+            carry = internal_trace_prefix_len(pending)
+            if carry:
+                safe, pending = pending[:-carry], pending[-carry:]
+                if safe:
+                    yield safe
                 break
-            yield pending[:-_SPEECH_GUARD_CARRY]
-            pending = pending[-_SPEECH_GUARD_CARRY:]
+            yield pending
+            pending = ""
     pending = strip_model_control_tokens(pending)
     if pending and not dropping and not internal_trace_match(pending):
         yield pending
@@ -1536,7 +1540,7 @@ async def _load_shared_prompt_cache(key, instructions: str) -> bool:
     try:
         from backend.redis_client import get_redis
 
-        redis = await get_redis()
+        redis = get_redis()
         name = await redis.get(_prompt_cache_redis_key(key))
         if isinstance(name, bytes):
             name = name.decode()
@@ -1564,7 +1568,7 @@ async def _create_prompt_cache(key, instructions: str, tools) -> bool:
         try:
             from backend.redis_client import get_redis
 
-            lock_redis = await get_redis()
+            lock_redis = get_redis()
             lock_owned = bool(
                 await lock_redis.set(lock_key, lock_token, ex=120, nx=True)
             )
@@ -3027,7 +3031,7 @@ class VachanamAgent(Agent):
             try:
                 from backend.redis_client import get_redis
 
-                _r = await get_redis()
+                _r = get_redis()
                 await _r.set("lat:last_switch", json.dumps({
                     "total": round(_t_end - _t0, 2),
                     "db": round(_t_db - _t0, 2),
@@ -5096,7 +5100,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             try:
                 from backend.redis_client import get_redis
 
-                _r = await get_redis()
+                _r = get_redis()
                 await _r.set(
                     "lat:last_call",
                     json.dumps({
@@ -5128,6 +5132,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # competes with a fast caller's real request and can double generation.
         # Persistent clients + explicit prompt caching provide useful warmth.
         session = AgentSession(
+            # Two consecutive tools cover route->availability or hold->confirm.
+            # A third tool in one caller turn is almost always a model loop; bounding
+            # it prevents another full Gemini round trip without blocking valid flows.
+            max_tool_steps=2,
             # Per-clinic spoken-language fillers ride here so _say_lookup_filler
             # speaks the clinic's language (falls back to Telugu). filler_clips is
             # filled by cache_filler_clips at session start = instant playback.
@@ -5279,7 +5287,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 try:
                     from backend.redis_client import get_redis
 
-                    _r = await get_redis()
+                    _r = get_redis()
                     await _r.rpush("lat:turns", line)
                     await _r.expire("lat:turns", 7 * 86400)
                 except Exception:  # noqa: BLE001
