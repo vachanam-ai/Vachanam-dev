@@ -11,7 +11,7 @@ import hashlib
 import hmac
 import re
 import uuid as _uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import razorpay
 import structlog
