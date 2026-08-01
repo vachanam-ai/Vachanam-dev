@@ -11,7 +11,7 @@ const num = (v) => (v == null ? "—" : v);
 const COMP_LABELS = {
   agent: "Voice agent (Fly)",
   redis: "Redis (Upstash)",
-  database: "Database (Neon)",
+  database: "Database (Supabase)",
   api_memory: "API memory",
   calendar_queue: "Calendar queue",
 };
@@ -34,9 +34,9 @@ function HealthBoard() {
   const anyDown = Object.values(comps).some((c) => c.status === "down");
   return (
     <section className="card overflow-hidden">
-      <header className={`flex items-center justify-between border-b border-hairline px-5 py-3 ${anyDown ? "bg-red-50" : "bg-teal-mint/60"}`}>
+      <header className={`flex items-center justify-between border-b border-hairline px-5 py-3 ${anyDown ? "bg-danger/10" : "bg-pill"}`}>
         <h2 className="font-display text-lg font-semibold">Live health · watchdog</h2>
-        <span className={`rounded-full px-3 py-0.5 font-ui text-xs font-semibold ${anyDown ? "bg-red-600 text-white" : "bg-teal text-white"}`}>
+        <span className={`rounded-full px-3 py-0.5 font-ui text-xs font-semibold ${anyDown ? "bg-danger text-white" : "bg-accent text-accent-ink"}`}>
           {anyDown ? "ATTENTION" : "ALL SYSTEMS OK"}
         </span>
       </header>
@@ -44,7 +44,7 @@ function HealthBoard() {
         {Object.entries(COMP_LABELS).map(([key, label]) => {
           const c = comps[key];
           const st = c?.status ?? "unknown";
-          const color = st === "ok" ? "bg-emerald-500" : st === "down" ? "bg-red-500" : "bg-gray-300";
+          const color = st === "ok" ? "bg-good" : st === "down" ? "bg-danger/100" : "bg-line2";
           return (
             <div key={key} className="rounded-xl border border-hairline bg-surface px-3 py-2">
               <div className="flex items-center gap-2">
@@ -56,7 +56,7 @@ function HealthBoard() {
                 {c?.since ? ` · ${ago(c.since)}` : ""}
               </p>
               {c?.action && st === "down" && (
-                <p className="mt-1 font-ui text-[11px] font-medium text-amber-700">⚙ {c.action}</p>
+                <p className="mt-1 font-ui text-[11px] font-medium text-warn">⚙ {c.action}</p>
               )}
             </div>
           );
@@ -68,11 +68,11 @@ function HealthBoard() {
           <ul className="max-h-48 space-y-1 overflow-y-auto">
             {hb.incidents.map((i, idx) => (
               <li key={idx} className="font-ui text-xs text-slate">
-                <span className={i.action.endsWith("resolved") ? "text-emerald-700" : "text-red-700"}>
+                <span className={i.action.endsWith("resolved") ? "text-good" : "text-danger"}>
                   {i.action.replace("watchdog.", "").replace(".", " ")}
                 </span>
                 {" — "}{i.detail}
-                {i.action_taken && <span className="text-amber-700"> · action: {i.action_taken}</span>}
+                {i.action_taken && <span className="text-warn"> · action: {i.action_taken}</span>}
                 {i.at && <span className="text-slate/60"> · {new Date(i.at).toLocaleString()}</span>}
               </li>
             ))}
@@ -123,7 +123,7 @@ export default function Monitoring() {
           {[7, 30, 90].map((d) => (
             <button key={d} onClick={() => setDays(d)}
               className={`rounded-full px-3 py-1 font-ui text-xs font-medium transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] ${
-                days === d ? "bg-teal text-white" : "bg-surface text-slate hover:bg-teal-pale"
+                days === d ? "bg-accent text-accent-ink" : "bg-surface text-slate hover:bg-teal-pale"
               }`}>
               {d}d
             </button>
@@ -148,7 +148,7 @@ export default function Monitoring() {
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Issue tags — what the judge flags most */}
         <section className="card overflow-hidden">
-          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
             <h2 className="font-display text-lg font-semibold">What to improve</h2>
           </header>
           <div className="px-5 py-4 space-y-2">
@@ -173,7 +173,7 @@ export default function Monitoring() {
 
         {/* Daily call volume */}
         <section className="card overflow-hidden">
-          <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+          <header className="border-b border-hairline bg-pill px-5 py-3">
             <h2 className="font-display text-lg font-semibold">Daily calls</h2>
           </header>
           <div className="flex items-end gap-1 px-5 py-4" style={{ height: "140px" }}>
@@ -191,7 +191,7 @@ export default function Monitoring() {
 
       {/* Per-clinic rollup */}
       <section className="card overflow-hidden">
-        <header className="border-b border-hairline bg-teal-mint/60 px-5 py-3">
+        <header className="border-b border-hairline bg-pill px-5 py-3">
           <h2 className="font-display text-lg font-semibold">By clinic</h2>
         </header>
         <div className="overflow-x-auto">

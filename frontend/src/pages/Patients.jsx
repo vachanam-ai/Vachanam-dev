@@ -4,6 +4,7 @@ import { useAuth } from "../hooks/useAuth.jsx";
 import { toast } from "sonner";
 import { listPatients, editPatient, deletePatient, fetchUpcoming } from "../api/patients.js";
 import { fetchDoctors } from "../api/client.js";
+import PageHeader from "../components/PageHeader.jsx";
 
 export default function Patients() {
   const { branchId } = useAuth();
@@ -82,15 +83,13 @@ export default function Patients() {
     return <p className="font-ui text-slate">No branch linked to your account yet.</p>;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <p className="eyebrow">Records</p>
-        <h1 className="section-title text-2xl">Patient information</h1>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <PageHeader eyebrow="Records" title="Patient information"
+        sub={isLoading ? undefined : `${patients.length} ${patients.length === 1 ? "patient" : "patients"}`} />
 
       <UpcomingAppointments branchId={branchId} />
 
-      {err && <p className="font-ui text-sm text-red-600">{err}</p>}
+      {err && <p className="font-ui text-sm text-danger">{err}</p>}
 
       {/* Erase confirmation — permanent, so it interrupts */}
       {deleting && (
@@ -125,7 +124,7 @@ export default function Patients() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full font-ui text-sm">
-              <thead className="border-b border-hairline bg-teal-mint/60 text-left">
+              <thead className="border-b border-hairline bg-pill text-left">
                 <tr>
                   <th className="p-3 font-medium">Name</th>
                   <th className="p-3 font-medium">Age</th>
@@ -240,7 +239,7 @@ function UpcomingAppointments({ branchId }) {
 
   return (
     <section className="card overflow-hidden">
-      <header className="flex flex-wrap items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+      <header className="flex flex-wrap items-center gap-3 border-b border-hairline bg-pill px-4 py-3">
         <h2 className="font-display text-lg font-semibold">Upcoming appointments · next 15 days</h2>
         <span className="chip-muted">{appts.length}</span>
         <div className="ml-auto flex flex-wrap items-center gap-2">

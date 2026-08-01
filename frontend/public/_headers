@@ -3,3 +3,8 @@
 # scrapers stale pricing. Only vachanam.in should be indexed.
 https://:project.pages.dev/*
   X-Robots-Tag: noindex
+
+# Self-hosted fonts — long cache (stable filenames, versioned by content).
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+  Access-Control-Allow-Origin: *

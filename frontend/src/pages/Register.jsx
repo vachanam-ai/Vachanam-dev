@@ -230,14 +230,14 @@ export default function Register() {
                 onBlur={blur("password")} placeholder="Password" />
             </Field>
 
-            <div className="rounded-xl bg-teal-mint/40 p-3">
+            <div className="rounded-xl bg-pill p-3">
               <p className="font-ui text-xs font-medium text-slate">Your password must contain</p>
               <ul className="mt-2 space-y-1">
                 {checks.map((c) => (
                   <li key={c.label}
-                    className={`flex items-center gap-2 font-ui text-xs ${c.ok ? "text-teal" : "text-slate/70"}`}>
+                    className={`flex items-center gap-2 font-ui text-xs ${c.ok ? "text-ink" : "text-slate/70"}`}>
                     <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${
-                      c.ok ? "bg-teal text-white" : "bg-hairline text-transparent"
+                      c.ok ? "bg-good text-white" : "bg-line2 text-transparent"
                     }`}>✓</span>
                     {c.label}
                   </li>
@@ -251,7 +251,7 @@ export default function Register() {
                 {Object.entries(PLANS).map(([k, v]) => (
                   <button type="button" key={k} onClick={() => setForm((f) => ({ ...f, plan: k }))}
                     className={`flex-1 rounded-xl border px-3 py-2 font-ui text-sm font-medium transition ${
-                      form.plan === k ? "border-teal bg-teal-mint" : "border-hairline bg-surface hover:border-teal-light/60"
+                      form.plan === k ? "border-accent bg-pill text-ink" : "border-hairline bg-surface text-ink-soft hover:border-line2"
                     }`}>
                     {v}
                   </button>

@@ -13,6 +13,7 @@ import {
   markMessagesRead
 } from "../api/treatment.js";
 import { useAuth } from "../hooks/useAuth.jsx";
+import PageHeader from "../components/PageHeader.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { localDateInputValue } from "../utils/date.js";
 
@@ -90,12 +91,12 @@ function ThreadRow({ item }) {
   if (item.task_type === "patient_message") {
     return (
       <div className="flex flex-col items-end gap-1 px-4 py-3">
-        <div className="max-w-[85%] rounded-2xl rounded-tr-sm border border-amber-300 bg-amber-50 px-4 py-2">
-          <p className="font-ui text-sm text-amber-900">{item.response}</p>
+        <div className="max-w-[85%] rounded-2xl rounded-tr-sm border border-warn/30 bg-warn/10 px-4 py-2">
+          <p className="font-ui text-sm text-ink">{item.response}</p>
         </div>
-        <span className="flex items-center gap-2 pr-1 font-ui text-[11px] uppercase tracking-wide text-amber-700">
+        <span className="flex items-center gap-2 pr-1 font-ui text-[11px] uppercase tracking-wide text-warn">
           message from patient
-          {item.urgent && <span className="chip-token bg-red-100 text-red-800">urgent</span>}
+          {item.urgent && <span className="chip-danger">urgent</span>}
           <span className="normal-case tracking-normal text-slate">{waTime(item.created_at)}</span>
         </span>
       </div>
@@ -105,7 +106,7 @@ function ThreadRow({ item }) {
     <div className="space-y-2 px-4 py-3">
       {/* Clinic / agent message — left aligned */}
       <div className="flex flex-col items-start gap-1">
-        <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-teal-mint/60 px-4 py-2">
+        <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-pill px-4 py-2">
           <p className="font-ui text-sm">{item.message}</p>
         </div>
         <div className="flex items-center gap-2 pl-1">
@@ -123,10 +124,10 @@ function ThreadRow({ item }) {
       {/* Patient reply — right aligned, visually distinct */}
       {hasReply && (
         <div className="flex flex-col items-end gap-1">
-          <div className="max-w-[85%] rounded-2xl rounded-tr-sm border border-amber-300 bg-amber-50 px-4 py-2">
-            <p className="font-ui text-sm text-amber-900">{item.response}</p>
+          <div className="max-w-[85%] rounded-2xl rounded-tr-sm border border-warn/30 bg-warn/10 px-4 py-2">
+            <p className="font-ui text-sm text-ink">{item.response}</p>
           </div>
-          <span className="flex items-center gap-2 pr-1 font-ui text-[11px] uppercase tracking-wide text-amber-700">
+          <span className="flex items-center gap-2 pr-1 font-ui text-[11px] uppercase tracking-wide text-warn">
             patient reply
             <span className="normal-case tracking-normal text-slate">{waTime(item.updated_at)}</span>
           </span>
@@ -376,12 +377,9 @@ export default function Treatments() {
 
   return (
     <div ref={pageRef} className="mx-auto max-w-3xl space-y-6">
-      <div data-reveal>
-        <p className="eyebrow">Care</p>
-        <h1 className="section-title text-2xl">Treatment progress</h1>
-      </div>
+      <PageHeader eyebrow="Care" title="Treatment progress" />
 
-      <div data-reveal className="card space-y-3 p-6">
+      <div data-reveal className="card space-y-3 p-5">
         <label className="label">Patients under treatment</label>
         {/* Search + doctor filter: a clinic can have 100+ patients split across
             doctors — a bare dropdown doesn't scale (Vinay 2026-07-03). */}
@@ -415,7 +413,7 @@ export default function Treatments() {
         ) : (
           <>
           {selected.size > 0 && (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-teal-mint/50 px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-hairline bg-pill px-3 py-2">
               <span className="font-ui text-sm">
                 {selected.size} selected
               </span>
@@ -450,7 +448,7 @@ export default function Treatments() {
               const isOpen = p.patient_id === patientId && p.doctor_id === threadDoctorId;
               const hasUnread = (p.unread_messages || 0) > 0;
               return (
-                <li key={key} className={`flex items-center ${isOpen ? "bg-teal-mint/60" : hasUnread ? "bg-amber-50 hover:bg-amber-100/70" : "hover:bg-teal-mint/30"} transition-colors`}>
+                <li key={key} className={`flex items-center transition-colors ${isOpen ? "pick" : hasUnread ? "bg-warn/10 hover:bg-warn/20" : "hover:bg-pill/60"}`}>
                   {/* mass-select checkbox — separate hit target from the row */}
                   <label className="grid h-12 w-11 shrink-0 cursor-pointer place-items-center">
                     <input
@@ -479,7 +477,7 @@ export default function Treatments() {
                       </span>
                       <span className="block truncate font-ui text-sm text-slate">
                         {hasUnread ? (
-                          <span className="font-medium text-amber-800">
+                          <span className="font-medium text-warn">
                             New message from patient
                           </span>
                         ) : (
@@ -492,7 +490,7 @@ export default function Treatments() {
                     </span>
                     {hasUnread && (
                       <span
-                        className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-teal px-1.5 font-ui text-xs font-semibold text-white"
+                        className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-accent px-1.5 font-ui text-xs font-semibold text-accent-ink"
                         aria-label={`${p.unread_messages} unread message${p.unread_messages === 1 ? "" : "s"}`}
                       >
                         {p.unread_messages}
@@ -514,7 +512,7 @@ export default function Treatments() {
         <>
           {/* Timeline */}
           <section data-reveal className="card overflow-hidden">
-            <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+            <header className="flex items-center gap-3 border-b border-hairline bg-pill px-4 py-3">
               <h2 className="font-display text-lg font-semibold">Visit history</h2>
               {selectedPatient?.doctor_name && (
                 <span className="font-ui text-sm text-slate">
@@ -577,10 +575,10 @@ export default function Treatments() {
 
           {/* Follow-up thread */}
           <section data-reveal className="card overflow-hidden">
-            <header className="flex items-center gap-3 border-b border-hairline bg-teal-mint/60 px-4 py-3">
+            <header className="flex items-center gap-3 border-b border-hairline bg-pill px-4 py-3">
               <h2 className="font-display text-lg font-semibold">Follow-up thread</h2>
               {needsAttention && (
-                <span className="chip-token bg-amber-100 text-amber-900">needs attention</span>
+                <span className="tag tag-warn">needs attention</span>
               )}
             </header>
             {followupsLoading ? (
@@ -686,57 +684,59 @@ export default function Treatments() {
               </div>
             </div>
 
-            <div>
-              <label className="label" htmlFor="steps">Steps performed</label>
-              <textarea
-                id="steps"
-                className="field"
-                rows={2}
-                value={stepsPerformed}
-                onChange={(e) => setStepsPerformed(e.target.value)}
-                placeholder="scaling, root canal session 1…"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label" htmlFor="steps">Steps performed</label>
+                <textarea
+                  id="steps"
+                  className="field"
+                  rows={2}
+                  value={stepsPerformed}
+                  onChange={(e) => setStepsPerformed(e.target.value)}
+                  placeholder="scaling, root canal session 1…"
+                />
+              </div>
+              <div>
+                <label className="label" htmlFor="next">Next steps</label>
+                <textarea
+                  id="next"
+                  className="field"
+                  rows={2}
+                  value={nextSteps}
+                  onChange={(e) => setNextSteps(e.target.value)}
+                  placeholder="crown fitting next visit…"
+                />
+              </div>
             </div>
 
-            <div>
-              <label className="label" htmlFor="next">Next steps</label>
-              <textarea
-                id="next"
-                className="field"
-                rows={2}
-                value={nextSteps}
-                onChange={(e) => setNextSteps(e.target.value)}
-                placeholder="crown fitting next visit…"
-              />
-            </div>
-
-            <div>
-              <label className="label" htmlFor="followup-q">
-                Question to ask on the follow-up call (optional)
-              </label>
-              <textarea
-                id="followup-q"
-                className="field"
-                rows={2}
-                value={followupQuestion}
-                onChange={(e) => setFollowupQuestion(e.target.value)}
-                placeholder="e.g. Is the pain reducing? Any swelling?"
-              />
-              <p className="mt-1 font-ui text-xs text-slate">
-                The agent asks this on the next-visit reminder call, then helps them book.
-              </p>
-            </div>
-
-            <div>
-              <label className="label" htmlFor="next-date">Next reporting date (optional)</label>
-              <input
-                id="next-date"
-                type="date"
-                className="field w-full"
-                value={nextReportingDate}
-                onChange={(e) => setNextReportingDate(e.target.value)}
-                disabled={isFinal}
-              />
+            <div className="grid items-start gap-4 sm:grid-cols-2">
+              <div>
+                <label className="label" htmlFor="followup-q">
+                  Question to ask on the follow-up call (optional)
+                </label>
+                <textarea
+                  id="followup-q"
+                  className="field"
+                  rows={2}
+                  value={followupQuestion}
+                  onChange={(e) => setFollowupQuestion(e.target.value)}
+                  placeholder="e.g. Is the pain reducing? Any swelling?"
+                />
+                <p className="mt-1 font-ui text-xs text-slate">
+                  The agent asks this on the next-visit reminder call, then helps them book.
+                </p>
+              </div>
+              <div>
+                <label className="label" htmlFor="next-date">Next reporting date (optional)</label>
+                <input
+                  id="next-date"
+                  type="date"
+                  className="field w-full"
+                  value={nextReportingDate}
+                  onChange={(e) => setNextReportingDate(e.target.value)}
+                  disabled={isFinal}
+                />
+              </div>
             </div>
 
             <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-hairline px-4 font-ui">

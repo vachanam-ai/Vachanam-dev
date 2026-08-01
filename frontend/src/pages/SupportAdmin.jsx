@@ -47,7 +47,7 @@ function Thread({ ticket, macros, onChanged }) {
         {msgs.map((m, i) => (
           <div key={i} className={m.sender === "staff" ? "text-right" : "text-left"}>
             <span className={"inline-block max-w-[85%] rounded-2xl px-3 py-2 text-sm " +
-              (m.sender === "staff" ? "bg-teal text-white" :
+              (m.sender === "staff" ? "bg-accent text-accent-ink" :
                m.sender === "bot" ? "bg-teal-pale text-teal-deep" : "bg-teal-mint text-ink")}>
               {m.body}
             </span>
@@ -147,7 +147,7 @@ export default function SupportAdmin() {
             {["inbox", "leads"].map((k) => (
               <button key={k}
                 className={"rounded-lg px-3 py-1 text-sm font-medium capitalize transition " +
-                  (tab === k ? "bg-teal text-white" : "text-ink-soft hover:text-ink")}
+                  (tab === k ? "bg-accent text-accent-ink" : "text-ink-soft hover:text-ink")}
                 onClick={() => setTab(k)}>
                 {k === "leads" ? "🔥 Leads" : "Inbox"}
               </button>

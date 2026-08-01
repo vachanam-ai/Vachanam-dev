@@ -67,9 +67,10 @@ function checklist(data, calOk) {
   ];
 }
 
-function Section({ id, title, sub, done, children }) {
+function Section({ id, title, sub, done, tone, children }) {
   return (
-    <section id={id} className="card scroll-mt-24 p-6">
+    <section id={id}
+      className={`card scroll-mt-24 p-6 ${tone === "cream" ? "!bg-panel border-line2" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-semibold">{title}</h2>
@@ -88,7 +89,7 @@ function Section({ id, title, sub, done, children }) {
 
 function InfoBox({ title, children }) {
   return (
-    <div className="mt-4 rounded-xl border border-teal-pale bg-teal-mint/70 p-4 font-ui text-sm">
+    <div className="mt-4 rounded-xl border border-teal-pale bg-pill p-4 font-ui text-sm">
       {title && <p className="font-medium">{title}</p>}
       <div className="mt-1 space-y-1 text-ink-soft">{children}</div>
     </div>
@@ -205,7 +206,7 @@ export default function Settings() {
           name: "Vachanam",
           description: `${PLAN_LABELS[planKey]} subscription`,
           prefill: { email: user?.email ?? "" },
-          theme: { color: "#0f766e" },
+          theme: { color: "#1b1b1a" },
           modal: { ondismiss: () => reject(new Error("Payment window closed")) },
           handler: async (resp) => {
             try {
@@ -354,7 +355,7 @@ export default function Settings() {
                   ? "border-teal-pale bg-teal-mint text-teal-deep"
                   : "border-hairline bg-surface text-slate hover:border-teal-light/50"
               }`}>
-              <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${s.done ? "bg-teal text-white" : "bg-slate-light/30"}`}>
+              <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${s.done ? "bg-accent text-accent-ink" : "bg-slate-light/30"}`}>
                 {s.done ? "✓" : i + 1}
               </span>
               {s.label}
@@ -363,7 +364,8 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Plan & billing — anniversary cycles: your 30 days start the day you pay. */}
+      {/* Plan & billing + Clinic details — side by side */}
+      <div className="grid gap-6 lg:grid-cols-2">
       <Section id="plan" title="Plan & billing"
         sub="Your billing cycle starts the day you pay and runs 30 days. Plan switches take effect from your next cycle, so you never lose minutes you've already paid for.">
         <div className="flex flex-wrap items-center gap-3">
@@ -496,8 +498,10 @@ export default function Settings() {
           Save details
         </button>
       </Section>
+      </div>
 
-      {/* 2 — Doctors */}
+      {/* Doctors + Google Calendar — side by side */}
+      <div className="grid gap-6 lg:grid-cols-2">
       <Section id="doctors" title="2 · Doctors" done={steps[1].done}
         sub={`${data?.doctors_count ?? 0} configured. The AI books patients against these profiles.`}>
         <InfoBox title="Two booking styles — pick per doctor:">
@@ -532,8 +536,10 @@ export default function Settings() {
           <p>3. Permission: <strong>"Make changes to events"</strong> → Send → come back and press <em>Test connection</em>.</p>
         </InfoBox>
       </Section>
+      </div>
 
-      {/* 4 — Phone number */}
+      {/* Phone · Agent language · Agent voice — cream row, side by side */}
+      <div className="grid gap-6 lg:grid-cols-3">
       <Section id="phone" title="4 · Phone number (AI line)" done={steps[3].done}
         sub="The number your AI answers. Your existing clinic number forwards to it — patients notice nothing.">
         <div className="flex flex-wrap items-end gap-3">
@@ -547,20 +553,6 @@ export default function Settings() {
             Save & activate
           </button>
         </div>
-        <InfoBox title="How to get a number (choose one):">
-          <p><strong>We provision it (recommended):</strong>{" "}
-            <a className="text-teal underline underline-offset-2"
-              href={`mailto:hello@vachanam.in?subject=Number%20request%20—%20${encodeURIComponent(data?.name ?? "clinic")}`}>
-              request a number
-            </a>{" "}
-            — we buy a local number on our telephony partner and send it to you (1 business day).
-          </p>
-          <p><strong>You buy it:</strong> purchase a DID on Vobiz (console.vobiz.ai), point it at our SIP endpoint
-            (we send exact settings), then paste the number above.</p>
-          <p className="pt-1"><strong>After saving:</strong> we wire it to the voice system automatically — you'll
-            see "number is wired and live". Then set call forwarding from your clinic phone to this number
-            (*21*number# on most Indian carriers, or ask your operator for "unconditional call forwarding").</p>
-        </InfoBox>
       </Section>
 
       {/* WhatsApp is exposed only by the deployment feature flag. */}
@@ -630,13 +622,17 @@ export default function Settings() {
           </p>
         )}
       </Section>
+      </div>
 
+      {/* Clinic FAQ + Team — side by side, compact */}
+      <div className="grid gap-6 lg:grid-cols-2">
       {/* Clinic FAQ — the agent answers these on calls */}
       <Section id="faq" title="Clinic FAQ"
         sub="Answers your AI agent gives when callers ask about fees, timings, parking, insurance, reports and more. Leave a row blank to skip it.">
         <div className="space-y-3">
+          <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
           {(faqRows ?? []).map((row, i) => (
-            <div key={i} className="rounded-xl border border-hairline p-3">
+            <div key={i} className="rounded-xl border border-hairline p-2.5">
               <div className="flex items-start justify-between gap-2">
                 <input className="field flex-1 !py-1.5 text-sm font-medium"
                   value={row.q}
@@ -651,7 +647,7 @@ export default function Settings() {
                   Remove
                 </button>
               </div>
-              <textarea className="field mt-2 min-h-[60px] text-sm"
+              <textarea className="field mt-1.5 min-h-[40px] text-sm" rows={2}
                 value={row.a}
                 placeholder="Your clinic's answer (spoken by the agent)…"
                 onChange={(e) => {
@@ -661,6 +657,7 @@ export default function Settings() {
                 }} />
             </div>
           ))}
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row">
             <button type="button" className="btn-ghost flex-1 min-h-[44px]"
               onClick={() => setFaqRows([...(faqRows ?? []), { q: "", a: "" }])}>
@@ -679,7 +676,7 @@ export default function Settings() {
                 The agent told them the clinic will get back after checking with the doctor.
                 Add an answer above so it's answered on the next call.
               </p>
-              <ul className="mt-2 space-y-1">
+              <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto pr-1">
                 {faqQuery.data.asked.map((a, i) => (
                   <li key={i} className="flex items-center justify-between gap-2">
                     <span className="font-ui text-sm">{a.question}</span>
@@ -777,6 +774,8 @@ export default function Settings() {
         </InfoBox>
       </Section>
 
+      </div>
+
       {/* DPDP erasure (Vinay 2026-07-17): the fiduciary can close the account
           and erase everything — patients, bookings, notes, logins, billing. */}
       <Section id="danger" title="Delete clinic"
@@ -789,7 +788,7 @@ export default function Settings() {
           </div>
           <div className="flex items-end">
             <button type="button"
-              className="w-full rounded-xl border border-danger px-4 py-2 font-ui text-sm font-semibold text-danger transition hover:bg-danger hover:text-white disabled:opacity-50"
+              className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
               disabled={nukeClinic.isPending || !delConfirm.trim()}
               onClick={() => {
                 if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))

@@ -43,9 +43,9 @@ export default class ErrorBoundary extends React.Component {
           alignItems: "center",
           justifyContent: "center",
           padding: "1.5rem",
-          fontFamily: "Outfit, sans-serif",
-          background: "#F0FAFA",
-          color: "#1A2E2E",
+          fontFamily: "General Sans, sans-serif",
+          background: "#f7f7f5",
+          color: "#1b1b1a",
         }}
       >
         <div
@@ -54,7 +54,7 @@ export default class ErrorBoundary extends React.Component {
             width: "100%",
             textAlign: "center",
             background: "#FFFFFF",
-            border: "1px solid #D0E4E4",
+            border: "1px solid #ededeb",
             borderRadius: "16px",
             padding: "2rem 1.75rem",
             boxShadow: "0 10px 30px rgba(26, 46, 46, 0.06)",
@@ -64,18 +64,18 @@ export default class ErrorBoundary extends React.Component {
           <h1 style={{ fontSize: "1.25rem", margin: "0 0 0.5rem", fontWeight: 600 }}>
             Something went wrong
           </h1>
-          <p style={{ fontSize: "0.95rem", lineHeight: 1.5, color: "#4A6060", margin: "0 0 1.5rem" }}>
+          <p style={{ fontSize: "0.95rem", lineHeight: 1.5, color: "#6b6b64", margin: "0 0 1.5rem" }}>
             We hit an unexpected hiccup. Your data is safe. Please reload — if it
             keeps happening, reach us at hello@vachanam.in.
           </p>
           <button
             onClick={this.handleReload}
             style={{
-              fontFamily: "Outfit, sans-serif",
+              fontFamily: "General Sans, sans-serif",
               fontSize: "0.95rem",
               fontWeight: 600,
               color: "#FFFFFF",
-              background: "#008F8F",
+              background: "#1b1b1a",
               border: "none",
               borderRadius: "10px",
               padding: "0.7rem 1.5rem",

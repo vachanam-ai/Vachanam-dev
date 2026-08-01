@@ -1,5 +1,9 @@
 import gsap from "gsap";
 
+const reduced = () =>
+  typeof window !== "undefined" &&
+  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
 /** Staggered entrance for everything marked [data-reveal] inside `scope`.
  *  One orchestrated load beats scattered micro-motion.
  *  #355: animated nodes get [data-revealed] so (a) re-running only reveals
@@ -10,6 +14,7 @@ export function revealStagger(scope) {
   const targets = scope?.querySelectorAll?.("[data-reveal]:not([data-revealed])");
   if (!targets?.length) return;
   targets.forEach((el) => el.setAttribute("data-revealed", ""));
+  if (reduced()) { gsap.set(targets, { opacity: 1, y: 0 }); return; }
   gsap.fromTo(
     targets,
     { opacity: 0, y: 14 },
@@ -22,6 +27,7 @@ export function revealStagger(scope) {
 export function revealNow(el) {
   if (!el || el.hasAttribute("data-revealed")) return;
   el.setAttribute("data-revealed", "");
+  if (reduced()) { gsap.set(el, { opacity: 1, y: 0 }); return; }
   gsap.fromTo(
     el,
     { opacity: 0, y: 14 },
@@ -32,6 +38,7 @@ export function revealNow(el) {
 /** Count a numeral element up to `value` (Spectral tabular nums hold width). */
 export function countUp(el, value, { duration = 0.9, suffix = "" } = {}) {
   if (!el) return;
+  if (reduced()) { el.textContent = Math.round(value).toString() + suffix; return; }
   const obj = { v: 0 };
   gsap.to(obj, {
     v: value,
@@ -43,12 +50,13 @@ export function countUp(el, value, { duration = 0.9, suffix = "" } = {}) {
   });
 }
 
-/** Soft press-confirm pulse on a card row after an optimistic action. */
+/** Soft press-confirm pulse on a card row after an optimistic action.
+ *  Sage-band flash (the design's one warm note), fades to transparent. */
 export function pulseRow(el) {
-  if (!el) return;
+  if (!el || reduced()) return;
   gsap.fromTo(
     el,
-    { backgroundColor: "rgba(224,242,241,0.9)" },
-    { backgroundColor: "rgba(255,255,255,0)", duration: 0.8, ease: "power2.out", clearProps: "backgroundColor" }
+    { backgroundColor: "rgba(236,238,225,0.9)" },
+    { backgroundColor: "rgba(236,238,225,0)", duration: 0.8, ease: "power2.out", clearProps: "backgroundColor" }
   );
 }
