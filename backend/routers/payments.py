@@ -30,7 +30,12 @@ from backend.middleware.rate_limit import (
     verify_payment_limit,
 )
 from backend.models.schema import Organization
-from backend.services.billing_math import PLANS, effective_price, subscription_order_breakdown
+from backend.services.billing_math import (
+    PLANS,
+    add_month,
+    effective_price,
+    subscription_order_breakdown,
+)
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -594,7 +599,7 @@ async def activate_subscription(
         BillingCycle(
             org_id=org.id,
             cycle_start=start,
-            cycle_end=start + timedelta(days=30),
+            cycle_end=add_month(start),
             plan=chosen_plan,
             # #391: record the base actually charged (launch-offer aware).
             base_amount=effective_price(chosen_plan, org.subscription_started_at)[0],
@@ -623,7 +628,7 @@ async def activate_subscription(
         await send_payment_invoice(
             to_email=org.owner_email or "", org_name=org.name,
             org_gstin=getattr(org, "gstin", None), plan=chosen_plan,
-            cycle_start=start, cycle_end=start + timedelta(days=30),
+            cycle_start=start, cycle_end=add_month(start),
             bd=bd, payment_id=payment_id,
         )
     except Exception as e:  # noqa: BLE001

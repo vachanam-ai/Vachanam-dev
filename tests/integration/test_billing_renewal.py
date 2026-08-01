@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from backend.models.schema import BillingCycle, Branch, CallLog, Organization
 from backend.routers.payments import activate_subscription
+from backend.services.billing_math import add_month
 
 pytestmark = pytest.mark.asyncio
 
@@ -47,7 +48,10 @@ async def test_first_activation_starts_cycle_today(db):
     assert res == "activated"
     (c,) = await _cycles(db, org)
     assert c.cycle_start == datetime.now(timezone.utc).date()
-    assert c.cycle_end == datetime.now(timezone.utc).date() + timedelta(days=30)
+    # A cycle runs payment-day -> SAME day next month, not a flat 30 days
+    # (Vinay 2026-08-01). 30-day cycles slid the billing day earlier every
+    # month and stopped matching the date the clinic actually paid.
+    assert c.cycle_end == add_month(datetime.now(timezone.utc).date())
     await db.refresh(org)
     assert org.status == "active"
 

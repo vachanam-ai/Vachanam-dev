@@ -448,6 +448,35 @@ def _silence_action(elapsed: float, prompts_sent: int, closing: bool = False) ->
 _TRAILING_DIGITS = re.compile(r"\d*$")
 
 
+async def _spoken_names_stream(text, sub, hold):
+    """Swap Latin doctor names/roles for their cached native-script spelling
+    just before synthesis (Vinay 2026-08-01: names came out in an American
+    accent mid-Telugu sentence, because Soniox voices text by SCRIPT).
+
+    Only the audio changes — the LLM and every tool still see the original
+    Latin name, so doctor matching and tool arguments are untouched.
+
+    A name can straddle two LLM chunks ("Dr. Srin" + "ivas"), so `hold` keeps
+    back exactly the trailing text that could still grow into a name and
+    everything else is emitted immediately. The carry is bounded by the longest
+    name, so first audio is never delayed by more than that and a long reply
+    cannot accumulate unbounded text. Text is only ever rewritten, never
+    dropped or duplicated."""
+    if sub is None or hold is None:
+        async for chunk in text:
+            yield chunk
+        return
+    carry = ""
+    async for chunk in text:
+        buf = carry + chunk
+        keep = hold(buf)
+        emit, carry = (buf[: len(buf) - keep], buf[len(buf) - keep:]) if keep else (buf, "")
+        if emit:
+            yield sub(emit)
+    if carry:
+        yield sub(carry)
+
+
 async def _space_digits_stream(text):
     """Chunk-stitch phone numbers, leaving times and small numbers natural."""
     from agent.services.tts_sanitizer import spoken_phone_digits
@@ -1795,6 +1824,24 @@ class VachanamAgent(Agent):
         # current turn's transcript (dedicated session), consumed by route_to_doctor.
         self._prefetch_route: asyncio.Task | None = None
         self._prefetch_complaint = ""
+        # Cached native-script pronunciations, applied at the TTS boundary only.
+        # Empty until primed, and staying empty simply speaks the Latin name.
+        self._name_sub = None
+        self._name_hold = None
+
+    def set_pronunciations(self, mapping: dict) -> None:
+        """Install the clinic+language pronunciation map (see
+        agent/services/pronunciation.py). Safe to call with {} — that disables
+        the substitution and speaks names exactly as stored."""
+        try:
+            from agent.services.pronunciation import build_replacer
+
+            self._name_sub, self._name_hold = build_replacer(mapping or {})
+            if self._name_sub is not None:
+                logger.info("pronunciations_installed entries=%d", len(mapping))
+        except Exception as e:  # noqa: BLE001 — pronunciation is never fatal
+            logger.warning("pronunciation_install_failed: %s", str(e)[:140])
+            self._name_sub, self._name_hold = None, None
 
     async def tts_node(self, text, model_settings):
         """Space out LONG digit runs (5+) before they reach TTS. A joined
@@ -1823,6 +1870,11 @@ class VachanamAgent(Agent):
 
         safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
         expressive_text = _filter_soniox_expression_stream(safe_text)
+        # Native-script doctor names/roles (cached per clinic+language) so the
+        # voice does not flip to an English accent mid-sentence.
+        expressive_text = _spoken_names_stream(
+            expressive_text, self._name_sub, self._name_hold
+        )
         _first = True
         async for frame in super().tts_node(
             _space_digits_stream(expressive_text), model_settings
@@ -4175,8 +4227,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         try:
             from zoneinfo import ZoneInfo as _ZoneInfo
 
-            from backend.models.schema import CallLog, Organization
-            from backend.services.billing_math import call_blocked
+            from backend.models.schema import BillingCycle, CallLog, Organization
+            from backend.services.billing_math import add_month, call_blocked, cycle_window
 
             async with AsyncSessionLocal() as _s:
                 _org = (
@@ -4189,15 +4241,52 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     _plan = _org.plan or "clinic"
                     _used_min = 0.0
                     if getattr(_org, "hard_block_on_exhaust", False):
-                        # Month boundary in the BRANCH timezone, not server UTC.
+                        # Cycle boundary in the BRANCH timezone, not server UTC.
                         try:
                             _now_b = datetime_cls.now(
                                 _ZoneInfo(_b.timezone or "Asia/Kolkata")
                             )
                         except Exception:
                             _now_b = datetime_cls.now(_ZoneInfo("Asia/Kolkata"))
-                        _month_start = _now_b.replace(
-                            day=1, hour=0, minute=0, second=0, microsecond=0
+                        # Meter over the org's BILLING CYCLE, never the calendar
+                        # month (Vinay 2026-08-01: minutes were resetting on the
+                        # 1st, so a clinic that paid on the 20th got a free
+                        # bucket 11 days later). Priority: the invoiced
+                        # BillingCycle row covering today, then the subscription
+                        # anniversary, then — only if the org has neither — the
+                        # calendar month, so the gate can still meter something.
+                        _today_b = _now_b.date()
+                        _cycle = (
+                            await _s.execute(
+                                select(BillingCycle)
+                                .where(
+                                    and_(
+                                        BillingCycle.org_id == _org.id,
+                                        BillingCycle.cycle_start <= _today_b,
+                                        BillingCycle.cycle_end > _today_b,
+                                    )
+                                )
+                                .order_by(BillingCycle.cycle_start.desc())
+                                .limit(1)
+                            )
+                        ).scalar_one_or_none()
+                        if _cycle is not None:
+                            _win_start, _win_end = _cycle.cycle_start, _cycle.cycle_end
+                        elif getattr(_org, "subscription_started_at", None):
+                            _win_start, _win_end = cycle_window(
+                                _org.subscription_started_at.date(), _today_b
+                            )
+                        else:
+                            _win_start = _today_b.replace(day=1)
+                            _win_end = add_month(_win_start)
+                        # Compare against branch-local wall clock, matching the
+                        # timezone the window itself was derived in.
+                        _tzinfo = _now_b.tzinfo
+                        _start_dt = datetime_cls.combine(
+                            _win_start, time_cls.min, tzinfo=_tzinfo
+                        )
+                        _end_dt = datetime_cls.combine(
+                            _win_end, time_cls.min, tzinfo=_tzinfo
                         )
                         from sqlalchemy import func as _func
 
@@ -4213,7 +4302,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 ).where(
                                     and_(
                                         CallLog.branch_id.in_(_org_branch_ids),
-                                        CallLog.started_at >= _month_start,
+                                        CallLog.started_at >= _start_dt,
+                                        CallLog.started_at < _end_dt,
                                     )
                                 )
                             )
@@ -4896,6 +4986,25 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         switched_key, switched_instructions, switched_agent.tools
                     )
                 )
+            # The switched language needs its OWN script for the same names.
+            # This factory is sync, so install the map in the background — the
+            # switch acknowledgement covers the (usually Redis-hit) lookup, and
+            # until it lands the names simply speak as stored.
+            async def _install_switched_pronunciations() -> None:
+                try:
+                    from agent.services.pronunciation import spoken_map as _sm
+
+                    switched_agent.set_pronunciations(
+                        await _sm(
+                            branch.id,
+                            lc,
+                            [(d.name, d.specialization) for d in doctor_contexts],
+                        )
+                    )
+                except Exception as _e:  # noqa: BLE001 — never break a switch
+                    logger.warning("pronunciation_switch_failed: %s", str(_e)[:140])
+
+            asyncio.create_task(_install_switched_pronunciations())
             return switched_agent
 
         # The instant greeting bypasses the session pipeline — seed it into the
@@ -4930,6 +5039,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             agent_factory=_agent_for_lang,
             llm=_cached_llm,
         )
+        # Native-script doctor names/roles for THIS clinic + language. Cached in
+        # Redis (agent/services/pronunciation.py), so this is a cache read on
+        # every call after the first; a miss/failure just speaks Latin names.
+        try:
+            from agent.services.pronunciation import spoken_map as _spoken_map
+
+            vachanam_agent.set_pronunciations(
+                await _spoken_map(
+                    branch.id,
+                    lang_code,
+                    [(d.name, d.specialization) for d in doctor_contexts],
+                )
+            )
+        except Exception as _e:  # noqa: BLE001 — never block answering a call
+            logger.warning("pronunciation_setup_failed: %s", str(_e)[:140])
         if _cached_llm is not None:
             logger.info("llm_prompt_cache_hit key=%s", _cache_key)
         elif _cache_key not in _PROMPT_CACHE_PENDING:

@@ -7,7 +7,7 @@ no I/O — unit-tested in tests/unit/test_billing_math.py.
 All amounts in WHOLE RUPEES (floats only where overage rates demand it).
 """
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 
 @dataclass(frozen=True)
@@ -290,6 +290,49 @@ def next_cycle_start(today: date) -> date:
     if today.month == 12:
         return date(today.year + 1, 1, 1)
     return date(today.year, today.month + 1, 1)
+
+
+def add_month(anchor: date, months: int = 1) -> date:
+    """``anchor`` shifted by whole months, keeping the SAME day-of-month.
+
+    Vinay 2026-08-01: a clinic's included minutes must run from the day they
+    paid to that same day next month — not to a fixed 30 days (which drifts a
+    little every cycle: Jan 31 + 30d lands on Mar 2) and not to the 1st.
+
+    Days that do not exist in the target month clamp to that month's last day,
+    so a 31st anchor bills on Feb 28/29 and then returns to the 31st — the
+    anchor is never mutated, so the clamp cannot walk the date backwards month
+    after month.
+    """
+    total = anchor.month - 1 + months
+    year = anchor.year + total // 12
+    month = total % 12 + 1
+    if month == 12:
+        last_day = 31
+    else:
+        last_day = (date(year, month + 1, 1) - timedelta(days=1)).day
+    return date(year, month, min(anchor.day, last_day))
+
+
+def cycle_window(anchor: date, today: date) -> tuple[date, date]:
+    """The billing window containing ``today`` for a subscription that started
+    on ``anchor``: ``[start, end)``, start inclusive, end exclusive.
+
+    Metering must count minutes over THIS window. Counting over the calendar
+    month reset every clinic's bucket on the 1st regardless of when they paid
+    (Vinay 2026-08-01), so a clinic that paid on the 20th silently got a fresh
+    bucket 11 days later.
+    """
+    if today < anchor:
+        # Pre-start (clock skew, or a future-dated anchor): the cycle that
+        # would END at the anchor.
+        return add_month(anchor, -1), anchor
+    months = (today.year - anchor.year) * 12 + (today.month - anchor.month)
+    start = add_month(anchor, months)
+    if start > today:  # day-of-month not reached yet this month
+        months -= 1
+        start = add_month(anchor, months)
+    return start, add_month(anchor, months + 1)
 
 
 def minutes_exhausted(
