@@ -318,8 +318,12 @@ Almost entirely Meta console work plus a thin code layer. No new UI page.
   Business app installed (coexistence); webhook callback + verify token;
   submit the four existing templates for approval.
 - Code: per-branch **token resolver** (returns the platform token while
-  `wa_token_enc` is NULL — the seam that makes MVP6 a flag flip); link a branch
-  by pasting its `phone_number_id` into Settings; connection status chip.
+  `wa_token_enc` is NULL — the seam that makes MVP6 a flag flip); a WhatsApp-only
+  prompt module split from the voice prompt; unknown clinic questions routed to
+  the doctor instead of a call-us line; a read-only connection chip in Settings.
+  Linking stays **concierge** — `PATCH /admin/branches/{id}/whatsapp`
+  (super_admin) already exists, is unique-constrained and audited, so Vinay links
+  a clinic after finishing its Meta steps. Self-serve connect is MVP6.
 - Behaviour, all from code that already exists: booking confirmation, reminder,
   rating and rebook templates go out; inbound FAQ answers from the clinic's own
   FAQ; location; cancel/reschedule of an existing booking.
