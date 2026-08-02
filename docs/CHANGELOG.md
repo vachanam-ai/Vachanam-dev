@@ -37,6 +37,21 @@ token resolver (`wa_token_enc` NULL = bridge, present = clinic-owned). The
 switch to Tech Provider becomes a per-clinic flag flip instead of a rewrite. The
 Tech Provider doc's build order is amended accordingly.
 
+**Revised the same day** after Vinay asked why we would store messages at all
+when the receptionist already has the clinic phone. Researched it: a number can
+run **coexistence** — WhatsApp Business app AND Cloud API at once — and every
+message the receptionist sends from the phone fires an `smb_message_echoes`
+webhook to us, body included. So the phone IS the inbox, and human-reply
+detection is free. The correction to the privacy worry: bodies reach our servers
+either way (the AI cannot answer without them); the real choice is retention.
+
+Result: **no inbox, no thread UI, no takeover button** (D13). Tabs are Activity ·
+Templates · Broadcasts · Setup. We persist metadata + the text OUR AI sent;
+patient message bodies are never written to Postgres, living only in a Redis
+window with a TTL while the AI composes (D14/D15), with a default-off capture
+flag as the seam (D16). The AI answers instantly and goes silent on a thread for
+24h the moment a human types (D7) — no button, no per-clinic hours.
+
 Spec: `docs/superpowers/specs/2026-08-02-whatsapp-hub-cross-channel-design.md`.
 No code yet — implementation plan next.
 
