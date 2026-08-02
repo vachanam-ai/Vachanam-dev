@@ -121,23 +121,88 @@ def test_plan_table_matches_claude_md():
 
 def test_every_plan_holds_40pct_margin_at_worst_case():
     """The Vinay invariant (2026-07-11): full use of the included bucket at
-    Rs3/min + Rs1,500 infra (1 DID) must leave >=40% gross margin. This test
-    is the guard that stops a future 'more generous minutes' edit from
+    Rs3/min + the plan's own fixed cost must leave >=40% gross margin. This
+    test is the guard that stops a future 'more generous minutes' edit from
     silently breaking the economics."""
-    WORST_COST_PER_MIN, INFRA = 3.0, 1500.0
+    from backend.services.billing_math import fixed_cost_for
+
+    WORST_COST_PER_MIN = 3.0
     # Lite (2026-07-15) is EXEMPT by Vinay's explicit decision: the per-clinic
     # fixed cost makes a 40%-worst plan impossible under Rs2,000. Its own
     # typical-margin guard is test_lite_plan_economics below.
     for key, p in PLANS.items():
         if key == "lite":
             continue
-        cost = p.included_minutes * WORST_COST_PER_MIN + INFRA
+        cost = p.included_minutes * WORST_COST_PER_MIN + fixed_cost_for(key)
         margin = (p.base_rupees - cost) / p.base_rupees
         assert margin >= 0.399, f"{key}: worst-case margin {margin:.1%} < 40%"
     # Overage must hold the same bar (Lite included — overage is Rs5/min vs
-    # Rs3 worst cost = 40%, so it passes).
-    for p in PLANS.values():
+    # Rs3 worst cost = 40%, so it passes). A plan with no voice sells no
+    # minutes and therefore has no overage rate to margin-check.
+    for key, p in PLANS.items():
+        if p.overage_per_min == 0:
+            continue
         assert (p.overage_per_min - WORST_COST_PER_MIN) / p.overage_per_min >= 0.399
+
+
+def test_wa_plan_is_1499_with_no_voice():
+    """WhatsApp-only plan (Vinay 2026-08-02, spec 2026-08-02-whatsapp-pricing).
+    Zero minutes and zero overage are deliberate: it buys no voice at all, so
+    a call is a configuration error rather than an overage."""
+    wa = PLANS["wa"]
+    assert wa.base_rupees == 1499
+    assert wa.included_minutes == 0
+    assert wa.overage_per_min == 0.0
+    assert wa.max_doctors == 3
+    assert wa.display_name == "WhatsApp"
+
+
+def test_whatsapp_enabled_gate():
+    """Single gate for every WhatsApp capability check: included in the plan,
+    or bought as an add-on by Lite/Starter."""
+    from backend.services.billing_math import whatsapp_enabled
+
+    assert whatsapp_enabled("wa", False) is True
+    assert whatsapp_enabled("clinic", False) is True
+    assert whatsapp_enabled("multi", False) is True
+    assert whatsapp_enabled("lite", False) is False
+    assert whatsapp_enabled("solo", False) is False
+    assert whatsapp_enabled("lite", True) is True
+    assert whatsapp_enabled("solo", True) is True
+    # An add-on flag must never conjure WhatsApp onto a plan that cannot buy it.
+    assert whatsapp_enabled("", True) is False
+
+
+def test_margin_invariant_costs_a_did_only_to_voice_plans():
+    """The old flat INFRA=1500 folded in a DID that every plan was assumed to
+    buy. Applied to a WhatsApp-only plan that yields 0*3 + 1500 = 1500 against
+    a 1499 price — a NEGATIVE margin for what is in fact our best plan."""
+    from backend.services.billing_math import BASE_INFRA, DID_RUPEES, fixed_cost_for
+
+    assert DID_RUPEES + BASE_INFRA == 1500.0  # voice plans unchanged
+    for voice_plan in ("lite", "solo", "clinic", "multi"):
+        assert fixed_cost_for(voice_plan) == 1500.0
+    assert fixed_cost_for("wa") == BASE_INFRA
+
+    wa = PLANS["wa"]
+    margin = (wa.base_rupees - fixed_cost_for("wa")) / wa.base_rupees
+    assert margin >= 0.75, f"wa margin {margin:.1%} — should be our best plan"
+
+
+def test_whatsapp_addon_is_the_same_1499():
+    """One number for WhatsApp everywhere — standalone or bolted onto a voice
+    plan — so a clinic never sees the same feature priced two ways."""
+    from backend.services.billing_math import (
+        PLANS,
+        WHATSAPP_ADDON_PLANS,
+        WHATSAPP_ADDON_RUPEES,
+    )
+
+    assert WHATSAPP_ADDON_RUPEES == PLANS["wa"].base_rupees == 1499
+    assert WHATSAPP_ADDON_PLANS == frozenset({"lite", "solo"})
+    # Starter + add-on must stay UNDER Clinic, which also buys 800 more
+    # minutes and 2 more doctors — the upgrade has to remain worth making.
+    assert PLANS["solo"].base_rupees + WHATSAPP_ADDON_RUPEES < PLANS["clinic"].base_rupees
 
 
 def test_lite_plan_economics():
@@ -278,8 +343,14 @@ def test_b3_hard_block_honors_trial_grant_and_adjustment():
 
 
 def test_whatsapp_plans_gate():
-    # Spec 2026-07-13 (Vinay): WhatsApp is a Clinic+Multi differentiator.
-    from backend.services.billing_math import WHATSAPP_PLANS
+    """Spec 2026-07-13 (Vinay): WhatsApp is a Clinic+Multi differentiator.
+    Amended 2026-08-02: the standalone "wa" plan IS WhatsApp, so it is included
+    too. Lite/Starter still do not get it for free — they buy the add-on, which
+    is why the gate is whatsapp_enabled() rather than this set alone."""
+    from backend.services.billing_math import WHATSAPP_PLANS, whatsapp_enabled
 
-    assert WHATSAPP_PLANS == {"clinic", "multi"}
-    assert "solo" not in WHATSAPP_PLANS
+    assert WHATSAPP_PLANS == {"clinic", "multi", "wa"}
+    # The differentiator holds: no voice plan below Clinic gets it bundled.
+    for key in ("lite", "solo"):
+        assert key not in WHATSAPP_PLANS
+        assert whatsapp_enabled(key) is False

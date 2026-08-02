@@ -110,6 +110,24 @@ class Branch(Base):
     wa_phone_number_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, unique=True
     )
+    # Clinic-owned WhatsApp Business Account (spec 2026-08-02, migration mm36).
+    # The clinic holds its own WABA and its own Meta billing; we send on its
+    # behalf with ITS token. UNIQUE so one WABA can only ever be claimed by one
+    # branch — a second claim must fail loudly, never silently route one
+    # clinic's patients to another (RULE 1).
+    wa_waba_id: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True)
+    # Fernet-encrypted Meta business token — never plaintext, never logged,
+    # never returned by any API (same discipline as the Vobiz SIP password).
+    # NULL means "fall back to the platform token" (bridge mode).
+    wa_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wa_verified_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # none | connected | disconnected | error
+    wa_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="none", server_default="none"
+    )
+    wa_connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Soniox catalog voice for this clinic's agent. NULL or a legacy provider ID
     # resolves to the configured Soniox default without breaking existing rows.
     tts_voice: Mapped[str | None] = mapped_column(String(64), nullable=True)

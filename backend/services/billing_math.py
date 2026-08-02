@@ -35,12 +35,31 @@ class Plan:
 # test carves Lite out explicitly. Follow-up loop IS included (retention).
 # 2026-07-17 (Vinay): Lite doctor cap 1 → 3 (zero-variable-cost, same lever
 # as Starter's 07-12 bump).
+# 2026-08-02 (Vinay): NEW "wa" — WhatsApp-only, no DID, no voice minutes.
+# Zero included_minutes/overage is deliberate: the plan buys no telephony at
+# all, so an inbound call is a configuration error, not an overage (see
+# call_blocked). Spec: docs/superpowers/specs/2026-08-02-whatsapp-pricing-design.md
 PLANS: dict[str, Plan] = {
+    "wa": Plan(1_499, 0, 0.0, 3, "WhatsApp"),
     "lite": Plan(1_999, 150, 5.0, 3, "Lite"),
     "solo": Plan(5_999, 700, 5.0, 3, "Starter"),
     "clinic": Plan(9_999, 1_500, 5.0, 5, "Clinic"),
     "multi": Plan(17_999, 3_000, 5.0, None, "Multi"),
 }
+
+# Fixed monthly cost per clinic, split by whether the plan buys a phone number.
+# Until 2026-08-02 this was one flat Rs1,500 constant with the DID folded in —
+# which charged a WhatsApp-only clinic for a line it never gets (0*3 + 1500 vs
+# a Rs1,499 price = a NEGATIVE margin on our most profitable plan).
+DID_RUPEES = 1_200.0  # per-clinic DID; voice plans only
+BASE_INFRA = 300.0    # hosting/support share; every plan
+
+
+def fixed_cost_for(plan: str) -> float:
+    """Vachanam's own fixed monthly cost to serve one clinic on this plan."""
+    p = PLANS.get(plan)
+    has_voice = bool(p and p.included_minutes > 0)
+    return (DID_RUPEES + BASE_INFRA) if has_voice else BASE_INFRA
 
 # LAUNCH OFFER (Vinay 2026-07-17 — clinic feedback: "pricing too much; keep it
 # low until you get some clients"). For a clinic's FIRST 3 PAID MONTHS:
@@ -113,9 +132,24 @@ PLAN_LANGUAGES: dict[str, list[str] | None] = {
 # behind premium made no economic sense.
 FOLLOWUP_PLANS = ("lite", "solo", "clinic", "multi")
 
-# Plans with WhatsApp (confirmations, reminders, rating asks, chat) — Vinay's
-# positioning call, spec 2026-07-13. Message cost ≈ ₹0.40/booking, absorbed.
-WHATSAPP_PLANS = frozenset({"clinic", "multi"})
+# Plans that INCLUDE WhatsApp (confirmations, reminders, rating asks, chat).
+# 2026-08-02: "wa" joins clinic/multi — WhatsApp IS that plan. The old note
+# "message cost ~Rs0.40/booking, absorbed" is obsolete: under the clinic-owned
+# WABA model (spec 2026-08-02-whatsapp-tech-provider) the CLINIC pays Meta
+# directly, so our marginal message cost is zero and unmeterable.
+WHATSAPP_PLANS = frozenset({"clinic", "multi", "wa"})
+
+# Lite/Starter may BUY WhatsApp for the same Rs1,499 the standalone plan costs
+# — one number everywhere, so a clinic never sees it priced two ways. Starter
+# + add-on stays under Clinic, which also buys 800 more minutes and 2 more
+# doctors, so the upgrade path survives.
+WHATSAPP_ADDON_RUPEES = 1_499
+WHATSAPP_ADDON_PLANS = frozenset({"lite", "solo"})
+
+
+def whatsapp_enabled(plan: str, addon: bool = False) -> bool:
+    """Single gate for every WhatsApp capability check."""
+    return plan in WHATSAPP_PLANS or (bool(addon) and plan in WHATSAPP_ADDON_PLANS)
 
 # The 14-day free trial grants a flat voice-minute bucket regardless of the
 # plan picked at signup. 500→300 on 2026-07-11 (Vinay): ~100 calls is enough

@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     razorpay_plan_solo_id: str = ""
     razorpay_plan_clinic_id: str = ""
     razorpay_plan_multi_id: str = ""
+    razorpay_plan_wa_id: str = ""  # WhatsApp-only plan (Vinay 2026-08-02)
 
     # App
     app_env: str = "development"

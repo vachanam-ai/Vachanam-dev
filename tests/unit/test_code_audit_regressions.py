@@ -389,9 +389,15 @@ def test_plan_source_of_truth_has_current_doctor_caps():
     assert [PLANS[p].max_doctors for p in ("lite", "solo", "clinic", "multi")] == [3, 3, 5, None]
 
 
-def test_whatsapp_entitlement_is_clinic_and_multi_only():
-    from backend.services.billing_math import WHATSAPP_PLANS
-    assert WHATSAPP_PLANS == frozenset({"clinic", "multi"})
+def test_whatsapp_entitlement_is_not_free_on_the_cheap_voice_plans():
+    """WhatsApp is bundled on Clinic/Multi and IS the "wa" plan (Vinay
+    2026-08-02). It must never become free on Lite/Starter — those buy the
+    Rs1,499 add-on, which is why the real gate is whatsapp_enabled()."""
+    from backend.services.billing_math import WHATSAPP_PLANS, whatsapp_enabled
+
+    assert WHATSAPP_PLANS == frozenset({"clinic", "multi", "wa"})
+    for key in ("lite", "solo"):
+        assert whatsapp_enabled(key) is False
 
 
 def test_backend_container_drops_root_privileges():
