@@ -1,14 +1,23 @@
-"""WhatsApp Cloud API sends (spec 2026-07-13, plan T3).
+"""WhatsApp Cloud API sends (spec 2026-07-13, plan T3; per-branch token WA
+MVP1 Task 2).
 
-One Vachanam-level system-user token (settings.meta_access_token); the SENDER
-identity is per-branch — branch.wa_phone_number_id, the clinic's own
-Coexistence-linked number. RULE 4: a send failure NEVER raises into a booking
-path — every public function returns bool and logs. RULE 9: logs carry
-to_last4 + template name + branch_id, never body text.
+The SENDER identity is per-branch — branch.wa_phone_number_id, the clinic's
+own number. The bearer TOKEN is also resolved per branch via `token_for`:
+a clinic that has connected its own WABA (Task 1's `wa_token_enc`, Fernet
+encrypted) sends with ITS token; a branch with none falls back to the
+Vachanam-level platform token (settings.meta_access_token) — "bridge mode".
 
-No creds / no linked number / wrong plan → structured no-op (False), so the
-whole feature is inert until Vinay finishes the Meta runbook (Phase A) and a
-branch is linked (Phase B).
+RULE 1: a clinic token that will not decrypt fails CLOSED — `token_for`
+returns None rather than ever falling back to the platform token, because
+that fallback would send THIS clinic's message from Vachanam's own WhatsApp
+account (cross-tenant send). RULE 4: a send failure NEVER raises into a
+booking path — every public function returns bool and logs. RULE 9: logs
+carry to_last4 + template name + branch_id, never body text, never any part
+of a token.
+
+No creds / no linked number / wrong plan / no resolvable token → structured
+no-op (False), so the whole feature is inert until Vinay finishes the Meta
+runbook (Phase A) and a branch is linked (Phase B).
 """
 from __future__ import annotations
 
@@ -20,16 +29,47 @@ from tenacity import (
 
 from backend.config import settings
 from backend.services.billing_math import WHATSAPP_PLANS
+from backend.services.crypto import decrypt_secret
 
 logger = structlog.get_logger()
 
 _GRAPH = "https://graph.facebook.com/v21.0"
 
 
+def token_for(branch) -> str | None:
+    """The Meta bearer token this branch sends with.
+
+    A clinic token (`branch.wa_token_enc`, Fernet-encrypted) that will not
+    decrypt fails CLOSED: returning None here — never falling back to the
+    platform token — because that fallback would send this clinic's message
+    from Vachanam's own WhatsApp account (RULE 1, cross-tenant send). Only a
+    branch with NO token at all (wa_token_enc is None/empty — bridge mode)
+    may use the platform token.
+    """
+    enc = getattr(branch, "wa_token_enc", None)
+    if enc:
+        try:
+            return decrypt_secret(enc)
+        except Exception as e:  # noqa: BLE001 — fail closed, never leak the token
+            logger.error(
+                "wa_token_undecryptable",
+                branch_id=str(getattr(branch, "id", None)),
+                error=str(e)[:120],
+            )
+            return None
+    return settings.meta_access_token or None
+
+
 def wa_enabled(branch, plan: str | None) -> bool:
-    """True when this branch can send WhatsApp right now: platform creds set,
-    branch number linked, org plan gated in (Clinic+Multi — Vinay)."""
-    if not settings.meta_access_token:
+    """True when this branch can send WhatsApp right now: a usable token,
+    branch number linked, org plan gated in (clinic/multi/wa — Vinay).
+
+    The token check is `token_for(branch)`, NOT the platform token: under the
+    clinic-owned WABA model a branch sends with its OWN credential, and the
+    platform token may legitimately be unset. Gating on it would report every
+    clinic-owned branch as disabled.
+    """
+    if not token_for(branch):
         logger.debug("wa_skipped_unconfigured", reason="no_access_token")
         return False
     if not getattr(branch, "wa_phone_number_id", None):
@@ -53,22 +93,34 @@ def wa_enabled(branch, plan: str | None) -> bool:
     retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
     reraise=True,
 )
-async def _post(phone_number_id: str, payload: dict) -> None:
+async def _post(phone_number_id: str, payload: dict, token: str) -> None:
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.post(
             f"{_GRAPH}/{phone_number_id}/messages",
-            headers={"Authorization": f"Bearer {settings.meta_access_token}"},
+            headers={"Authorization": f"Bearer {token}"},
             json=payload,
         )
         r.raise_for_status()
 
 
 async def _send(branch, plan: str | None, to: str, payload: dict, kind: str, detail: str) -> bool:
-    """Shared guarded send. RULE 4: catches everything terminal."""
+    """Shared guarded send. RULE 4: catches everything terminal.
+
+    Token resolution is per-branch (RULE 1 — see `token_for`); a branch
+    that resolves to no usable token is a structured no-op, never a
+    fallback to another identity.
+    """
     if not wa_enabled(branch, plan):
         return False
+    token = token_for(branch)
+    if not token:
+        logger.warning(
+            "wa_send_no_token", kind=kind, detail=detail,
+            to_last4=to[-4:] if to else None, branch_id=str(getattr(branch, "id", None)),
+        )
+        return False
     try:
-        await _post(branch.wa_phone_number_id, payload)
+        await _post(branch.wa_phone_number_id, payload, token)
         logger.info(
             "wa_sent", kind=kind, detail=detail,
             to_last4=to[-4:] if to else None, branch_id=str(branch.id),
