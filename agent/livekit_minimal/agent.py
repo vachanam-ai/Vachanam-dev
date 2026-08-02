@@ -3656,6 +3656,12 @@ class VachanamAgent(Agent):
                 pass
             return {"logged": False}
         self._state.question_logged = True
+        # RULE 10: the success path was silent, so a "did the tool even run?"
+        # question could only be answered from the database (2026-08-02).
+        logger.info(
+            "clinic_question_logged branch_id=%s phone_last4=%s",
+            str(self._state.branch_id), (self._state.patient_phone or "")[-4:] or "----",
+        )
         return {"logged": True, "next": "Tell the caller the clinic will check "
                 "with the doctor and get back to them."}
 
@@ -6477,26 +6483,48 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             for ln in (_net_tx or "").split("\n")
                             if ln.startswith("agent:")
                         ]
-                        _PROMISES = (
+                        # 2026-08-02 real call ("do you have a plastic surgeon?"):
+                        # the agent used the ASK-THE-DOCTOR line — the most common
+                        # way it promises to come back — and NONE of the markers
+                        # matched, so the net stayed silent and the question was
+                        # lost. Ask-shaped promises are now caught too, and they
+                        # land as a clinic QUESTION (the doctor answers it and the
+                        # caller gets the answer back) instead of a message.
+                        _ASK_PROMISES = (
+                            "అడిగి చెప్తాను", "అడిగి చెబుతాను",   # te
+                            "पूछकर बताती", "पूछकर बताऊं",          # hi
+                            "கேட்டு சொல்",                          # ta
+                            "ಕೇಳಿ ಹೇಳ",                             # kn
+                            "विचारून सांगते",                        # mr
+                            "check with the doctor", "ask the doctor",  # en
+                        )
+                        _MSG_PROMISES = (
                             "తెలియజేస్తాను", "తిరిగి కాల్ చేస్తారు",
                             "pass it on", "inform the doctor",
                             "let the doctor know", "get back to you",
                         )
-                        if any(p in ln for ln in _agent_lines for p in _PROMISES):
+                        _hit_msg = any(
+                            p in ln for ln in _agent_lines for p in _MSG_PROMISES
+                        )
+                        _hit_ask = any(
+                            p in ln for ln in _agent_lines for p in _ASK_PROMISES
+                        )
+                        if _hit_msg or _hit_ask:
                             _caller_words = " / ".join(
                                 ln[len("patient:"):].strip()
                                 for ln in (_net_tx or "").split("\n")
                                 if ln.startswith("patient:")
                             )[:450]
                             if _caller_words:
+                                from backend.models.schema import ClinicQuestion as _CQ
                                 from backend.models.schema import Patient as _Pat
                                 from backend.models.schema import PatientMessage as _PM
 
                                 await db.rollback()
-                                # Link the message to the patient record when the
-                                # caller's phone matches (same rule take_message
-                                # uses) — a treating patient's message must land
-                                # in their treatment thread, not just the inbox.
+                                # Link to the patient record when the caller's
+                                # phone matches (same rule take_message uses) — a
+                                # treating patient's message must land in their
+                                # treatment thread, not just the inbox.
                                 _net_pid = None
                                 if state.patient_phone:
                                     _net_pid = (await db.execute(
@@ -6505,21 +6533,34 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                             _Pat.phone == state.patient_phone,
                                         )).limit(1)
                                     )).scalar_one_or_none()
-                                db.add(_PM(
-                                    branch_id=state.branch_id,
-                                    patient_id=_net_pid,
-                                    caller_phone=state.patient_phone,
-                                    message=(
-                                        "[auto-captured — the agent promised to pass this on "
-                                        "but no message was recorded on the call] "
-                                        + _caller_words
-                                    ),
-                                    urgent=False,
-                                ))
+                                if _hit_msg:
+                                    db.add(_PM(
+                                        branch_id=state.branch_id,
+                                        patient_id=_net_pid,
+                                        caller_phone=state.patient_phone,
+                                        message=(
+                                            "[auto-captured — the agent promised to pass this on "
+                                            "but no message was recorded on the call] "
+                                            + _caller_words
+                                        ),
+                                        urgent=False,
+                                    ))
+                                else:
+                                    db.add(_CQ(
+                                        branch_id=state.branch_id,
+                                        question=(
+                                            "[auto-captured — the agent said it would ask the "
+                                            "doctor but logged nothing] " + _caller_words
+                                        )[:300],
+                                        caller_last4=(state.patient_phone or "")[-4:] or None,
+                                        patient_id=_net_pid,
+                                        caller_phone=state.patient_phone,
+                                    ))
                                 await db.commit()
                                 logger.warning(
-                                    "message_safety_net_captured branch_id=%s",
+                                    "message_safety_net_captured branch_id=%s kind=%s",
                                     str(state.branch_id),
+                                    "message" if _hit_msg else "question",
                                 )
                 except Exception as e:  # noqa: BLE001 — net must never break teardown
                     logger.warning("message_safety_net_failed: %s", e)

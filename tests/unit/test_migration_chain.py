@@ -2,6 +2,7 @@
 
 import importlib.util
 import inspect
+import re
 from pathlib import Path
 
 
@@ -41,8 +42,12 @@ def test_zap_missing_report_is_a_failure():
 
     assert "ghcr.io/zaproxy/zaproxy:stable" in workflow
     assert "softwaresecurityproject/zap-stable" not in workflow
-    assert "actions/setup-python@v6" in workflow
-    assert "actions/upload-artifact@v6" in workflow
+    # Version-AGNOSTIC on purpose (2026-08-02): pinning the exact major here
+    # made every Dependabot action bump fail CI for a reason that has nothing
+    # to do with what this test guards (the ZAP report must exist and a missing
+    # one must fail). What matters is that the steps are still wired up.
+    assert re.search(r"actions/setup-python@v\d+", workflow)
+    assert re.search(r"actions/upload-artifact@v\d+", workflow)
     assert "chmod 777 zap" in workflow
     assert "-J zap-report.json" in workflow
     assert 'a.get(\"riskcode\")' in workflow

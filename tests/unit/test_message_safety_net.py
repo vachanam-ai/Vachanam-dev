@@ -33,6 +33,29 @@ def test_teardown_net_present_and_guarded():
     assert "తెలియజేస్తాను" in net
 
 
+def test_ask_the_doctor_promise_is_caught_as_a_question():
+    """2026-08-02 real call ("do you have a plastic surgeon?"): the agent used
+    the ask-the-doctor line, which matched NO marker, so nothing was captured.
+    Every language's ask_doctor line is now a marker, and an ask-shaped promise
+    lands as a ClinicQuestion (answerable + auto callback), not a message."""
+    from agent.prompts.grounded_prompt import PACKS
+
+    net = AGENT_SRC.split("MESSAGE SAFETY NET")[1][:8000]
+    for code, pack in PACKS.items():
+        ask = (pack.ask_doctor or "").replace("[hesitates]", "").strip()
+        if not ask:
+            continue
+        assert any(marker in ask for marker in _markers(net)), (
+            f"{code} ask_doctor line has no safety-net marker: {ask}"
+        )
+    assert "_CQ(" in net  # ask-shaped promise → clinic question row
+
+
+def _markers(net: str) -> list[str]:
+    block = net.split("_ASK_PROMISES = (")[1].split(")")[0]
+    return [chunk.split('"')[1] for chunk in block.split(",") if '"' in chunk]
+
+
 def test_prompt_forbids_promise_before_tool():
     # v19 dropped the "SAYING IS NOT DOING" label; the rule now reads
     # "Never send or promise ... from speech" + "claim delivery only after success".

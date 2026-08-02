@@ -178,9 +178,12 @@ def test_cancel_booking_has_no_spoken_name_gate():
 
 
 def test_cold_open_greeting_does_not_speak_stored_name_by_default():
+    # The switch used to be an env kill-switch defaulting to off; it is now
+    # HARD-disabled (2026-08-02: no environment variable can restore the leak),
+    # which is strictly stronger. Assert the guarantee — greet-by-name is off
+    # and the cold open drops the stored name — not the shape of the flag.
+    assert getattr(agent_mod, "_GREET_BY_NAME") is False
     src = inspect.getsource(agent_mod)
-    # default off → name suppressed; a documented kill-switch restores it
-    assert '_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"' in src
     assert "if not _GREET_BY_NAME:\n                    caller_greeting_name = None" in src
 
 

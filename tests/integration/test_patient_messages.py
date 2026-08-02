@@ -203,8 +203,21 @@ def test_prompt_instructs_take_message():
         plan="clinic", language="te", faq=None,
     )
     assert "take_message" in prompt
-    # No "informed clinic" before the tool succeeds (tokens chosen to survive
-    # the template's line wrapping).
-    assert "urgent=true" in prompt
+    # No "informed clinic" before the tool succeeds.
+    assert "claim delivery only after success" in prompt
     # FAQ growth path stays separate.
     assert "log_clinic_question" in prompt
+
+
+def test_take_message_tool_still_asks_for_the_urgent_flag():
+    """The v21 prompt dropped the prose "urgent=true" line (2026-08-02), but the
+    urgent flag is what drives the owner alert + the dashboard badge — so the
+    instruction must still reach the model somewhere. It does: the tool's own
+    docstring IS the function schema description the LLM reads."""
+    import inspect
+
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    doc = inspect.getdoc(VachanamAgent.take_message.__wrapped__) or ""
+    assert "urgent=true" in doc
+    assert "success" in doc  # no delivery claim before the tool returns ok

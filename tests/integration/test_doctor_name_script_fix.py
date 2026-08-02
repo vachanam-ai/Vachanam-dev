@@ -122,13 +122,22 @@ async def test_state_fallback_unaffected(clinic, db):
     assert resolved == lakshmi.id
 
 
-def test_prompt_pins_listed_name_rule():
-    from agent.prompts.system_prompt import build_system_prompt, DoctorContext
+def test_prompt_lists_the_doctor_id_the_tools_expect():
+    """Guard (c), rewritten 2026-08-02. The v21 prompt dropped the prose rule
+    "pass the listed name or ID exactly"; the mechanism it protected is what
+    actually matters and is still there — the roster block hands the LLM the
+    real doctor ID and the exact Latin name, and _resolve_doctor_id
+    (guards a + b above) recovers from a native-script name anyway. Assert the
+    mechanism, not the sentence, so prompt rewording never fails this file
+    while the doctor-matching guarantee is intact."""
+    from agent.prompts.system_prompt import DoctorContext, build_system_prompt
     p = build_system_prompt(
         clinic_name="C", doctors=[DoctorContext(
             id="1", name="Dr. Lakshmi", specialization="skin",
             routing_keywords=["skin"], booking_type="appointment", is_default=True)],
         emergency_contact="x", plan="clinic", language="te",
     )
-    assert "the listed name or ID exactly" in p
-    assert "NEVER" in p and "native-script" in p
+    assert '<doctor id="1"' in p          # the ID the tools accept
+    assert 'name="Dr. Lakshmi"' in p      # the exact Latin name to match on
+    # Roster is closed: the agent may not invent a doctor outside this list.
+    assert "DOCTOR ROSTER IS IN SCOPE" in p
