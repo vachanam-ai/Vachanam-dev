@@ -13,6 +13,30 @@ Format per session:
 
 ---
 
+## 2026-08-02 — WhatsApp multi-clinic: Tech Provider model chosen (design only)
+
+Vinay picked **(A) the clinic owns its WABA**: Vachanam onboards as an
+independent Tech Provider, each clinic brings/creates its own WhatsApp Business
+Account through Embedded Signup, adds its own payment method, and Vachanam
+charges the monthly fee on top. Rejected (B) one Vachanam-owned WABA hosting
+clinic numbers — ~25 numbers per WABA, one pooled quality rating, and every
+clinic's Meta bill (and GST) landing on us.
+
+This supersedes the Coexistence assumption in the 2026-07-13 WhatsApp design
+(single platform token). The message, webhook, template and chat layer built by
+that plan is kept as-is; only the ownership and credential model changes: a
+per-branch encrypted business token, `wa_waba_id`, and an Embedded Signup
+connect endpoint. One webhook endpoint keeps serving every clinic — the branch
+is still resolved from the RECEIVING `phone_number_id` (RULE 5).
+
+Design: `docs/superpowers/specs/2026-08-02-whatsapp-tech-provider-design.md`
+(flows, data-model delta, Meta console checklist, 4 build phases, risks).
+
+No code yet. Build starts at P1 (migration + connect endpoint + per-branch
+token) once business verification and App Review clear and the app is published.
+
+---
+
 ## 2026-08-02 — Unanswered caller questions go to the doctor, and the caller gets called back
 
 Vinay: a question the receptionist (AI) could not answer must reach the doctor
