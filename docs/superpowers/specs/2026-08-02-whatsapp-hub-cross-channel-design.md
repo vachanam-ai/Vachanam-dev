@@ -54,6 +54,41 @@ Sources: [Onboard WhatsApp Business app users](https://developers.facebook.com/d
 
 ---
 
+## 0.5 Scope of this spec (decomposition, Vinay 2026-08-02)
+
+WhatsApp turned out to be five subsystems, not one. This document covers **S1 +
+S5 only**; the others get their own spec and plan so each can ship on its own.
+
+| | Subsystem | Where |
+|---|---|---|
+| **S1** | Channel foundation — token resolver, `wa_events`, templates, echo handling, coexistence onboarding, outbound notifications | **this spec** |
+| **S5** | The page — Activity · Templates · Broadcasts · Setup, capability-driven nav | **this spec** |
+| S3 | Unknown question → doctor → answer delivered back to the patient | **this spec** (§5.6) — almost entirely built already |
+| S2 | Patient booking agent in chat, at full parity with the voice flow | separate spec, next |
+| S4 | Doctor command channel (leave, timings) on one Vachanam-owned number | separate spec, after S2 |
+
+**Consequence to be honest about:** until S2 ships, the chat AI cannot book.
+Today's `wa_chat.handle_text` is a single-turn intent router (FAQ, location,
+cancel/reschedule of an existing booking) that redirects everything else to the
+phone. Vinay's requirement — *"clinics choose WhatsApp because we handle all
+their queries; 'call us' is not a good option"* — is therefore an **S2**
+requirement, and S1 must not be sold to a clinic as conversational booking.
+
+What S1 does deliver on its own: every outbound notification (confirmations,
+reminders, ratings, rebooks, missed-call recovery), the templates the clinic
+controls, the activity trail, and the unknown-question loop. That is a real
+product; it just is not the whole promise.
+
+**S2's central decision, recorded here so it is not re-litigated:** the voice
+agent already owns every booking rule (availability, atomic token assignment,
+holds that die with the conversation, identity, cancel/reschedule). S2 extracts a
+**channel-agnostic booking brain** and makes voice and chat two front-ends over
+one rule set. A second chat-only booking implementation is rejected — two copies
+of atomic token assignment will drift, and the first divergence is a
+double-booking in front of a paying clinic (RULE 2).
+
+---
+
 ## Decisions (binding)
 
 | # | Decision | Rationale |
@@ -80,21 +115,35 @@ Sources: [Onboard WhatsApp Business app users](https://developers.facebook.com/d
 ## 1. Information architecture
 
 ```
-Sidebar (owner)          Sidebar (WhatsApp-only clinic)
-  Dashboard                 Dashboard
-  Queue                     Patients
-  Walk-in                   WhatsApp
-  Treatments                Settings
-  Patients                  Support
-  WhatsApp   ← new
-  Doctors
-  Settings
-  Support
+Sidebar (owner, voice only)     Sidebar (owner, WhatsApp connected)
+  Dashboard                       Dashboard
+  Queue                           Queue
+  Walk-in                         Walk-in
+  Treatments                      Treatments
+  Patients                        Patients
+                                  WhatsApp   ← the only difference
+  Doctors                         Doctors
+  Settings                        Settings
+  Support                         Support
 ```
 
-Nav renders from org capabilities (`voice_enabled`, `whatsapp_enabled`), derived
-from plan + connection state. Not a new permission system — a filter over the
-existing role-keyed `NAV` map in `frontend/src/components/Shell.jsx`.
+**Corrected 2026-08-02 (Vinay):** an earlier draft hid Queue, Walk-in and Doctor
+leave from a WhatsApp-only clinic. That was wrong — none of those pages are
+voice-specific. A WhatsApp-only clinic still books tokens, still runs a queue,
+still has doctors going on leave, still keeps patient records. **The only
+channel-specific page is WhatsApp itself.**
+
+So "capability-driven" is smaller than it sounded, and that is good:
+
+- **Page level:** the WhatsApp item appears only when the branch is connected
+  (and the plan allows it). Nothing else is ever hidden.
+- **Card level:** the Dashboard swaps its voice-specific tiles (calls answered,
+  plan minutes, voice minutes) for WhatsApp equivalents (conversations answered,
+  messages sent, template spend) when a clinic has no voice line. The Dashboard
+  itself stays for everyone — it is the money screen.
+
+A filter over the existing role-keyed `NAV` map in
+`frontend/src/components/Shell.jsx`, not a new permission system.
 
 The cross-channel story lives on the **Patient** page, not here — that is where
 staff already go for a person's history (§5.2).
@@ -251,21 +300,69 @@ prune because there is none stored.
   phone last-4 and ids only.
 - Plan gate `WHATSAPP_PLANS = {clinic, multi}` stays the single source.
 
-## 9. Build order and gates
+## 9. Build order — MVP batches (Vinay 2026-08-02)
 
 **This supersedes the build order in the companion Tech Provider doc**, where
-Embedded Signup was slice 1. It moves to slice 6: nothing else depends on it, and
+Embedded Signup was slice 1. It moves to MVP6: nothing else depends on it, and
 App Review is easier to pass once the real product exists to record.
 
-| # | Slice | Gate |
-|---|---|---|
-| 1 | Per-branch token resolver + `wa_events` / `wa_templates` schema + echo webhook handling (`smb_message_echoes` → `answered_by=human`, AI silenced 24h) | none |
-| 2 | Templates tab (preview, custom, approval webhooks) | test WABA |
-| 3 | Activity tab + capability-driven nav | test WABA |
-| 4 | Timeline on the Patient page + the three fallbacks | pilot number on our WABA |
-| 5 | Record App Review videos **using the real product** | slices 2–3 done |
-| 6 | Coexistence / Embedded Signup connect flow | Tech Provider approved |
-| 7 | Broadcasts | — (last, so it can slip) |
+Batched easiest-first, because a basic messaging bot is needed **this week** for
+the clinics already enrolled.
+
+### MVP1 — "it talks" (target: this week)
+
+Almost entirely Meta console work plus a thin code layer. No new UI page.
+
+- Meta: toggle the app **Live** (basic settings only — privacy policy already
+  served at `/privacy`); pilot number onto Vachanam's WABA with the WhatsApp
+  Business app installed (coexistence); webhook callback + verify token;
+  submit the four existing templates for approval.
+- Code: per-branch **token resolver** (returns the platform token while
+  `wa_token_enc` is NULL — the seam that makes MVP6 a flag flip); link a branch
+  by pasting its `phone_number_id` into Settings; connection status chip.
+- Behaviour, all from code that already exists: booking confirmation, reminder,
+  rating and rebook templates go out; inbound FAQ answers from the clinic's own
+  FAQ; location; cancel/reschedule of an existing booking.
+- **Not** in MVP1: conversational booking, the WhatsApp page, custom templates,
+  broadcasts. A clinic must not be sold chat booking yet (§0.5).
+
+### MVP2 — "it remembers and it logs"
+
+- `wa_events` table + **Activity tab** + the WhatsApp page shell (Activity +
+  Setup), capability-driven nav.
+- `smb_message_echoes` handling: a human reply on the clinic phone marks the
+  event `answered_by=human` and silences the AI on that thread for 24h (D7).
+- **S3**: unknown question → `ClinicQuestion` (already shipped for voice) →
+  doctor answers on the dashboard → answer delivered back over WhatsApp, and the
+  doctor notified on their own WhatsApp.
+
+### MVP3 — "the clinic controls its words"
+
+- **Templates tab**: list + live preview, enable/disable, custom template
+  authoring, submission, and `message_template_status_update` handling.
+- Per-WABA template sync so each clinic carries its own approved copies.
+
+### MVP4 — "it books" (S2, separate spec)
+
+Channel-agnostic booking brain; chat reaches parity with the voice flow. The
+biggest batch and the one that fulfils *"clinics choose WhatsApp because we
+handle all their queries"*.
+
+### MVP5 — cross-channel
+
+Patient-page timeline (call + chat interleaved) and the three fallbacks: missed
+call → WhatsApp, unanswered reminder call → WhatsApp, undelivered doctor
+follow-up → WhatsApp.
+
+### MVP6 — self-serve onboarding + broadcasts
+
+Coexistence / Embedded Signup connect flow (needs Tech Provider approval), then
+broadcasts. Record the App Review videos against the real product from MVP2–3
+before this batch.
+
+### MVP7 — doctor command channel (S4, separate spec)
+
+Leave and timings by WhatsApp to one Vachanam-owned number.
 
 ## 10. Risks
 
