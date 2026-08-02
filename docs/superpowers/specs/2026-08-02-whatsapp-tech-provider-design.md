@@ -161,6 +161,14 @@ traffic). It stays useful as the platform-token fallback for our own testing.
 
 ## 7. Build phases
 
+> **Amended 2026-08-02** by `2026-08-02-whatsapp-hub-cross-channel-design.md`
+> §6/§9: P1 (Embedded Signup connect) is **no longer first**. We run "bridge
+> mode" — the pilot number on Vachanam's own WABA, platform token — while
+> business verification and App Review are pending, behind a per-branch token
+> resolver so the switch to clinic-owned WABAs is a per-clinic flag flip, not a
+> rewrite. Connect moves to slice 6 of that plan; everything below still applies
+> when it is built.
+
 **P1 — connect a clinic (the unblocking slice)**
 - [ ] Migration + model fields (§4)
 - [ ] `backend/services/wa_onboarding.py`: `exchange_code`, `subscribe_app`,

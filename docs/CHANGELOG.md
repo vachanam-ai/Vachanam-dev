@@ -13,6 +13,35 @@ Format per session:
 
 ---
 
+## 2026-08-02 — WhatsApp hub + cross-channel design (brainstorming session)
+
+Designed the WhatsApp product surface with Vinay. Decisions: one **WhatsApp** nav
+item with four tabs (Inbox · Templates · Broadcasts · Setup); nav becomes
+capability-driven so a WhatsApp-only clinic sees a smaller app (Vinay's idea);
+Templates tab is a list + live preview because custom templates are what Meta
+rejects; templates English-only while free-text AI replies mirror the patient's
+language; a staff reply pauses the AI for that patient until handed back
+(auto-resume 24h); broadcast audience v1 is every contact the branch holds, with
+segmentation parked until Vinay talks to clinics.
+
+Cross-channel: shared patient memory by phone number, one interleaved
+call+chat timeline on the Patient page (query-time union, not a materialized
+table), and three fallbacks — missed call → WhatsApp, unanswered reminder call →
+WhatsApp, undelivered doctor follow-up → WhatsApp. Rejected WhatsApp→call.
+Continuity carries context but never a token hold (RULE 3 stands).
+
+**Sequencing correction (Vinay):** App Review videos need a working product, so
+Embedded Signup is no longer slice 1. We run *bridge mode* — pilot number on
+Vachanam's own WABA, 250 conversations/day, platform token — behind a per-branch
+token resolver (`wa_token_enc` NULL = bridge, present = clinic-owned). The
+switch to Tech Provider becomes a per-clinic flag flip instead of a rewrite. The
+Tech Provider doc's build order is amended accordingly.
+
+Spec: `docs/superpowers/specs/2026-08-02-whatsapp-hub-cross-channel-design.md`.
+No code yet — implementation plan next.
+
+---
+
 ## 2026-08-02 — WhatsApp multi-clinic: Tech Provider model chosen (design only)
 
 Vinay picked **(A) the clinic owns its WABA**: Vachanam onboards as an
