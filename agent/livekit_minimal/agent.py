@@ -1,7 +1,7 @@
 """Vachanam LiveKit voice agent — production booking brain, inbound + outbound.
 
-Stack: Sarvam Saaras v3 STT (te-IN) + Gemini 2.5 Flash (GPT-4o-mini fallback,
-RULE 9) + Sarvam Bulbul v3 TTS (kavitha, Telugu script, pace 1.3).
+Stack: Soniox realtime STT + Gemini Flash (fallback chain, RULE 9) + Soniox
+realtime TTS. Sarvam STT is retained only as an explicitly configured fallback.
 
 Booking brain (ported from agent/bot.py Pipecat implementation):
   - DID -> branch resolution from SIP participant attributes (RULE 5)
@@ -18,12 +18,14 @@ LiveKit + trunk IDs).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import random
 import re
 import sys
+import unicodedata
 import weakref
 from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
 from datetime import timezone as _tz
@@ -82,14 +84,17 @@ from backend.services.clinic_cache import (  # noqa: E402
     get_doctors,
     load_doctors,
 )
+from backend.services.doctor_schedule import doctors_on_shift_at  # noqa: E402
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.livekit_minimal.confirm_speech import build_confirm_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_context,
-    build_system_prompt,
 )
-from agent.prompts.grounded_prompt import supported_codes  # noqa: E402
+from agent.prompts.grounded_prompt import (  # noqa: E402
+    build_grounded_prompt,
+    supported_codes,
+)
 # CalendarService (legacy-signature shim), NOT GoogleCalendarService —
 # booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
@@ -325,77 +330,31 @@ def _protect_mutation(context) -> None:
 
 
 def _build_caller_context(rows, now_local) -> tuple[str | None, str]:
-    """Identify an inbound caller from their existing bookings (RULE 1 already
-    applied — rows are branch-scoped via find_bookings_by_phone).
+    """Return privacy-safe context for a number that has upcoming bookings.
 
-    Returns (greeting_name, prompt_extra):
-      - greeting_name: the patient name to greet by, or None when the caller is
-        new OR several different patients share the number (don't reveal one).
-      - prompt_extra: caller-identity instructions injected into the system
-        prompt so the agent knows their FUTURE bookings up front and handles the
-        "wants a new booking but already has one" case without a tool round-trip.
+    The greeting and system prompt must not reveal that a booking exists, a
+    patient's name, a doctor, a time, or a token merely because ANI matched.
+    That was enough for the model to answer an unrelated opening utterance with
+    private appointment details. Exact records are fetched only after the caller
+    explicitly asks about their appointments, using the phone-scoped tool.
     """
-    # Older pure-function callers pass a date; production passes branch-local
-    # datetime so same-day clock appointments are classified precisely.
     if isinstance(now_local, date_cls) and not isinstance(now_local, datetime_cls):
         now_local = datetime_cls.combine(now_local, time_cls.min)
-    today = now_local.date()
     confirmed = [
         (t, d, p) for (t, d, p) in rows if booking_is_upcoming(t, now_local)
     ]
     if not confirmed:
-        return None, ""  # new caller (or only clinic-cancelled) -> normal flow
-    names = {p.name.strip() for (_, _, p) in confirmed}
-    greeting_name = next(iter(names)) if len(names) == 1 else None
-    lines = []
-    for t, d, p in confirmed:
-        if t.appointment_time:
-            ref = f"time {t.appointment_time.strftime('%I:%M %p').lstrip('0')}"
-        else:
-            ref = f"token {t.token_number}"
-        lines.append(
-            f"  - token_id={t.id} | patient={p.name} | doctor={d.name} | "
-            f"date={t.date.isoformat()} | {ref} | type={d.booking_type}"
-        )
-    bookings_block = "\n".join(lines)
-    # Audit #23: if we already tried a reminder call for a TODAY booking, say
-    # so knowingly instead of acting like the call never happened.
-    if any(
-        t.date == today and getattr(t, "reminder_sent", False)
-        for (t, _, _) in confirmed
-    ):
-        bookings_block += (
-            "\n  (We already placed a reminder call for today's booking — if "
-            "they mention a missed call, that was us; confirm they're coming "
-            "or reschedule.)"
-        )
-    who = (
-        f" by name ({greeting_name})."
-        if greeting_name
-        else " (several patients share this number — ask which patient they mean "
-        "before acting on a specific booking)."
-    )
+        return None, ""
     extra = (
-        "\n\nCALLER IDENTIFICATION (looked up by their phone BEFORE this call — "
-        "do NOT call find_my_bookings, you already have it):\n"
-        "This is an EXISTING patient. The greeting already welcomed them" + who + "\n"
-        "Ask their concern warmly. Speak all dates/times in Telugu words.\n"
-        "FUTURE booking(s) already on file for this number:\n"
-        f"{bookings_block}\n"
-        "HOW TO HANDLE THIS CALLER:\n"
-        "- Reschedule/cancel one of the above: use its token_id directly "
-        "(never re-ask their number).\n"
-        "- They ask for a NEW booking while a future booking above already "
-        "exists: do NOT silently create a second one. Tell them they already "
-        "have a booking on that date and time with that doctor, then ask ONE "
-        "question — reschedule that one, or a separate new booking? Follow their "
-        "choice: reschedule_booking(old token_id) to move it, or the normal "
-        "BOOKING FLOW for a genuinely separate booking (e.g. a family member — "
-        "pass different_person=true if same patient_phone+doctor+day).\n"
-        "- A clearly UNRELATED request (different doctor/concern): just book it "
-        "normally.\n"
+        "\n\nPRIVATE CALLER CONTEXT:\n"
+        "The verified inbound number may have appointment records. Do not "
+        "mention their existence or any patient, doctor, date, time, token, or "
+        "reminder unless the caller explicitly asks about their appointments. "
+        "When they do, call find_my_bookings; it is strictly scoped to the "
+        "verified inbound number. Never greet by a database patient name and "
+        "never answer an unrelated utterance with appointment details.\n"
     )
-    return greeting_name, extra
+    return None, extra
 
 
 def _cancel_on_shutdown(task):
@@ -799,12 +758,10 @@ KNOWN_CALLER_BOOKING_EXTRA = (
     "on the same day."
 )
 
-# SEC (ANI spoofing): by default the cold-open greeting does NOT speak a
-# recognised caller's stored name — the inbound caller ID is spoofable, and a
-# free name disclosure both leaks PII to a spoofer and would hand them the
-# second factor that verify_caller_identity relies on. Set VOICE_GREET_BY_NAME=1
-# to restore greet-by-name (accepting that residual risk knowingly).
-_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"
+# SEC: inbound caller ID is the appointment scope, but it is not permission to
+# disclose a stored patient's name in the cold open. This is hard-disabled;
+# there is no environment switch that can accidentally restore the leak.
+_GREET_BY_NAME = False
 
 # On a language switch, append a recency-salient language-lock to the carried
 # history so the old-language turns cannot pull the model back (see
@@ -831,8 +788,8 @@ _SWITCH_CTX_KEEP = int(os.getenv("VOICE_SWITCH_CTX_KEEP", "8"))
 KNOWN_CALLER_NO_NAME_EXTRA = (
     "\n\nRETURNING CALLER: this number belongs to a patient the clinic already "
     "knows, but the greeting did not use their name. Welcome them warmly and "
-    "ask how you can help. For an existing appointment, call find_my_bookings "
-    "immediately. Never ask for another phone number. If multiple family "
+    "ask how you can help. Only if they explicitly ask about an existing "
+    "appointment, call find_my_bookings. Never ask for another phone number. If multiple family "
     "members have appointments on this number, ask which listed patient and "
     "appointment they want to change before mutating anything."
 )
@@ -845,7 +802,7 @@ REBOOK_PROMPT_EXTRA = (
     "dialed, doctor={doctor}. NEVER ask who they are, NEVER ask their health "
     "problem, NEVER restart the new-patient flow — this overrides the booking "
     "flow steps above. If their reply is unclear or mumbled, simply repeat "
-    "your question once: 'సరిగా వినిపించలేదండి — వేరే రోజు బుక్ చేయమంటారా?'\n"
+    "your question once: 'వేరే రోజు బుక్ చేయమంటారా అండి, లేక ఇప్పటికి వద్దా?'\n"
     "If they ask about their PREVIOUS booking ('when was my appointment?'): "
     "answer from THIS context — it was on {cancelled_date} with {doctor} and "
     "the clinic cancelled it for the leave. NEVER say they have no booking; "
@@ -1391,15 +1348,17 @@ def _build_stt(
                 endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level,
             ),
         )
-    if provider == 'soniox':
-        logger.error('stt_provider=soniox requested without key; falling back to Sarvam')
-    else:
+    if settings.sarvam_api_key and provider != 'soniox':
         logger.info('stt_config provider=sarvam requested=%s', provider)
-    return sarvam.STT(
-        api_key=settings.sarvam_api_key,
-        model="saaras:v3",
-        language=lang_cfg.stt_code,
-        flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
+        return sarvam.STT(
+            api_key=settings.sarvam_api_key,
+            model="saaras:v3",
+            language=lang_cfg.stt_code,
+            flush_signal=True,  # final transcript on client VAD end (-1-2s/turn)
+        )
+    raise RuntimeError(
+        'Voice STT is not configured: set SONIOX_JP_API_KEY. '
+        'SARVAM_API_KEY is optional and used only when STT_PROVIDER=sarvam.'
     )
 
 
@@ -1951,6 +1910,351 @@ def _explicit_language_request(text: str) -> str | None:
     return None
 
 
+_NATIVE_SCRIPT_RANGES: tuple[tuple[str, int, int], ...] = (
+    ('te', 0x0C00, 0x0C7F),
+    ('ta', 0x0B80, 0x0BFF),
+    ('kn', 0x0C80, 0x0CFF),
+    ('ml', 0x0D00, 0x0D7F),
+    ('bn', 0x0980, 0x09FF),
+)
+
+
+def _dominant_native_language(text: str) -> str | None:
+    '''Return an unambiguous native-script language for substantial speech.
+
+    Stored caller preference is only a startup hint. If a caller whose saved
+    preference is English speaks a complete Telugu sentence, their actual
+    speech wins before the model replies. Devanagari uses conservative
+    Hindi/Marathi word evidence because the script alone is ambiguous.
+    '''
+    counts = {code: 0 for code, _, _ in _NATIVE_SCRIPT_RANGES}
+    for char in text or '':
+        if not unicodedata.category(char).startswith('L'):
+            continue
+        cp = ord(char)
+        for code, start, end in _NATIVE_SCRIPT_RANGES:
+            if start <= cp <= end:
+                counts[code] += 1
+                break
+    devanagari_letters = sum(
+        0x0900 <= ord(char) <= 0x097F
+        and unicodedata.category(char).startswith('L')
+        for char in text or ''
+    )
+    if devanagari_letters >= 4:
+        words = set(re.findall(r'[\u0900-\u097f]+', (text or '').casefold()))
+        hindi = {
+            'है', 'हैं', 'मुझे', 'तुम', 'आप', 'बताओ', 'बताइए', 'चाहिए',
+            'बोलिए', 'कौन', 'क्या',
+        }
+        marathi = {
+            'आहे', 'आहेत', 'आहेस', 'मला', 'तू', 'तुम्ही', 'सांगा',
+            'हवी', 'हवं', 'कोणते', 'उद्या',
+        }
+        hi_score = len(words & hindi)
+        mr_score = len(words & marathi)
+        if hi_score > mr_score:
+            return 'hi'
+        if mr_score > hi_score:
+            return 'mr'
+    code, count = max(counts.items(), key=lambda item: item[1])
+    total = sum(counts.values())
+    if count < 4 or total == 0 or count / total < 0.7:
+        return None
+    return code
+
+
+_ROSTER_PATTERNS = (
+    re.compile(r'\b(?:who|what|which)\b.{0,50}\bdoctors?\b', re.I),
+    re.compile(r'\b(?:list|tell me).{0,35}\bdoctors?\b', re.I),
+    re.compile(r'(?:ఎవరెవరు|ఎవరు).{0,35}డాక్ట', re.I),
+    re.compile(r'(?:ఏ|ఎంతమంది).{0,20}డాక్ట', re.I),
+    re.compile(r'డాక్ట.{0,35}(?:ఎవరెవరు|ఎవరు)', re.I),
+    re.compile(r'డాక్ట.{0,35}(?:ఉన్నారు|ఉన్నారో|ఉన్నాయి)', re.I),
+    re.compile(r'(?:कौन-कौन|कौन).{0,35}डॉक्टर', re.I),
+    re.compile(r'(?:कोणते|कोण-कोण).{0,35}डॉक्टर', re.I),
+    re.compile(r'डॉक्टर.{0,35}(?:आहेत|आहे)', re.I),
+    re.compile(r'(?:யாரெல்லாம்|யார்).{0,35}டாக்டர்', re.I),
+    re.compile(r'(?:எந்த|என்னென்ன).{0,20}டாக்டர்', re.I),
+    re.compile(r'டாக்டர்.{0,35}(?:இருக்காங்க|இருக்கு)', re.I),
+    re.compile(r'(?:ಯಾರ್ಯಾರು|ಯಾರು).{0,35}ಡಾಕ್ಟರ್', re.I),
+    re.compile(r'(?:ಯಾವ|ಎಷ್ಟೆಷ್ಟು).{0,20}ಡಾಕ್ಟರ್', re.I),
+    re.compile(r'ಡಾಕ್ಟರ್.{0,35}(?:ಇದ್ದಾರೆ|ಇದ್ದಾರ)', re.I),
+    re.compile(r'(?:ആരൊക്കെ|ആര്).{0,35}ഡോക്ട', re.I),
+    re.compile(r'(?:কারা|কে কে).{0,35}ডাক্তার', re.I),
+)
+
+
+def _is_doctor_roster_question(text: str) -> bool:
+    '''Whether the caller asks which doctors the clinic has.'''
+    clean = ' '.join((text or '').split())
+    return (
+        bool(clean)
+        and not _is_current_doctor_availability_question(clean)
+        and any(pattern.search(clean) for pattern in _ROSTER_PATTERNS)
+    )
+
+
+_CURRENT_DOCTOR_TERMS = (
+    'doctor', 'doctors', 'డాక్టర్', 'డాక్టర్స్', 'डॉक्टर', 'டாக்டர்',
+    'ಡಾಕ್ಟರ್', 'ഡോക്ട', 'ডাক্তার',
+)
+_CURRENT_TIME_TERMS = (
+    'right now', 'currently', 'now available', 'available now', 'on duty now',
+    'ఇప్పుడు', 'ప్రస్తుతం', 'ప్రస్తుతానికి', 'ఇప్పుడైతే', 'ఈ టైంలో',
+    'अभी', 'फिलहाल', 'इस समय', 'இப்போது', 'தற்போது', 'ಈಗ', 'ಪ್ರಸ್ತುತ',
+    'सध्या', 'आत्ता', 'ഇപ്പോൾ', 'നിലവിൽ', 'এখন', 'বর্তমানে',
+)
+
+
+def _is_current_doctor_availability_question(text: str) -> bool:
+    '''Whether the caller asks who is scheduled at this exact moment.'''
+    clean = ' '.join((text or '').casefold().split())
+    return bool(clean) and any(term in clean for term in _CURRENT_DOCTOR_TERMS) and any(
+        term in clean for term in _CURRENT_TIME_TERMS
+    )
+
+
+_INCOMPLETE_EXACT = frozenset({
+    'what is', 'what is?', 'doctor', 'tomorrow', 'can you',
+    'ఏంటి', 'ఏంటి?', 'డాక్టర్', 'రేపు', 'మీరు', 'నేను', 'నాకు',
+    'అసలు మీ', 'అసలు మీరు',
+    'क्या है', 'क्या है?', 'डॉक्टर', 'कल', 'क्या आप',
+    'என்னது', 'என்னது?', 'டாக்டர்', 'நாளைக்கு', 'நீங்க',
+    'ಏನು', 'ಏನು?', 'ಡಾಕ್ಟರ್', 'ನಾಳೆ', 'ನೀವು',
+    'काय आहे', 'काय आहे?', 'डॉक्टर', 'उद्या', 'तुम्ही',
+})
+
+
+def _is_incomplete_fragment(text: str) -> bool:
+    '''Recognize only high-confidence unfinished caller turns.'''
+    clean = ' '.join((text or '').strip().split())
+    if not clean:
+        return True
+    normalized = clean.rstrip('.…').strip().casefold()
+    if normalized in _INCOMPLETE_EXACT:
+        return True
+    # STT preserves an ellipsis only when speech trails off. Keep the bound
+    # conservative so a complete long sentence with expressive punctuation is
+    # never intercepted.
+    return clean.endswith(('...', '…')) and len(normalized.split()) <= 5
+
+
+def _incomplete_clarification(language: str, attempt: int = 0) -> str:
+    first = {
+        'te': 'చెప్పండి అండి, తొందరేమీ లేదు. ఏం అడగాలనుకున్నారు?',
+        'hi': 'आराम से बताइए जी। आप क्या पूछना चाहते थे?',
+        'ta': 'நிதானமா சொல்லுங்க. என்ன கேட்க நினைச்சீங்க?',
+        'kn': 'ಆರಾಮವಾಗಿ ಹೇಳಿ ರೀ. ಏನು ಕೇಳಬೇಕಿತ್ತು?',
+        'mr': 'निवांत सांगा. तुम्हाला काय विचारायचं होतं?',
+        'en': 'Take your time. What did you want to ask?',
+    }
+    guided = {
+        'te': 'డాక్టర్ గురించా, టైమ్ గురించా, లేక అపాయింట్‌మెంట్ గురించా అండి?',
+        'hi': 'डॉक्टर, समय, या अपॉइंटमेंट—किस बारे में पूछना है जी?',
+        'ta': 'டாக்டர், நேரம், இல்ல அப்பாயிண்ட்மெண்ட்—எதைப் பற்றி கேட்கணும்?',
+        'kn': 'ಡಾಕ್ಟರ್, ಸಮಯ, ಅಥವಾ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್—ಯಾವುದರ ಬಗ್ಗೆ ಕೇಳಬೇಕು ರೀ?',
+        'mr': 'डॉक्टर, वेळ, की अपॉइंटमेंट—कशाबद्दल विचारायचं आहे?',
+        'en': 'Is this about a doctor, a time, or an appointment?',
+    }
+    support = {
+        'te': 'మీరు చిన్న వాక్యంలో చెప్పగలరా అండి, లేక క్లినిక్ సిబ్బందితో మాట్లాడాలా?',
+        'hi': 'एक छोटे वाक्य में बताएँगे जी, या क्लिनिक स्टाफ से बात करनी है?',
+        'ta': 'ஒரு சின்ன வாக்கியமா சொல்ல முடியுமா, இல்ல கிளினிக் ஊழியரிடம் பேசணுமா?',
+        'kn': 'ಒಂದು ಚಿಕ್ಕ ವಾಕ್ಯದಲ್ಲಿ ಹೇಳುತ್ತೀರಾ ರೀ, ಅಥವಾ ಕ್ಲಿನಿಕ್ ಸಿಬ್ಬಂದಿಯ ಜೊತೆ ಮಾತಾಡಬೇಕಾ?',
+        'mr': 'एका छोट्या वाक्यात सांगाल का, की क्लिनिक कर्मचाऱ्यांशी बोलायचं आहे?',
+        'en': 'Could you say it in one short sentence, or would you like the clinic staff?',
+    }
+    table = first if attempt <= 0 else guided if attempt == 1 else support
+    return table.get(language, table['en'])
+
+
+_HOSTILE_WORDS = (
+    'idiot', 'stupid', 'useless', 'shut up', 'brain',
+    'బుర్ర ఉందా', 'బుర్రలేదా', 'బుద్ధి లేదా', 'బుద్ధి లేదు',
+    'పిచ్చి', 'వెధవ', 'మూసుకో',
+    'बेवकूफ', 'पागल', 'चुप रह', 'முட்டாள்', 'பைத்தியம்',
+    'அறிவே இல்லையா', 'அறிவு இல்லையா', 'ಮೂರ್ಖ', 'ಹುಚ್ಚ',
+    'ಬುದ್ಧಿ ಇಲ್ಲವಾ', 'ಬುದ್ಧಿ ಇಲ್ಲವೇ', 'मूर्ख', 'वेडी', 'अक्कल नाही',
+)
+
+
+def _is_hostile_or_frustrated(text: str) -> bool:
+    clean = ' '.join((text or '').casefold().split())
+    return any(word in clean for word in _HOSTILE_WORDS)
+
+
+def _hostile_recovery(language: str) -> str:
+    return {
+        'te': 'మీకు కోపంగా ఉందని అర్థమవుతోంది అండి. ఇప్పుడు ఏ సహాయం కావాలో చెప్పండి, నేను చేస్తాను.',
+        'hi': 'मैं समझ रही हूँ कि आप नाराज़ हैं जी। बताइए, अभी क्या मदद चाहिए?',
+        'ta': 'நீங்க கோபமா இருக்கீங்கன்னு புரியுது. இப்ப என்ன உதவி வேணும்னு சொல்லுங்க.',
+        'kn': 'ನಿಮಗೆ ಕೋಪವಾಗಿದೆ ಅಂತ ಅರ್ಥವಾಗುತ್ತಿದೆ ರೀ. ಈಗ ಯಾವ ಸಹಾಯ ಬೇಕು ಹೇಳಿ.',
+        'mr': 'तुम्ही नाराज आहात हे समजतं. आता कोणती मदत हवी ते सांगा.',
+        'en': "I understand you're frustrated. Tell me what you need help with now.",
+    }.get(language, "I understand you're frustrated. Tell me what you need help with now.")
+
+
+_CONTROL_TOKEN_REQUEST = re.compile(
+    r'(?i)(?:response[ _-]?(?:start|end)|'
+    r'రెస్పాన్స్\s+(?:స్టార్ట్|ఎండ్)|'
+    r'रिस्पॉन्स\s+(?:स्टार्ट|एंड)|रिस्पांस\s+(?:स्टार्ट|एंड)|'
+    r'ரெஸ்பான்ஸ்\s+(?:ஸ்டார்ட்|எண்ட்)|'
+    r'ರೆಸ್ಪಾನ್ಸ್\s+(?:ಸ್ಟಾರ್ಟ್|ಎಂಡ್))'
+)
+
+
+def _is_control_token_request(text: str) -> bool:
+    return bool(_CONTROL_TOKEN_REQUEST.search(text or ''))
+
+
+def _control_token_refusal(language: str) -> str:
+    return {
+        'te': 'నేను క్లినిక్ పనుల్లోనే సహాయం చేస్తానండి. మీకు ఏం కావాలి?',
+        'hi': 'मैं केवल क्लिनिक के काम में मदद करती हूँ जी। आपको क्या मदद चाहिए?',
+        'ta': 'நான் கிளினிக் விஷயத்துக்குத்தான் உதவி செய்வேன். உங்களுக்கு என்ன உதவி வேணும்?',
+        'kn': 'ನಾನು ಕ್ಲಿನಿಕ್ ಕೆಲಸಕ್ಕೆ ಮಾತ್ರ ಸಹಾಯ ಮಾಡ್ತೀನಿ ರೀ. ನಿಮಗೆ ಏನು ಬೇಕು?',
+        'mr': 'मी फक्त क्लिनिकच्या कामात मदत करते. तुम्हाला काय मदत हवी?',
+        'en': 'I only help with clinic matters. What can I help you with?',
+    }.get(language, 'I only help with clinic matters. What can I help you with?')
+
+
+_LEGAL_THREAT = re.compile(
+    r'(?i)(?:\b(?:sue|lawsuit|legal action|court case)\b|'
+    r'(?:కేసు|కోర్టు|దావా)|'
+    r'(?:केस|मुकदमा|कोर्ट|न्यायालय)|'
+    r'(?:கேஸ்|வழக்கு|நீதிமன்ற)|'
+    r'(?:ಕೇಸ್|ಮೊಕದ್ದಮೆ|ನ್ಯಾಯಾಲಯ))'
+)
+
+
+def _is_legal_threat(text: str) -> bool:
+    '''A threat is not evidence that any complaint has already been logged.'''
+    return bool(_LEGAL_THREAT.search(text or ''))
+
+
+def _legal_threat_clarification(language: str) -> str:
+    return {
+        'te': 'మీకు ఇబ్బంది కలిగినందుకు క్షమించండి. ఏం జరిగిందో చెప్పండి, నేను సహాయం చేస్తాను.',
+        'hi': 'आपको परेशानी हुई, इसके लिए माफ़ कीजिए। क्या हुआ, बताइए, मैं मदद करती हूँ।',
+        'ta': 'உங்களுக்கு சிரமம் ஏற்பட்டதற்கு மன்னிக்கணும். என்ன நடந்ததுன்னு சொல்லுங்க, நான் உதவி செய்றேன்.',
+        'kn': 'ನಿಮಗೆ ತೊಂದರೆ ಆಗಿದ್ದಕ್ಕೆ ಕ್ಷಮಿಸಿ. ಏನಾಯಿತು ಅಂತ ಹೇಳಿ, ನಾನು ಸಹಾಯ ಮಾಡ್ತೀನಿ.',
+        'mr': 'तुम्हाला त्रास झाला, त्याबद्दल माफ करा. काय झालं ते सांगा, मी मदत करते.',
+        'en': "I'm sorry you had a bad experience. Please tell me what happened so I can help.",
+    }.get(
+        language,
+        "I'm sorry you had a bad experience. Please tell me what happened so I can help.",
+    )
+
+
+def _doctor_roster_text(doctors, language: str) -> str:
+    '''Render a DB-backed doctor roster without an LLM decision.'''
+    rows: list[tuple[str, str]] = []
+    for doctor in doctors or ():
+        name = re.sub(
+            r'^(?:dr\.?|doctor)\s+', '', str(getattr(doctor, 'name', '') or ''),
+            flags=re.I,
+        ).strip()
+        specialization = str(getattr(doctor, 'specialization', '') or '').strip()
+        if name:
+            rows.append((name, specialization))
+    code = language if language in LANGUAGES else DEFAULT_LANG
+    if not rows:
+        return {
+            'te': 'డాక్టర్ల వివరాలు ఇప్పుడే కనిపించడం లేదండి. ఒక్క నిమిషం తర్వాత మళ్ళీ అడగండి.',
+            'hi': 'डॉक्टरों की सूची अभी नहीं खुल रही है जी। एक मिनट बाद फिर पूछिएगा।',
+            'ta': 'டாக்டர்கள் விவரம் இப்போது கிடைக்கவில்லைங்க. ஒரு நிமிஷம் கழித்து மீண்டும் கேளுங்க.',
+            'kn': 'ಡಾಕ್ಟರ್ ವಿವರ ಈಗ ಸಿಗುತ್ತಿಲ್ಲ ರೀ. ಒಂದು ನಿಮಿಷದ ನಂತರ ಮತ್ತೆ ಕೇಳಿ.',
+            'mr': 'डॉक्टरांची माहिती आत्ता दिसत नाही. एक मिनिटाने पुन्हा विचारा.',
+            'ml': 'ഡോക്ടർമാരുടെ വിവരങ്ങൾ ഇപ്പോൾ ലഭിക്കുന്നില്ല. ഒരു മിനിറ്റിന് ശേഷം വീണ്ടും ചോദിക്കൂ.',
+            'bn': 'ডাক্তারদের তালিকা এখন পাওয়া যাচ্ছে না। এক মিনিট পরে আবার জিজ্ঞেস করুন।',
+            'en': 'The doctor roster is temporarily unavailable. Please ask again in a minute.',
+        }.get(code, 'The doctor roster is temporarily unavailable. Please ask again in a minute.')
+
+    if code == 'te':
+        items = [f'డాక్టర్ {name} గారు, {spec}' if spec else f'డాక్టర్ {name} గారు' for name, spec in rows]
+        return 'మా క్లినిక్‌లో {} ఉన్నారండి.'.format('; '.join(items))
+    if code == 'hi':
+        items = [f'डॉक्टर {name}, {spec}' if spec else f'डॉक्टर {name}' for name, spec in rows]
+        return 'हमारे क्लिनिक में {} हैं जी।'.format('; '.join(items))
+    if code == 'ta':
+        items = [f'டாக்டர் {name}, {spec}' if spec else f'டாக்டர் {name}' for name, spec in rows]
+        return 'எங்கள் கிளினிக்கில் {} இருக்காங்க.'.format('; '.join(items))
+    if code == 'kn':
+        items = [f'ಡಾಕ್ಟರ್ {name}, {spec}' if spec else f'ಡಾಕ್ಟರ್ {name}' for name, spec in rows]
+        return 'ನಮ್ಮ ಕ್ಲಿನಿಕ್‌ನಲ್ಲಿ {} ಇದ್ದಾರೆ ರೀ.'.format('; '.join(items))
+    if code == 'mr':
+        items = [f'डाक्टर {name}, {spec}' if spec else f'डाक्टर {name}' for name, spec in rows]
+        return 'आमच्या क्लिनिकमध्ये {} आहेत.'.format('; '.join(items))
+    if code == 'ml':
+        items = [f'ഡോക്ടർ {name}, {spec}' if spec else f'ഡോക്ടർ {name}' for name, spec in rows]
+        return 'ഞങ്ങളുടെ ക്ലിനിക്കിൽ {} ഉണ്ട്.'.format('; '.join(items))
+    if code == 'bn':
+        items = [f'ডাক্তার {name}, {spec}' if spec else f'ডাক্তার {name}' for name, spec in rows]
+        return 'আমাদের ক্লিনিকে {} আছেন।'.format('; '.join(items))
+    items = [f'Dr. {name}, {spec}' if spec else f'Dr. {name}' for name, spec in rows]
+    return 'Our doctors are {}.'.format('; '.join(items))
+
+
+def _current_doctors_text(doctors, language: str) -> str:
+    '''Render doctors scheduled right now without claiming an open slot.'''
+    names = []
+    for doctor in doctors or ():
+        name = re.sub(
+            r'^(?:dr\.?|doctor)\s+', '', str(getattr(doctor, 'name', '') or ''),
+            flags=re.I,
+        ).strip()
+        if name:
+            names.append(name)
+    if not names:
+        return {
+            'te': 'ఇప్పుడైతే ఏ డాక్టర్ గారి షిఫ్ట్ నడవడం లేదండి. ఏ డాక్టర్ కోసం కావాలో చెప్పండి, వారి నెక్స్ట్ టైమ్ చెక్ చేస్తాను.',
+            'hi': 'अभी किसी डॉक्टर की शिफ्ट नहीं चल रही है जी। किस डॉक्टर से मिलना है, बताइए; मैं उनका अगला समय जाँचती हूँ।',
+            'ta': 'இப்போது எந்த டாக்டருடைய ஷிப்டும் இல்லை. எந்த டாக்டர் வேணும்னு சொல்லுங்க; அடுத்த நேரத்தைப் பார்க்கிறேன்.',
+            'kn': 'ಈಗ ಯಾವ ಡಾಕ್ಟರ್ ಅವರ ಶಿಫ್ಟ್ ಕೂಡ ನಡೆಯುತ್ತಿಲ್ಲ ರೀ. ಯಾವ ಡಾಕ್ಟರ್ ಬೇಕು ಹೇಳಿ; ಮುಂದಿನ ಸಮಯ ನೋಡುತ್ತೇನೆ.',
+            'mr': 'सध्या कोणत्याही डॉक्टरांची शिफ्ट सुरू नाही. कोणते डॉक्टर हवे ते सांगा; पुढची वेळ तपासते.',
+            'en': 'No doctor is scheduled on shift right now. Tell me which doctor you need and I will check their next time.',
+        }.get(language, 'No doctor is scheduled on shift right now. Tell me which doctor you need and I will check their next time.')
+    joined = ', '.join(names[:-1]) + (' and ' if len(names) > 1 else '') + names[-1]
+    english_subject = f'Dr. {joined}' if len(names) == 1 else f'Doctors {joined}'
+    english_verb = 'is' if len(names) == 1 else 'are'
+    return {
+        'te': f'ఇప్పుడు {", ".join(f"డాక్టర్ {name} గారు" for name in names)} షిఫ్ట్‌లో ఉన్నారండి. ఎవరిని కలవాలి?',
+        'hi': f'अभी {", ".join(f"डॉक्टर {name}" for name in names)} की शिफ्ट चल रही है जी। आप किससे मिलना चाहते हैं?',
+        'ta': f'இப்போது {", ".join(f"டாக்டர் {name}" for name in names)} ஷிப்டில் இருக்காங்க. யாரைப் பார்க்கணும்?',
+        'kn': f'ಈಗ {", ".join(f"ಡಾಕ್ಟರ್ {name}" for name in names)} ಶಿಫ್ಟ್‌ನಲ್ಲಿ ಇದ್ದಾರೆ ರೀ. ಯಾರನ್ನು ಭೇಟಿ ಮಾಡಬೇಕು?',
+        'mr': f'सध्या {", ".join(f"डॉक्टर {name}" for name in names)} यांची शिफ्ट सुरू आहे. कोणांना भेटायचं आहे?',
+        'en': f'{english_subject} {english_verb} scheduled on shift right now. Who would you like to see?',
+    }.get(language, f'{english_subject} {english_verb} scheduled on shift right now. Who would you like to see?')
+
+
+def _privacy_safe_session_id(value: str | None) -> str | None:
+    '''Pseudonymize LiveKit room names, which embed the caller phone number.'''
+    if not value:
+        return None
+    return 'call-' + hashlib.sha256(value.encode('utf-8')).hexdigest()[:20]
+
+
+_CLARIFICATION_FAILURE_MARKERS = (
+    'మళ్ళీ చెప్తారా', 'మళ్ళీ ఒకసారి', 'సరిగా వినలేద', 'సరిగ్గా వినపడలేదు',
+    'did not catch', 'say that again', 'ठीक से सुनाई नहीं', 'फिर से पूछ',
+    'சரியா கேக்கலை', 'இன்னொரு முறை', 'ಸರಿಯಾಗಿ ಕೇಳಿಸ್ಲಿಲ್ಲ',
+)
+
+
+def _inferred_call_failure(transcript: str | None) -> str | None:
+    '''Classify an unresolved clarification loop for monitoring.'''
+    if not transcript:
+        return None
+    agent_text = '\n'.join(
+        line[7:] for line in transcript.splitlines() if line.startswith('agent: ')
+    ).casefold()
+    clarification_count = sum(
+        agent_text.count(marker.casefold()) for marker in _CLARIFICATION_FAILURE_MARKERS
+    )
+    return 'repeated_clarification' if clarification_count >= 2 else None
+
+
 class VachanamAgent(Agent):
     """Booking receptionist with real tools. One instance per call."""
 
@@ -1971,6 +2275,8 @@ class VachanamAgent(Agent):
         tts=None,             # per-agent TTS override (language switch handoff)
         chat_ctx=None,        # conversation history carried across the handoff
         llm=None,             # #417 per-agent LLM (prompt-cache-backed primary)
+        doctor_contexts=None, # authoritative active roster for deterministic replies
+        timezone_name: str = 'Asia/Kolkata',
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
         # None would DISABLE the session-level pipeline, not inherit it.
@@ -2009,6 +2315,12 @@ class VachanamAgent(Agent):
         # Kept so switch_language can PRIME the new agent's TTS before handoff
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
+        self._doctor_contexts = tuple(doctor_contexts or ())
+        self._timezone_name = timezone_name or 'Asia/Kolkata'
+        # Native-script auto-correction hands the current turn to a freshly
+        # configured language agent. on_enter consumes exactly one of these.
+        self._handoff_user_input: str | None = None
+        self._handoff_speech: str | None = None
         # #lost (Vinay 2026-07-20): count consecutive lone-"hello" user turns —
         # 3 in a row means the caller can't hear us (one-way audio / dropped line).
         self._consecutive_hellos = 0
@@ -2020,6 +2332,27 @@ class VachanamAgent(Agent):
         # Empty until primed, and staying empty simply speaks the Latin name.
         self._name_sub = None
         self._name_hold = None
+
+    async def _current_doctors_speech(self, language: str) -> str:
+        '''One-query, DB-grounded current-shift response; never use the LLM.'''
+        try:
+            from zoneinfo import ZoneInfo
+
+            moment = datetime_cls.now(ZoneInfo(self._timezone_name))
+            doctors = await doctors_on_shift_at(
+                self._state.branch_id, moment, self._db
+            )
+            return _current_doctors_text(doctors, language)
+        except Exception as exc:  # noqa: BLE001 — fail closed, never invent a doctor
+            logger.error('current_doctors_lookup_failed: %s', str(exc)[:160])
+            return {
+                'te': 'ప్రస్తుతం లైవ్ షెడ్యూల్ చెక్ కావడం లేదండి. తప్పు సమాచారం చెప్పకుండా క్లినిక్ సిబ్బందికి కనెక్ట్ చేయగలను.',
+                'hi': 'अभी लाइव शेड्यूल खुल नहीं रहा है जी। गलत जानकारी देने के बजाय मैं क्लिनिक स्टाफ से जोड़ सकती हूँ।',
+                'ta': 'இப்போது நேரடி அட்டவணையை பார்க்க முடியவில்லை. தவறான தகவல் சொல்லாமல் கிளினிக் ஊழியரிடம் இணைக்க முடியும்.',
+                'kn': 'ಈಗ ಲೈವ್ ವೇಳಾಪಟ್ಟಿ ತೆರೆಯುತ್ತಿಲ್ಲ ರೀ. ತಪ್ಪು ಮಾಹಿತಿ ಹೇಳದೆ ಕ್ಲಿನಿಕ್ ಸಿಬ್ಬಂದಿಗೆ ಸಂಪರ್ಕಿಸಬಹುದು.',
+                'mr': 'सध्या थेट वेळापत्रक उघडत नाही. चुकीची माहिती न देता मी क्लिनिक कर्मचाऱ्यांशी जोडू शकते.',
+                'en': 'I cannot access the live schedule right now. Rather than guess, I can connect you to the clinic staff.',
+            }.get(language, 'I cannot access the live schedule right now. Rather than guess, I can connect you to the clinic staff.')
 
     def set_pronunciations(self, mapping: dict) -> None:
         """Install the clinic+language pronunciation map (see
@@ -2082,6 +2415,20 @@ class VachanamAgent(Agent):
         switch_language it speaks a short deterministic acknowledgement in the
         NEW language so the caller never hears dead air while the STT/TTS
         pipelines are being swapped."""
+        if self._handoff_speech:
+            speech = self._handoff_speech
+            self._handoff_speech = None
+            await self.session.say(
+                sanitize_for_tts(speech), allow_interruptions=True
+            )
+            return
+        if self._handoff_user_input:
+            utterance = self._handoff_user_input
+            self._handoff_user_input = None
+            # Re-submit the SAME completed caller turn to the corrected
+            # language pipeline. The caller never has to repeat it.
+            self.session.generate_reply(user_input=utterance, input_modality='audio')
+            return
         if self._switch_ack:
             try:
                 # allow_interruptions=False: the intro is ~2s and is the ONLY
@@ -2139,7 +2486,7 @@ class VachanamAgent(Agent):
 
     async def on_user_turn_completed(self, turn_ctx, new_message) -> None:
         """ECHO GUARD (self-talk loop). A phone line can bounce the agent's own
-        TTS back; Sarvam STT then transcribes it as if the CALLER said it, and
+        TTS back; STT then transcribes it as if the CALLER said it, and
         the agent answers itself — an endless self-talk loop (BVCTelephony AEC
         does not always fully cancel carrier line echo). Drop a user turn that is
         a near-verbatim echo of the agent's immediately preceding utterance.
@@ -2168,9 +2515,121 @@ class VachanamAgent(Agent):
                 logger.error('language_request_handoff_failed: %s', exc)
                 self._sync_runtime_language(requested_language)
 
-        try:
-            from livekit.agents import StopResponse
+        # A saved preference is a startup hint, not permission to ignore the
+        # language the caller is actually speaking now. Unique native scripts
+        # are deterministic; correct the full pipeline before any model reply.
+        detected_language = _dominant_native_language(utterance)
+        incomplete_fragment = _is_incomplete_fragment(utterance)
+        control_token_request = _is_control_token_request(utterance)
+        current_doctors_question = _is_current_doctor_availability_question(utterance)
+        roster_question = _is_doctor_roster_question(utterance)
+        legal_threat = _is_legal_threat(utterance)
+        hostile_or_frustrated = _is_hostile_or_frustrated(utterance)
+        response_language = detected_language or self._lang_code
+        current_doctors_speech = (
+            await self._current_doctors_speech(response_language)
+            if current_doctors_question
+            else None
+        )
+        clarification_attempt = getattr(self._state, 'clarification_attempts', 0)
+        if not incomplete_fragment:
+            self._state.clarification_attempts = 0
+        if detected_language and detected_language != self._lang_code:
+            deterministic_speech = (
+                _control_token_refusal(detected_language)
+                if control_token_request
+                else (
+                _incomplete_clarification(detected_language, clarification_attempt)
+                if incomplete_fragment
+                else (
+                current_doctors_speech
+                if current_doctors_question
+                else (
+                _doctor_roster_text(self._doctor_contexts, detected_language)
+                if roster_question
+                else (
+                _legal_threat_clarification(detected_language)
+                if legal_threat
+                else (
+                _hostile_recovery(detected_language)
+                if hostile_or_frustrated
+                else None
+                )
+                )
+                )
+                )
+                )
+            )
+            if current_doctors_question:
+                self._state.quality_intent = 'current_doctor_availability'
+            elif roster_question:
+                self._state.quality_intent = 'doctor_roster'
+            elif legal_threat:
+                self._state.quality_intent = 'clinic_complaint'
+            if incomplete_fragment:
+                self._state.clarification_attempts = clarification_attempt + 1
+            if self._handoff_detected_language(
+                turn_ctx,
+                detected_language,
+                user_input=None if deterministic_speech else utterance,
+                speech=deterministic_speech,
+            ):
+                raise StopResponse()
 
+        if control_token_request:
+            await self.session.say(
+                _control_token_refusal(self._lang_code),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        if incomplete_fragment:
+            self._state.clarification_attempts = clarification_attempt + 1
+            await self.session.say(
+                _incomplete_clarification(self._lang_code, clarification_attempt),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        if current_doctors_question:
+            self._state.quality_intent = 'current_doctor_availability'
+            await self.session.say(
+                sanitize_for_tts(current_doctors_speech),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        if legal_threat:
+            self._state.quality_intent = 'clinic_complaint'
+            await self.session.say(
+                _legal_threat_clarification(self._lang_code),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        # Roster truth is already loaded authoritatively before the session is
+        # built. Do not ask Gemini to rediscover it, and do not let an
+        # interruption turn the same clear question into an endless
+        # clarification loop.
+        if roster_question:
+            self._state.quality_intent = 'doctor_roster'
+            await self.session.say(
+                sanitize_for_tts(
+                    _doctor_roster_text(self._doctor_contexts, self._lang_code)
+                ),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        if hostile_or_frustrated:
+            self._state.quality_intent = 'clinic_complaint'
+            await self.session.say(
+                _hostile_recovery(self._lang_code),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        try:
             if is_lone_hello(self._message_text(new_message)):
                 self._consecutive_hellos += 1
                 if self._consecutive_hellos >= LOST_HELLO_COUNT:
@@ -2211,8 +2670,6 @@ class VachanamAgent(Agent):
                 return
             ratio = difflib.SequenceMatcher(None, norm_user, norm_agent).ratio()
             if ratio >= 0.85 or (len(norm_user) >= 25 and norm_user in norm_agent):
-                from livekit.agents import StopResponse
-
                 logger.warning(
                     "echo_turn_discarded ratio=%.2f len=%d branch_id=%s",
                     ratio, len(norm_user), str(self._state.branch_id),
@@ -2220,8 +2677,6 @@ class VachanamAgent(Agent):
                 raise StopResponse()
         except Exception as e:
             # StopResponse is the intended control-flow signal — re-raise it.
-            from livekit.agents import StopResponse
-
             if isinstance(e, StopResponse):
                 raise
             # Any other error must NEVER swallow a real turn — let it through.
@@ -2452,6 +2907,48 @@ class VachanamAgent(Agent):
         asyncio.create_task(_persist())
         return True
 
+    def _handoff_detected_language(
+        self,
+        turn_ctx,
+        code: str,
+        *,
+        user_input: str | None = None,
+        speech: str | None = None,
+    ) -> bool:
+        '''Correct a stale saved language without dropping the current turn.'''
+        self._sync_runtime_language(code)
+        if code == self._lang_code or self._agent_factory is None:
+            return False
+        try:
+            carried = turn_ctx.copy()
+        except Exception:
+            carried = None
+        new_agent = self._agent_factory(code, chat_ctx=carried)
+        new_agent._switch_ack = None
+        new_agent._handoff_user_input = user_input
+        new_agent._handoff_speech = speech
+        self.session.update_agent(new_agent)
+        logger.info(
+            'native_language_handoff from=%s to=%s session=%s',
+            self._lang_code,
+            code,
+            _privacy_safe_session_id(self._state.session_id),
+        )
+
+        async def _persist_detected() -> None:
+            if not self._state.patient_phone:
+                return
+            try:
+                async with AsyncSessionLocal() as pdb:
+                    await set_preferred_language(
+                        self._state.branch_id, self._state.patient_phone, code, pdb
+                    )
+            except Exception as exc:
+                logger.warning('detected_language_persist_failed: %s', exc)
+
+        asyncio.create_task(_persist_detected())
+        return True
+
     async def _resolve_doctor_id(self, doctor_id: str | None) -> UUID:
         """Never trust the LLM to echo a UUID. Accept a real UUID, else match a
         doctor name within this branch, else fall back to the doctor selected by
@@ -2547,6 +3044,7 @@ class VachanamAgent(Agent):
         """Match the patient's stated health complaint to the right doctor.
         Call once the patient has described their problem. Pass the complaint
         exactly as spoken."""
+        self._state.quality_intent = 'doctor_routing'
         _say_lookup_filler(context)  # cover the routing-LLM/DB beat (no dead air)
         # A new complaint invalidates the previous route before any await. This
         # prevents a throat query from inheriting a skin doctor if routing is
@@ -2578,6 +3076,7 @@ class VachanamAgent(Agent):
         Pass booking_for_other=true when the appointment is for a friend/family
         member (not the caller) — this stops the caller's OWN booking that day
         from being surfaced as a blocker."""
+        self._state.quality_intent = 'availability'
         if booking_for_other:
             self._state.booking_for_other = True
         _say_wait_filler(context)  # slow: DB + calendar availability scan
@@ -2723,6 +3222,7 @@ class VachanamAgent(Agent):
         # The model may propose a tool call, but only the caller can authorize a
         # write. A bare availability question is never authorization. A short
         # yes is accepted only after an audible booking-confirmation question.
+        self._state.quality_intent = 'booking'
         utterance = self._state.last_user_utterance
         if utterance is not None and not (
             _caller_authorized_booking(utterance)
@@ -2731,7 +3231,10 @@ class VachanamAgent(Agent):
                 and self._last_assistant_requested_booking_confirmation()
             )
         ):
-            logger.warning('booking_blocked_no_caller_authorization session=%s', self._state.session_id)
+            logger.warning(
+                'booking_blocked_no_caller_authorization session=%s',
+                _privacy_safe_session_id(self._state.session_id),
+            )
             raise ToolError(
                 'Booking blocked: the caller did not ask to book or confirm. '
                 'Answer availability only. Wait for an explicit booking request.'
@@ -2933,13 +3436,11 @@ class VachanamAgent(Agent):
             if not text:
                 return False
             sess.say(sanitize_for_tts(text))
-            # WRAP-UP: cancel/reschedule are terminal — the caller rang to do
-            # exactly this. After the confirm line, a short silence should end
-            # the call instead of the full 30s "are you there?" cycle. A NEW
-            # booking is NOT terminal (the flow offers "anything else?"), so it
-            # never arms closing.
-            if kind in ("cancelled", "resched_slot", "resched_token"):
-                self._state.closing = True
+            # Every verified mutation reaches a natural wrap-up. Booking speech
+            # already asks "anything else?"; if the caller answers, the speaking
+            # event clears this latch and the conversation continues. If they do
+            # not, end after the short window instead of a 30-second line check.
+            self._state.closing = True
             logger.info("deterministic_confirm_spoken kind=%s lang=%s", kind, lang)
             return True
         except Exception as exc:  # noqa: BLE001 — booking result still wins
@@ -3038,6 +3539,7 @@ class VachanamAgent(Agent):
         appointment. status='cancelled_by_clinic' bookings are what rebook
         calls are about — never tell such a patient they have no booking;
         offer to rebook it instead."""
+        self._state.quality_intent = 'existing_bookings'
         _guard_human_booking(self._state)
         phone, _ = _require_caller_phone(self._state)
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
@@ -3418,6 +3920,7 @@ class VachanamAgent(Agent):
         and only after the new booking is confirmed cancels the old one. Use
         this instead of manual assign/confirm/cancel for every reschedule.
         new_time (HH:MM) required only for schedule (appointment) doctors."""
+        self._state.quality_intent = 'reschedule'
         utterance = self._state.last_user_utterance
         if utterance is not None and not (
             _caller_authorized_reschedule(utterance)
@@ -3426,7 +3929,10 @@ class VachanamAgent(Agent):
                 and self._last_assistant_requested_reschedule()
             )
         ):
-            logger.warning('reschedule_blocked_no_caller_authorization session=%s', self._state.session_id)
+            logger.warning(
+                'reschedule_blocked_no_caller_authorization session=%s',
+                _privacy_safe_session_id(self._state.session_id),
+            )
             raise ToolError(
                 'Reschedule blocked: the caller did not ask to change the booking. '
                 'Answer availability only and wait for explicit confirmation.'
@@ -3751,6 +4257,7 @@ class VachanamAgent(Agent):
         cancel manually for a reschedule, the NEW booking must already be
         confirmed."""
         utterance = self._state.last_user_utterance
+        self._state.quality_intent = 'cancellation'
         accidental = (
             utterance is not None
             and _caller_rejected_accidental_booking(utterance)
@@ -3763,7 +4270,10 @@ class VachanamAgent(Agent):
                 and self._last_assistant_requested_cancellation()
             )
         ):
-            logger.warning('cancellation_blocked_no_caller_authorization session=%s', self._state.session_id)
+            logger.warning(
+                'cancellation_blocked_no_caller_authorization session=%s',
+                _privacy_safe_session_id(self._state.session_id),
+            )
             raise ToolError(
                 'Cancellation blocked: the caller did not ask to cancel. '
                 'Do not call cancel_booking until they explicitly request it.'
@@ -3990,71 +4500,36 @@ class VachanamAgent(Agent):
             except Exception as e:
                 logger.warning("cancel_redis_release_failed: %s", e)
 
-        cal_id = None
-        if token.google_calendar_event_id and self._calendar is not None:
+        # Calendar cleanup is durable but deliberately off the caller's critical
+        # path. The old inline Google delete could hold a truthful cancellation
+        # response for up to five seconds after the DB had already committed.
+        # Queueing first is faster and more reliable: the worker owns retries.
+        if token.google_calendar_event_id:
             try:
-                # Delete from the SAME calendar create used: doctor's personal
-                # calendar first, branch calendar as fallback. Deleting only
-                # from the branch calendar left ghost events on every doctor
-                # who had a personal calendar (404 silently treated as success).
-                doc_cal = (
-                    await self._db.execute(
-                        select(Doctor.google_calendar_id).where(Doctor.id == token.doctor_id)
+                from backend.models.schema import CalendarWriteTask
+
+                self._db.add(
+                    CalendarWriteTask(
+                        branch_id=token.branch_id,
+                        token_id=token.id,
+                        operation="delete",
+                        payload_json={},
+                        google_event_id=token.google_calendar_event_id,
+                        status="pending",
+                        attempts=0,
+                        next_attempt_at=datetime_cls.now(timezone_utc),
                     )
-                ).scalar_one_or_none()
-                branch_cal = (
-                    await self._db.execute(
-                        select(Branch.google_calendar_id).where(
-                            Branch.id == self._state.branch_id
-                        )
-                    )
-                ).scalar_one_or_none()
-                cal_id = doc_cal or branch_cal
-                if not cal_id:
-                    raise RuntimeError("calendar id no longer configured")
-                if cal_id:
-                    # HARD CAP (live 2026-07-03 18:18Z): this delete's retry
-                    # backoff blocked _do_cancel for 36s — the caller heard
-                    # dead air and the LLM apologised "I can't cancel" while
-                    # the DB cancel had ALREADY succeeded. The DB row is the
-                    # booking truth; the calendar event is cleanup — never let
-                    # it stall or fail the cancel (mirror of RULE 4's spirit).
-                    async with asyncio.timeout(5):
-                        await self._calendar.delete_event(
-                            cal_id, token.google_calendar_event_id
-                        )
-            except Exception as e:
-                logger.warning("cancel_calendar_delete_failed: %s", e)
-                # DB cancellation is already committed, so retry only the
-                # external cleanup. Without this queue entry a transient Google
-                # failure leaves a ghost appointment on the doctor's calendar.
+                )
+                await self._db.commit()
+                from backend.jobs import wake_gate
+
+                await wake_gate.clear_next_at("calendar")
+            except Exception as queue_error:  # noqa: BLE001
                 try:
-                    from backend.models.schema import CalendarWriteTask
-
-                    self._db.add(
-                        CalendarWriteTask(
-                            branch_id=token.branch_id,
-                            token_id=token.id,
-                            operation="delete",
-                            payload_json={"calendar_id": cal_id},
-                            google_event_id=token.google_calendar_event_id,
-                            status="pending",
-                            attempts=0,
-                            next_attempt_at=datetime_cls.now(timezone_utc),
-                        )
-                    )
-                    await self._db.commit()
-                    from backend.jobs import wake_gate
-
-                    await wake_gate.clear_next_at("calendar")
-                except Exception as queue_error:  # noqa: BLE001
-                    try:
-                        await self._db.rollback()
-                    except Exception:
-                        pass
-                    logger.error(
-                        "cancel_calendar_retry_enqueue_failed: %s", queue_error
-                    )
+                    await self._db.rollback()
+                except Exception:
+                    pass
+                logger.error("cancel_calendar_enqueue_failed: %s", queue_error)
 
         logger.info(
             "booking_cancelled token=%s branch_id=%s",
@@ -4572,7 +5047,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     branch = branches[0]
     _t_branch = _perf.monotonic()  # #393: stage timing (branch resolve = first Neon wake)
 
-    # Per-clinic voice language (Branch.language → Sarvam STT/TTS codes + the
+    # Per-clinic voice language (Branch.language → Soniox hints/TTS code + the
     # spoken lines + system-prompt directive). Resolved ONCE here so both the
     # service-gate path and the main call path speak the clinic's language.
     # get_lang/get_lines fall back to Telugu for None/unknown/legacy rows, so a
@@ -5252,7 +5727,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         def _compose_instructions(lc: str) -> str:
             """Clinic-wide stable prompt: safe to share across every caller."""
             return (
-                build_system_prompt(
+                build_grounded_prompt(
                     clinic_name=branch_name,
                     doctors=doctor_contexts,
                     emergency_contact=emergency_contact,
@@ -5387,6 +5862,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     ctx.proc.userdata.get("tts_soniox"),
                 ),
                 llm=switched_cached_llm,
+                doctor_contexts=doctor_contexts,
+                timezone_name=branch.timezone or 'Asia/Kolkata',
             )
             if switched_cached_llm is None and switched_key not in _PROMPT_CACHE_PENDING:
                 _PROMPT_CACHE_PENDING.add(switched_key)
@@ -5447,6 +5924,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             lang_code=lang_code,
             agent_factory=_agent_for_lang,
             llm=_cached_llm,
+            doctor_contexts=doctor_contexts,
+            timezone_name=branch.timezone or 'Asia/Kolkata',
         )
         # Native-script doctor names/roles for THIS clinic + language. Cached in
         # Redis (agent/services/pronunciation.py), so this is a cache read on
@@ -5713,7 +6192,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     state.peer_agent_detected = True
                     logger.warning(
                         "peer_voice_agent_detected session=%s mutations_blocked=true",
-                        state.session_id,
+                        _privacy_safe_session_id(state.session_id),
                     )
             else:
                 # interim: tracks the caller's last recognizable sound so the
@@ -5897,9 +6376,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 try:
                     from backend.models.schema import CallQuality
 
-                    abandoned = bool(state.token_held and not state.token_confirmed)
-                    fail_reason = state.fail_reason or ("abandoned_hold" if abandoned else None)
                     turns, transcript = _extract_call_record(session)
+                    abandoned = bool(state.token_held and not state.token_confirmed)
+                    fail_reason = (
+                        state.fail_reason
+                        or ('abandoned_hold' if abandoned else None)
+                        or _inferred_call_failure(transcript)
+                    )
+                    quality_call_type = state.quality_intent or (
+                        'inbound_info'
+                        if state.call_type == 'inbound_booking'
+                        else state.call_type or 'inbound'
+                    )
                     if not settings.transcript_capture_enabled:
                         transcript = None  # capture disabled → outcome only, no text
                     await db.rollback()  # fresh tx (the CallLog write may have committed/failed)
@@ -5907,8 +6395,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         CallQuality(
                             branch_id=state.branch_id,
                             call_log_id=state.call_log_id,
-                            session_id=state.session_id,
-                            call_type=state.call_type or "inbound",
+                            session_id=_privacy_safe_session_id(state.session_id),
+                            call_type=quality_call_type,
                             language=state.language,
                             duration_seconds=duration,
                             turns=turns,
@@ -6233,7 +6721,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     if not _is_outbound_greet:
                         _cdb.add(_Consent(
                             branch_id=state.branch_id,
-                            session_id=state.session_id,
+                            session_id=_privacy_safe_session_id(state.session_id),
                             patient_phone=state.patient_phone,
                             consent_type="data_processing",
                             notice_version="1.0",
@@ -6242,7 +6730,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     if _recording_active:
                         _cdb.add(_Consent(
                             branch_id=state.branch_id,
-                            session_id=state.session_id,
+                            session_id=_privacy_safe_session_id(state.session_id),
                             patient_phone=state.patient_phone,
                             consent_type="recording",
                             notice_version="admin-test-audio-1.0",
@@ -6259,7 +6747,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # the cap shipped disabled-by-default). A non-zero env value overrides.
         #
         # ABSOLUTE SAFETY CEILING (bounce F16): clinic/multi have no per-call
-        # plan cap, but a stuck call still burns Vobiz+LiveKit+Sarvam minutes
+        # plan cap, but a stuck call still burns Vobiz+LiveKit+Soniox minutes
         # (~₹1.49/min) forever. Worse, if plan resolution failed above, a SOLO
         # clinic mis-defaults to "clinic" and dodges its 240s cap. So every call
         # gets a ceiling: solo → 240s, everyone else → ABSOLUTE_CAP. A real call
@@ -6779,7 +7267,7 @@ async def _warm_all_clinic_prompt_caches() -> None:
         for language in sorted(languages):
             for recording_active in recording_variants:
                 instructions = (
-                    build_system_prompt(
+                    build_grounded_prompt(
                         clinic_name=clinic_name,
                         doctors=doctors_by_branch.get(branch_id, []),
                         emergency_contact=row["emergency_contact"] or "",

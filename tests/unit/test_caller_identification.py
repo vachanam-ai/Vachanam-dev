@@ -1,9 +1,8 @@
 """Caller identification at inbound call start (Vinay 2026-06-14).
 
-_build_caller_context maps a returning caller's existing bookings to:
-  - a greeting name (welcome them by name), and
-  - a system-prompt block that hands the agent their FUTURE bookings so it can
-    handle "wants a new booking but already has one" without a tool round-trip.
+_build_caller_context detects whether a phone-scoped lookup has upcoming rows,
+but never places patient names or appointment details in the greeting/prompt.
+The caller must explicitly ask before find_my_bookings fetches those records.
 
 These are pure-function tests over stub rows (no DB) — they prove the new-vs-
 existing branching and the family-shared-number guard (don't reveal one name).
@@ -41,16 +40,15 @@ def test_only_clinic_cancelled_is_not_an_existing_future_booking():
     assert extra == ""
 
 
-def test_single_future_booking_greets_by_name_and_lists_it():
+def test_single_future_booking_is_private_until_explicit_request():
     rows = [_row(name="Vinay", doctor="Dr. Skin", tid="tok-abc")]
     name, extra = _build_caller_context(rows, TODAY)
-    assert name == "Vinay"
-    assert "EXISTING patient" in extra
-    assert "token_id=tok-abc" in extra
-    assert "Dr. Skin" in extra
-    # The new-vs-existing instruction must be present.
-    assert "reschedule" in extra.lower()
-    assert "separate new booking" in extra.lower()
+    assert name is None
+    assert "find_my_bookings" in extra
+    assert "explicitly asks" in extra
+    assert "tok-abc" not in extra
+    assert "Vinay" not in extra
+    assert "Dr. Skin" not in extra
 
 
 def test_past_booking_is_ignored():
@@ -70,8 +68,9 @@ def test_past_same_day_clock_booking_is_not_greeted_as_upcoming():
 def test_later_same_day_clock_booking_remains_upcoming():
     rows = [_row(days=0, appt=time(20, 0))]
     name, extra = _build_caller_context(rows, datetime(2026, 6, 14, 19, 0))
-    assert name == "Vinay"
-    assert "8:00 PM" in extra
+    assert name is None
+    assert "find_my_bookings" in extra
+    assert "8:00 PM" not in extra
 
 
 def test_family_shared_number_does_not_reveal_a_single_name():
@@ -80,6 +79,7 @@ def test_family_shared_number_does_not_reveal_a_single_name():
         _row(name="Abbayi", tid="t2"),
     ]
     name, extra = _build_caller_context(rows, TODAY)
-    assert name is None  # ambiguous — never greet by one family member's name
-    assert "several patients share this number" in extra
-    assert "token_id=t1" in extra and "token_id=t2" in extra
+    assert name is None
+    assert "verified inbound number" in extra
+    assert "Amma" not in extra and "Abbayi" not in extra
+    assert "t1" not in extra and "t2" not in extra

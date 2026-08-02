@@ -6,6 +6,7 @@ judge-driven auto-tuning (memory: feedback-no-auto-prompt-tuning).
 from pathlib import Path
 
 from agent.i18n.lines import get_lines
+from agent.prompts.grounded_prompt import PACKS
 from agent.prompts.system_prompt import build_system_prompt
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,6 +27,8 @@ def test_complaint_block_apology_first_and_logged():
     assert "COMPLAINT ABOUT THE CLINIC" in p
     assert "apologise first and specifically" in p
     assert "log_clinic_question" in p
+    assert "only after its returned logged=true say it was logged" in p
+    assert "without claiming it was logged" in p
     assert "ఇప్పుడు నేను ఏం చేయగలనండి?" in p
     assert "Never repeat a sentence verbatim" in p
 
@@ -51,8 +54,8 @@ def test_urgent_caller_gets_first_slot_directly():
     """"వీలైనంత తొందరగా" got a windows recital + "ఏ టైమ్ వీలవుతుంది?" —
     urgency means offer the FIRST free slot as one yes/no question."""
     p = _prompt()
-    assert "వీలైనంత తొందరగా" in p
-    assert "FIRST free slot" in p
+    assert "URGENT NOW" in p
+    assert 'request_human_transfer(reason="urgent") immediately' in p
 
 
 def test_taken_slot_offers_nearest_not_full_windows():
@@ -60,7 +63,7 @@ def test_taken_slot_offers_nearest_not_full_windows():
     table. Inside hours: offer the NEAREST free time; windows only outside."""
     p = _prompt()
     assert "nearest free time" in p
-    assert "రెండున్నరకి ఉంది" in p
+    assert "<నెక్స్ట్_టైం>కి ఉంది" in p
 
 
 def test_daypart_mismatch_is_acknowledged():
@@ -68,7 +71,7 @@ def test_daypart_mismatch_is_acknowledged():
     Nothing free in the asked day-part → say so first, then nearest outside."""
     p = _prompt()
     assert "For a day-part, stay in it" in p
-    assert "మధ్యాహ్నం ఖాళీ లేదండి" in p
+    assert PACKS['te'].daypart_full in p
 
 
 def test_age_question_is_short():
@@ -83,7 +86,8 @@ def test_phone_confirm_folded_into_single_readback():
     confusion. The number now rides the single step-6 readback ("ఇదే నంబర్‌కి")
     where the caller can still object."""
     p = _prompt()
-    assert "ఇదే నంబర్‌కి" in p
+    assert "ALWAYS the verified incoming caller number" in p
+    assert "Never ask for, accept, read back, or pass another number" in p
     assert "THE ONE CONFIRMATION" in p
 
 
@@ -92,7 +96,7 @@ def test_message_leaver_insistence_routes_to_human_transfer():
     persistent insistence follows the HUMAN TRANSFER rule — which since #350
     caps deflection at two offers (third ask always transfers)."""
     p = _prompt()
-    assert "Calm\ndoctor request → offer help at most TWICE; the 3rd ask transfers" in p
+    assert "offer help at most TWICE; the 3rd ask transfers" in p
 
 
 def test_trailing_off_fragment_is_not_a_turn():
@@ -104,7 +108,8 @@ def test_trailing_off_fragment_is_not_a_turn():
 
 def test_step0_duplicate_sentence_removed():
     p = _prompt()
-    assert p.count("Their first\nreply states the need") == 1
+    greeting = get_lines("te").disclosure_greeting
+    assert p.count(greeting) == 1
 
 
 def test_warmth_applies_to_every_reply():

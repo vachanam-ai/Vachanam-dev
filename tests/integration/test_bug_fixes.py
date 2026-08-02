@@ -596,6 +596,33 @@ async def test_route_vague_complaint_still_defaults(clinic, db):
     assert result["confidence"] == "none"
 
 
+async def test_route_jaw_pain_uses_local_dental_fast_path(clinic, db):
+    """Latest live call spent ~970ms classifying an obvious dental complaint."""
+    from agent.tools.booking_tools import route_to_doctor
+
+    dental = Doctor(
+        branch_id=clinic["branch"].id,
+        name="Dr. Dental",
+        specialization="Dental",
+        routing_keywords=[],
+        booking_type="appointment",
+        working_hours_start=time(9, 0),
+        working_hours_end=time(17, 0),
+        slot_duration_minutes=30,
+        max_concurrent_per_slot=1,
+        status="active",
+    )
+    db.add(dental)
+    await db.commit()
+
+    async def llm(_messages):
+        raise AssertionError("high-confidence dental routing must not call the LLM")
+
+    result = await route_to_doctor("నా దవడ నొప్పిగా ఉంది", clinic["branch"].id, db, llm)
+    assert result["doctor_id"] == str(dental.id)
+    assert result["confidence"] == "high"
+
+
 # ── Fix 30: asked time full -> NEAREST free times offered first ──────────────
 
 

@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, time, timedelta
+from datetime import date, datetime, time, timedelta
 
 import pytest
 from fastapi import HTTPException, Request
@@ -19,7 +19,7 @@ from backend.models.schema import (
 from backend.middleware.auth_middleware import CurrentUser
 from backend.routers.availability import DateScheduleIn, publish_date_schedule
 from backend.routers.doctors import _reject_if_schedule_edit_breaks_bookings
-from backend.services.doctor_schedule import resolve_doctor_schedule
+from backend.services.doctor_schedule import doctors_on_shift_at, resolve_doctor_schedule
 
 
 async def _clinic(db: AsyncSession):
@@ -93,6 +93,61 @@ async def test_leave_overrides_even_a_published_date_schedule(db):
     resolved = await resolve_doctor_schedule(doctor, branch.id, target, db)
     assert resolved.status == "unavailable"
     assert resolved.source == "leave"
+
+
+@pytest.mark.asyncio
+async def test_current_shift_uses_exact_date_sessions_and_excludes_leave(db):
+    branch, doctor = await _clinic(db)
+    target = date.today() + timedelta(days=2)
+    db.add(DoctorDateSchedule(
+        branch_id=branch.id,
+        doctor_id=doctor.id,
+        date=target,
+        sessions=[
+            {"start": "09:00", "end": "12:00"},
+            {"start": "17:00", "end": "21:00"},
+        ],
+    ))
+    recurring = Doctor(
+        branch_id=branch.id,
+        name="Dr. Recurring",
+        booking_type="token",
+        schedule_mode="recurring",
+        recurring_schedule={
+            str(target.weekday()): [{"start": "17:00", "end": "21:00"}]
+        },
+        status="active",
+    )
+    on_leave = Doctor(
+        branch_id=branch.id,
+        name="Dr. Leave",
+        booking_type="token",
+        schedule_mode="recurring",
+        recurring_schedule={
+            str(target.weekday()): [{"start": "17:00", "end": "21:00"}]
+        },
+        status="active",
+    )
+    db.add_all([recurring, on_leave])
+    await db.flush()
+    db.add(DoctorUnavailability(
+        branch_id=branch.id,
+        doctor_id=on_leave.id,
+        date=target,
+        reason="leave",
+    ))
+    await db.commit()
+
+    evening = await doctors_on_shift_at(
+        branch.id, datetime.combine(target, time(19, 0)), db
+    )
+    names = {item.name for item in evening}
+    assert names == {"Dr. Exact", "Dr. Recurring"}
+
+    afternoon = await doctors_on_shift_at(
+        branch.id, datetime.combine(target, time(15, 0)), db
+    )
+    assert afternoon == []
 
 
 def _request() -> Request:

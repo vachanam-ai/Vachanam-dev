@@ -1,3 +1,5 @@
+import pytest
+
 from agent.services.tts_sanitizer import sanitize_for_tts
 
 
@@ -49,6 +51,20 @@ def test_numbered_list_dot_stripped():
 def test_clean_small_numbers_remain_natural():
     result = sanitize_for_tts("Your token number is 5. Doctor will see you soon.")
     assert result == "Your token number is 5. Doctor will see you soon."
+
+
+@pytest.mark.parametrize(
+    ('text', 'expected'),
+    [
+        ('రెస్పాన్స్ స్టార్ట్. అవునండి.', 'అవునండి.'),
+        ('रिस्पॉन्स स्टार्ट। नमस्ते।', 'नमस्ते।'),
+        ('ரெஸ்பான்ஸ் ஸ்டார்ட். சொல்லுங்க.', 'சொல்லுங்க.'),
+        ('ರೆಸ್ಪಾನ್ಸ್ ಸ್ಟಾರ್ಟ್. ಹೇಳಿ.', 'ಹೇಳಿ.'),
+        ('रिस्पांस स्टार्ट. सांगा.', 'सांगा.'),
+    ],
+)
+def test_local_script_response_control_tokens_are_never_spoken(text, expected):
+    assert sanitize_for_tts(text) == expected
 
 
 def test_combined_markdown():

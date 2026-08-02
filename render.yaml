@@ -23,8 +23,6 @@ services:
         value: production
       - key: LOG_LEVEL
         value: info
-      - key: SARVAM_API_KEY
-        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: GEMINI_API_KEY
@@ -100,9 +98,6 @@ services:
         sync: false
       # REQUIRED in prod — Fernet key encrypting per-clinic Vobiz SIP passwords.
       - key: FIELD_ENCRYPTION_KEY
-        sync: false
-      # smallest.ai TTS — backend needs it for the voice catalog picker.
-      - key: SMALLEST_API_KEY
         sync: false
       # Email OTP (preferred over SMTP). RESEND_FROM domain must be verified.
       - key: RESEND_API_KEY

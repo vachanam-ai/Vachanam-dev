@@ -2,7 +2,7 @@
 
 Two pieces:
   - languages.py: the registry mapping a clinic's chosen language (Branch.language)
-    to its Sarvam STT/TTS codes and display names.
+    to its Soniox hints, optional fallback code, and display names.
   - lines.py: every hardcoded spoken line (greetings, fillers, reminders, etc.)
     translated per language. These bypass the LLM, so they must be exact.
 

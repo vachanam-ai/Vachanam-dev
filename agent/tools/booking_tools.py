@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from contextlib import asynccontextmanager
 from datetime import date, timedelta, datetime, time, timezone
 from uuid import UUID
@@ -253,12 +254,64 @@ async def route_to_doctor(
     # LATENCY FAST-PATH: direct keyword hit skips the extra LLM round-trip
     # (~1-2s on the call). Only when UNAMBIGUOUS — exactly one doctor's
     # keywords/specialization match; otherwise fall through to the LLM.
-    lowered = complaint.lower()
+    lowered = complaint.casefold()
+
+    # Clinic rosters commonly leave routing_keywords empty. These conservative
+    # specialty families cover high-confidence, everyday complaints locally so
+    # a jaw/tooth/skin/child request does not pay an extra ~1s classifier hop.
+    # The match is accepted only when exactly one branch doctor fits.
+    specialty_families = (
+        (
+            ('dental', 'dentist', 'oral'),
+            ('tooth', 'teeth', 'gum', 'gums', 'jaw', 'mouth', 'dental',
+             'పంటి', 'పళ్ళు', 'పళ్లు', 'దవడ', 'చిగుళ్లు', 'నోరు',
+             'दांत', 'दाँत', 'जबड़ा', 'मसूड़', 'பல்', 'பற்கள்', 'ஈறு', 'தாடை',
+             'ಹಲ್ಲು', 'ಒಸಡು', 'ದವಡೆ', 'दात', 'हिरडी', 'जबडा'),
+        ),
+        (
+            ('skin', 'dermat', 'hair'),
+            ('skin', 'rash', 'itch', 'acne', 'pimple', 'hair fall',
+             'చర్మం', 'దద్దుర్లు', 'దురద', 'మొటిమ', 'జుట్టు',
+             'त्वचा', 'खुजली', 'मुंहास', 'बाल', 'தோல்', 'அரிப்பு', 'முகப்பரு',
+             'ಚರ್ಮ', 'ತುರಿಕೆ', 'ಮೊಡವೆ', 'केस गळ', 'खाज'),
+        ),
+        (
+            ('pediatric', 'paediatric', 'child', 'children'),
+            ('child', 'children', 'kid', 'baby', 'pediatric',
+             'పిల్ల', 'బాబు', 'పాప', 'చిన్నారి', 'बच्च', 'शिशु',
+             'குழந்தை', 'பாப்பா', 'ಮಗು', 'ಮಕ್ಕಳ', 'बाळ', 'मुल'),
+        ),
+        (
+            ('orthopedic', 'orthopaedic', 'bone'),
+            ('bone', 'joint', 'knee', 'fracture', 'orthopedic',
+             'ఎముక', 'మోకాలు', 'కీళ్ళు', 'हड्डी', 'घुटना', 'जोड़',
+             'எலும்பு', 'முழங்கால்', 'ಮೂಳೆ', 'ಮೊಣಕಾಲು', 'हाड', 'गुडघा'),
+        ),
+        (
+            ('ent', 'ear nose throat', 'otolaryng'),
+            ('ear pain', 'nose', 'throat', 'tonsil', 'ent',
+             'చెవి', 'ముక్కు', 'గొంతు', 'कान', 'नाक', 'गला',
+             'காது', 'மூக்கு', 'தொண்டை', 'ಕಿವಿ', 'ಮೂಗು', 'ಗಂಟಲು'),
+        ),
+    )
+
+    def _has_phrase(haystack: str, phrase: str) -> bool:
+        phrase = phrase.casefold()
+        if phrase.isascii() and ' ' not in phrase:
+            return re.search(rf'(?<![a-z]){re.escape(phrase)}(?![a-z])', haystack) is not None
+        return phrase in haystack
+
     def _kw_hit(d) -> bool:
-        if any(k and k.lower() in lowered for k in (d.routing_keywords or [])):
+        if any(k and _has_phrase(lowered, k) for k in (d.routing_keywords or [])):
             return True
-        spec = (d.specialization or "").lower()
-        return bool(spec) and spec in lowered
+        spec = (d.specialization or '').casefold()
+        if spec and _has_phrase(lowered, spec):
+            return True
+        return any(
+            any(key in spec for key in specialty_keys)
+            and any(_has_phrase(lowered, alias) for alias in complaint_aliases)
+            for specialty_keys, complaint_aliases in specialty_families
+        )
 
     kw_matches = [d for d in doctors if _kw_hit(d)]
     if len(kw_matches) == 1:

@@ -34,7 +34,13 @@ _INTERNAL_META = re.compile(
 # this exact token before otherwise valid replies; strip only the label so the
 # patient-facing sentence is preserved (unlike the fail-closed tool guard).
 _MODEL_CONTROL_TOKEN = re.compile(
-    r"(?i)(?:<|\[)?\s*response_(?:start|end)\s*(?:>|\])?\s*:?[ \t\r\n]*"
+    r"(?i)(?:<|\[)?\s*(?:"
+    r"response[ _-]?(?:start|end)|"
+    r"రెస్పాన్స్\s+(?:స్టార్ట్|ఎండ్)|"
+    r"रिस्पॉन्स\s+(?:स्टार्ट|एंड)|रिस्पांस\s+(?:स्टार्ट|एंड)|"
+    r"ரெஸ்பான்ஸ்\s+(?:ஸ்டார்ட்|எண்ட்)|"
+    r"ರೆಸ್ಪಾನ್ಸ್\s+(?:ಸ್ಟಾರ್ಟ್|ಎಂಡ್)"
+    r")\s*(?:>|\])?\s*[.:：।]?[ \t\r\n]*"
 )
 
 
@@ -65,6 +71,10 @@ _INTERNAL_STREAM_MARKERS = (
     "confirm_booking", "reschedule_booking", "cancel_booking",
     "check_availability", "route_to_doctor", "assign_token",
     "find_my_bookings", "get_queue_status", "response_start", "response_end",
+    "response start", "response end", "రెస్పాన్స్ స్టార్ట్", "రెస్పాన్స్ ఎండ్",
+    "रिस्पॉन्स स्टार्ट", "रिस्पॉन्स एंड", "रिस्पांस स्टार्ट", "रिस्पांस एंड",
+    "ரெஸ்பான்ஸ் ஸ்டார்ட்", "ரெஸ்பான்ஸ் எண்ட்",
+    "ರೆಸ್ಪಾನ್ಸ್ ಸ್ಟಾರ್ಟ್", "ರೆಸ್ಪಾನ್ಸ್ ಎಂಡ್",
 )
 _INTERNAL_STREAM_PREFIXES = frozenset(
     marker[:size]

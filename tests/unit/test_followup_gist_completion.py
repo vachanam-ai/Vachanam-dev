@@ -79,8 +79,10 @@ def test_gist_prompt_frames_untrusted_input():
     assert "[BEGIN PATIENT TURNS]" in _PROMPT
 
 
-def test_caller_context_mentions_attempted_reminder():
+def test_caller_context_never_preloads_reminder_or_appointment_details():
     import agent.livekit_minimal.agent as agent_mod
 
     src = inspect.getsource(agent_mod._build_caller_context)
-    assert "reminder_sent" in src and "that was us" in src
+    assert "reminder_sent" not in src
+    assert "find_my_bookings" in src
+    assert "never answer an unrelated utterance with appointment details" in src

@@ -35,7 +35,9 @@ SUMMARY_ALLOWED_KEYS = frozenset({
 
 
 def _ms(a: float | None, b: float | None) -> float | None:
-    return None if a is None or b is None else round((b - a) * 1000, 1)
+    if a is None or b is None or b < a:
+        return None
+    return round((b - a) * 1000, 1)
 
 
 class TurnLatencyTrace:
@@ -179,8 +181,24 @@ class TurnLatencyTrace:
         self._turn["t_last_tool_end"] = now
 
     def mark_playout_start(self) -> None:
-        if self._turn is not None and "t_playout" not in self._turn:
-            self._turn["t_playout"] = self._clock()
+        # A resumed/interrupted PREVIOUS reply can flip agent_state to
+        # ``speaking`` a few milliseconds after the caller starts a new turn.
+        # It is not this turn's first audio. Production 2026-08-02 recorded a
+        # physically impossible 3.3 ms total and -1636 ms playout gap from that
+        # stale edge. Genuine no-transcript responses are possible, but cannot
+        # reach audio within 150 ms of speech-end. Keep those while rejecting
+        # the stale edge seen in production.
+        if self._turn is None or 't_playout' in self._turn:
+            return
+        now = self._clock()
+        speech_end = self._turn.get('t_speech_end')
+        if (
+            't_final_transcript' not in self._turn
+            and speech_end is not None
+            and now - speech_end < 0.150
+        ):
+            return
+        self._turn['t_playout'] = now
 
     # ── flush ───────────────────────────────────────────────────────────────
     def flush(self) -> None:

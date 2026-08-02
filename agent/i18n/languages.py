@@ -1,9 +1,8 @@
-"""Language registry: Branch.language code -> Sarvam codes + display names.
+"""Language registry for Soniox voice calls and optional Sarvam fallback.
 
-Sarvam Saaras v3 (STT) and Bulbul v3 (TTS) both accept the *-IN language codes
-below. Bulbul speakers are language-agnostic — the SAME speaker (Branch.tts_voice)
-voices any target_language_code — so only the language code changes per clinic,
-not the speaker.
+The short code drives Soniox language hints and TTS. ``stt_code`` retains the
+regional form required only by the explicitly configured Sarvam STT or
+transliteration fallback.
 """
 from dataclasses import dataclass
 
@@ -14,7 +13,7 @@ class LangConfig:
     name: str          # English name, used in the system prompt directive
     native_name: str   # endonym, shown in the Settings dropdown
     script: str        # script name, used in the system prompt directive
-    stt_code: str      # Sarvam Saaras language= (STT)
+    stt_code: str      # regional code for optional Sarvam fallback
     tts_code: str      # Soniox TTS language code — same as internal `code`
     default_voice: str  # Soniox catalog voice when the clinic hasn't chosen one
 
@@ -28,7 +27,7 @@ class LangConfig:
 # can choose any of the four catalog voices through Settings.
 LANGUAGES: dict[str, LangConfig] = {
     "te": LangConfig("te", "Telugu", "తెలుగు", "Telugu", "te-IN", "te", "Priya"),
-    # Indian English (Saaras en-IN) — added 2026-07-03 for the
+    # Indian English (en-IN fallback) — added 2026-07-03 for the
     # per-caller language mapping ("can you speak English?").
     "en": LangConfig("en", "English", "English", "Latin", "en-IN", "en", "Priya"),
     "hi": LangConfig("hi", "Hindi", "हिन्दी", "Devanagari", "hi-IN", "hi", "Priya"),

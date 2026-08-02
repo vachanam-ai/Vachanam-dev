@@ -82,6 +82,15 @@ class SessionState:
     # Logging
     session_id: str | None = None
 
+    # Human intent used by call-quality analytics. Telephony ``call_type`` must
+    # remain compatible with the legacy billing enum (for example
+    # ``inbound_booking``), but a roster-only call is not a booking call. Keep
+    # that distinction here instead of corrupting the billing classification.
+    quality_intent: str | None = None
+    # Deterministic fragment recovery varies the next prompt instead of
+    # repeating the same "I couldn't hear" sentence in a loop.
+    clarification_attempts: int = 0
+
     # Quality / feedback-loop signals (written to CallLog at call end).
     language: str | None = None          # clinic voice language code
     # Caller's mapped spoken language (Patient.preferred_language). Loaded at

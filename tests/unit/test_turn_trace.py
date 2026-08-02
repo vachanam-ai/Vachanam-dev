@@ -129,6 +129,25 @@ def test_late_final_transcript_after_commit_is_rejected_not_corrupted(trace_and_
     assert s["commit_ms"] is not None and s["commit_ms"] >= 0
 
 
+def test_stale_previous_reply_playout_edge_is_not_this_turn(trace_and_out):
+    tr, out, clock = trace_and_out
+    tr.mark_speech_end()
+    clock.advance(0.003)
+    tr.mark_playout_start()
+    clock.advance(0.297)
+    tr.mark_final_transcript()
+    clock.advance(0.7)
+    tr.mark_playout_start()
+    tr.flush()
+    (summary,) = out
+    assert summary['total_ms'] == pytest.approx(1000, abs=1)
+    assert summary['playout_gap_ms'] is None
+    assert all(
+        value is None or not isinstance(value, (int, float)) or value >= 0
+        for value in summary.values()
+    )
+
+
 def test_stale_metric_after_flush_cannot_attach_to_next_turn(trace_and_out):
     tr, out, clock = trace_and_out
     _run_full_turn(tr, clock)

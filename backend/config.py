@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     soniox_jp_api_key: str = ""
     # #406: Japan measured 4ms from Fly bom vs 230ms to the US endpoint.
     soniox_jp_stt_ws_url: str = "wss://stt-rt.jp.soniox.com/transcribe-websocket"
-    sarvam_api_key: str           # Sarvam Saaras v3 — STT fallback
+    sarvam_api_key: str = ""      # optional Sarvam Saaras v3 STT fallback
     # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
     # conservative production canary; 0 restores Soniox's default behavior.
     # Tune one control at a time on real Telugu calls (0..3).

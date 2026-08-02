@@ -206,3 +206,70 @@ async def resolve_doctor_schedule(
         sessions=sessions,
         token_limit=doctor.daily_token_limit,
     )
+
+
+async def doctors_on_shift_at(
+    branch_id: UUID,
+    moment: datetime,
+    db: AsyncSession,
+) -> list[Doctor]:
+    """Return active doctors whose published schedule contains ``moment``.
+
+    This is the authoritative answer to "who is available right now?" It uses
+    one tenant-scoped query for the roster, leave rows, and date overrides,
+    then applies the same precedence as :func:`resolve_doctor_schedule`:
+    leave > exact-date schedule > recurring schedule > unpublished.
+
+    "Available" here intentionally means scheduled/on shift. It does not claim
+    that a bookable appointment slot is free; slot availability remains the
+    responsibility of ``check_availability``.
+    """
+    target_date = moment.date()
+    current_time = moment.time().replace(tzinfo=None)
+    rows = (
+        await db.execute(
+            select(Doctor, DoctorUnavailability, DoctorDateSchedule)
+            .outerjoin(
+                DoctorUnavailability,
+                and_(
+                    DoctorUnavailability.branch_id == branch_id,
+                    DoctorUnavailability.doctor_id == Doctor.id,
+                    DoctorUnavailability.date == target_date,
+                ),
+            )
+            .outerjoin(
+                DoctorDateSchedule,
+                and_(
+                    DoctorDateSchedule.branch_id == branch_id,
+                    DoctorDateSchedule.doctor_id == Doctor.id,
+                    DoctorDateSchedule.date == target_date,
+                ),
+            )
+            .where(
+                and_(Doctor.branch_id == branch_id, Doctor.status == "active")
+            )
+        )
+    ).all()
+
+    available: list[Doctor] = []
+    for doctor, leave, date_schedule in rows:
+        if leave is not None:
+            continue
+        if date_schedule is not None:
+            raw_sessions = validate_sessions(date_schedule.sessions)
+        elif getattr(doctor, "schedule_mode", "recurring") == "date_specific":
+            continue
+        else:
+            raw_sessions = effective_recurring_schedule(doctor).get(
+                str(target_date.weekday()), []
+            )
+        windows = (
+            SessionWindow(
+                _parse_clock(item["start"], "start"),
+                _parse_clock(item["end"], "end"),
+            )
+            for item in raw_sessions
+        )
+        if any(window.start <= current_time < window.end for window in windows):
+            available.append(doctor)
+    return available

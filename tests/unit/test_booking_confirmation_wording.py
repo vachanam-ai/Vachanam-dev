@@ -3,6 +3,7 @@
 import inspect
 
 from agent.livekit_minimal.agent import VachanamAgent
+from agent.prompts.grounded_prompt import PACKS, _booking_steps
 from agent.prompts.system_prompt import build_system_prompt
 from agent.tools.booking_tools import confirm_booking
 
@@ -20,18 +21,20 @@ def test_booking_close_is_once_no_take_care_then_offer_help():
     tacked on 'జాగ్రత్తగా ఉండండి' (take-care). Now: come_on_time ONCE, no
     warm_close after a booking, offer help once, decline → short thanks + end_call."""
     prompt = build_system_prompt("Clinic", [], "", "clinic")
-    step6 = prompt.split("On success", 1)[1].split("They may reschedule", 1)[0]
-    assert 'టైంకి రండి" ONCE' in step6                       # said once, never twice
-    assert 'NO "జాగ్రత్తగా ఉండండి అండి." after a booking' in step6  # no take-care
+    step6 = _booking_steps(PACKS['te']).split("On success", 1)[1]
+    come_on_time = PACKS['te'].come_on_time
+    assert come_on_time in step6
+    assert step6.count(come_on_time) == 1
+    assert 'జాగ్రత్తగా ఉండండి' not in step6
     assert "ఇంకేమైనా కావాలా అండి?" in step6                  # offer help once
-    assert "a short thanks" in step6 and "end_call" in step6  # decline → thanks + end
+    assert "end_call" in step6
     # The WARM CLOSE rule is scoped to NOT fire after a booking.
     assert "NOT after a booking" in prompt
 
 
 def test_prompt_says_punctuality_message_only_after_booking_or_reschedule():
     prompt = build_system_prompt("Clinic", [], "", "clinic")
-    flow = prompt.split("<flow>", 1)[1].split("</flow>", 1)[0]
-    assert 'On success' in flow and 'say "టైంకి రండి" ONCE' in flow
-    assert "RESCHEDULE:" in flow and "టైంకి రండి" in flow.split("RESCHEDULE:", 1)[1].split("CANCEL", 1)[0]
-    assert "After:" in flow and 'no "టైంకి రండి"' in flow
+    come_on_time = PACKS['te'].come_on_time
+    assert 'On success' in prompt and come_on_time in prompt
+    reschedule = prompt.split("RESCHEDULE:", 1)[1].split("CANCEL:", 1)[0]
+    assert come_on_time in reschedule

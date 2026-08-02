@@ -11,11 +11,13 @@ from agent.livekit_minimal import agent as agent_mod
 from agent.livekit_minimal.agent import VachanamAgent
 
 
-# ── Cancel: calendar cleanup capped + success unmistakable ──
+# ── Cancel: calendar cleanup queued + success unmistakable ──
 
-def test_do_cancel_caps_calendar_delete_and_asserts_success():
+def test_do_cancel_queues_calendar_delete_and_asserts_success():
     src = inspect.getsource(VachanamAgent._do_cancel)
-    assert "asyncio.timeout(5)" in src          # 36s retry stall can't recur
+    assert "CalendarWriteTask" in src
+    assert 'operation="delete"' in src
+    assert "delete_event(" not in src          # Google latency is off the call path
     assert "The cancellation SUCCEEDED" in src  # LLM can't misread the result
     assert "Do NOT say it" in src
 

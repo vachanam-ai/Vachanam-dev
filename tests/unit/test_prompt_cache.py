@@ -77,6 +77,8 @@ def test_exact_variant_and_agent_ride_source_guard():
     compose = src.split("def _compose_instructions", 1)[1].split(
         "def _compose_runtime_context", 1
     )[0]
+    assert 'build_grounded_prompt(' in compose
+    assert 'build_system_prompt(' not in compose
     assert "caller_prompt_extra" not in compose
     assert "date_context" not in compose
     runtime = src.split("def _compose_runtime_context", 1)[1][:1200]
@@ -139,6 +141,8 @@ def test_proactive_warmer_covers_active_clinics_and_saved_languages():
     assert "_create_prompt_cache" in src
     assert "warm_greeting_cache" in src
     assert "tts_voice" in src
+    assert 'build_grounded_prompt(' in src
+    assert 'build_system_prompt(' not in src
 
 
 def test_raw_database_faq_is_normalized_without_breaking_warmup():

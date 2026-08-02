@@ -28,8 +28,13 @@ def test_soniox_when_key_set():
 
 
 def test_sarvam_fallback_when_key_empty():
-    """RULE 8: no Soniox key ⇒ Sarvam, never a crash / never no-STT."""
-    with patch.object(ag.settings, "soniox_jp_api_key", ""):
+    """A configured Sarvam key remains an explicit operational fallback."""
+    with patch.multiple(
+        ag.settings,
+        soniox_jp_api_key="",
+        sarvam_api_key="sarvam-test",
+        stt_provider="auto",
+    ):
         stt = ag._build_stt(get_lang("te"))
     assert isinstance(stt, sarvam.STT)
 
@@ -61,6 +66,7 @@ def test_sarvam_can_be_forced_without_removing_soniox_key():
     with patch.multiple(
         ag.settings,
         soniox_jp_api_key="sk-test",
+        sarvam_api_key="sarvam-test",
         stt_provider="sarvam",
     ):
         stt = ag._build_stt(get_lang("te"))
