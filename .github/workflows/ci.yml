@@ -252,17 +252,25 @@ jobs:
               NEXT="v${DECLARED}"
               echo "starting canonical series at $NEXT"
             else
-              LOG=$(git log --format='%B' "${LAST}..HEAD")
+              # PATCH within the declared series, always (2026-08-02). The old
+              # conventional-commit bump left the series on any `feat:` — it
+              # computed v1.3.0 while VERSION pinned 1.2.x, collided with a
+              # historical side-branch tag of the same name, and ABORTED THE
+              # WHOLE DEPLOY ("v1.3.0 exists on another commit"). Worse, the
+              # next push recomputed the same doomed tag, so master could never
+              # ship again. A minor/major release is now a deliberate edit of
+              # VERSION, which is what "VERSION pins the series" always meant.
               V=${LAST#v}
               MAJ=${V%%.*}; REST=${V#*.}; MIN=${REST%%.*}; PAT=${REST#*.}
-              if echo "$LOG" | grep -qE 'BREAKING CHANGE|^[a-z]+(\(.+\))?!:'; then
-                MAJ=$((MAJ+1)); MIN=0; PAT=0
-              elif echo "$LOG" | grep -qE '^feat(\(.+\))?:'; then
-                MIN=$((MIN+1)); PAT=0
-              else
-                PAT=$((PAT+1))
-              fi
+              PAT=$((PAT+1))
               NEXT="v${MAJ}.${MIN}.${PAT}"
+              # Never hand a taken tag to the release step: legacy branches own
+              # tags we do not control. Skip forward to the first free one.
+              while git rev-parse -q --verify "refs/tags/${NEXT}" >/dev/null; do
+                echo "${NEXT} already exists — skipping"
+                PAT=$((PAT+1))
+                NEXT="v${MAJ}.${MIN}.${PAT}"
+              done
               echo "${LAST} -> ${NEXT}"
             fi
           fi

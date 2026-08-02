@@ -12,7 +12,22 @@ from backend.database import Base
 from backend.models import schema  # noqa: F401 — registers all models
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+
+# 2026-08-02: applying a migration to the real database failed here twice
+# before it ever opened a connection.
+#   1. This runner builds an ASYNC engine, but DATABASE_URL is stored in the
+#      plain `postgresql://` form the app itself normalizes at engine build
+#      time — alembic got no async driver.
+#   2. alembic.ini is a configparser file, so a '%' in the URL (a percent-
+#      encoded character in the password, e.g. %40 for '@') is read as
+#      interpolation syntax and raises before anything runs. Doubling it is
+#      the documented escape; configparser hands back the single '%'.
+_db_url = settings.database_url
+if _db_url.startswith("postgres://"):
+    _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+elif _db_url.startswith("postgresql://"):
+    _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+config.set_main_option("sqlalchemy.url", _db_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
