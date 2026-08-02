@@ -177,6 +177,9 @@ _PRIVACY_HTML: str | None = _load_doc("privacy-policy.md", "Privacy Policy")
 _TERMS_HTML: str | None = _load_doc("terms-of-service.md", "Terms of Service")
 _DPA_HTML: str | None = _load_doc("data-processing-agreement.md", "Data Processing Agreement")
 _DATA_HANDLING_HTML: str | None = _load_doc("data-handling.md", "How Vachanam Handles Your Data")
+# Meta app review requires a public "User data deletion" URL; DPDP erasure
+# rights need the same page. One doc serves both.
+_DATA_DELETION_HTML: str | None = _load_doc("data-deletion.md", "How to Delete Your Data")
 # Razorpay website-compliance requirement (live-mode KYC checks the site has a
 # published refund/cancellation policy).
 _REFUND_HTML: str | None = _load_doc("refund-policy.md", "Refund & Cancellation Policy")
@@ -289,6 +292,23 @@ async def data_handling() -> HTMLResponse:
     Returns 503 if the markdown file is missing or empty at startup.
     """
     return _doc_response(_DATA_HANDLING_HTML, "data-handling")
+
+
+@router.get(
+    "/data-deletion",
+    response_class=HTMLResponse,
+    include_in_schema=True,
+    tags=["legal"],
+    summary="How to Delete Your Data",
+)
+async def data_deletion() -> HTMLResponse:
+    """Render docs/legal/data-deletion.md as styled HTML.
+
+    Public — this is the URL given to Meta as the app's "User data deletion"
+    instructions, and the DPDP erasure-rights page. Returns 503 if the
+    markdown file is missing or empty at startup.
+    """
+    return _doc_response(_DATA_DELETION_HTML, "data-deletion")
 
 
 @router.get(

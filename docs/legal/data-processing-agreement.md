@@ -34,7 +34,8 @@ Vachanam processes personal data solely on the documented instructions of the Cl
 - Storing doctor-entered visit-progress notes and follow-up question/answer summaries (optional treatment-follow-up feature)
 - Providing a receptionist queue management interface
 - Providing clinic owner analytics (appointment counts, attendance rates)
-- Sending booking confirmations (via WhatsApp in upcoming release, with separate notice)
+- Recording a patient question the Clinic's published FAQ does not answer, together with the patient's name and number, so the Clinic can answer it and reply to the patient; and recording a message the patient asked to be passed to the Clinic
+- Where the Clinic has enabled WhatsApp: receiving patient WhatsApp messages on the Clinic's behalf, classifying each message in the moment to determine the patient's request, replying, and sending the Clinic's appointment templates (booking confirmation, reminder, rating request, rebooking). Vachanam does **not** store the content of patient WhatsApp messages and provides no message archive.
 - Generating billing records for the Clinic's Vachanam subscription
 
 Vachanam will NOT process personal data for any purpose beyond those documented above without prior written consent from the Clinic.
@@ -55,7 +56,7 @@ Vachanam will NOT process personal data for any purpose beyond those documented 
 
 | Data subject | Personal data processed |
 |---|---|
-| Patient | First name, mobile phone number, age/gender (if volunteered), preferred language, appointment date, token number; phone-masked call transcript (up to 90 days); visit-progress notes and follow-up Q&A summaries where the Clinic uses the treatment-follow-up feature. The spoken health concern is processed in-call for doctor routing and is NOT stored as a booking field. |
+| Patient | First name, mobile phone number, age/gender (if volunteered), preferred language, appointment date, token number; phone-masked call transcript (up to 90 days); visit-progress notes and follow-up Q&A summaries where the Clinic uses the treatment-follow-up feature; an unanswered clinic-information question with the patient's name and number, and the Clinic's answer to it; a message the patient asked to be passed to the Clinic, with their number (deleted after 90 days). Where the Clinic uses WhatsApp: the patient's WhatsApp number (the same mobile number) and, transiently, the text of their message — classified in memory and not stored. The spoken health concern is processed in-call for doctor routing and is NOT stored as a booking field. |
 | Doctor | Name, specialization, working hours |
 | Staff | Email address, name, role (owner or receptionist); bcrypt password hash for email-login accounts |
 
@@ -91,6 +92,10 @@ Vachanam uses the following categories of sub-processor to deliver the service. 
 | Voice compute host | Voice agent compute (processes calls in real time) | Mumbai, India | Host voice agent server |
 | API hosting provider | Backend API compute (processes API requests) | Singapore | Host backend application server |
 | CDN & security provider | HTTP request metadata (IP, URL, headers) | Global edge | CDN, DNS, web application firewall |
+
+**WhatsApp (Meta Platforms) — applies only where the Clinic has enabled WhatsApp.** Meta is not listed in the table above because, in the normal arrangement, **the Clinic holds its own WhatsApp Business Account and its own billing relationship with Meta.** Meta is therefore a processor engaged directly by the Clinic; Vachanam sends and receives on the Clinic's behalf using the Clinic's account, on the Clinic's documented instructions. Message content passes through Meta because Meta operates WhatsApp — this is inherent to the service and is not a Vachanam sub-processing arrangement.
+
+Where a Clinic operates temporarily on a Vachanam-held WhatsApp Business Account during initial setup, Meta acts as a Vachanam sub-processor for that period, on the same terms as the table above, processing the patient's WhatsApp number and message content for delivery only. Vachanam stores no message content in either arrangement.
 
 ### 4.1 Changes to sub-processors
 

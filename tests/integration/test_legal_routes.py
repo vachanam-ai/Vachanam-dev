@@ -235,6 +235,44 @@ async def test_privacy_policy_matches_reality():
     assert "| Voice call transcripts | NOT STORED |" not in text
 
 
+async def test_data_deletion_returns_html(client):
+    """GET /data-deletion must render publicly — Meta's app review fetches this
+    URL as the "User data deletion" instructions, and it is also the DPDP
+    erasure-rights page. A 404/503 here fails app review."""
+    r = await client.get("/data-deletion")
+    assert r.status_code == 200, (
+        f"Expected 200 from GET /data-deletion, got {r.status_code}. "
+        f"Body: {r.text[:200]}"
+    )
+    assert r.headers.get("content-type", "").startswith("text/html")
+    assert "<h1" in r.text
+    assert "privacy@vachanam.in" in r.text  # the contact that actions the request
+    assert "7 calendar days" in r.text      # the completion commitment
+
+
+async def test_data_deletion_promises_only_built_behaviour():
+    """This page is a legal commitment, so every mechanism it names must exist.
+
+    The DELETE-over-WhatsApp keyword was drafted and cut because wa_chat has no
+    such intent (reschedule/cancel/location/faq/out_of_scope only) — a patient
+    typing it would get the out-of-scope 'call us' reply while the policy said
+    their data would be erased. If that intent is ever built, this test is the
+    place that unblocks the promise."""
+    from pathlib import Path
+
+    text = Path("docs/legal/data-deletion.md").read_text(encoding="utf-8")
+    chat_src = Path("backend/services/wa_chat.py").read_text(encoding="utf-8")
+    if "DELETE" in text:
+        assert "delete_data" in chat_src, (
+            "data-deletion.md advertises a WhatsApp DELETE keyword, but "
+            "wa_chat.py has no delete_data intent to honour it."
+        )
+    # Audio and WhatsApp bodies are never stored — the page must not imply
+    # there is something to erase, or we invite requests we cannot action.
+    assert "We do not record your phone calls." in text
+    assert "We do not store the content of your WhatsApp messages." in text
+
+
 async def test_data_safety_pitch_returns_html(client):
     """GET /data-safety — the doctor-facing pitch must be publicly shareable."""
     r = await client.get("/data-safety")

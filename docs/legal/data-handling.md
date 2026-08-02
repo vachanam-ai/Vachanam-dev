@@ -53,6 +53,20 @@ Some clinics track multi-visit treatments in Vachanam. Here is exactly what that
 
 These are **appointment-continuity notes, not a medical record**: Vachanam has no fields for diagnoses, prescriptions, test results, documents, or scans, and the AI never speaks these notes in any notification or calendar event. Follow-up calls happen only with your consent, and stop immediately when the clinic ends the treatment or you withdraw consent. When your patient record is erased — automatically after 2 years of inactivity, or on demand — the visit notes are deleted outright and the follow-up question/answer text is cleared.
 
+### Step 7 — If your clinic uses WhatsApp (optional)
+
+Some clinics let patients message them on WhatsApp instead of calling. What that stores is deliberately almost nothing:
+
+| Stored | Where | Kept for |
+|---|---|---|
+| Nothing from the body of your message | — | Your text is read once, in the moment, to work out what you are asking for (reschedule, cancel, directions, or a question the clinic has already published an answer to), then discarded |
+| The message's WhatsApp-issued ID (the identifier only, never the text) | Cache | 24 hours — so a message WhatsApp delivers twice does not get two replies |
+| A question the clinic has not published an answer to, with your name and number | `clinic_questions` table, clinic-scoped | Until your patient record is erased — a person answers it and replies to you |
+
+**There is no WhatsApp inbox in Vachanam.** No screen exists where clinic staff read your conversation, because the conversation is already where it belongs — in WhatsApp, on the clinic's own phone. We deliberately did not build a second copy of it.
+
+WhatsApp is operated by Meta, and message content necessarily passes through Meta to be delivered at all — that is true of any WhatsApp service. In the normal arrangement the WhatsApp Business Account belongs to your clinic, not to Vachanam. Messages the clinic sends you carry your name, doctor, date, time and token — never anything about your health.
+
 ---
 
 ## 2. Separation by Design
@@ -83,6 +97,10 @@ Our production logs follow a strict PII discipline:
 | Call transcripts (text, phone-masked) | 90 days | Deleted by the same daily job |
 | Consent records | Same window as the patient data they document | Pruned |
 | Treatment visit notes + follow-up Q&A summary (optional feature; clinic-scoped) | Until patient-record erasure | Deleted / text cleared with the patient record |
+| A question you asked + the clinic's answer, with your name and number | Until patient-record erasure | Your name and number are cleared. If the clinic chose to publish the question and answer in its FAQ, that pair holds no personal data and remains |
+| A message you asked us to pass to the clinic (text + number) | 90 days, or patient-record erasure — whichever is first | Deleted outright, text and number together |
+| WhatsApp message text | Never stored | — |
+| WhatsApp message ID (identifier only) | 24 hours | Expires automatically |
 | Temporary token counters (cache) | Same calendar day | Expire automatically |
 | Voice audio | Never stored | — |
 | Staff accounts | Until removed by the clinic owner (+30-day recovery buffer) | PII purged; anonymised audit records kept |
