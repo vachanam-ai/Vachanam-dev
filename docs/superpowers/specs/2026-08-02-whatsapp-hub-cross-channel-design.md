@@ -306,6 +306,18 @@ prune because there is none stored.
 Embedded Signup was slice 1. It moves to MVP6: nothing else depends on it, and
 App Review is easier to pass once the real product exists to record.
 
+> **SUPERSEDED 2026-08-02** by `2026-08-02-whatsapp-pricing-design.md` §8.
+> Vinay moved conversational booking OUT of MVP4 and INTO MVP1: MVP1 must be a
+> complete, sellable **WhatsApp-only product** (`wa` plan, ₹1,499/mo), because
+> "please call us" is banned as a WhatsApp reply. The add-on for voice plans
+> becomes MVP2. Two further reversals in that spec: patient conversation state
+> **is** stored (last 10 turns in `WhatsAppSession.session_data`, reversing the
+> coexistence no-storage decision below — the policy update must ship in the
+> same release), and chat bookings take **no token hold** (assign only on
+> confirmation, via the existing atomic INCR). The MVP1 bullets below are kept
+> for the Meta-console checklist, which is unchanged; treat their code scope and
+> the "Not in MVP1" list as historical.
+
 Batched easiest-first, because a basic messaging bot is needed **this week** for
 the clinics already enrolled.
 
