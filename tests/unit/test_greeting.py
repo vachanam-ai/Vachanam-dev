@@ -105,6 +105,25 @@ def test_outbound_followup_question_is_own_segment():
     assert texts[-1] == fm["message"]
 
 
+def test_outbound_question_answer_speaks_the_answer():
+    """2026-08-02: the question-answer callback opens with the clinic's answer
+    (already localized by the agent), prefixed with the caller's honorific."""
+    fm = {"message": "మీరు అడిగిన దాని గురించి... ఒకే సిట్టింగ్‌లో అవుతుంది."}
+    texts = g.outbound_greeting_texts(
+        TE, CLINIC, "రమేష్", "", {}, fm, is_question_answer=True
+    )
+    assert texts[0] == get_welcome(TE).format(clinic=CLINIC)
+    assert texts[-1].endswith(fm["message"])
+    assert "రమేష్" in texts[-1]
+
+
+def test_outbound_question_answer_without_message_says_only_welcome():
+    texts = g.outbound_greeting_texts(
+        TE, CLINIC, "రమేష్", "", {}, {}, is_question_answer=True
+    )
+    assert texts == [get_welcome(TE).format(clinic=CLINIC)]
+
+
 def test_fallback_speaks_same_words_as_clip():
     """The session.say fallback and the instant clip must be the SAME text —
     the seeded chat_ctx describes what the caller actually heard."""

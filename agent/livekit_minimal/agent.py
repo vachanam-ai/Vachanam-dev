@@ -901,6 +901,18 @@ DOCTOR_ADVICE_PROMPT_EXTRA = (
     "reply."
 )
 
+QUESTION_ANSWER_PROMPT_EXTRA = (
+    "\n\nTHIS IS A QUESTION-ANSWER CALLBACK. On an earlier call this person "
+    "asked the clinic something you could not answer; the clinic checked with "
+    "the doctor and wrote the answer. Your OPENING already spoke that answer. "
+    "Do NOT repeat it unless they ask you to, and NEVER add, guess, or extend "
+    "it — if they ask something the answer does not cover, say you will check "
+    "with the clinic and call log_clinic_question. No medical opinions "
+    "(RULE 7). Offer a booking ONLY if they ask for one. When they have "
+    "nothing more, say a short goodbye and end_call. Two short sentences per "
+    "reply."
+)
+
 _FOLLOWUP_CALLTYPES = {"next_visit_book", "doctor_advice"}
 
 
@@ -3605,16 +3617,35 @@ class VachanamAgent(Agent):
         NEVER log here: booking requests, medical questions, urgent matters,
         requests to speak to the doctor, or anything expecting a call back —
         those are take_message or the HUMAN TRANSFER rule (#352)."""
-        from backend.models.schema import ClinicQuestion
+        from backend.models.schema import ClinicQuestion, Patient
 
         q = " ".join((question or "").split())[:300]
         if not q:
             return {"logged": False}
         try:
+            # Identity is stored so the doctor's answer can be CALLED BACK
+            # (2026-08-02) — same lookup take_message uses; a miss just means
+            # the dashboard shows "Unknown caller" and the number from SIP.
+            patient_id = None
+            if self._state.patient_phone:
+                _pat = (
+                    await self._db.execute(
+                        select(Patient.id).where(
+                            and_(
+                                Patient.branch_id == self._state.branch_id,
+                                Patient.phone == self._state.patient_phone,
+                            )
+                        ).limit(1)
+                    )
+                ).first()
+                if _pat is not None:
+                    patient_id = _pat[0]
             self._db.add(ClinicQuestion(
                 branch_id=self._state.branch_id,
                 question=q,
                 caller_last4=(self._state.patient_phone or "")[-4:] or None,
+                patient_id=patient_id,
+                caller_phone=self._state.patient_phone,
             ))
             await self._db.commit()
         except Exception as e:  # noqa: BLE001 — logging must never break the call
@@ -4701,11 +4732,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     is_rebook_call = meta.get("call_type") == "cascade_rebook"
     # Treatment follow-up loop (M2): next_visit_book / doctor_advice.
     is_followup = meta.get("call_type") in _FOLLOWUP_CALLTYPES
+    # Question-answer callback (2026-08-02): the doctor answered a question this
+    # caller asked on an earlier call; this call just relays that answer. Kept
+    # OUT of _FOLLOWUP_CALLTYPES on purpose — it owns no FollowupTask, so none
+    # of the follow-up task/writeback machinery must treat it as one.
+    is_qa_call = meta.get("call_type") == "question_answer"
     # RULE 9 — the LLM/agent only ever sees the allowlisted operational fields of a
     # follow-up call; private clinical notes (steps_performed/next_steps) never reach
     # the prompt. SIP routing (phone_number/branch_id/outbound_trunk_id) still reads
     # the RAW `meta`, so build the safe view separately rather than overwriting it.
-    followup_meta = _followup_meta_safe(meta) if is_followup else {}
+    followup_meta = _followup_meta_safe(meta) if (is_followup or is_qa_call) else {}
     _outbound_recording_active = settings.recording_allowed_for(outbound_number)
 
     # LATENCY: warm a DB connection NOW, before the outbound dial / SIP wait below
@@ -4758,7 +4794,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         _glang = _gpref
                 except Exception:  # noqa: BLE001 — RULE 8
                     pass
-            if is_followup and followup_meta.get("message"):
+            if (is_followup or is_qa_call) and followup_meta.get("message"):
                 followup_meta["message"] = await _localize_message(
                     followup_meta["message"], _glang
                 )
@@ -4774,6 +4810,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 is_reminder=is_reminder,
                 is_rebook=is_rebook_call,
                 is_followup=is_followup,
+                is_question_answer=is_qa_call,
                 recording_active=_outbound_recording_active,
             )
             wavs = await synth_wavs(texts, _voice_for_lang(_gbr, _glang), _glang)
@@ -5272,7 +5309,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # A doctor may write the follow-up note in English; speak it in the call's
     # language (clear Telugu), not fast English over a Telugu TTS (Vinay 2026-06-25).
     if (
-        is_followup
+        (is_followup or is_qa_call)
         and followup_meta.get("message")
         and not followup_meta.get("_localized")  # ring-time prep already did it
     ):
@@ -5801,6 +5838,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ),
             )
             state.call_type = "doctor_advice"
+        elif is_qa_call:
+            extra_tail += QUESTION_ANSWER_PROMPT_EXTRA
+            state.call_type = "question_answer"
 
         instructions = _compose_instructions(lang_code)
 

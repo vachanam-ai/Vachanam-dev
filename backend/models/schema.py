@@ -304,9 +304,14 @@ class Patient(Base):
 
 class ClinicQuestion(Base):
     """A clinic-info question a caller asked that the FAQ could NOT answer —
-    logged by the voice agent so the owner can discuss with the doctor and
-    grow the FAQ over time (Vinay 2026-07-03). RULE 9: question text only +
-    caller last-4; no names, no medical detail expected (info questions)."""
+    logged by the voice agent so the doctor can answer it and (optionally) grow
+    the FAQ (Vinay 2026-07-03; answer + callback loop 2026-08-02).
+
+    RULE 9: question text only — no medical detail is expected on an info
+    question. The caller's identity is stored for ONE purpose: the doctor's
+    answer is delivered by calling them back, so patient_id + caller_phone are
+    the delivery address (same basis as PatientMessage), wiped by patient
+    erasure. The dashboard shows the name/number; logs stay on last-4."""
     __tablename__ = "clinic_questions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -315,6 +320,18 @@ class ClinicQuestion(Base):
     )
     question: Mapped[str] = mapped_column(String(300), nullable=False)
     caller_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # Known caller → linked record so the dashboard can show the name.
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"), nullable=True
+    )
+    caller_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    answer: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    added_to_faq: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # pending (awaiting the doctor) | answered (queued for callback)
+    # | called (dispatched) | unreachable (no phone / attempts exhausted)
+    status: Mapped[str] = mapped_column(String(12), default="pending", nullable=False, index=True)
+    call_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

@@ -301,10 +301,16 @@ async def get_faq(
         raise HTTPException(status_code=404, detail="Branch not found")
     from backend.models.schema import ClinicQuestion
 
+    # Only questions still waiting on the doctor: once answered on the dashboard
+    # they either joined the FAQ below or were deliberately kept out of it, so
+    # repeating them here is noise (2026-08-02).
     asked = (
         await db.execute(
             select(ClinicQuestion)
-            .where(ClinicQuestion.branch_id == uuid.UUID(branch_id))
+            .where(
+                ClinicQuestion.branch_id == uuid.UUID(branch_id),
+                ClinicQuestion.answer.is_(None),
+            )
             .order_by(ClinicQuestion.created_at.desc())
             .limit(30)
         )
@@ -361,6 +367,143 @@ async def save_faq(
     await db.commit()
     logger.info("branch_faq_saved", branch_id=branch_id, items=len(cleaned))
     return {"faq": cleaned, "template": FAQ_TEMPLATE}
+
+
+class QuestionAnswerIn(BaseModel):
+    answer: str
+    add_to_faq: bool = False
+
+
+@router.get("/{branch_id}/questions")
+async def list_questions(
+    branch_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Questions callers asked that the AI could not answer (2026-08-02).
+    Unanswered first, newest first; latest 50. Shows who asked so the clinic
+    knows whose callback the doctor's answer is going to."""
+    await assert_branch_access(current_user, branch_id, db)
+    from backend.models.schema import ClinicQuestion, Patient
+
+    rows = (
+        await db.execute(
+            select(ClinicQuestion, Patient.name)
+            .outerjoin(Patient, Patient.id == ClinicQuestion.patient_id)
+            .where(ClinicQuestion.branch_id == uuid.UUID(branch_id))
+            .order_by(
+                (ClinicQuestion.answer.is_(None)).desc(),
+                ClinicQuestion.created_at.desc(),
+            )
+            .limit(50)
+        )
+    ).all()
+    return {
+        "questions": [
+            {
+                "id": str(q.id),
+                "question": q.question,
+                "answer": q.answer,
+                "status": q.status,
+                "added_to_faq": q.added_to_faq,
+                "patient_name": name,
+                "caller_phone": q.caller_phone,
+                "caller_last4": q.caller_last4,
+                "created_at": q.created_at.isoformat() if q.created_at else None,
+                "answered_at": q.answered_at.isoformat() if q.answered_at else None,
+            }
+            for q, name in rows
+        ],
+        "pending": sum(1 for q, _ in rows if q.answer is None),
+    }
+
+
+@router.post("/{branch_id}/questions/{question_id}/answer")
+@audit("branch.question_answered", resource_type="clinic_question")
+async def answer_question(
+    branch_id: str,
+    question_id: str,
+    body: QuestionAnswerIn,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """The doctor (or owner) answers a caller's question and decides whether it
+    joins the FAQ (Vinay 2026-08-02). EITHER WAY the caller gets a callback: the
+    answer is queued and question_callback_caller dials them and speaks it.
+
+    Doctors may write here even though the FAQ editor is owner-only — Vinay's
+    call: the doctor is the one who knows the answer."""
+    await assert_branch_access(current_user, branch_id, db)
+    from backend.models.schema import ClinicQuestion
+
+    answer = " ".join((body.answer or "").split())
+    if not answer:
+        raise HTTPException(status_code=422, detail="Answer cannot be empty")
+    if len(answer) > _FAQ_A_MAX:
+        raise HTTPException(status_code=422, detail=f"Answer must be under {_FAQ_A_MAX} characters")
+    q = (
+        await db.execute(
+            select(ClinicQuestion).where(
+                ClinicQuestion.id == uuid.UUID(question_id),
+                # RULE 1: id alone is not enough — the row must belong to the
+                # branch this user is authorized on.
+                ClinicQuestion.branch_id == uuid.UUID(branch_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if q is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    faq_added = False
+    if body.add_to_faq and not q.added_to_faq:
+        branch = (
+            await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+        ).scalar_one_or_none()
+        if branch is None:
+            raise HTTPException(status_code=404, detail="Branch not found")
+        faq = list(getattr(branch, "faq", None) or [])
+        if len(faq) >= _FAQ_MAX_ITEMS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"FAQ is full ({_FAQ_MAX_ITEMS} entries) — remove one in Settings first",
+            )
+        faq.append({"q": q.question[:_FAQ_Q_MAX], "a": answer})
+        branch.faq = faq  # reassign — JSONB change tracking
+        faq_added = True
+
+    q.answer = answer
+    q.answered_at = datetime.now(timezone.utc)
+    q.added_to_faq = q.added_to_faq or faq_added
+    # No number to dial (walk-in-style unknown caller) → nothing to call back.
+    q.status = "answered" if q.caller_phone else "unreachable"
+    await db.commit()
+    if q.status == "answered":
+        # Wake the callback job's gate so the patient is dialed on the next
+        # 5-min tick instead of waiting out the safety ceiling (#299 pattern).
+        from backend.jobs import wake_gate
+
+        await wake_gate.clear_next_at("question_callbacks")
+    logger.info(
+        "clinic_question_answered",
+        branch_id=branch_id,
+        question_id=question_id,
+        added_to_faq=q.added_to_faq,
+        callback=q.status,
+        phone_last4=(q.caller_phone or "")[-4:] or None,  # RULE 9: last-4 in logs
+    )
+    request.state.audit_resource_id = str(q.id)
+    request.state.audit_branch_id = branch_id
+    # IDs and flags only — never the question, the answer, or the number.
+    request.state.audit_metadata = {
+        "added_to_faq": q.added_to_faq, "callback": q.status,
+    }
+    return {
+        "id": str(q.id),
+        "status": q.status,
+        "added_to_faq": q.added_to_faq,
+        "callback_queued": q.status == "answered",
+    }
 
 
 @router.get("/{branch_id}/messages")

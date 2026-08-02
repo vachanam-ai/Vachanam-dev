@@ -1,5 +1,17 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-08-02 — QUESTIONS FOR THE DOCTOR (answer + automatic callback).**
+> A caller question the AI could not answer now appears on the Dashboard with
+> who asked it (name + number), not just as an anonymous line in the Settings
+> FAQ backlog. The doctor opens it, types the answer, and ticks or unticks "also
+> add to the clinic FAQ". The FAQ entry is optional; the callback is not — a new
+> 5-minute job (09:00–20:00 IST, wake-gated, 3 attempts, dispatch-then-mutate)
+> dials the caller and the agent speaks the answer as its opening, then is
+> forbidden to extend it. Doctors may answer and push to the FAQ; the Settings
+> FAQ editor stays owner-only. Migration `ll35_question_answer` is
+> DEPLOY-GATED. Proof: FIXLOG #472 — 9 new integration tests + 2 greeting tests.
+> NOT yet validated on a real Telugu call.
+
 > **2026-07-29 — FRESH-DATABASE MIGRATIONS + ZAP GATE REPAIRED.**
 > Closed the historical Alembic bootstrap collision: revision `8559268c0c44`
 > now applies only its intended audit table, 15 FK delete rules, and 15 FK

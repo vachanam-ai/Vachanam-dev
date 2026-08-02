@@ -11,6 +11,7 @@ import {
   stopWalkinsToday,
   updateDoctor
 } from "../api/client.js";
+import QuestionsCard from "../components/QuestionsCard.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
@@ -578,6 +579,10 @@ export default function DoctorSchedule() {
             onDone={() => { setAdding(false); invalidate(); }} />
         </div>
       )}
+
+      {/* Patient questions waiting on the doctor's answer (2026-08-02) — the
+          same card the owner sees on the Dashboard; hidden when there are none. */}
+      <QuestionsCard branchId={branchId} />
 
       {visible.length > 0 && (
         <DoctorsBoard doctors={visible} queue={queue} role={role}

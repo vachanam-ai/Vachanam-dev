@@ -114,6 +114,7 @@ def outbound_greeting_texts(
     is_reminder: bool = False,
     is_rebook: bool = False,
     is_followup: bool = False,
+    is_question_answer: bool = False,
     recording_active: bool = False,
 ) -> list[str]:
     """Segments of the REAL outbound opening (welcome line + call-type body).
@@ -158,6 +159,20 @@ def outbound_greeting_texts(
             out.append(lines.followup_greeting_noq.format(patient=spk_patient, clinic=spk_clinic))
         else:
             out.append(lines.known_caller_greeting.format(patient=spk_patient, clinic=spk_clinic))
+    elif is_question_answer:
+        # Question-answer callback (2026-08-02). The framing sentence ("you had
+        # asked us X, here is the clinic's answer") is composed by the dispatcher
+        # and translated into the call's language by _localize_message, so this
+        # needs no new hand-written copy per language — only the existing
+        # honorific prefix. Answer stays its OWN segment (prosody, lands whole).
+        msg = (followup_meta.get("message") or "").strip()
+        if msg:
+            prefix = (
+                lines.followup_name_prefix.format(patient=spk_patient)
+                if spk_patient and lines.followup_name_prefix
+                else ""
+            )
+            out.append(f"{prefix}{msg}" if prefix else msg)
     return out
 
 

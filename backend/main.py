@@ -156,6 +156,15 @@ async def lifespan(app: FastAPI):
             run_next_visit_followups, IntervalTrigger(minutes=5),
             id="next_visit_followups", replace_existing=True,
         )
+        # 2026-08-02: call a patient back with the doctor's answer to the
+        # question the AI could not answer. Same 5-min tick + wake gate: idle
+        # clinics cost one Redis GET, not a Postgres wake.
+        from backend.jobs.question_callback_caller import run_question_callbacks
+
+        scheduler.add_job(
+            run_question_callbacks, IntervalTrigger(minutes=5),
+            id="question_callbacks", replace_existing=True,
+        )
         # WA T8: evening rating asks (19:00 IST, cron). Cheap when idle: the
         # branch query filters on wa_phone_number_id IS NOT NULL — zero linked
         # branches = one indexed read a day.

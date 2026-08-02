@@ -107,6 +107,17 @@ export const fetchMessages = (branchId) =>
 export const resolveMessage = (branchId, messageId) =>
   api.patch(`/branches/${branchId}/messages/${messageId}`).then((r) => r.data);
 
+// ── Questions the AI could not answer → doctor answers → patient gets a callback ──
+export const fetchQuestions = (branchId) =>
+  api.get(`/branches/${branchId}/questions`).then((r) => r.data);
+export const answerQuestion = (branchId, questionId, answer, addToFaq) =>
+  api
+    .post(`/branches/${branchId}/questions/${questionId}/answer`, {
+      answer,
+      add_to_faq: addToFaq,
+    })
+    .then((r) => r.data);
+
 // ── WhatsApp post-visit ratings (WA T9) ──
 export const fetchRatingsSummary = (branchId) =>
   api.get(`/branches/${branchId}/ratings/summary`).then((r) => r.data);

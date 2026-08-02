@@ -14,7 +14,13 @@ from datetime import datetime, timezone
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models.schema import FollowupTask, Patient, PatientMessage, TreatmentNote
+from backend.models.schema import (
+    ClinicQuestion,
+    FollowupTask,
+    Patient,
+    PatientMessage,
+    TreatmentNote,
+)
 
 logger = structlog.get_logger()
 
@@ -44,6 +50,25 @@ async def erase_patient_pii(db: AsyncSession, p: Patient) -> None:
             & (PatientMessage.caller_phone == p.phone)
         )
     await db.execute(PatientMessage.__table__.delete().where(_msg_filter))
+    # Clinic questions are FAQ material, not patient data — the QUESTION stays,
+    # but the identity attached to it for the callback goes, and any queued
+    # callback is closed so an erased patient is never dialed (2026-08-02).
+    _q_filter = ClinicQuestion.patient_id == p.id
+    if p.phone:
+        _q_filter = _q_filter | (
+            (ClinicQuestion.branch_id == p.branch_id)
+            & (ClinicQuestion.caller_phone == p.phone)
+        )
+    await db.execute(
+        ClinicQuestion.__table__.update()
+        .where(_q_filter, ClinicQuestion.status == "answered")
+        .values(status="unreachable")
+    )
+    await db.execute(
+        ClinicQuestion.__table__.update()
+        .where(_q_filter)
+        .values(patient_id=None, caller_phone=None, caller_last4=None)
+    )
     p.name = ERASED_NAME
     p.phone = None
     p.age = None

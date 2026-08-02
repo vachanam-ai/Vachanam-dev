@@ -4,6 +4,7 @@ import {
   fetchAnalytics, fetchCallQuality, fetchMessages, fetchRatingsSummary,
   fetchTodayQueue, resolveMessage,
 } from "../api/client.js";
+import QuestionsCard from "../components/QuestionsCard.jsx";
 import TrendChart, { ChartLegend } from "../components/dash/TrendChart.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { countUp, revealNow, revealStagger } from "../lib/motion.js";
@@ -365,6 +366,8 @@ export default function Dashboard() {
 
       {/* Caller messages awaiting a callback (#349) — hidden when empty */}
       <MessagesCard branchId={branchId} />
+      {/* Questions the AI couldn't answer, awaiting the doctor — hidden when empty */}
+      <QuestionsCard branchId={branchId} />
       <RatingsCard branchId={branchId} />
 
       {/* Lifetime totals — since day one */}

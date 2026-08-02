@@ -13,6 +13,48 @@ Format per session:
 
 ---
 
+## 2026-08-02 — Unanswered caller questions go to the doctor, and the caller gets called back
+
+Vinay: a question the receptionist (AI) could not answer must reach the doctor
+with the caller's name and number, be answerable from the dashboard, and let the
+doctor decide whether it joins the FAQ — "if added to faq, save the question and
+entered answer in faq. if doctor selected don't add, don't add to faq. but
+either way call the person and answer the question."
+
+Decisions:
+- The FAQ append is optional; the callback is not. Answering sets the row to
+  `answered`, which is the callback job's queue.
+- Doctors (not only the clinic owner) may answer and push to the FAQ, even
+  though the FAQ editor in Settings stays owner-only — the doctor is the one who
+  knows the answer (Vinay's call).
+- The callback is an AI outbound call (Vinay's choice over a manual dial-back).
+  It reuses the existing dispatch + join-verification path; a new call type
+  `question_answer` was kept OUT of `_FOLLOWUP_CALLTYPES` so no treatment
+  follow-up machinery treats it as a FollowupTask.
+- No new per-language copy: the spoken opening ("You had asked us about X … here
+  is the answer") is composed in English by the dispatcher and translated by the
+  agent's existing `_localize_message`, the same path the doctor's follow-up
+  note already uses.
+- `clinic_questions` now stores patient_id + caller_phone. Justified exactly as
+  patient_messages is — the number is the delivery address for a promised
+  callback — and wiped by patient erasure, which also closes a queued callback
+  so an erased patient is never dialed.
+
+Files: `alembic/versions/ll35_question_answer_callback.py` (new),
+`backend/models/schema.py`, `backend/routers/branches.py`,
+`backend/jobs/question_callback_caller.py` (new), `backend/main.py`,
+`backend/services/patient_erasure.py`, `agent/livekit_minimal/agent.py`,
+`agent/livekit_minimal/greeting.py`, `frontend/src/api/client.js`,
+`frontend/src/pages/Dashboard.jsx`,
+`tests/integration/test_question_answer_callback.py` (new),
+`tests/unit/test_greeting.py`.
+
+Follow-ups: migration `ll35_question_answer` is DEPLOY-GATED (not applied to
+prod); one real Telugu callback should be heard before this is trusted on a
+paying clinic.
+
+---
+
 ## 2026-07-29 — Fresh-database chain and security-scan gate repaired
 
 Rewrote deployed revision `8559268c0c44` from the accidental second full-schema
