@@ -136,10 +136,12 @@ async def test_done_message_leaves_the_dashboard_but_stays_in_db(db):
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
-    kept = (await db.execute(
-        select(PatientMessage).where(PatientMessage.id == done_m.id)
-    )).scalar_one()
-    assert kept.status == "done" and kept.resolved_at is not None
+    # The PATCH ran in the APP's session, so this session still holds the
+    # pre-PATCH instance in its identity map and a plain select() hands it
+    # straight back. refresh() re-reads it (and is greenlet-safe, unlike
+    # expire_all(), whose lazy reload fires on attribute access).
+    await db.refresh(done_m)
+    assert done_m.status == "done" and done_m.resolved_at is not None
 
 
 # ── pre-ll35 questions: recover the number so the callback actually fires ────

@@ -357,13 +357,19 @@ async def test_patch_doctor_working_hours_triggers_recurring_cal_upsert(
     The mock patches the class inside the doctors router module so the
     router's instantiation picks up the mock instance.
     """
-    # Create a token doctor with a calendar_id set
+    # One calendar per clinic (2026-08-03): the hours block resolves from the
+    # BRANCH calendar, so that is what has to be set for an upsert to happen.
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(clinic["branch_id"])))
+    ).scalar_one()
+    branch.google_calendar_id = "some-cal@group.calendar.google.com"
+    await db.commit()
+
     create_r = await client.post(
         f"/doctors/{clinic['branch_id']}",
         json={
             "name": "Dr Cal Token",
             "booking_type": "token",
-            "google_calendar_id": "some-cal@group.calendar.google.com",
             "working_hours_start": "09:00",
             "working_hours_end": "13:00",
             "available_weekdays": [0, 1, 2, 3, 4],
@@ -395,16 +401,30 @@ async def test_patch_doctor_working_hours_triggers_recurring_cal_upsert(
     mock_instance.upsert_doctor_hours_event.assert_called_once()
 
 
-async def test_patch_doctor_calendar_change_moves_recurring_event(
+async def test_doctor_hours_always_go_to_the_clinic_calendar(
     client, db: AsyncSession, clinic, org_admin_jwt
 ):
-    """TD-023: changing a doctor's calendar_id deletes the stale hours event
-    from the OLD calendar and creates a fresh one on the NEW (no PATCH-404)."""
+    """Replaces the TD-023 "calendar moved" test.
+
+    TD-023 existed because a doctor's OWN calendar id could change, stranding
+    the hours event on the previous calendar. Per-doctor calendars were removed
+    2026-08-03 (Vinay: "everything should be on clinic"), so the effective
+    calendar can no longer move underneath a doctor. What must hold now is
+    simpler and stronger: the hours block goes to the BRANCH calendar, and a
+    google_calendar_id supplied by the client is ignored rather than honoured.
+    """
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(clinic["branch_id"])))
+    ).scalar_one()
+    branch.google_calendar_id = "clinic-cal@group.calendar.google.com"
+    await db.commit()
+
     create_r = await client.post(
         f"/doctors/{clinic['branch_id']}",
         json={
             "name": "Dr Move", "booking_type": "token",
-            "google_calendar_id": "old-cal@group.calendar.google.com",
+            # Ignored: doctors hold no calendar of their own any more.
+            "google_calendar_id": "attacker-cal@group.calendar.google.com",
             "working_hours_start": "09:00", "working_hours_end": "13:00",
             "available_weekdays": [0, 1, 2, 3, 4],
         },
@@ -413,34 +433,28 @@ async def test_patch_doctor_calendar_change_moves_recurring_event(
     assert create_r.status_code == 201, create_r.text
     doctor_id = create_r.json()["id"]
 
-    # Pretend the recurring event was created on the OLD calendar.
     doc = (
         await db.execute(select(Doctor).where(Doctor.id == uuid.UUID(doctor_id)))
     ).scalar_one()
-    doc.calendar_event_id_recurring = "evt_old_cal"
+    assert doc.google_calendar_id is None, "the supplied id must not be stored"
+    doc.calendar_event_id_recurring = "evt_existing"
     await db.commit()
 
     with patch("backend.routers.doctors.GoogleCalendarService") as mock_cls:
         inst = mock_cls.return_value
         inst.delete_event = AsyncMock(return_value=None)
-        inst.upsert_doctor_hours_event = AsyncMock(return_value="evt_new_cal")
+        inst.upsert_doctor_hours_event = AsyncMock(return_value="evt_clinic")
 
         patch_r = await client.patch(
             f"/doctors/{clinic['branch_id']}/{doctor_id}",
-            json={
-                "name": "Dr Move", "booking_type": "token",
-                "google_calendar_id": "new-cal@group.calendar.google.com",
-            },
+            json={"name": "Dr Move", "working_hours_start": "10:00"},
             headers=_auth(org_admin_jwt),
         )
     assert patch_r.status_code == 200, patch_r.text
-    # Old event deleted from the OLD calendar...
-    inst.delete_event.assert_awaited_once_with(
-        "old-cal@group.calendar.google.com", "evt_old_cal"
-    )
-    # ...and the upsert created fresh (existing_event_id=None, not the stale id).
     _, kwargs = inst.upsert_doctor_hours_event.call_args
-    assert kwargs["existing_event_id"] is None
+    assert kwargs["calendar_id"] == "clinic-cal@group.calendar.google.com"
+    # Nothing to move, so nothing is deleted off another calendar.
+    inst.delete_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio

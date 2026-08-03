@@ -113,8 +113,12 @@ async def test_cascade_delete_resolves_calendar_id(clinic, db):
     await _process_one_task(db, task, svc)
 
     assert task.status == "done", task.last_error
-    # resolved from the token's DOCTOR calendar (falls back to branch)
-    assert svc.deleted == [("doctor-cal@group.calendar.google.com", "evt-ghost-1")]
+    # B1's point stands: a delete task enqueued with calendar_id=None must still
+    # resolve a REAL calendar, or the doctor keeps seeing a ghost appointment.
+    # The source is now the clinic's calendar — per-doctor calendars were removed
+    # 2026-08-03 (Vinay: "everything should be on clinic").
+    assert svc.deleted == [(branch.google_calendar_id, "evt-ghost-1")]
+    assert branch.google_calendar_id, "fixture must give the branch a calendar"
 
 
 # ── B5: reminder window survives midnight ────────────────────────────────────

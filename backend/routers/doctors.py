@@ -736,8 +736,8 @@ async def update_doctor(
         or "recurring_schedule" in changed
     )
     # One calendar per clinic (Vinay 2026-08-03): the hours block always lives on
-    # the BRANCH calendar now, so there is no per-doctor calendar to move it off.
-    old_effective_cal = branch.google_calendar_id
+    # the BRANCH calendar, so TD-023's "the effective calendar moved" case — and
+    # the old_effective_cal it needed — no longer exists.
 
     # Apply scalar fields; parse time strings
     for field, value in changed.items():
@@ -786,9 +786,10 @@ async def update_doctor(
     # Best-effort: re-sync recurring Cal event if relevant fields changed.
     # Pass the old calendar so a calendar change moves the hours block (TD-023).
     if hours_weekdays_changed:
-        await _maybe_upsert_recurring_cal_event(
-            doc, branch, db, old_calendar_id=old_effective_cal
-        )
+        # No old_calendar_id any more: TD-023 existed because the EFFECTIVE
+        # calendar could change when a doctor's own id changed. With one
+        # calendar per clinic there is nothing to move the hours block off.
+        await _maybe_upsert_recurring_cal_event(doc, branch, db)
 
     return _doctor_to_out(doc)
 

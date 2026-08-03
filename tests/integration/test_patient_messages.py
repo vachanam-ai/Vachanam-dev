@@ -66,7 +66,10 @@ async def test_messages_listed_pending_and_urgent_first(db):
             assert msgs[0]["urgent"] is True  # urgent pending on top
             assert msgs[0]["patient_name"] == "Vinay"
             assert msgs[0]["caller_phone"] == "+919000007554"
-            assert msgs[-1]["status"] == "done"  # done sinks
+            # Vinay 2026-08-03: a done message LEAVES the dashboard rather than
+            # sinking to the bottom — the desk only wants what still needs action.
+            assert [m["status"] for m in msgs] == ["pending", "pending"]
+            assert "Old resolved thing" not in str(msgs)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 

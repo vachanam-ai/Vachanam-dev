@@ -146,6 +146,10 @@ async def test_answer_without_phone_is_unreachable_not_queued(db):
     org_id, br, _pat, q = await _seed(db, "+910000000096")
     q.caller_phone = None
     q.patient_id = None
+    # caller_last4 must go too, or the pre-ll35 recovery added 2026-08-03 finds
+    # the seeded patient by their last four digits and correctly queues a call.
+    # This test is about having genuinely NOTHING to dial.
+    q.caller_last4 = None
     await db.commit()
     app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
     try:
