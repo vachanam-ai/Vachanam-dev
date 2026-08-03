@@ -164,7 +164,13 @@ async def test_smuggled_token_from_other_branch_rejected(db, wa_env):
 
     rows = (await db.execute(select(Rating))).scalars().all()
     assert rows == []
-    assert "call" in wa_env[-1]["text"].lower()
+    # The reply must be generic — never confirm the token exists or leak whose
+    # it is (RULE 1). It used to say "call us"; that is banned in WhatsApp now
+    # (Vinay 2026-08-02), so assert the GUARANTEE rather than the sentence.
+    reply = wa_env[-1]["text"].lower()
+    assert reply, "must still answer — RULE 8, no dead ends"
+    assert "call us" not in reply and "call the clinic" not in reply
+    assert str(tok1.id) not in reply and "rating" not in reply
 
 
 # ── reschedule/cancel buttons (day-1 callback flow) ──────────────────────────
@@ -180,8 +186,13 @@ async def test_reschedule_button_creates_dashboard_message(db, wa_env):
     assert "reschedule" in msgs[0].message
     assert msgs[0].branch_id == b.id
     reply = wa_env[-1]["text"]
-    assert "call you" in reply  # honest: clinic will call — never "changed"
+    # Honest: the clinic still has to confirm — the reply must never claim the
+    # booking was already changed (nothing was written). It used to promise a
+    # phone call back; sending a patient to a phone is banned in WhatsApp now
+    # (Vinay 2026-08-02), so the invitation is to reply in chat instead.
     assert "changed" not in reply.lower() and "rescheduled" not in reply.lower()
+    assert "call us" not in reply.lower() and "call you" not in reply.lower()
+    assert "reply here" in reply.lower()
 
 
 # ── chat intents (Gemini mocked) ─────────────────────────────────────────────
@@ -201,21 +212,36 @@ async def test_chat_location_intent(db, wa_env, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_medical_goes_to_call(db, wa_env, monkeypatch):
+async def test_chat_medical_goes_to_the_doctor_never_triaged(db, wa_env, monkeypatch):
+    """WA MVP1 Task 6 (Vinay 2026-08-02): a symptom question is `ask_doctor`
+    — it reaches the doctor via ClinicQuestion, it is NEVER answered by the
+    bot, and "call us" is banned platform-wide, so it must not appear here
+    either."""
+    from sqlalchemy import select
+
+    from backend.models.schema import ClinicQuestion
+
     b, _, _ = await _setup(db)
 
     async def _fake_gemini(prompt):
         # RULE 7: prompt itself must forbid medical judgment
         assert "never give medical advice" in prompt
-        return json.dumps({"intent": "out_of_scope", "answer": ""})
+        return json.dumps({"intent": "ask_doctor", "answer": ""})
 
     monkeypatch.setattr(wa_chat, "_call_gemini", _fake_gemini)
     await wa_chat.handle_text(db, b, "clinic", "919000000042", "my tooth pains, which medicine?")
-    assert "call" in wa_env[-1]["text"].lower()
+
+    reply = wa_env[-1]["text"].lower()
+    assert "call us" not in reply and "call the clinic" not in reply
+    for w in ("serious", "urgent", "you should", "medicine"):
+        assert w not in reply
+    q = (await db.execute(select(ClinicQuestion))).scalars().one()
+    assert q.branch_id == b.id and "tooth" in q.question.lower()
 
 
 @pytest.mark.asyncio
 async def test_chat_gemini_down_static_fallback(db, wa_env, monkeypatch):
+    """RULE 8 — no dead end. Also banned (Vinay 2026-08-02): "call us"."""
     b, _, _ = await _setup(db)
 
     async def _boom(prompt):
@@ -223,4 +249,6 @@ async def test_chat_gemini_down_static_fallback(db, wa_env, monkeypatch):
 
     monkeypatch.setattr(wa_chat, "_call_gemini", _boom)
     await wa_chat.handle_text(db, b, "clinic", "919000000042", "hello")
-    assert "call" in wa_env[-1]["text"].lower()  # RULE 8: no dead end
+    reply = wa_env[-1]["text"].lower()
+    assert reply  # a reply was sent — never a dead end
+    assert "call us" not in reply and "call the clinic" not in reply

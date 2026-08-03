@@ -152,4 +152,4 @@ async def _handle_value(db: AsyncSession, value: dict) -> None:
                 logger.info("wa_unsupported_type", mtype=msg.get("type"))
         except Exception as e:  # noqa: BLE001 — never dead-end the patient (RULE 8)
             logger.error("wa_message_error", error=str(e)[:300])
-            await wa_actions.reply_call_us(branch, sender, plan)
+            await wa_actions.reply_transient_error(branch, sender, plan)

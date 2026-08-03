@@ -66,20 +66,37 @@ async def _owned_token(
     return token
 
 
-async def reply_call_us(branch: Branch, sender: str, plan: str) -> None:
-    """Static no-dead-end reply (RULE 8)."""
-    number = branch.clinic_phone or branch.did_number or ""
-    line = (
-        f"Sorry, something went wrong. Please call us at {number}."
-        if number else "Sorry, something went wrong. Please call the clinic."
+async def reply_transient_error(branch: Branch, sender: str, plan: str) -> None:
+    """Static no-dead-end reply (RULE 8) that keeps the patient IN chat.
+
+    Was `reply_call_us`, which sent "Please call us at {number}". That is
+    banned platform-wide (Vinay 2026-08-02): every WhatsApp path must resolve
+    in WhatsApp. It is doubly wrong on the `wa` plan, where the clinic bought
+    no AI phone line at all — the whole product promise is that the patient
+    never has to ring anyone.
+
+    RULE 8 still holds: the patient always gets a coherent next step. Here the
+    next step is "say it again", which is true — this fires on a transient
+    handler failure, and the retry usually works.
+    """
+    await wa_service.send_text(
+        branch,
+        sender,
+        "Sorry, something went wrong at our end. Please send that again in a "
+        "moment and I will take care of it.",
+        plan=plan,
     )
-    await wa_service.send_text(branch, sender, line, plan=plan)
+
+
+# Back-compat alias: any straggler caller keeps working, but the name no longer
+# advertises a phone number that must never be sent.
+reply_call_us = reply_transient_error
 
 
 async def dispatch_button(
     db: AsyncSession, branch: Branch, plan: str, sender: str, payload: str
 ) -> None:
-    """Route a quick-reply payload by grammar prefix. Unknown → call-us."""
+    """Route a quick-reply payload by grammar prefix. Unknown → in-chat retry."""
     if not wa_service.wa_enabled(branch, plan):
         return
     parts = (payload or "").split(":")
@@ -92,7 +109,7 @@ async def dispatch_button(
         )
     else:
         logger.info("wa_unknown_button", payload=payload[:40])
-        await reply_call_us(branch, sender, plan)
+        await reply_transient_error(branch, sender, plan)
 
 
 async def handle_rating(
@@ -104,7 +121,7 @@ async def handle_rating(
     except ValueError:
         score = 0
     if token is None or not 1 <= score <= 5:
-        await reply_call_us(branch, sender, plan)
+        await reply_transient_error(branch, sender, plan)
         return
     existing = (
         await db.execute(select(Rating).where(Rating.token_id == token.id))
@@ -151,7 +168,7 @@ async def handle_change_request(
     claims the booking was changed (nothing was written)."""
     token = await _owned_token(db, branch, sender, token_id)
     if token is None or token.status != "confirmed":
-        await reply_call_us(branch, sender, plan)
+        await reply_transient_error(branch, sender, plan)
         return
     what = "cancel" if want_cancel else "reschedule"
     when = (
@@ -166,12 +183,12 @@ async def handle_change_request(
         urgent=False,
     ))
     await db.commit()
-    number = branch.clinic_phone or branch.did_number or ""
-    call_bit = f" You can also call us right away: {number}" if number else ""
+    # No "you can also call us" tail — a WhatsApp path never sends the patient
+    # to a phone (Vinay 2026-08-02). They can simply reply here.
     await wa_service.send_text(
         branch, sender,
-        f"Got it — the clinic will call you shortly to {what} your "
-        f"appointment.{call_bit}",
+        f"Got it — the clinic will confirm the {what} shortly. "
+        f"If anything changes, just reply here.",
         plan=plan,
     )
     logger.info(
