@@ -1371,7 +1371,8 @@ async def confirm_booking(
     result = await db.execute(select(Branch).where(Branch.id == branch_id))
     branch = result.scalar_one()
     doctor_name = doctor.name
-    doctor_calendar_id = doctor.google_calendar_id
+    # Doctor-level calendars retired 2026-08-03 (Vinay) — one calendar per
+    # clinic branch; Doctor.google_calendar_id is never read here.
     branch_calendar_id = branch.google_calendar_id
     branch_name = branch.name
 
@@ -1389,7 +1390,7 @@ async def confirm_booking(
         @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=1, max=3))
         async def _calendar_write() -> str:
             return await calendar_service.create_booking_event(
-                calendar_id=doctor_calendar_id or branch_calendar_id,
+                calendar_id=branch_calendar_id,
                 patient_name=patient_name,
                 patient_phone=patient_phone[-4:] if patient_phone else "unknown",
                 token_number=token_number,

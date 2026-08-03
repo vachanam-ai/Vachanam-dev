@@ -340,6 +340,13 @@ async def analytics_overview(
                     Token.branch_id == branch_uuid,
                     Token.date >= start,
                     Token.date <= today,
+                    # A removed doctor is soft-deleted (status='inactive'). Without
+                    # this they stayed on the per-doctor board forever — Vinay
+                    # removed a doctor and still saw her flagged "needs attention"
+                    # (2026-08-03). This board is who is ON THE DESK, not a
+                    # historical ledger; clinic totals are computed by other
+                    # queries that do not join Doctor, so they stay truthful.
+                    Doctor.status == "active",
                     _tokens_of_live_patients(branch_uuid),
                 )
             )
@@ -390,6 +397,8 @@ async def analytics_overview(
                     DoctorUnavailability.branch_id == branch_uuid,  # Rule 1
                     DoctorUnavailability.date >= today,
                     DoctorUnavailability.date <= today + timedelta(days=30),
+                    # Upcoming leave for a doctor who has left the clinic is noise.
+                    Doctor.status == "active",
                 )
             )
             .order_by(DoctorUnavailability.date)

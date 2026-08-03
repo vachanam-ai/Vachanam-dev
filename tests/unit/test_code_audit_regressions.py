@@ -54,13 +54,25 @@ def test_branch_calendar_id_has_database_uniqueness_backstop():
 
 
 @known("AUDIT-003", "doctor calendars do not check IDs owned by other tenants")
-def test_doctor_calendar_mutations_check_global_ownership():
+def test_doctors_can_no_longer_claim_a_calendar_at_all():
+    """AUDIT-003 closed by REMOVAL, 2026-08-03 (Vinay: "remove calender linkage
+    of doctors completely. everything should be on clinic").
+
+    The original finding was that a doctor-level calendar id could be pointed at
+    a calendar belonging to another tenant, so the fix was an ownership check
+    (_assert_calendar_available). There is now no per-doctor calendar to claim:
+    every event goes to Branch.google_calendar_id, whose uniqueness AUDIT-002
+    already backstops at the database. This test guards the stronger property —
+    that no doctor write path can set a calendar id — so reintroducing the field
+    without an ownership check fails here rather than shipping the old hole.
+    """
     text = source("backend/routers/doctors.py")
-    helper = text[text.index("async def _assert_calendar_available"):text.index("def _doctor_to_out")]
     mutations = text[text.index("async def create_doctor"):]
-    assert "calendar_id_collision_blocked" in helper
-    assert "Branch.google_calendar_id" in helper and "Doctor.google_calendar_id" in helper
-    assert mutations.count("_assert_calendar_available(") >= 2
+    assert "body.google_calendar_id" not in mutations
+    assert "doc.google_calendar_id =" not in mutations
+    assert "google_calendar_id=body" not in mutations
+    # The branch calendar is still the one true calendar, and still resolved here.
+    assert "branch.google_calendar_id" in text
 
 
 @known("AUDIT-004", "clinic erasure leaves support-ticket PII orphaned")

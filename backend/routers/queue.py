@@ -10,7 +10,9 @@ Per CLAUDE.md Rule 1: branch isolation is enforced at THREE layers — middlewar
 (WHERE branch_id = ?). Any single layer failure must not breach data.
 """
 import uuid
-from datetime import date, datetime, timezone
+# date_cls: the queue endpoint takes a `date` QUERY PARAM, which shadows the
+# class inside that function. The alias keeps the nice ?date= contract.
+from datetime import date, date as date_cls, datetime, timezone
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -84,13 +86,20 @@ class QueueResponse(BaseModel):
 async def get_today_queue(
     branch_id: str,
     request: Request,
+    date: str | None = None,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> QueueResponse:
-    """Today's complete queue grouped by doctor.
+    """One day's complete queue grouped by doctor — today unless `date` says so.
 
-    Returns ALL tokens for the branch dated today with status in
+    Returns ALL tokens for the branch on that date with status in
     (confirmed, attended, no_show). Sorted by doctor name then token number.
+
+    `date` exists because this was today-ONLY, and it was the single view of
+    bookings in the whole product. A doctor who publishes a week of varying
+    sessions in advance takes bookings days out, and every one of them was
+    invisible until that morning — the clinic could not tell an empty diary
+    from a broken one (Vinay, 2026-08-03).
 
     Performance: this hits Token (filtered by branch_id + date) joined to Patient
     and Doctor. With TD-018 indexes added, this is a single index scan.
@@ -108,6 +117,13 @@ async def get_today_queue(
     # at YESTERDAY between 00:00 and 05:30 IST, hiding bookings from the
     # receptionist's queue in that window.
     today = await _branch_today(branch_uuid, db)
+    if date is not None:
+        try:
+            today = date_cls.fromisoformat(date)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid date — expected YYYY-MM-DD"
+            )
 
     try:
         result = await db.execute(
@@ -625,7 +641,9 @@ async def create_walkin(
         db,
         token,
         doctor,
-        doctor.google_calendar_id or branch_row.google_calendar_id,
+        # Doctor-level calendars retired 2026-08-03 (Vinay) — one calendar per
+        # clinic branch; per-doctor google_calendar_id is never read here.
+        branch_row.google_calendar_id,
         patient_first_name=body.patient_name.split()[0] if body.patient_name else "",
         # B17: use the NORMALIZED phone for last-4, not the raw typed value — a
         # trailing space / formatting in the input otherwise put junk like

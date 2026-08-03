@@ -27,8 +27,7 @@ const EMPTY_DOCTOR = {
   working_hours_start: "09:00",
   working_hours_end: "17:00",
   slot_duration_minutes: 15,
-  available_weekdays: [0, 1, 2, 3, 4, 5], // Mon-Sat default (Indian clinics)
-  google_calendar_id: ""
+  available_weekdays: [0, 1, 2, 3, 4, 5] // Mon-Sat default (Indian clinics)
 };
 
 const localISO = (value) => {
@@ -93,8 +92,7 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
           slot_duration_minutes: initial.slot_duration_minutes ?? 15,
           schedule_mode: initial.schedule_mode ?? "recurring",
           recurring_schedule: scheduleForForm(initial),
-          available_weekdays: initial.available_weekdays ?? [0, 1, 2, 3, 4, 5],
-          google_calendar_id: initial.google_calendar_id ?? ""
+          available_weekdays: initial.available_weekdays ?? [0, 1, 2, 3, 4, 5]
         }
       : { ...EMPTY_DOCTOR, recurring_schedule: scheduleForForm(null) }
   );
@@ -113,8 +111,7 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
         working_hours_start: f.working_hours_start || null,
         working_hours_end: f.working_hours_end || null,
         slot_duration_minutes: isToken ? null : Number(f.slot_duration_minutes),
-        available_weekdays: f.available_weekdays,
-        google_calendar_id: f.google_calendar_id.trim() || null
+        available_weekdays: f.available_weekdays
       };
       return isEdit ? updateDoctor(branchId, doctorId, payload) : createDoctor(branchId, payload);
     },
@@ -225,17 +222,10 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
             value={f.slot_duration_minutes} onChange={set("slot_duration_minutes")} />
         </div>
       )}
-      <div className="sm:col-span-2">
-        <label className="label">Doctor's own Google Calendar ID (optional)</label>
-        <input className="field" value={f.google_calendar_id} onChange={set("google_calendar_id")}
-          placeholder="doctor.name@gmail.com or abc123…@group.calendar.google.com" />
-        <p className="mt-1 font-ui text-xs text-slate">
-          Give each doctor their own calendar so one doctor's bookings don't appear on
-          everyone's schedule. Share that calendar with the clinic's service account
-          (same steps as in Settings → Google Calendar), then paste its ID here. Left
-          empty, this doctor's events go to the clinic-wide calendar.
-        </p>
-      </div>
+      {/* Per-doctor Google Calendar removed 2026-08-03 (Vinay): one calendar per
+          clinic. Doctors see their own appointments in their dashboard account
+          instead. A doctor-level calendar the service account could not write to
+          silently rolled back the booking that depended on it. */}
       <div className="flex gap-3 sm:col-span-2">
         <button className="btn-primary flex-1" disabled={create.isPending}>
           {create.isPending ? "Saving…" : isEdit ? "Save changes" : "Add doctor"}

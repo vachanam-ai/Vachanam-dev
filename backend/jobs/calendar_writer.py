@@ -30,7 +30,7 @@ import structlog
 from sqlalchemy import select
 
 from backend.database import AsyncSessionLocal
-from backend.models.schema import Branch, CalendarWriteTask, Doctor, Token
+from backend.models.schema import Branch, CalendarWriteTask, Token
 from backend.services.admin_alert import alert_admin
 from backend.services.calendar_service import GoogleCalendarService, CalendarWriteFailed
 
@@ -61,22 +61,20 @@ def _compute_next_attempt(attempts: int, now: datetime) -> datetime:
 
 
 async def _resolve_calendar_id(db, task: CalendarWriteTask) -> Optional[str]:
-    """Calendar id for this task: payload value, else resolved from the
-    task's Token -> Doctor.google_calendar_id -> Branch.google_calendar_id.
+    """Calendar id for this task: payload value, else the task's Branch calendar.
 
     cascade_cancel enqueues delete tasks with payload calendar_id=None (its
     comment claimed the writer fills it in — nothing ever did), so every
     cascade calendar delete failed 5x and went failed_permanent while the
     doctor kept seeing ghost appointments on their calendar.
+
+    Doctor-level calendars were retired 2026-08-03 (Vinay): every clinic has
+    exactly one calendar (Branch.google_calendar_id); Doctor.google_calendar_id
+    is no longer read here.
     """
     cal_id = (task.payload_json or {}).get("calendar_id")
     if cal_id:
         return cal_id
-    token = await db.get(Token, task.token_id)
-    if token is not None:
-        doctor = await db.get(Doctor, token.doctor_id)
-        if doctor is not None and doctor.google_calendar_id:
-            return doctor.google_calendar_id
     branch = await db.get(Branch, task.branch_id)
     if branch is not None and branch.google_calendar_id:
         return branch.google_calendar_id

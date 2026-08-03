@@ -113,7 +113,8 @@ class DoctorUpdate(BaseModel):
     post_treatment_followup: Optional[bool] = None
     whatsapp_number: Optional[str] = Field(default=None, max_length=20)
     invited_email: Optional[str] = Field(default=None, max_length=255)
-    google_calendar_id: Optional[str] = Field(default=None, max_length=255)
+    # google_calendar_id RETIRED 2026-08-03 (Vinay): doctors no longer have
+    # their own calendar — every booking targets the single Branch calendar.
     is_default_doctor: Optional[bool] = None
 
     @field_validator("available_weekdays")
@@ -205,7 +206,6 @@ class DoctorOut(BaseModel):
     post_treatment_followup: bool
     walkins_closed_today_date: Optional[str]
     calendar_event_id_recurring: Optional[str]
-    google_calendar_id: Optional[str]
     whatsapp_number: Optional[str]
     invited_email: Optional[str]
     is_default_doctor: bool
@@ -347,42 +347,6 @@ async def _reject_if_schedule_edit_breaks_bookings(
         )
 
 
-async def _assert_calendar_available(
-    db: AsyncSession,
-    branch: Branch,
-    calendar_id: str | None,
-    *,
-    doctor_id: uuid.UUID | None = None,
-) -> str | None:
-    """Reserve a Calendar ID globally across branches and doctors."""
-    if calendar_id is None or not calendar_id.strip():
-        return None
-    cal_id = calendar_id.strip()
-    await db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-        {"key": f"calendar:{cal_id}"},
-    )
-    branch_clash = (
-        await db.execute(
-            select(Branch).where(
-                Branch.google_calendar_id == cal_id,
-                Branch.id != branch.id,
-            )
-        )
-    ).scalar_one_or_none()
-    doctor_query = select(Doctor).where(Doctor.google_calendar_id == cal_id)
-    if doctor_id is not None:
-        doctor_query = doctor_query.where(Doctor.id != doctor_id)
-    doctor_clash = (await db.execute(doctor_query)).scalars().first()
-    if branch_clash is not None or doctor_clash is not None:
-        logger.warning("calendar_id_collision_blocked", branch_id=str(branch.id))
-        raise HTTPException(
-            status_code=409,
-            detail="This Google Calendar is already linked to another clinic or doctor.",
-        )
-    return cal_id
-
-
 def _doctor_to_out(doc: Doctor) -> DoctorOut:
     """Serialize a Doctor ORM row to the response model.
 
@@ -417,7 +381,6 @@ def _doctor_to_out(doc: Doctor) -> DoctorOut:
             if doc.walkins_closed_today_date else None
         ),
         calendar_event_id_recurring=doc.calendar_event_id_recurring,
-        google_calendar_id=doc.google_calendar_id,
         whatsapp_number=doc.whatsapp_number,
         invited_email=doc.invited_email,
         is_default_doctor=doc.is_default_doctor,
@@ -429,21 +392,21 @@ async def _maybe_upsert_recurring_cal_event(
     doc: Doctor,
     branch: Branch,
     db: AsyncSession,
-    old_calendar_id: str | None = None,
 ) -> None:
     """Best-effort: create/update recurring clinic-hours Calendar event.
 
-    Called after POST/PATCH for EVERY doctor type when a calendar_id is
-    available (doctor or branch level) — clinics expect each doctor's hours
-    visible in the calendar regardless of token/appointment booking. Any
-    exception is caught and logged — never raises (spec §5.2 constraint 4).
+    Called after POST/PATCH for EVERY doctor type when the branch has a
+    calendar configured — clinics expect each doctor's hours visible in the
+    calendar regardless of token/appointment booking. Any exception is caught
+    and logged — never raises (spec §5.2 constraint 4).
 
-    TD-023: when the effective calendar CHANGES, the stored recurring event id
-    belongs to the OLD calendar — PATCHing it against the new calendar 404s and
-    the old calendar keeps a stale hours block. So on a calendar change we delete
-    the old event from the old calendar and create a fresh one on the new.
+    Doctor-level calendars were retired 2026-08-03 (Vinay): every clinic has
+    exactly one calendar (Branch.google_calendar_id), so TD-023's "calendar
+    changed under a doctor" scenario can no longer happen from this router —
+    only Branch.google_calendar_id can change, and that is edited in
+    backend/routers/branches.py, not here.
     """
-    cal_id = doc.google_calendar_id or branch.google_calendar_id
+    cal_id = branch.google_calendar_id
     if not cal_id:
         return
     recurring_values = [
@@ -472,7 +435,7 @@ async def _maybe_upsert_recurring_cal_event(
         if doc.calendar_event_id_recurring:
             try:
                 await GoogleCalendarService().delete_event(
-                    old_calendar_id or cal_id, doc.calendar_event_id_recurring
+                    cal_id, doc.calendar_event_id_recurring
                 )
             except Exception as exc:
                 logger.warning("complex_schedule_old_calendar_delete_failed", error=str(exc))
@@ -491,18 +454,7 @@ async def _maybe_upsert_recurring_cal_event(
         )
         return
 
-    # Calendar moved? Drop the stale event from the OLD calendar and create new.
     existing_event_id = doc.calendar_event_id_recurring
-    if old_calendar_id and old_calendar_id != cal_id and existing_event_id:
-        try:
-            await GoogleCalendarService().delete_event(old_calendar_id, existing_event_id)
-            logger.info(
-                "recurring_cal_event_moved_deleted_old",
-                doctor_id=str(doc.id), old_calendar=old_calendar_id[-12:],
-            )
-        except Exception as _del_exc:
-            logger.warning("recurring_cal_old_delete_failed", error=str(_del_exc))
-        existing_event_id = None  # force a fresh create on the new calendar
 
     try:
         svc = GoogleCalendarService()
@@ -615,9 +567,6 @@ async def create_doctor(
     branch = branch_result.scalar_one_or_none()
     if not branch:
         raise HTTPException(status_code=404, detail="Branch not found")
-    body.google_calendar_id = await _assert_calendar_available(
-        db, branch, body.google_calendar_id
-    )
 
     # Plan doctor cap (repricing 2026-07-11): Starter 1 / Clinic 5 / Multi
     # unlimited. Counted per ORG (all branches), active doctors only.
@@ -678,7 +627,8 @@ async def create_doctor(
         post_treatment_followup=post_followup,
         whatsapp_number=body.whatsapp_number,
         invited_email=body.invited_email,
-        google_calendar_id=body.google_calendar_id,
+        # google_calendar_id retired 2026-08-03: one calendar per clinic. The
+        # column stays nullable/unused; nothing sets it any more.
         is_default_doctor=body.is_default_doctor or False,
         status="active",
     )
@@ -773,22 +723,21 @@ async def update_doctor(
     )
 
     changed = body.model_dump(exclude_unset=True)
-    if "google_calendar_id" in changed:
-        changed["google_calendar_id"] = await _assert_calendar_available(
-            db, branch, changed["google_calendar_id"], doctor_id=doc.id
-        )
     hours_weekdays_changed = (
-        "working_hours_start" in changed
+        # The recurring event's SUMMARY is the doctor's name, so a rename has to
+        # re-sync it too. Without this a renamed doctor kept the old name on the
+        # clinic's Google Calendar forever (Vinay, 2026-08-03).
+        "name" in changed
+        or "working_hours_start" in changed
         or "working_hours_end" in changed
         or "available_weekdays" in changed
         or "booking_type" in changed
         or "schedule_mode" in changed
         or "recurring_schedule" in changed
-        or "google_calendar_id" in changed
     )
-    # TD-023: remember the OLD effective calendar so the recurring-event upsert
-    # can move the hours block off it when the calendar id changes.
-    old_effective_cal = doc.google_calendar_id or branch.google_calendar_id
+    # One calendar per clinic (Vinay 2026-08-03): the hours block always lives on
+    # the BRANCH calendar now, so there is no per-doctor calendar to move it off.
+    old_effective_cal = branch.google_calendar_id
 
     # Apply scalar fields; parse time strings
     for field, value in changed.items():

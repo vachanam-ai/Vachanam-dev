@@ -123,8 +123,12 @@ export const fetchRatingsSummary = (branchId) =>
   api.get(`/branches/${branchId}/ratings/summary`).then((r) => r.data);
 
 // ── Queue (receptionist) ──
-export const fetchTodayQueue = (branchId) =>
-  api.get(`/queue/${branchId}/today`).then((r) => r.data);
+export const fetchTodayQueue = (branchId, date) =>
+  // `date` (YYYY-MM-DD) omitted = the branch's today. Bookings land days ahead
+  // when a doctor publishes a week of sessions, and this is the only view of
+  // them, so the desk has to be able to step off today.
+  api.get(`/queue/${branchId}/today`, date ? { params: { date } } : undefined)
+    .then((r) => r.data);
 export const markAttended = (branchId, tokenId) =>
   api.patch(`/queue/${branchId}/token/${tokenId}/attend`).then((r) => r.data);
 export const markNoShow = (branchId, tokenId) =>

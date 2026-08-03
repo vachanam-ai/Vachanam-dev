@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { fetchTodayQueue, markAttended, markNoShow } from "../api/client.js";
@@ -61,22 +61,39 @@ export default function Queue() {
   const qc = useQueryClient();
   const pageRef = useRef(null);
 
+  // day = null means "the branch's today", which the server decides — the
+  // browser's clock may be in another timezone. Stepping off today matters
+  // because a doctor can publish a week of sessions at once, and those
+  // bookings were invisible here until the morning they happened.
+  const [day, setDay] = useState(null);
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ["queue", branchId],
-    queryFn: () => fetchTodayQueue(branchId),
+    queryKey: ["queue", branchId, day],
+    queryFn: () => fetchTodayQueue(branchId, day),
     enabled: Boolean(branchId),
-    refetchInterval: 20_000
+    // Only today's board is a live desk view; past/future days are static.
+    refetchInterval: day ? false : 20_000,
+    placeholderData: (prev) => prev
   });
+
+  // Anchored on the day the SERVER reported, so stepping from "today" starts
+  // from the branch's date rather than the browser's.
+  const shiftDay = (delta) => {
+    const base = new Date(`${data?.date ?? new Date().toISOString().slice(0, 10)}T00:00:00`);
+    base.setDate(base.getDate() + delta);
+    setDay(`${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}-${String(base.getDate()).padStart(2, "0")}`);
+  };
 
   useEffect(() => {
     if (data) revealStagger(pageRef.current);
   }, [Boolean(data)]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const queueKey = ["queue", branchId, day];
   const optimistic = (statusValue) => ({
     onMutate: async ({ tokenId }) => {
-      await qc.cancelQueries({ queryKey: ["queue", branchId] });
-      const prev = qc.getQueryData(["queue", branchId]);
-      qc.setQueryData(["queue", branchId], (old) =>
+      await qc.cancelQueries({ queryKey: queueKey });
+      const prev = qc.getQueryData(queueKey);
+      qc.setQueryData(queueKey, (old) =>
         old && {
           ...old,
           doctors: old.doctors.map((d) => ({
@@ -90,11 +107,11 @@ export default function Queue() {
       return { prev };
     },
     onError: (_e, _v, ctx) => {
-      qc.setQueryData(["queue", branchId], ctx.prev);
+      qc.setQueryData(queueKey, ctx.prev);
       toast.error("Update failed — queue restored");
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: ["queue", branchId] });
+      qc.invalidateQueries({ queryKey: queueKey });
       qc.invalidateQueries({ queryKey: ["analytics"] });
     }
   });
@@ -127,9 +144,16 @@ export default function Queue() {
 
   return (
     <div ref={pageRef} className="space-y-6">
-      <PageHeader eyebrow="Today"
-        title={new Date(data.date).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
-        sub={`${doctors.length} ${doctors.length === 1 ? "doctor" : "doctors"} on the desk`} />
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <PageHeader eyebrow={day ? "Day view" : "Today"}
+          title={new Date(`${data.date}T00:00:00`).toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}
+          sub={`${doctors.length} ${doctors.length === 1 ? "doctor" : "doctors"} on the desk`} />
+        <div className="flex items-center gap-2">
+          <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => shiftDay(-1)}>← Prev</button>
+          {day && <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => setDay(null)}>Today</button>}
+          <button className="btn-ghost px-3 py-1.5 text-sm" onClick={() => shiftDay(1)}>Next →</button>
+        </div>
+      </div>
 
       <StatRow items={[
         { label: "Booked", value: s.total },
@@ -139,7 +163,9 @@ export default function Queue() {
       ]} />
 
       {all.length === 0 ? (
-        <p className="card px-5 py-10 text-center font-ui text-sm text-slate">No bookings yet today.</p>
+        <p className="card px-5 py-10 text-center font-ui text-sm text-slate">
+          No bookings on this day. Use Prev/Next to check the days a doctor has published.
+        </p>
       ) : (
         <div className="grid gap-5 md:grid-cols-3">
           <Column title="Waiting" col="waiting" cards={waiting} {...actions} />
