@@ -20,6 +20,7 @@ from backend.models.schema import (
     Patient,
     PatientMessage,
     TreatmentNote,
+    WhatsAppSession,
 )
 
 logger = structlog.get_logger()
@@ -69,6 +70,17 @@ async def erase_patient_pii(db: AsyncSession, p: Patient) -> None:
         .where(_q_filter)
         .values(patient_id=None, caller_phone=None, caller_last4=None)
     )
+    # WhatsApp conversation state (WA MVP1 Task 3, backend/services/wa_session.py)
+    # — the last-10-turns working memory + any in-progress booking. Keyed on
+    # phone only (no patient_id column on whatsapp_sessions), so this too must
+    # run BEFORE p.phone is nulled below.
+    if p.phone:
+        await db.execute(
+            WhatsAppSession.__table__.delete().where(
+                WhatsAppSession.branch_id == p.branch_id,
+                WhatsAppSession.patient_phone == p.phone,
+            )
+        )
     p.name = ERASED_NAME
     p.phone = None
     p.age = None

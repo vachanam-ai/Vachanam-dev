@@ -35,7 +35,7 @@ Vachanam processes personal data solely on the documented instructions of the Cl
 - Providing a receptionist queue management interface
 - Providing clinic owner analytics (appointment counts, attendance rates)
 - Recording a patient question the Clinic's published FAQ does not answer, together with the patient's name and number, so the Clinic can answer it and reply to the patient; and recording a message the patient asked to be passed to the Clinic
-- Where the Clinic has enabled WhatsApp: receiving patient WhatsApp messages on the Clinic's behalf, classifying each message in the moment to determine the patient's request, replying, and sending the Clinic's appointment templates (booking confirmation, reminder, rating request, rebooking). Vachanam does **not** store the content of patient WhatsApp messages and provides no message archive.
+- Where the Clinic has enabled WhatsApp: receiving patient WhatsApp messages on the Clinic's behalf, classifying each message in the moment to determine the patient's request, replying, and sending the Clinic's appointment templates (booking confirmation, reminder, rating request, rebooking). Vachanam keeps a short working-memory window of the conversation — the last 10 messages and any in-progress booking — so a multi-message request ("tomorrow morning" → "10:30 works") can be completed; it is deleted after 30 days of inactivity or when the patient record is erased, and is never a permanent archive.
 - Generating billing records for the Clinic's Vachanam subscription
 
 Vachanam will NOT process personal data for any purpose beyond those documented above without prior written consent from the Clinic.
@@ -56,7 +56,7 @@ Vachanam will NOT process personal data for any purpose beyond those documented 
 
 | Data subject | Personal data processed |
 |---|---|
-| Patient | First name, mobile phone number, age/gender (if volunteered), preferred language, appointment date, token number; phone-masked call transcript (up to 90 days); visit-progress notes and follow-up Q&A summaries where the Clinic uses the treatment-follow-up feature; an unanswered clinic-information question with the patient's name and number, and the Clinic's answer to it; a message the patient asked to be passed to the Clinic, with their number (deleted after 90 days). Where the Clinic uses WhatsApp: the patient's WhatsApp number (the same mobile number) and, transiently, the text of their message — classified in memory and not stored. The spoken health concern is processed in-call for doctor routing and is NOT stored as a booking field. |
+| Patient | First name, mobile phone number, age/gender (if volunteered), preferred language, appointment date, token number; phone-masked call transcript (up to 90 days); visit-progress notes and follow-up Q&A summaries where the Clinic uses the treatment-follow-up feature; an unanswered clinic-information question with the patient's name and number, and the Clinic's answer to it; a message the patient asked to be passed to the Clinic, with their number (deleted after 90 days). Where the Clinic uses WhatsApp: the patient's WhatsApp number (the same mobile number) and a short working-memory window of the conversation — the last 10 messages and any in-progress booking — kept for 30 days of inactivity or until patient-record erasure, whichever is first. The spoken health concern is processed in-call for doctor routing and is NOT stored as a booking field. |
 | Doctor | Name, specialization, working hours |
 | Staff | Email address, name, role (owner or receptionist); bcrypt password hash for email-login accounts |
 
@@ -95,7 +95,7 @@ Vachanam uses the following categories of sub-processor to deliver the service. 
 
 **WhatsApp (Meta Platforms) — applies only where the Clinic has enabled WhatsApp.** Meta is not listed in the table above because, in the normal arrangement, **the Clinic holds its own WhatsApp Business Account and its own billing relationship with Meta.** Meta is therefore a processor engaged directly by the Clinic; Vachanam sends and receives on the Clinic's behalf using the Clinic's account, on the Clinic's documented instructions. Message content passes through Meta because Meta operates WhatsApp — this is inherent to the service and is not a Vachanam sub-processing arrangement.
 
-Where a Clinic operates temporarily on a Vachanam-held WhatsApp Business Account during initial setup, Meta acts as a Vachanam sub-processor for that period, on the same terms as the table above, processing the patient's WhatsApp number and message content for delivery only. Vachanam stores no message content in either arrangement.
+Where a Clinic operates temporarily on a Vachanam-held WhatsApp Business Account during initial setup, Meta acts as a Vachanam sub-processor for that period, on the same terms as the table above, processing the patient's WhatsApp number and message content for delivery only. In either arrangement, Vachanam's own storage is limited to the short working-memory window described in Sections 2 and 3.2 — never a permanent archive.
 
 ### 4.1 Changes to sub-processors
 
@@ -246,4 +246,4 @@ By signing below, both parties agree to the terms of this Data Processing Agreem
 
 ---
 
-*This DPA is version 1.1, last updated 2026-07-12 (first published 2026-06-04). Updates to this DPA follow the same 30-day notice process as the Vachanam Privacy Policy and Terms of Service.*
+*This DPA is version 1.2, last updated 2026-08-03 (first published 2026-06-04). Updates to this DPA follow the same 30-day notice process as the Vachanam Privacy Policy and Terms of Service.*

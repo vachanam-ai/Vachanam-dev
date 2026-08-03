@@ -1,7 +1,7 @@
 # Vachanam Privacy Policy
 
 **Effective date:** 2026-06-04
-**Last updated:** 2026-08-02
+**Last updated:** 2026-08-03
 
 This policy explains, in plain language, what personal data Vachanam collects, why we collect it, who sees it, how long we keep it, and what rights you have. If any part is unclear, email us at hello@vachanam.in and we will explain it in Telugu, Hindi, or English -- whichever you prefer.
 
@@ -16,7 +16,7 @@ This policy explains, in plain language, what personal data Vachanam collects, w
 | Who owns the data? | The clinic you called (Data Fiduciary). Vachanam only processes it. |
 | Can other clinics see my data? | **Never** — enforced at the database level on every query. |
 | Do you sell data or run ads? | **No**, and we never use patient data to train AI. |
-| Do you keep my WhatsApp messages? | **No.** If your clinic uses WhatsApp, what you type is read once to work out what you need, then discarded. Vachanam has no message archive. |
+| Do you keep my WhatsApp messages? | **A short working memory, not a permanent archive.** If your clinic uses WhatsApp, we keep the last 10 messages of your thread plus any booking you are part-way through, so the assistant can follow the conversation. Deleted after 30 days idle, or when your patient record is erased. |
 | How long is data kept? | Identity: 2 years after last visit. Transcripts (text, masked): 90 days. Enforced by software. |
 | Whom do I contact? | privacy@vachanam.in (Vachanam Grievance Officer). |
 
@@ -69,8 +69,8 @@ We collect different data depending on your role. We collect only what is needed
 **If your clinic uses WhatsApp** (optional feature — not every clinic enables it): you may message the clinic's WhatsApp number instead of calling, and the clinic may send you appointment messages there.
 
 - **Your WhatsApp number is your mobile number** — the same number already described above. We do not collect a separate identifier.
-- **We do not store the contents of your WhatsApp messages.** What you type is read once, in the moment, to work out what you are asking for (reschedule, cancel, directions, or a question the clinic has already published an answer to), and then discarded. There is no message archive in Vachanam, and no Vachanam screen where staff can read your WhatsApp conversation. The conversation stays where it already is — on the clinic's own phone, in WhatsApp, under WhatsApp's own privacy policy.
-- **The one exception is a question we could not answer**, described above: if you ask something the clinic has not published an answer to, that question is stored so a person can answer it and reply to you. You are told this at the time.
+- **We keep a short working memory of your chat.** So the assistant can follow a conversation across several messages ("tomorrow morning" → "10:30 works"), we store the **last 10 messages** of your thread with the clinic, plus any booking you are part-way through. It is visible only to your clinic. It is deleted when your patient record is erased, and automatically after **30 days** with no messages. We keep no permanent archive of your conversation, and there is no screen where staff browse your chat history — the conversation itself lives in WhatsApp, on your phone and the clinic's.
+- **If you ask something the clinic has not published an answer to**, that question is stored — with your name and number — so a person can answer it and reply to you. You are told this at the time.
 - We keep the message's Meta-issued **ID** (not its text) for 24 hours, so that if WhatsApp delivers the same message twice you do not get two replies.
 - Messages the clinic sends you (booking confirmations, reminders) contain your name, doctor, date, time and token number — **never anything about your health**.
 - WhatsApp itself is operated by Meta, not by Vachanam. See Section 6.
@@ -177,7 +177,7 @@ We use carefully selected third-party services to operate Vachanam. Each process
 Two things are worth being precise about here:
 
 - **The clinic's WhatsApp account belongs to the clinic, not to Vachanam.** In the normal arrangement the clinic holds its own WhatsApp Business Account and its own billing relationship with Meta; Vachanam sends and receives messages on the clinic's behalf, using the clinic's account, on the clinic's instructions. Meta is therefore engaged by your clinic. During a clinic's initial setup it may temporarily operate on a Vachanam-held WhatsApp Business Account, and for that period Meta acts as Vachanam's sub-processor on the same terms.
-- **Message content reaches Meta because Meta *is* WhatsApp.** That is unavoidable for any WhatsApp service and is separate from what Vachanam stores, which is described in Section 2 (we keep no message archive).
+- **Message content reaches Meta because Meta *is* WhatsApp.** That is unavoidable for any WhatsApp service and is separate from what Vachanam itself stores, which is described in Section 2 — a short working-memory window (last 10 messages + any in-progress booking), never a permanent archive.
 
 Clinic staff also continue to see WhatsApp conversations in the ordinary WhatsApp app on the clinic's own phone. That phone is the clinic's, and what happens on it is governed by the clinic's own practices and WhatsApp's terms, not by Vachanam.
 
@@ -219,7 +219,7 @@ We keep data only as long as it serves a clear purpose. Here are the specific re
 | Redis token counters (daily booking counts) | End of calendar day + 1 hour buffer | Prevents double-booking during the day | Automatically expired by Redis TTL |
 | A question you asked + the clinic's answer + your name and number | Until your patient record is erased (2 years after last activity) | The clinic answers it and calls or messages you back; the clinic may also add the question and answer to its published answers | Your name and number are cleared with your patient record. If the clinic added the question and its answer to its published answers, that published pair contains no personal data and remains |
 | A message you asked us to pass to the clinic + your number | Up to 90 days, or until your patient record is erased — whichever comes first | The clinic reads it and calls you back where you asked. After 90 days the callback moment has passed, so the message serves no further purpose. | Deleted outright by the same daily job — the text and the number, not just the link to you |
-| WhatsApp message text (if your clinic uses WhatsApp) | NOT STORED | Read once, in the moment, to work out what you are asking for, then discarded. No message archive exists in Vachanam. | Not applicable |
+| WhatsApp conversation state (last 10 messages + any in-progress booking, if your clinic uses WhatsApp) | 30 days with no new messages, or until patient-record erasure — whichever is first | Lets the assistant follow a conversation across several messages | Deleted by the same daily job, or immediately on patient erasure |
 | WhatsApp message ID (the identifier only, not the text) | 24 hours | So a message WhatsApp delivers twice does not get two replies | Automatically expired by Redis TTL |
 
 **Retention enforcement:** We run automated jobs to delete data that has exceeded its retention period. This is not just a written policy -- it is enforced by software: a daily job erases patient personal data after 2 years of inactivity and deletes call transcripts after 90 days.

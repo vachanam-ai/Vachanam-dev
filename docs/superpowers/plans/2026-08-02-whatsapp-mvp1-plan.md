@@ -498,6 +498,15 @@ appending `wa_session` around each turn, delegating `book` to `wa_booking`, and
 writing a `ClinicQuestion` for `ask_doctor` with the reply *"Let me check that
 with the doctor and get back to you shortly."*
 
+> **Ordering hazard found in Task 3 review.** `wa_session.append()` calls
+> `db.commit()` itself. If the router appends a turn *in the middle* of
+> `wa_booking.confirm()` — between the atomic token allocation and the calendar
+> write — that commit persists a token whose booking has not completed, which is
+> exactly the phantom-booking class RULE 3 exists to prevent. **Append the bot's
+> turn only AFTER `confirm()` returns**, never between. Add a regression test:
+> a booking whose calendar write fails must leave no token AND no committed
+> session turn claiming the booking succeeded.
+
 - [ ] **Step 4: Run tests. Step 5: Full suite. Step 6: Commit.**
 
 ---

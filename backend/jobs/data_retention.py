@@ -27,8 +27,10 @@ from backend.models.schema import (
     Consent,
     Patient,
     Token,
+    WhatsAppSession,
 )
 from backend.services.patient_erasure import erase_patient_pii
+from backend.services.wa_session import WA_SESSION_IDLE_DAYS
 
 logger = structlog.get_logger()
 
@@ -83,7 +85,19 @@ async def run_data_retention() -> None:
             PatientMessage.__table__.delete().where(PatientMessage.created_at < t_cutoff)
         )
 
-        if stale or pruned.rowcount or transcripts_pruned.rowcount or messages_pruned.rowcount:
+        # WhatsApp conversation state (WA MVP1 Task 3) is idle-pruned on its
+        # own fixed clock — WA_SESSION_IDLE_DAYS (backend/services/wa_session.py,
+        # also the number quoted in docs/legal/*.md), independent of the
+        # transcript/message clock above.
+        wa_cutoff = now - timedelta(days=WA_SESSION_IDLE_DAYS)
+        wa_sessions_pruned = await db.execute(
+            WhatsAppSession.__table__.delete().where(WhatsAppSession.updated_at < wa_cutoff)
+        )
+
+        if (
+            stale or pruned.rowcount or transcripts_pruned.rowcount
+            or messages_pruned.rowcount or wa_sessions_pruned.rowcount
+        ):
             await db.commit()
             logger.info(
                 "data_retention_run",
@@ -91,6 +105,8 @@ async def run_data_retention() -> None:
                 consents_pruned=int(pruned.rowcount or 0),
                 transcripts_pruned=int(transcripts_pruned.rowcount or 0),
                 messages_pruned=int(messages_pruned.rowcount or 0),
+                wa_sessions_pruned=int(wa_sessions_pruned.rowcount or 0),
                 retention_days=days,
                 transcript_retention_days=t_days,
+                wa_session_idle_days=WA_SESSION_IDLE_DAYS,
             )

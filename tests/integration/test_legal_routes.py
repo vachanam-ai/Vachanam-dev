@@ -267,10 +267,33 @@ async def test_data_deletion_promises_only_built_behaviour():
             "data-deletion.md advertises a WhatsApp DELETE keyword, but "
             "wa_chat.py has no delete_data intent to honour it."
         )
-    # Audio and WhatsApp bodies are never stored — the page must not imply
-    # there is something to erase, or we invite requests we cannot action.
+    # Audio is still never stored — the page must not imply there is a call
+    # recording to erase.
     assert "We do not record your phone calls." in text
-    assert "We do not store the content of your WhatsApp messages." in text
+    # WA MVP1 Task 3 (2026-08-03): WhatsApp conversation state (last 10
+    # messages + in-progress booking) IS now stored, so the page must say so
+    # rather than deny it — see test_legal_docs_disclose_whatsapp_storage
+    # below, which is the other half of this guardrail.
+    assert "We do not store the content of your WhatsApp messages." not in text
+    assert "WhatsApp conversation state" in text
+    assert "30 days" in text
+
+
+async def test_legal_docs_disclose_whatsapp_storage():
+    """WA MVP1 Task 3 (2026-08-03) started writing WhatsApp conversation
+    state (backend/services/wa_session.py) — last 10 turns + any in-progress
+    booking. Storage shipped, so the docs must say so — and must not still
+    deny it (the sentences below were true before this task and are the
+    exact ones a false-statement scrub would have caught)."""
+    from pathlib import Path
+
+    for doc in ("privacy-policy", "data-deletion", "data-handling"):
+        text = Path(f"docs/legal/{doc}.md").read_text(encoding="utf-8")
+        assert "We do not store the content of your WhatsApp messages." not in text
+        assert "no message archive" not in text
+    privacy = Path("docs/legal/privacy-policy.md").read_text(encoding="utf-8")
+    assert "last 10" in privacy.lower()   # the window is disclosed
+    assert "30 days" in privacy           # the idle prune is disclosed
 
 
 async def test_data_safety_pitch_returns_html(client):
