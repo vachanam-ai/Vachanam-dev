@@ -633,6 +633,36 @@ async def create_walkin(
         patient_phone_last4=(norm_phone or "")[-4:],
     )
 
+    # WhatsApp confirmation — same call the voice path makes in
+    # agent/tools/booking_tools.py::confirm_booking. On a `wa`-plan clinic
+    # (no DID, no voice minutes) this desk entry IS a primary booking path, so
+    # the patient must get the same written confirmation. RULE 4: a WhatsApp
+    # failure only logs — meta_service.send_booking_confirmation already never
+    # raises, but the walk-in path wraps it too (defense in depth, mirrors the
+    # voice call site) so the booking can never fail on a notification.
+    if norm_phone:
+        try:
+            from backend.services.meta_service import MetaService
+
+            await MetaService().send_booking_confirmation(
+                to=norm_phone,
+                patient_name=body.patient_name,
+                doctor_name=doctor.name,
+                clinic_name=branch_row.name,
+                booking_date=today,
+                token_number=token.token_number,
+                appointment_time=appt_time,
+                branch_id=branch_uuid,
+                token_id=str(token.id),
+                patient_lang=getattr(patient, "preferred_language", None),
+            )
+        except Exception as e:  # noqa: BLE001 — RULE 4: never fail the booking
+            logger.warning(
+                "walkin_whatsapp_confirmation_failed",
+                error=str(e)[:200],
+                token_id=str(token.id),
+            )
+
     request.state.audit_resource_id = str(token.id)
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id

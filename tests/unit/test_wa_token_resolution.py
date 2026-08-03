@@ -11,9 +11,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-import pytest_asyncio
 
-from backend.config import settings
 from backend.models.schema import Branch, Organization
 from backend.services import wa_service
 from backend.services.crypto import encrypt_secret

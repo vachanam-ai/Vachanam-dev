@@ -423,4 +423,17 @@ def call_blocked(
         plan, minutes_used, status, adjustment
     ):
         return "minutes_exhausted"
+    # 2026-08-02 (WA MVP1 Task 7): a plan with zero included minutes (`wa`)
+    # bought no DID and no voice at all — an inbound call reaching this org is
+    # a CONFIGURATION error, not a billing state. Checked LAST, after every
+    # existing status/exhaustion branch, so it can never shadow a more specific,
+    # more actionable reason: paused/cancelled/trial_expired/minutes_exhausted
+    # all tell the org WHY billing blocked them, and none of those checks
+    # inspect the plan's minute bucket, so moving this earlier would risk a
+    # `wa` org that is ALSO paused/cancelled being told the wrong reason. This
+    # only fires once none of those apply — e.g. an active `wa` org somehow
+    # dialed at all (should never happen; the DID was never provisioned).
+    p = PLANS.get(plan)
+    if p is not None and p.included_minutes == 0:
+        return "no_voice_plan"
     return None

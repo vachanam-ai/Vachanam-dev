@@ -18,7 +18,8 @@ from dotenv import load_dotenv
 from sqlalchemy import and_, select
 
 import backend.database as _db_module
-from backend.models.schema import Branch, Doctor, Patient, Token
+from backend.models.schema import Branch, Doctor, Organization, Patient, Token
+from backend.services.billing_math import PLANS
 from backend.services.telephony import branch_outbound_trunk_id
 
 load_dotenv()
@@ -57,6 +58,15 @@ def appointment_in_window(
         return False
     appt = datetime.combine(token_date, appointment_time, tzinfo=lo.tzinfo)
     return lo <= appt <= hi
+
+
+def _plan_has_voice(plan: str | None) -> bool:
+    """False only for a plan explicitly known to buy zero voice minutes
+    (`wa`). An unrecognized/None plan is treated as voice-capable — this gate
+    exists to stop the `wa` plan from being dialed (no DID was ever
+    provisioned for it), not to change behavior for anything else."""
+    p = PLANS.get(plan)
+    return p is None or p.included_minutes > 0
 
 
 async def _next_due_epoch(db, branches) -> float | None:
@@ -111,7 +121,19 @@ async def run_pre_appt_reminders() -> None:
         return
 
     async with _db_module.AsyncSessionLocal() as db:
-        branches = (await db.execute(select(Branch))).scalars().all()
+        # Loaded WITH the org's plan (WA MVP1 Task 7): `_dispatch_reminder_call`
+        # must skip a `wa`-plan branch (no DID, no voice minutes — see
+        # `_plan_has_voice`), while `_send_wa_reminder` still runs unconditionally
+        # below (it has its own independent wa_enabled/plan gate).
+        branch_rows = (
+            await db.execute(
+                select(Branch, Organization.plan).join(
+                    Organization, Organization.id == Branch.org_id
+                )
+            )
+        ).all()
+        branches = [b for b, _ in branch_rows]
+        plan_by_branch_id = {b.id: plan for b, plan in branch_rows}
         for branch in branches:
             tz = ZoneInfo(branch.timezone or "Asia/Kolkata")
             now_local = datetime.now(tz)
@@ -158,7 +180,23 @@ async def run_pre_appt_reminders() -> None:
                 # (dispatch ok but the commit below fails) is acceptable — the
                 # call itself re-confirms with the patient — and far better than a
                 # silently dropped reminder.
-                ok = await _dispatch_reminder_call(branch, token, doctor, patient)
+                plan = plan_by_branch_id.get(branch.id)
+                if _plan_has_voice(plan):
+                    ok = await _dispatch_reminder_call(branch, token, doctor, patient)
+                else:
+                    # WA MVP1 Task 7: `settings.voice_plane_configured` describes
+                    # OUR platform, not this clinic's plan — without this branch
+                    # a `wa` clinic (no DID, no minutes) would still get dialed.
+                    # There is nothing to retry (no line was ever attempted), so
+                    # treat it as "sent" and let the WhatsApp reminder below carry
+                    # the notification instead (RULE 4/8: never a dead end).
+                    ok = True
+                    logger.info(
+                        "reminder_call_skipped_no_voice_plan",
+                        branch_id=str(branch.id),
+                        token_id=str(token.id),
+                        plan=plan,
+                    )
                 if ok:
                     token.reminder_sent = True
                     await db.commit()
