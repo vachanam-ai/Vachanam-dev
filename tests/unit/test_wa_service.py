@@ -118,3 +118,46 @@ async def test_network_failure_returns_false_never_raises(monkeypatch):
     monkeypatch.setattr(wa_service.httpx, "AsyncClient", _Boom)
     ok = await wa_service.send_text(_branch(), "+919000000001", "hi", plan="clinic")
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_a_meta_error_body_reaches_the_log(monkeypatch):
+    """A 400 from Meta always says WHY in the body. raise_for_status() keeps
+    only the status line, so a real failure logged as "Client error '400 Bad
+    Request'" and nothing more — which cost an evening of guessing on
+    2026-08-03. The reason must survive into the exception.
+    """
+    import httpx
+
+    class _Resp:
+        status_code = 400
+        is_error = True
+        request = httpx.Request("POST", "https://graph.facebook.com/v21.0/1/messages")
+
+        def json(self):
+            return {"error": {
+                "code": 131030,
+                "error_subcode": 2655007,
+                "message": "Recipient phone number not in allowed list",
+                "error_data": {"details": "Add the number to the app's recipients"},
+            }}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return _Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _Client())
+
+    with pytest.raises(httpx.HTTPStatusError) as err:
+        await wa_service._post("1", {"to": "91900"}, "tok")
+
+    text = str(err.value)
+    assert "131030" in text
+    assert "not in allowed list" in text
+    assert "Add the number to the app's recipients" in text

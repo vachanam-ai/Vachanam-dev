@@ -106,6 +106,29 @@ async def _post(phone_number_id: str, payload: dict, token: str) -> None:
             headers={"Authorization": f"Bearer {token}"},
             json=payload,
         )
+        # getattr: test doubles stub only what they need. A stub without
+        # is_error falls through to raise_for_status() below, which is the
+        # behaviour that existed before this enrichment.
+        if getattr(r, "is_error", False):
+            # raise_for_status() keeps only the status line, so a 400 logged as
+            # "Client error '400 Bad Request'" and nothing else — useless, and it
+            # cost real debugging time (2026-08-03). Meta ALWAYS says why in the
+            # body (error.code / error.message / error_data.details); surface it.
+            # RULE 9: Meta's error text describes OUR request, not patient
+            # content, and the body never echoes the message we sent.
+            detail = ""
+            try:
+                err = (r.json() or {}).get("error") or {}
+                detail = (
+                    f" code={err.get('code')} subcode={err.get('error_subcode')} "
+                    f"msg={str(err.get('message'))[:200]} "
+                    f"details={str((err.get('error_data') or {}).get('details'))[:200]}"
+                )
+            except Exception:  # noqa: BLE001 — non-JSON body
+                detail = f" body={r.text[:200]}"
+            raise httpx.HTTPStatusError(
+                f"{r.status_code} from Meta:{detail}", request=r.request, response=r
+            )
         r.raise_for_status()
 
 
