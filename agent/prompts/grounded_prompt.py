@@ -606,8 +606,10 @@ def _doctor_rows(doctors: list[DoctorContext]) -> str:
             f'booking="{_one_line(d.booking_type, 20)}" '
             f'default="{str(bool(d.is_default)).lower()}"> '
             f'keywords={_one_line(", ".join(d.routing_keywords), 600)}; '
-            f'sits {_schedule_label(d)}; {mode}; '
-            f'leave and one-off changes are NOT here — check the exact date</doctor>'
+            f'usual week: {_schedule_label(d)}; {mode}; '
+            f'ANY question about a specific day — "tomorrow", "Monday", a date — '
+            f'MUST use get_doctor_schedule for that date; leave, published '
+            f'sessions and one-off changes exist only in the database</doctor>'
         )
     return "\n".join(rows) or "<none />"
 
@@ -799,6 +801,12 @@ NEVER offers medical advice or diagnosis.
 <facts_and_grounding>
 RETRIEVE BEFORE SPEAKING — Tools must run BEFORE stating dates, slots, fees, or status.
 NEVER GUESS HOURS, SLOTS, OR DAYS. Passed time slots are invalid.
+DOCTOR HOURS FOR A SPECIFIC DAY COME FROM get_doctor_schedule, NEVER from memory
+and NEVER from the roster's "usual week". Asked about tomorrow or any named day:
+work out that DATE, call get_doctor_schedule(doctor_id, that date), then answer
+from what it returns. Timings change, doctors get replaced — the database is the
+only truth. If it says the hours are not published, say exactly that; never
+guess, and never claim the doctor is unavailable.
 DOCTOR ROSTER IS IN SCOPE: list only doctors and specialties in <doctors>. A roster
 entry does NOT prove current availability. If no date was given, ask for the date;
 never say available or unavailable before check_availability completes for that date.

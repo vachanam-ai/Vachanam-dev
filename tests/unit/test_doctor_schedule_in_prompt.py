@@ -80,9 +80,13 @@ def test_prompt_rows_carry_the_hours_the_model_answers_from():
     rows = _doctor_rows([
         _doctor(schedule={"2": [{"start": "17:00", "end": "21:00"}]})
     ])
-    assert "sits Wed 5:00 PM-9:00 PM" in rows
+    assert "usual week: Wed 5:00 PM-9:00 PM" in rows
     # The old text told the model nothing was known — that was the regression.
     assert "schedule intentionally omitted" not in rows
+    # The usual week is a routing aid only: a question about a NAMED day has to
+    # hit the database, because leave and published sessions live there alone
+    # (Vinay 2026-08-03: "always depend on DB for answering about doctors").
+    assert "get_doctor_schedule" in rows
 
 
 class _Row(dict):

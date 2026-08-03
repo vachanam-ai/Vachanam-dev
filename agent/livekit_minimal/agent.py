@@ -3130,6 +3130,76 @@ class VachanamAgent(Agent):
         )
         return {"availability": availability}
 
+    @function_tool()
+    async def get_doctor_schedule(
+        self,
+        context: RunContext,
+        doctor_id: str,
+        target_date: str,
+    ) -> dict:
+        """What hours does this doctor sit on ONE date (YYYY-MM-DD)?
+
+        Use for ANY question about a doctor's timings — "what time is Dr X
+        there tomorrow?", "is he in on Monday?", "what are his hours?". Resolve
+        the date first (today/tomorrow/a weekday) and pass it. This reads the
+        clinic database live, so it accounts for that date's published
+        sessions, leave, and one-off changes. NEVER state a doctor's hours
+        without calling this — do not answer from memory or from the roster.
+        """
+        # RULE: doctor facts come from the DATABASE, never from the prompt
+        # (Vinay 2026-08-03: "doctor timings can change. doctors may get
+        # replaced. anything can happen. so always depend on DB"). The roster in
+        # the prompt is for ROUTING; the hours spoken to a patient come from
+        # here, resolved for the specific date the patient asked about.
+        from backend.services.doctor_schedule import (
+            resolve_doctor_schedule, sessions_as_text,
+        )
+
+        self._state.quality_intent = "availability"
+        _say_lookup_filler(context)
+        resolved = await self._resolve_doctor_id(doctor_id)
+        when = self._parse_date(target_date)
+
+        doctor = await self._db.get(Doctor, resolved)
+        if doctor is None or doctor.branch_id != self._state.branch_id:
+            return {"error": "unknown_doctor"}  # RULE 1: never cross-branch
+
+        schedule = await resolve_doctor_schedule(
+            doctor, self._state.branch_id, when, self._db
+        )
+        spoken_date = when.strftime("%d %B")
+        if schedule.status == "unavailable" and schedule.source == "leave":
+            return {
+                "doctor": doctor.name, "date": str(when), "available": False,
+                "instruction": f"{doctor.name} is not sitting on {spoken_date}. "
+                               "Offer another date.",
+            }
+        if schedule.status == "unpublished":
+            return {
+                "doctor": doctor.name, "date": str(when), "available": False,
+                "instruction": (
+                    f"The clinic has not published {doctor.name}'s hours for "
+                    f"{spoken_date} yet. Say exactly that — never guess hours "
+                    "and never say the doctor is unavailable. Offer to check a "
+                    "date that IS published, or to take a message."
+                ),
+            }
+        if not schedule.sessions:
+            return {
+                "doctor": doctor.name, "date": str(when), "available": False,
+                "instruction": f"{doctor.name} does not sit on {spoken_date}.",
+            }
+        hours = sessions_as_text(schedule.sessions)
+        return {
+            "doctor": doctor.name, "date": str(when), "available": True,
+            "hours": hours,
+            "instruction": (
+                f"On {spoken_date}, {doctor.name} sits {hours}. Say the sittings "
+                "exactly as given — if there are two, say BOTH, and never merge "
+                "them into one span."
+            ),
+        }
+
     # Deliberately not decorated: tests and server-side recovery may call this
     # helper, but it is absent from the model tool schema. Final confirmation
     # acquires the same atomic hold when this helper was not called.
