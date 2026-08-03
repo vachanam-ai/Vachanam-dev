@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
-import { fetchBranchSettings, fetchDoctors, fetchStaff } from "../api/client.js";
+import { fetchBranchSettings, fetchDoctors, fetchPlan, fetchStaff } from "../api/client.js";
 import ThemeToggle from "./ThemeToggle.jsx";
 
 /* Stroke-icon set (inline SVG, no dependency). Keyed to the nav routes so the
@@ -190,7 +190,20 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, 
 export default function Shell() {
   const { user, role, logout, branchId, branchIds, selectBranch } = useAuth();
   const qc = useQueryClient();
-  const links = (NAV[role] ?? []).filter((l) => l.to !== "/whatsapp" || WHATSAPP_LIVE);
+  // WhatsApp appears when the clinic actually HAS it — bundled in the plan or
+  // bought as the ₹1,499 add-on. It used to hang off a build-time env flag, so
+  // a clinic that had paid still saw no WhatsApp page until someone redeployed
+  // the frontend (Vinay, 2026-08-03). VITE_WHATSAPP_LIVE now only forces it ON
+  // for pre-launch demos; it can no longer hide a feature someone paid for.
+  const plan = useQuery({
+    queryKey: ["plan"],
+    queryFn: fetchPlan,
+    enabled: role === "org_admin",
+    staleTime: 60_000,
+  });
+  const hasWhatsapp =
+    WHATSAPP_LIVE || Boolean(plan.data?.whatsapp_included || plan.data?.whatsapp_addon);
+  const links = (NAV[role] ?? []).filter((l) => l.to !== "/whatsapp" || hasWhatsapp);
   const [menuOpen, setMenuOpen] = useState(false);
   const [branchNames, setBranchNames] = useState({});
   const location = useLocation();

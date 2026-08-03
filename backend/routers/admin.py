@@ -541,6 +541,36 @@ async def admin_overview(
             for bc, oname in payments
         ]
 
+        # One-off charges are NOT billing cycles, so they live in their own
+        # ledger — without this a paid WhatsApp add-on was invisible here while
+        # the feature was demonstrably on (Vinay, 2026-08-03).
+        from backend.models.schema import AddonPurchase
+
+        addons = (
+            await db.execute(
+                select(AddonPurchase, Organization.name)
+                .join(Organization, AddonPurchase.org_id == Organization.id)
+                .order_by(AddonPurchase.created_at.desc())
+                .limit(20)
+            )
+        ).all()
+        payment_rows += [
+            PaymentRow(
+                org_name=oname,
+                plan=ap.kind.replace("_", " "),
+                cycle_start=ap.created_at.date().isoformat() if ap.created_at else "",
+                cycle_end="",
+                amount=float(ap.amount + (ap.gst or 0)),
+                minutes_used=0,
+                status="paid",
+                razorpay_payment_id=ap.razorpay_payment_id,
+                invoice_number=None,
+            )
+            for ap, oname in addons
+        ]
+        payment_rows.sort(key=lambda r: r.cycle_start, reverse=True)
+        payment_rows = payment_rows[:20]
+
         this_min = round(sum(org_min_this.values()), 1)
         prev_min = round(sum(org_min_prev.values()), 1)
         return AdminOverview(

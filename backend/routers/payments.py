@@ -371,8 +371,30 @@ async def _enable_whatsapp_addon(db: "AsyncSession", notes: dict, payment_id: st
     if branch is None:
         logger.error("wa_addon_branch_missing", payment_id=payment_id)
         return
+    # The LEDGER row is written even when the flag is already on: the flag is
+    # idempotent state, the row is money. Uniqueness on razorpay_payment_id is
+    # what stops a webhook replay booking the same payment twice — not the flag.
+    from backend.models.schema import AddonPurchase
+    from backend.services.billing_math import whatsapp_addon_order_breakdown
+
+    bd = whatsapp_addon_order_breakdown()
+    already = (
+        await db.execute(
+            select(AddonPurchase).where(
+                AddonPurchase.razorpay_payment_id == payment_id
+            )
+        )
+    ).scalar_one_or_none()
+    if already is None:
+        db.add(AddonPurchase(
+            org_id=branch.org_id, branch_id=branch.id, kind="whatsapp_addon",
+            amount=int(bd["base"]), gst=int(round(bd["gst"])),
+            razorpay_payment_id=payment_id,
+        ))
+
     if branch.whatsapp_addon:
         logger.info("wa_addon_already_on", branch_id=str(branch.id))
+        await db.commit()  # the ledger row above still has to land
         return
     branch.whatsapp_addon = True
     await db.commit()

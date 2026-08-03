@@ -523,6 +523,68 @@ async def health_voice_plane() -> dict:
     return out
 
 
+@app.get("/health/whatsapp", tags=["health"], dependencies=[Depends(_diag_guard)])
+async def health_whatsapp(branch_id: str | None = None) -> dict:
+    """Diagnostic (Vinay 2026-08-03, "still not working. no one is replying"):
+    WHY is a WhatsApp message not answered?
+
+    Every failure mode is a silent structured no-op by design (RULE 4/8), so
+    from outside a dead bot looks identical whether the plan gate rejected it,
+    the branch was never linked, or no token resolves. This reports which one,
+    for a specific branch, as booleans — never a token, never message text.
+
+    can_send False is the answer: whichever of the three flags below is False
+    is the reason.
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from backend.database import AsyncSessionLocal
+    from backend.models.schema import Branch, Organization
+    from backend.services.billing_math import whatsapp_enabled
+    from backend.services.wa_service import token_for
+
+    out: dict = {
+        "platform_token_configured": bool(settings.meta_access_token),
+        "webhook_verify_token_configured": bool(
+            getattr(settings, "meta_webhook_verify_token", "")
+        ),
+    }
+    if not branch_id:
+        out["hint"] = "pass ?branch_id=<uuid> for the per-clinic verdict"
+        return out
+
+    async with AsyncSessionLocal() as db:
+        row = (
+            await db.execute(
+                select(Branch, Organization.plan)
+                .join(Organization, Branch.org_id == Organization.id)
+                .where(Branch.id == _uuid.UUID(branch_id))
+            )
+        ).first()
+        if row is None:
+            return {**out, "branch_found": False}
+        branch, plan = row
+        addon = bool(getattr(branch, "whatsapp_addon", False))
+        linked = bool(getattr(branch, "wa_phone_number_id", None))
+        gated_in = whatsapp_enabled(plan or "", addon)
+        has_token = bool(token_for(branch))
+        return {
+            **out,
+            "branch_found": True,
+            "plan": plan,
+            "whatsapp_addon": addon,
+            "plan_gate_passes": gated_in,
+            "branch_linked": linked,
+            "uses_clinic_token": bool(getattr(branch, "wa_token_enc", None)),
+            "token_resolves": has_token,
+            "wa_status": getattr(branch, "wa_status", None),
+            # The exact condition wa_enabled() applies before every send.
+            "can_send": bool(has_token and linked and gated_in),
+        }
+
+
 @app.get("/health/ratelimit", tags=["health"], dependencies=[Depends(_diag_guard)])
 async def health_ratelimit(request: Request) -> dict:
     """Diagnostic: what client IP + rate-limit key does THIS request resolve to,

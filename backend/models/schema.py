@@ -796,6 +796,37 @@ class TreatmentNote(Base):
     patient: Mapped["Patient"] = relationship()
 
 
+class AddonPurchase(Base):
+    """A one-off charge that is not a subscription cycle.
+
+    BillingCycle is cycle-shaped (start/end, plan, included minutes) and its
+    razorpay_payment_id is already taken by that cycle's plan payment, so a
+    mid-cycle add-on cannot ride on it. Without a row of its own a paid
+    ₹1,499 existed only in Razorpay and as a boolean on the branch — invisible
+    in the ops Payments list, and unaccountable at tax time (Vinay noticed the
+    gap immediately, 2026-08-03).
+
+    razorpay_payment_id is UNIQUE: Razorpay redelivers, and a webhook replay
+    must not book the same money twice.
+    """
+
+    __tablename__ = "addon_purchases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Which NUMBER was bought for — WhatsApp is provisioned per branch.
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)  # whatsapp_addon
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)  # rupees, ex-GST
+    gst: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class BillingCycle(Base):
     __tablename__ = "billing_cycles"
 
