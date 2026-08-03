@@ -59,14 +59,35 @@ _SYSTEM = (
 )
 
 
-async def _call_gemini(prompt: str) -> str:
-    """Isolated so tests swap it out. Async client (same loop as FastAPI)."""
-    from google import genai
+_client = None
+
+
+def _genai_client():
+    """One process-wide client. Building a fresh `genai.Client` per call meant
+    a new TLS handshake to generativelanguage.googleapis.com on every WhatsApp
+    message, which pushed the p95 into the caller's 12s timeout (2026-08-03:
+    `wa_chat_gemini_failed error=""` — an empty error string IS
+    asyncio.TimeoutError). The client is stateless and thread/loop safe to
+    share."""
+    global _client
+    if _client is None:
+        from google import genai
+
+        _client = genai.Client(api_key=settings.gemini_api_key)
+    return _client
+
+
+async def _call_gemini(prompt: str, model: str = "gemini-2.5-flash-lite") -> str:
+    """Isolated so tests swap it out. Async client (same loop as FastAPI).
+
+    `model` is a parameter so a caller can retry a 503/overloaded flash-lite
+    on a different model rather than dead-ending (CLAUDE.md constraint 8:
+    LLM failure -> automatic fallback model)."""
     from google.genai import types as genai_types
 
-    client = genai.Client(api_key=settings.gemini_api_key)
+    client = _genai_client()
     resp = await client.aio.models.generate_content(
-        model="gemini-2.5-flash-lite",
+        model=model,
         contents=prompt,
         config=genai_types.GenerateContentConfig(
             thinking_config=genai_types.ThinkingConfig(thinking_budget=0),

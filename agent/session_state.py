@@ -45,6 +45,20 @@ class SessionState:
     # Mutation tools use it as a deterministic authorization boundary: an LLM
     # tool call alone is never proof that the caller asked to book/cancel.
     last_user_utterance: str | None = None
+    # Which mutation the agent has just been told to ask the caller about:
+    # "book" | "cancel" | "reschedule", else None.
+    #
+    # Set by the mutation guards themselves at the moment they raise the
+    # "ask the caller first" ToolError, so a following "yes" is authorization
+    # for THAT mutation. Replaces reading the phrasing back out of the
+    # assistant's own transcript: those checks matched hardcoded strings
+    # ('shall i book', 'रीशेड्यूल कर दूँ', ...) against text the LLM writes
+    # freely in 7 languages, so any natural rephrasing — even दूँ vs दूं —
+    # failed to match, the guard blocked again, and the agent re-asked the
+    # same question forever (Vinay 2026-08-03: "switched to hindi and asked
+    # to reschedule ... it is repeating n number of times", and booking
+    # confirmations asked 3 times before a plain "yes" took).
+    pending_confirmation: str | None = None
     # Exact durable booking created most recently in THIS call. If the caller
     # immediately says the booking was accidental, cancellation is pinned to
     # this id instead of trusting an older/arbitrary id selected by the LLM.

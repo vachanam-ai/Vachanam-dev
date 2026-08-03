@@ -124,6 +124,7 @@ from agent.session_state import SessionState  # noqa: E402
 from agent.tools.booking_tools import (  # noqa: E402
     _branch_now,
     assign_token,
+    booking_is_actionable,
     booking_is_upcoming,
     caller_name_matches,
     check_availability,
@@ -2848,8 +2849,29 @@ class VachanamAgent(Agent):
 
         return re.sub(r"[\s\W_]+", "", (s or "").lower())
 
+    def _awaiting_confirmation(self, kind: str) -> bool:
+        '''True once a guard has told the agent to ask the caller about `kind`.
+
+        The guards below used to answer "did we ask?" by string-matching the
+        assistant's own transcript against a fixed phrase list per language.
+        That cannot work: the guard's own ToolError tells the model to ask the
+        question "in the active language", and the model then writes it freely
+        in any of 7 languages. Any natural rephrasing missed the list — even
+        दूँ vs दूं — so the guard blocked, the model re-asked, and the caller's
+        "yes" never landed. Vinay 2026-08-03, on a live call: booking asked 3
+        times before it took, and a Hindi reschedule looped until he hung up.
+
+        Arming a flag at the moment we demand the question is deterministic and
+        language-independent. The phrase lists are kept as an additional way to
+        say yes (never the only one), so a model that asks on its own — without
+        being prompted by a guard — still works.
+        '''
+        return self._state.pending_confirmation == kind
+
     def _last_assistant_requested_booking_confirmation(self) -> bool:
         '''True only when the previous audible turn explicitly asked to book.'''
+        if self._awaiting_confirmation('book'):
+            return True
         try:
             items = list(getattr(self.chat_ctx, 'items', None) or [])
             for item in reversed(items):
@@ -2870,6 +2892,8 @@ class VachanamAgent(Agent):
         return False
 
     def _last_assistant_requested_cancellation(self) -> bool:
+        if self._awaiting_confirmation('cancel'):
+            return True
         try:
             for item in reversed(list(getattr(self.chat_ctx, 'items', None) or [])):
                 if getattr(item, 'role', None) != 'assistant':
@@ -2887,6 +2911,8 @@ class VachanamAgent(Agent):
         return False
 
     def _last_assistant_requested_reschedule(self) -> bool:
+        if self._awaiting_confirmation('reschedule'):
+            return True
         try:
             for item in reversed(list(getattr(self.chat_ctx, 'items', None) or [])):
                 if getattr(item, 'role', None) != 'assistant':
@@ -3391,6 +3417,10 @@ class VachanamAgent(Agent):
                 'booking_blocked_no_caller_authorization session=%s',
                 _privacy_safe_session_id(self._state.session_id),
             )
+            # Arm the affirm path BEFORE we demand the question, so the next
+            # "yes" authorizes regardless of how the model phrases it or which
+            # language it phrases it in (see _awaiting_confirmation).
+            self._state.pending_confirmation = 'book'
             # This text reaches the MODEL, and whatever it says here the caller
             # hears. The old wording ("wait for an explicit booking request")
             # made it refuse out loud — "you haven't explicitly told to book
@@ -3407,6 +3437,10 @@ class VachanamAgent(Agent):
                 'date: "Shall I book it?" (in the active language). When they '
                 'agree, call confirm_booking again immediately.'
             )
+
+        # Authorized: disarm, so this yes cannot also authorize some later
+        # mutation the caller was never asked about.
+        self._state.pending_confirmation = None
 
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB write + Google Calendar create
@@ -4126,6 +4160,7 @@ class VachanamAgent(Agent):
                 'reschedule_blocked_no_caller_authorization session=%s',
                 _privacy_safe_session_id(self._state.session_id),
             )
+            self._state.pending_confirmation = 'reschedule'
             # Same deadlock as confirm_booking: refusing aloud meant the model
             # never asked, so the caller's agreement could never authorize.
             raise ToolError(
@@ -4135,6 +4170,7 @@ class VachanamAgent(Agent):
                 '"Shall I move it?" (in the active language). '
                 'On agreement, call reschedule_booking again immediately.'
             )
+        self._state.pending_confirmation = None
         _guard_human_booking(self._state)
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
@@ -4241,14 +4277,18 @@ class VachanamAgent(Agent):
             )
             old_token = replacement
 
-        if not booking_is_upcoming(
+        # booking_is_actionable, NOT booking_is_upcoming: a caller who missed
+        # this morning's 8:45 and rings at 11 to move it must be able to
+        # (Vinay 2026-08-03). Only a booking from a PREVIOUS day, or one the
+        # clinic already closed out, is refused here.
+        if not booking_is_actionable(
             old_token, await _branch_now(self._state.branch_id, self._db)
         ):
             return {
                 "success": False,
                 "error": "appointment_is_past",
                 "instruction": (
-                    "That appointment time has already passed. Do not describe "
+                    "That appointment day has already passed. Do not describe "
                     "it as upcoming and do not reschedule it. Offer a fresh "
                     "booking if the caller still needs an appointment."
                 ),
@@ -4472,6 +4512,7 @@ class VachanamAgent(Agent):
                 'cancellation_blocked_no_caller_authorization session=%s',
                 _privacy_safe_session_id(self._state.session_id),
             )
+            self._state.pending_confirmation = 'cancel'
             # Same deadlock as confirm_booking. NOTE the asymmetry that stays:
             # a cancellation is destructive, so the caller must still agree to
             # THIS booking by name — the question just has to be asked.
@@ -4482,6 +4523,7 @@ class VachanamAgent(Agent):
                 'you would cancel: "Shall I cancel it?" (in the active '
                 'language). On agreement, call cancel_booking again immediately.'
             )
+        self._state.pending_confirmation = None
         if accidental:
             if self._state.last_confirmed_token_id is None:
                 raise ToolError(
@@ -4648,14 +4690,16 @@ class VachanamAgent(Agent):
                 }
             return {"success": False, "error": f"not_cancellable_{token.status}"}
 
-        if not booking_is_upcoming(
+        # Same widening as reschedule_booking: a patient who missed today's
+        # slot may still cancel it, which is also what frees the seat.
+        if not booking_is_actionable(
             token, await _branch_now(self._state.branch_id, self._db)
         ):
             return {
                 "success": False,
                 "error": "appointment_is_past",
                 "instruction": (
-                    "That appointment time has already passed. Do not describe "
+                    "That appointment day has already passed. Do not describe "
                     "it as upcoming and do not cancel it. Offer a fresh booking "
                     "if the caller still needs an appointment."
                 ),

@@ -114,6 +114,26 @@ def booking_is_upcoming(token: Token, now: datetime) -> bool:
     )
 
 
+def booking_is_actionable(token: Token, now: datetime) -> bool:
+    """Whether a booking can still be FOUND, moved or cancelled at ``now``.
+
+    Wider than ``booking_is_upcoming`` on purpose, and the difference is
+    today's already-passed appointment.
+
+    A patient who missed their 8:45 and rings at 11 to move it is Vachanam's
+    whole pitch, and the status lifecycle proves the booking is not finished:
+    the receptionist marks confirmed -> attended | no_show, so a token still
+    sitting at ``confirmed`` after its time means nobody was seen. Treating it
+    as gone made the agent tell that patient "you don't have any appointments
+    at all" while the row sat in the table (Vinay 2026-08-03).
+
+    ``booking_is_upcoming`` stays the predicate for anything that describes a
+    booking as still ahead — greeting a caller, or blocking a duplicate — so
+    the agent still never calls a passed appointment "upcoming".
+    """
+    return token.status == "confirmed" and token.date >= now.date()
+
+
 def _outside_working_hours(
     doctor: Doctor,
     schedule: ResolvedDoctorSchedule,
@@ -1535,7 +1555,7 @@ async def find_bookings_by_phone(
     return [
         (t, d, p)
         for t, d, p in rows
-        if (t.status == "confirmed" and booking_is_upcoming(t, now_local))
+        if (t.status == "confirmed" and booking_is_actionable(t, now_local))
         or t.status == "cancelled_by_clinic"
     ]
 

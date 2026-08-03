@@ -220,6 +220,7 @@ async def offer_slots(
     doctor_id: uuid.UUID | None = None,
     booking_date: date | None = None,
     llm_call=None,
+    limit: int | None = _MAX_OFFERED_SLOTS,
 ) -> list[Slot]:
     """READ-ONLY availability lookup (spec Section 7.1) — never reserves
     anything. Reuses ``resolve_doctor_schedule`` (the exact resolver
@@ -231,6 +232,12 @@ async def offer_slots(
     ``doctor_id``/``booking_date`` let a caller (Task 6's router, or
     ``confirm()`` recomputing alternatives) pin the search instead of
     re-routing from free text.
+
+    ``limit`` caps how many open times come back — 5 is right for an OFFER
+    ("reply with a time"), but ``limit=None`` returns the doctor's whole
+    remaining day so an availability ANSWER can merge them into real free
+    ranges ("free 8:00 to 8:15 and 8:30 to 21:00") instead of truncating at
+    the fifth slot and lying about the rest.
     """
     # Captured once: if this runs right after confirm()'s own db.rollback()
     # (recomputing alternatives), the ORM `branch` object is expired and a
@@ -355,7 +362,7 @@ async def offer_slots(
             doctor_id=doctor.id, doctor_name=doctor.name, booking_type="appointment",
             date=target_date, appointment_time=t,
         )
-        for t in open_times[:_MAX_OFFERED_SLOTS]
+        for t in (open_times if limit is None else open_times[:limit])
     ]
 
 

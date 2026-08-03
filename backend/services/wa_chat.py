@@ -41,15 +41,16 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import time
+from datetime import date as date_cls, datetime, time, timedelta
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.prompts.whatsapp_prompt import build_chat_prompt
-from backend.models.schema import Branch, ClinicQuestion, Patient, PatientMessage, Token
+from backend.models.schema import Branch, ClinicQuestion, Doctor, Patient, PatientMessage, Token
 from backend.services import wa_actions, wa_booking, wa_service, wa_session, wa_templates
+from backend.services.doctor_schedule import resolve_doctor_schedule, sessions_as_text
 from backend.services.resilience import guard
 from backend.services.support_bot import _call_gemini
 from backend.services.wa_booking import Slot
@@ -68,9 +69,13 @@ _MAX_OFFER_LINES = 3
 # judgment ever reaches the patient via free model text; RULE 8: no
 # hallucinated availability).
 _JSON_CONTRACT = (
+    # Single braces on purpose: this string is CONCATENATED onto the output of
+    # build_chat_prompt(), never passed through str.format(). Doubling them
+    # (as an f-string/format template would need) literally instructed the
+    # model to emit `{{...}}`, which is not JSON.
     "\n\nReply as compact JSON only, with EXACTLY these keys and no others:\n"
-    '{{"intent": "<one of book, reschedule, cancel, location, faq, '
-    'ask_doctor, off_topic>", '
+    '{"intent": "<one of book, reschedule, cancel, doctor_info, location, '
+    'faq, ask_doctor, off_topic>", '
     '"answer": "<ONLY when intent=faq — the reply text, answering strictly '
     "from the clinic FAQ above, plain text, max 3 sentences, same language "
     'as the patient; empty otherwise>", '
@@ -82,7 +87,12 @@ _JSON_CONTRACT = (
     '"patient_age": <the patient\'s age as a whole number if stated in THIS '
     "message, else null>, "
     '"patient_gender": "<male, female or other if stated or unambiguous, '
-    'else empty>"}}'
+    'else empty>", '
+    '"doctor_name": "<ONLY when intent=doctor_info — the doctor name the '
+    "patient named, copied verbatim from their message, with no title; empty "
+    'if they asked about the clinic generally>", '
+    '"target_date": "<the calendar date the patient is asking about as '
+    'YYYY-MM-DD, resolved against today\'s date above; empty if none>"}'
 )
 
 
@@ -341,6 +351,165 @@ async def _handle_book(
     return _REFUSAL_REPLIES.get(result.reason or "", _DEFAULT_REFUSAL_REPLY)
 
 
+_NO_DOCTORS_REPLY = (
+    "I don't have the clinic's doctor list on file yet — I've let the clinic "
+    "know so they can add it."
+)
+_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# A doctor_info answer names at most this many doctors. More than 3 stops
+# being a WhatsApp reply and becomes a directory dump.
+_MAX_DOCTORS_LISTED = 3
+
+
+def _parse_iso(value: str) -> date_cls | None:
+    v = (value or "").strip()
+    if not _ISO_DATE_RE.match(v):
+        return None
+    try:
+        return date_cls.fromisoformat(v)
+    except ValueError:
+        return None
+
+
+def _name_matches(doctor_name: str, asked: str) -> bool:
+    """Loose name match against what the patient typed. Titles and spelling
+    drift ("dr.srinivas", "Srinivas garu") must still find Dr Srinivas Rao, so
+    match on any shared word of 3+ characters rather than equality."""
+    strip = re.compile(r"[^a-z\s]")
+    doc_words = {w for w in strip.sub(" ", doctor_name.lower()).split() if len(w) >= 3}
+    ask_words = {
+        w for w in strip.sub(" ", asked.lower()).split()
+        if len(w) >= 3 and w not in ("doctor", "dr", "the", "garu", "sir", "madam")
+    }
+    return bool(doc_words & ask_words)
+
+
+def _merge_to_ranges(slots: list[time], duration_minutes: int) -> list[tuple[time, time]]:
+    """Contiguous open slots -> real free windows.
+
+    Vinay 2026-08-03: "if there is one slot booked in between at 8:15 then it
+    should say he is available from 8 to 8:15 and 8:30 to 9" — listing the
+    first five slot times answers a different question than the patient asked.
+    """
+    if not slots:
+        return []
+    step = timedelta(minutes=duration_minutes)
+    ranges: list[tuple[time, time]] = []
+    start = prev = slots[0]
+    for slot in slots[1:]:
+        base = date_cls.min
+        if datetime.combine(base, slot) == datetime.combine(base, prev) + step:
+            prev = slot
+            continue
+        ranges.append((start, (datetime.combine(base, prev) + step).time()))
+        start = prev = slot
+    ranges.append((start, (datetime.combine(date_cls.min, prev) + step).time()))
+    return ranges
+
+
+def _hhmm(value: time) -> str:
+    return value.strftime("%H:%M")
+
+
+async def _doctor_line(
+    db: AsyncSession, branch: Branch, doctor: Doctor, target_date: date_cls
+) -> str:
+    """One doctor's real availability for one date, straight from the DB.
+
+    Uses `resolve_doctor_schedule` — the SAME resolver check_availability and
+    the voice agent's get_doctor_schedule are built on — so leave, published
+    date overrides, the recurring week and 'not published yet' all behave
+    identically on WhatsApp. Nothing about this doctor comes from the prompt.
+    """
+    schedule = await resolve_doctor_schedule(doctor, branch.id, target_date, db)
+    if schedule.status == "unavailable":
+        reason = f" ({schedule.notes})" if schedule.source == "leave" and schedule.notes else ""
+        return f"{doctor.name} is not available{reason}"
+    if schedule.status == "unpublished" or not schedule.sessions:
+        return f"{doctor.name}'s timings for that day aren't published yet"
+
+    if doctor.booking_type == "token":
+        return f"{doctor.name} sits {sessions_as_text(schedule.sessions)}"
+
+    slots = await wa_booking.offer_slots(
+        db, branch, "", doctor_id=doctor.id, booking_date=target_date, limit=None
+    )
+    times = sorted(s.appointment_time for s in slots if s.appointment_time)
+    if not times:
+        return (
+            f"{doctor.name} sits {sessions_as_text(schedule.sessions)} but has "
+            f"nothing open"
+        )
+    ranges = _merge_to_ranges(times, doctor.slot_duration_minutes or 15)
+    free = " and ".join(f"{_hhmm(a)} to {_hhmm(b)}" for a, b in ranges)
+    return f"{doctor.name} is free {free}"
+
+
+async def _handle_doctor_info(
+    db: AsyncSession,
+    branch: Branch,
+    text: str,
+    *,
+    doctor_name: str,
+    target_date: date_cls,
+) -> str:
+    """Answers "which doctors are there" / "is Dr X available tomorrow" from
+    the database only.
+
+    Before this existed these questions had no intent to land on, so they fell
+    through to ask_doctor and became a ClinicQuestion + "let me check with the
+    doctor" — for a fact the clinic had already entered (Vinay 2026-08-03).
+    """
+    doctors = (
+        await db.execute(
+            select(Doctor)
+            .where(Doctor.branch_id == branch.id, Doctor.status == "active")  # RULE 1
+            .order_by(Doctor.name)
+        )
+    ).scalars().all()
+    if not doctors:
+        return _NO_DOCTORS_REPLY
+
+    asked = (doctor_name or "").strip()
+    if asked:
+        matched = [d for d in doctors if _name_matches(d.name, asked)]
+        if not matched:
+            names = ", ".join(d.name for d in doctors[:_MAX_DOCTORS_LISTED])
+            return f"I couldn't find that doctor here. Our doctors are {names}."
+        doctors = matched
+
+    day = target_date.strftime("%d %b")
+    lines = [await _doctor_line(db, branch, d, target_date) for d in doctors[:_MAX_DOCTORS_LISTED]]
+    return f"On {day}: " + "; ".join(lines) + "."
+
+
+# gemini-2.5-flash-lite returns 503 "experiencing high demand" often enough
+# that a single 12s attempt with no fallback left patients reading "sorry, I
+# had trouble understanding that" for a perfectly clear message (Vinay
+# 2026-08-03). CLAUDE.md constraint 8 requires an automatic fallback model, so
+# a failed lite call retries once on full 2.5-flash before we give up.
+_FALLBACK_MODEL = "gemini-2.5-flash"
+
+
+async def _classify(prompt: str) -> str:
+    """Primary model, then the fallback model. Separate breakers on purpose:
+    flash-lite being overloaded must not open the circuit on the model that is
+    still healthy."""
+    try:
+        return await guard(
+            "gemini_wa_chat", lambda: _call_gemini(prompt), timeout=15
+        )
+    except Exception as primary:  # noqa: BLE001 — fall through to the backup model
+        logger.warning(
+            "wa_chat_primary_llm_failed", error=f"{type(primary).__name__}: {primary}"[:150]
+        )
+        return await guard(
+            "gemini_wa_chat_fallback",
+            lambda: _call_gemini(prompt, model=_FALLBACK_MODEL),
+            timeout=15,
+        )
+
+
 async def handle_text(
     db: AsyncSession, branch: Branch, plan: str, sender: str, text: str
 ) -> None:
@@ -365,15 +534,20 @@ async def handle_text(
     turns = session["turns"]  # history only — does NOT include this message
     await wa_session.append(db, branch.id, sender, "patient", text)
 
+    now = await wa_booking._branch_now(branch.id, db)
     try:
-        prompt = build_chat_prompt(_faq_text(branch), turns, text[:1000]) + _JSON_CONTRACT
-        raw = await guard("gemini_wa_chat", lambda: _call_gemini(prompt), timeout=12)
-        data = json.loads(raw)
+        prompt = (
+            build_chat_prompt(
+                _faq_text(branch), turns, text[:1000], today=now.date().isoformat()
+            )
+            + _JSON_CONTRACT
+        )
+        data = json.loads(await _classify(prompt))
         intent = (data.get("intent") or "").strip()
     except Exception as e:  # noqa: BLE001 — RULE 8: helpful fallback, never a dead end
         logger.warning(
             "wa_chat_gemini_failed", branch_id=str(branch.id),
-            phone_last4=_last4(sender), error=str(e)[:150],
+            phone_last4=_last4(sender), error=f"{type(e).__name__}: {e}"[:150],
         )
         await wa_session.append(db, branch.id, sender, "bot", _GEMINI_DOWN_REPLY)
         await wa_service.send_text(branch, sender, _GEMINI_DOWN_REPLY, plan=plan)
@@ -408,6 +582,19 @@ async def handle_text(
             await _no_existing_booking(
                 db, branch, plan, sender, "reschedule" if intent == "reschedule" else "cancel"
             )
+        return
+
+    if intent == "doctor_info":
+        # A date the model failed to resolve falls back to TODAY, never to a
+        # guess: answering about the wrong day is worse than answering about
+        # the day the patient is most likely standing in.
+        reply = await _handle_doctor_info(
+            db, branch, text,
+            doctor_name=(data.get("doctor_name") or "").strip(),
+            target_date=_parse_iso(data.get("target_date") or "") or now.date(),
+        )
+        await wa_session.append(db, branch.id, sender, "bot", reply)
+        await wa_service.send_text(branch, sender, reply, plan=plan)
         return
 
     if intent == "location":

@@ -234,10 +234,29 @@ async def test_cancelled_token_number_never_reissued(clinic, db, redis):
     assert tok.status == "cancelled_by_patient"
 
 
-async def test_past_same_day_slot_cannot_be_cancelled_or_rescheduled(
+async def test_past_same_day_slot_can_still_be_cancelled_or_rescheduled(
     clinic, db, redis, monkeypatch
 ):
-    """Defense in depth: even a stale token id cannot mutate a finished slot."""
+    """A missed appointment stays movable for the rest of that day.
+
+    This test asserted the OPPOSITE until 2026-08-03, when Vinay hit it live:
+
+        today i had appointment at 8:45. i called at 11 saying i couldn't make
+        it, can you reschedule. now it is saying i don't have any appointments
+        at all at that time.
+
+    The old rule treated any passed clock time as finished. But the status
+    lifecycle is confirmed -> attended | no_show, so a token still sitting at
+    `confirmed` after its time means nobody was seen — that IS the patient
+    ringing to rebook, the call Vachanam exists to catch.
+
+    The defense-in-depth this test was protecting has not gone anywhere; it
+    was just never the date check. `_do_cancel`/`_do_reschedule` match the row
+    on the CALLER'S OWN phone, so a stale or invented token id still cannot
+    touch someone else's booking (see the cross-caller test below), a
+    PREVIOUS-DAY booking is still refused, and the greeting still filters on
+    booking_is_upcoming so a finished slot is never described as coming up.
+    """
     import agent.livekit_minimal.agent as agent_module
     from agent.livekit_minimal.agent import VachanamAgent
 
@@ -262,6 +281,51 @@ async def test_past_same_day_slot_cannot_be_cancelled_or_rescheduled(
     monkeypatch.setattr(agent_module, "_branch_now", fixed_now)
     state = SessionState(session_id="past-slot", branch_id=branch.id,
                          patient_phone="+919777000111")  # caller owns the booking
+    agent = VachanamAgent(
+        instructions="t", state=state, db=db, room=None,
+        # A real calendar stub: the reschedule now gets far enough to WRITE
+        # one, which the old refused-early version never did.
+        calendar_service=FlakyCalendar(failures=0),
+        meta_service=NullMeta(), transfer_to="",
+    )
+
+    # 16:00 booking, caller rings at the frozen 19:00 — the exact shape of
+    # Vinay's 8:45-missed-call-at-11.
+    moved = await agent._do_reschedule(str(token.id), _tomorrow().isoformat(), "10:00")
+    assert moved["success"] is True, moved
+    await db.refresh(token)
+    assert token.status != "confirmed", "the old slot must be released"
+
+
+async def test_a_previous_day_booking_still_cannot_be_mutated(
+    clinic, db, redis, monkeypatch
+):
+    """The widening is same-day only. Yesterday's appointment is genuinely
+    over and must not be presented as movable."""
+    import agent.livekit_minimal.agent as agent_module
+    from agent.livekit_minimal.agent import VachanamAgent
+
+    branch, doc = clinic["branch"], clinic["slot_doc"]
+    patient = Patient(
+        branch_id=branch.id, name="Old Patient", phone="+919777000222",
+        is_primary=True,
+    )
+    db.add(patient)
+    await db.flush()
+    token = Token(
+        branch_id=branch.id, doctor_id=doc.id, patient_id=patient.id,
+        date=date.today() - timedelta(days=1), appointment_time=time(16, 0),
+        status="confirmed", source="voice",
+    )
+    db.add(token)
+    await db.commit()
+
+    async def fixed_now(branch_id, session):
+        return datetime.combine(date.today(), time(19, 0))
+
+    monkeypatch.setattr(agent_module, "_branch_now", fixed_now)
+    state = SessionState(session_id="old-slot", branch_id=branch.id,
+                         patient_phone="+919777000222")
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=None, meta_service=NullMeta(), transfer_to="",

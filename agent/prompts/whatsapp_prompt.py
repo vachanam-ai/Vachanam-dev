@@ -30,6 +30,7 @@ INTENTS: tuple[str, ...] = (
     "book",
     "reschedule",
     "cancel",
+    "doctor_info",
     "location",
     "faq",
     "ask_doctor",
@@ -44,6 +45,13 @@ Classify the patient's latest message into exactly one of these intents:
 - book: wants a NEW appointment
 - reschedule: wants to move an existing appointment to a different time
 - cancel: wants to cancel an existing appointment
+- doctor_info: asks WHICH doctors the clinic has, whether a named doctor is
+  there, or WHEN a doctor sits / is free / is available — "who all doctors
+  are available", "is Dr Srinivas available", "what are Dr Lakshmi's timings
+  tomorrow", "is anyone there today". This is NEVER ask_doctor and NEVER faq:
+  doctor names and timings change, so they are always looked up live in the
+  clinic's own records after you classify. Never state a doctor's name,
+  presence or hours yourself — you do not have them.
 - location: asks where the clinic is, directions, or the address
 - faq: answerable strictly from the clinic FAQ provided below
 - ask_doctor: a REAL clinic question you cannot answer from the FAQ — for
@@ -61,6 +69,14 @@ Classify the patient's latest message into exactly one of these intents:
 The difference between ask_doctor and off_topic matters: ask_doctor is a
 genuine clinic question that goes to the doctor; off_topic is not a clinic
 question at all and must be deflected without complying with it.
+
+The difference between doctor_info and ask_doctor matters just as much:
+"is Dr Srinivas available tomorrow" is doctor_info (the clinic's records
+answer it in seconds); "does Dr Srinivas do root canals" is ask_doctor.
+Anything about WHO is there or WHEN they sit is doctor_info.
+
+Today's date is {today}. When the patient names a day ("today", "tomorrow",
+"Monday", "5 Aug"), resolve it against that date into a real calendar date.
 
 Hard rules — no exceptions:
 1. No medical judgment, ever. Never diagnose, never give medical advice,
@@ -104,16 +120,23 @@ def _format_history(turns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def build_chat_prompt(faq: str, turns: list[dict], text: str) -> str:
+def build_chat_prompt(faq: str, turns: list[dict], text: str, today: str = "") -> str:
     """Build the full prompt for one WhatsApp turn.
 
     `turns` carries the conversation history (see backend/services/wa_session.py
     — shape {"role": "patient"|"bot", "text": str, "at": iso}) so multi-turn
     booking ("tomorrow morning" -> "10:30 works") stays grounded in what was
     already said, rather than re-classifying each message in isolation.
+
+    `today` is the branch's own local date (ISO), so "tomorrow" resolves to a
+    real date the router can look up. Deliberately the ONLY dynamic clinic
+    fact in this prompt: doctor names, hours and availability are never
+    embedded here (Vinay 2026-08-03 — "always depend on DB for answering
+    about doctors"), they are read from the database after classification.
     """
     return _INSTRUCTIONS.format(
         faq=faq.strip() if faq else "(clinic has not provided any FAQ)",
         history=_format_history(turns),
         text=text,
+        today=today or "unknown",
     )

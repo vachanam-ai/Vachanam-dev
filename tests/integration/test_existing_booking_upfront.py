@@ -306,8 +306,20 @@ async def test_upcoming_booking_preferred_over_past_one(db, redis, monkeypatch):
     assert "12:01 AM" not in out
 
 
-async def test_caller_lookup_returns_only_actionable_same_day_slot(db, redis, monkeypatch):
-    """The greeting/find/cancel source must never return a finished slot."""
+async def test_caller_lookup_returns_todays_missed_slot_too(db, redis, monkeypatch):
+    """find/cancel/reschedule must SEE this morning's missed appointment.
+
+    Inverted 2026-08-03. This previously asserted the lookup returned only the
+    still-upcoming slot, which is why a caller who missed 8:45 and rang at 11
+    was told "you don't have any appointments at all".
+
+    The concern it was written for — never DESCRIBING a finished slot as
+    upcoming — is unaffected and still covered:
+      * the greeting filters these rows through booking_is_upcoming
+        (agent.py `_caller_context`), so a passed slot never reaches a greeting
+      * check_availability's ALREADY_BOOKED note still names the upcoming one
+        (test_upcoming_booking_preferred_over_past_one, directly above)
+    """
     _freeze_now(monkeypatch, 13, 0)
     _, br = await _org_branch(db, "lookup-now")
     doc = await _slot_doctor(db, br)
@@ -323,4 +335,26 @@ async def test_caller_lookup_returns_only_actionable_same_day_slot(db, redis, mo
     await db.commit()
 
     rows = await find_bookings_by_phone(br.id, CALLER, db)
-    assert [t.appointment_time for t, _, _ in rows] == [time(16, 30)]
+    assert [t.appointment_time for t, _, _ in rows] == [time(12, 30), time(16, 30)]
+
+
+async def test_the_greeting_still_hides_todays_missed_slot(db, redis, monkeypatch):
+    """The lookup widened; the GREETING did not. A caller whose only booking
+    already passed must not be greeted as if one is coming up."""
+    from datetime import datetime
+
+    from agent.livekit_minimal.agent import _build_caller_context
+
+    _freeze_now(monkeypatch, 13, 0)
+    _, br = await _org_branch(db, "greet-past")
+    doc = await _slot_doctor(db, br)
+    await _seed_confirmed(db, br, doc, CALLER, appt_time=time(12, 30))
+    await db.commit()
+
+    rows = await find_bookings_by_phone(br.id, CALLER, db)
+    assert rows, "the lookup must still find it, so it can be rescheduled"
+
+    patient, extra = _build_caller_context(
+        rows, datetime.combine(date.today(), time(13, 0))
+    )
+    assert patient is None and extra == ""
