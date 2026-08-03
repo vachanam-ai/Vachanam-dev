@@ -6,17 +6,14 @@ import { revealNow } from "../lib/motion.js";
 
 /* Questions the AI could not answer (2026-08-02). The doctor opens one, types
    the answer and decides whether it joins the FAQ; either way Vachanam calls
-   the patient back and reads the answer out. Hidden when there are none. */
-const QUESTION_STATE = {
-  answered: "Callback queued",
-  called: "Answer read out on a callback",
-  unreachable: "No number on record — answer them at the clinic",
-};
+   the patient back and reads the answer out. Hidden when there are none.
 
+   Vinay 2026-08-03: the list is unanswered-only — once saved, the question
+   leaves this card (into the FAQ if ticked, otherwise simply handled). */
 function QuestionRow({ branchId, q }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [text, setText] = useState(q.answer || "");
+  const [text, setText] = useState("");
   const [toFaq, setToFaq] = useState(true);
   const save = useMutation({
     mutationFn: () => answerQuestion(branchId, q.id, text, toFaq),
@@ -26,9 +23,8 @@ function QuestionRow({ branchId, q }) {
       qc.invalidateQueries({ queryKey: ["branch-faq", branchId] });
     },
   });
-  const answered = Boolean(q.answer);
   return (
-    <li className={`px-5 py-3 ${answered ? "opacity-70" : ""}`}>
+    <li className="px-5 py-3">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <p className="font-ui text-sm text-ink">{q.question}</p>
@@ -41,16 +37,9 @@ function QuestionRow({ branchId, q }) {
                 : ""}
             {q.created_at ? ` · ${new Date(q.created_at).toLocaleString()}` : ""}
           </p>
-          {answered && (
-            <p className="mt-1 font-ui text-xs text-slate">
-              <span className="text-ink">Answer:</span> {q.answer}
-              {q.added_to_faq && <span className="chip ml-2">in FAQ</span>}
-              <span className="ml-2">{QUESTION_STATE[q.status] || ""}</span>
-            </p>
-          )}
         </div>
         <button className="btn-ghost shrink-0 text-xs" onClick={() => setOpen((o) => !o)}>
-          {open ? "Close" : answered ? "Edit" : "Answer"}
+          {open ? "Close" : "Answer"}
         </button>
       </div>
       {open && (

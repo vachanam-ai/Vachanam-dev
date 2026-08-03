@@ -469,8 +469,11 @@ def _markdown(results: list[EvalResult]) -> str:
         'Spoken answer | Latency | Verdict |',
         '|---:|---|---|---|---|---|---|---|---:|---|',
     ]
+    def clean(value):
+        """Escape a cell so a pipe or newline cannot break the markdown table."""
+        return str(value).replace('|', '\\|').replace('\n', '<br>')
+
     for index, result in enumerate(results, 1):
-        clean = lambda value: str(value).replace('|', '\\|').replace('\n', '<br>')
         verdict = 'PASS' if result.passed else 'FAIL: ' + '; '.join(result.defects)
         lines.append(
             f'| {index} | {clean(result.case_id)} | {clean(result.category)} | '

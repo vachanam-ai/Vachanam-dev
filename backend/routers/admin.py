@@ -1057,6 +1057,10 @@ async def admin_resilience_chaos_clear(
 
 class WaLinkBody(BaseModel):
     wa_phone_number_id: str | None = None
+    # Rs1,499 add-on (spec 2026-08-02 pricing §1): lets a Lite/Starter branch
+    # use WhatsApp without upgrading to Clinic. None = leave unchanged, so an
+    # ordinary re-link never silently grants or revokes a paid feature.
+    whatsapp_addon: bool | None = None
 
 
 @router.patch("/branches/{branch_id}/whatsapp")
@@ -1096,6 +1100,8 @@ async def set_branch_wa_number(
         # Embedded Signup sets it directly. Clearing the link must not leave
         # a stale "connected" chip.
         branch.wa_status = "connected" if value else "none"
+        if body.whatsapp_addon is not None:
+            branch.whatsapp_addon = bool(body.whatsapp_addon)
         try:
             await db.commit()
         except IntegrityError:
@@ -1104,5 +1110,13 @@ async def set_branch_wa_number(
                 status_code=409,
                 detail="This phone_number_id is already linked to another branch",
             )
-    logger.info("wa_branch_linked", branch_id=branch_id, linked=bool(value))
-    return {"branch_id": branch_id, "wa_phone_number_id": value, "wa_status": branch.wa_status}
+    logger.info(
+        "wa_branch_linked", branch_id=branch_id, linked=bool(value),
+        addon=body.whatsapp_addon,
+    )
+    return {
+        "branch_id": branch_id,
+        "wa_phone_number_id": value,
+        "wa_status": branch.wa_status,
+        "whatsapp_addon": branch.whatsapp_addon,
+    }

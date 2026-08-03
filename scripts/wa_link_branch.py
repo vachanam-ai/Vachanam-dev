@@ -19,6 +19,7 @@ may not). Nothing is echoed or stored.
 
 Usage:
     python scripts/wa_link_branch.py --phone-number-id 1161669197040651
+    python scripts/wa_link_branch.py --phone-number-id ... --addon
     python scripts/wa_link_branch.py --phone-number-id ... --branch-id <uuid>
     python scripts/wa_link_branch.py --phone-number-id ... --api http://localhost:8000
 """
@@ -64,6 +65,11 @@ def main() -> int:
     ap.add_argument("--phone-number-id", required=True,
                     help="Meta phone number ID (digits, NOT the phone number)")
     ap.add_argument("--branch-id", help="skip the owner login if you already know it")
+    ap.add_argument("--addon", action="store_true",
+                    help="also grant the Rs1,499 WhatsApp add-on (needed for a "
+                         "Lite/Starter clinic — WhatsApp is bundled only into "
+                         "clinic/multi/wa, and without this every inbound "
+                         "message is dropped as wa_skipped_plan)")
     ap.add_argument("--api", default=DEFAULT_API)
     args = ap.parse_args()
 
@@ -91,7 +97,8 @@ def main() -> int:
         r = client.patch(
             f"{args.api}/admin/branches/{branch_id}/whatsapp",
             headers={"Authorization": f"Bearer {admin_token}"},
-            json={"wa_phone_number_id": pnid},
+            json=({"wa_phone_number_id": pnid, "whatsapp_addon": True}
+                  if args.addon else {"wa_phone_number_id": pnid}),
         )
 
     if r.status_code == 409:

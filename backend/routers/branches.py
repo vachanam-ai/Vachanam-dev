@@ -393,6 +393,53 @@ class QuestionAnswerIn(BaseModel):
     add_to_faq: bool = False
 
 
+async def _recover_caller_phone(db: AsyncSession, branch_id: uuid.UUID, q) -> str | None:
+    """The number to dial for a question logged BEFORE clinic_questions grew a
+    caller_phone column (migration ll35, 2026-08-02) — those rows carry only
+    caller_last4, so every answer landed on "unreachable" and no callback was
+    ever placed (Vinay 2026-08-03: "call is not getting triggered").
+
+    Recover it from the patient record, which usually still has it:
+      1. the linked patient (branch-scoped — RULE 1);
+      2. else patients in THIS branch whose phone ends with caller_last4, and
+         ONLY when that resolves to a single number. Two different numbers
+         share the last 4 digits often enough, and reading one patient's answer
+         out to another is a DPDP incident — ambiguity fails closed.
+    Returns None when nothing resolves; the caller keeps "unreachable"."""
+    from backend.models.schema import Patient
+
+    if q.patient_id:
+        phone = (
+            await db.execute(
+                select(Patient.phone).where(
+                    Patient.id == q.patient_id,
+                    Patient.branch_id == branch_id,  # RULE 1: never cross-branch
+                )
+            )
+        ).scalar_one_or_none()
+        if phone:
+            return phone
+
+    last4 = (q.caller_last4 or "").strip()
+    if not (len(last4) == 4 and last4.isdigit()):
+        return None
+    # DISTINCT: a family sharing one phone is several patient rows but a single
+    # delivery address — that is not ambiguity. Two DIFFERENT numbers are.
+    phones = (
+        await db.execute(
+            select(Patient.phone)
+            .where(
+                Patient.branch_id == branch_id,  # RULE 1
+                Patient.phone.is_not(None),
+                Patient.phone.like(f"%{last4}"),
+            )
+            .distinct()
+            .limit(2)
+        )
+    ).scalars().all()
+    return phones[0] if len(phones) == 1 else None
+
+
 @router.get("/{branch_id}/questions")
 async def list_questions(
     branch_id: str,
@@ -400,8 +447,14 @@ async def list_questions(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Questions callers asked that the AI could not answer (2026-08-02).
-    Unanswered first, newest first; latest 50. Shows who asked so the clinic
-    knows whose callback the doctor's answer is going to."""
+    Newest first; latest 50. Shows who asked so the clinic knows whose callback
+    the doctor's answer is going to.
+
+    Vinay 2026-08-03: ONLY still-unanswered questions. Once answered the item is
+    handled — it either joined the FAQ (visible in Settings) or was deliberately
+    kept out, and the callback is the job's problem — so leaving it here is
+    clutter on a desk that should show only what still needs action. The row is
+    KEPT in the database (the answer is a record); it is just not surfaced."""
     await assert_branch_access(current_user, branch_id, db)
     from backend.models.schema import ClinicQuestion, Patient
 
@@ -409,11 +462,11 @@ async def list_questions(
         await db.execute(
             select(ClinicQuestion, Patient.name)
             .outerjoin(Patient, Patient.id == ClinicQuestion.patient_id)
-            .where(ClinicQuestion.branch_id == uuid.UUID(branch_id))
-            .order_by(
-                (ClinicQuestion.answer.is_(None)).desc(),
-                ClinicQuestion.created_at.desc(),
+            .where(
+                ClinicQuestion.branch_id == uuid.UUID(branch_id),
+                ClinicQuestion.answer.is_(None),
             )
+            .order_by(ClinicQuestion.created_at.desc())
             .limit(50)
         )
     ).all()
@@ -494,7 +547,17 @@ async def answer_question(
     q.answer = answer
     q.answered_at = datetime.now(timezone.utc)
     q.added_to_faq = q.added_to_faq or faq_added
-    # No number to dial (walk-in-style unknown caller) → nothing to call back.
+    # Pre-ll35 rows carry only caller_last4 — recover the number from the
+    # patient record and PERSIST it, so the callback job (which reads
+    # caller_phone) dials on its next tick and the lookup happens once.
+    recovered = False
+    if not q.caller_phone:
+        found = await _recover_caller_phone(db, uuid.UUID(branch_id), q)
+        if found:
+            q.caller_phone = found
+            recovered = True
+    # Still no number to dial (walk-in-style unknown caller, or an ambiguous
+    # last-4) → nothing to call back.
     q.status = "answered" if q.caller_phone else "unreachable"
     await db.commit()
     if q.status == "answered":
@@ -509,6 +572,7 @@ async def answer_question(
         question_id=question_id,
         added_to_faq=q.added_to_faq,
         callback=q.status,
+        phone_recovered=recovered,
         phone_last4=(q.caller_phone or "")[-4:] or None,  # RULE 9: last-4 in logs
     )
     request.state.audit_resource_id = str(q.id)
@@ -532,7 +596,12 @@ async def list_messages(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Caller messages the voice agent took for the doctor/clinic (#349).
-    Pending first, urgent first within that, newest first; latest 50."""
+    Urgent first, newest first; latest 50.
+
+    Vinay 2026-08-03: ONLY messages still awaiting action — a message marked
+    done has been handled, so it leaves the dashboard. The row is KEPT in the
+    database (retention/erasure own its lifetime) and stays visible in the
+    patient's treatment thread; it is just off the desk."""
     await assert_branch_access(current_user, branch_id, db)
     from backend.models.schema import Patient, PatientMessage
 
@@ -540,9 +609,11 @@ async def list_messages(
         await db.execute(
             select(PatientMessage, Patient.name)
             .outerjoin(Patient, Patient.id == PatientMessage.patient_id)
-            .where(PatientMessage.branch_id == uuid.UUID(branch_id))
+            .where(
+                PatientMessage.branch_id == uuid.UUID(branch_id),
+                PatientMessage.status == "pending",
+            )
             .order_by(
-                (PatientMessage.status == "pending").desc(),
                 PatientMessage.urgent.desc(),
                 PatientMessage.created_at.desc(),
             )
@@ -1085,6 +1156,182 @@ async def delete_whatsapp_template(
     request.state.audit_branch_id = branch_id
     logger.info("wa_template_deleted_route", branch_id=branch_id)
     return {"deleted": True}
+
+
+# ── WhatsApp Embedded Signup — Tech Provider connect (WA MVP1 Task 9) ───────
+# Self-serve alternative to the concierge PATCH /admin/branches/{id}/whatsapp
+# (backend/routers/admin.py, super_admin-only): here the clinic OWNER connects
+# its OWN WABA after Meta's Embedded Signup JS flow hands the frontend a
+# one-time `code` plus the `waba_id`/`phone_number_id` from the session_info
+# event. org_admin only — connecting the clinic's WhatsApp identity is an
+# owner-level decision (same bar as telephony/voice/FAQ).
+
+
+class WaConnectBody(BaseModel):
+    code: str = Field(..., min_length=10, max_length=4000)
+    waba_id: str = Field(..., min_length=1, max_length=32)
+    phone_number_id: str = Field(..., min_length=1, max_length=32)
+
+    @field_validator("waba_id", "phone_number_id")
+    @classmethod
+    def _numeric_meta_id(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not value.isdigit():
+            raise ValueError("Must be a numeric Meta id")
+        return value
+
+
+@router.get("/{branch_id}/whatsapp/connect")
+async def get_whatsapp_connection(
+    branch_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Connection status for the Settings UI. Any branch user can read this
+    (mirrors GET /{branch_id}/settings) — only connect/disconnect are
+    owner-only. RULE 9: never returns wa_token_enc or any part of a token."""
+    await assert_branch_access(current_user, branch_id, db)
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    connected_at = getattr(branch, "wa_connected_at", None)
+    return {
+        "branch_id": branch_id,
+        "connected": bool(getattr(branch, "wa_waba_id", None)),
+        "wa_status": getattr(branch, "wa_status", None) or "none",
+        "wa_waba_id": getattr(branch, "wa_waba_id", None),
+        "wa_verified_name": getattr(branch, "wa_verified_name", None),
+        "wa_phone_number_id": getattr(branch, "wa_phone_number_id", None),
+        "wa_connected_at": connected_at.isoformat() if connected_at else None,
+    }
+
+
+@router.post("/{branch_id}/whatsapp/connect", status_code=201)
+@audit("branch.wa_connected", resource_type="branch")
+async def connect_whatsapp(
+    branch_id: str,
+    body: WaConnectBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Embedded Signup callback: the clinic owner connects ITS OWN WABA.
+    org_admin only. Exchanges the authorization code for a business token,
+    subscribes our app to the WABA's webhooks (mandatory — see wa_connect
+    docstring), best-effort registers the number for Cloud API, and stores
+    the encrypted token + connection metadata on the branch.
+
+    RULE 1: wa_waba_id is UNIQUE — a WABA already claimed by another branch
+    is a clean 409, checked BEFORE any Graph call (cheap, no wasted Meta
+    round-trip) and again at commit (IntegrityError -> 409) as a race guard.
+    RULE 9: the body carries `code` (one-time secret) but it is never logged
+    — only branch_id / waba_id / status appear in any log line.
+    """
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    clash = (
+        await db.execute(
+            select(Branch).where(
+                Branch.wa_waba_id == body.waba_id, Branch.id != branch.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if clash is not None:
+        logger.warning(
+            "wa_waba_already_linked", branch_id=branch_id, waba_id=body.waba_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="This WhatsApp Business Account is already connected to another clinic.",
+        )
+
+    from backend.services import wa_connect
+
+    try:
+        result = await wa_connect.connect_branch(
+            branch, code=body.code, waba_id=body.waba_id,
+            phone_number_id=body.phone_number_id,
+        )
+    except wa_connect.WaConnectError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        logger.warning(
+            "wa_waba_already_linked", branch_id=branch_id, waba_id=body.waba_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="This WhatsApp Business Account is already connected to another clinic.",
+        )
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    request.state.audit_metadata = {"waba_id": body.waba_id, "status": branch.wa_status}
+
+    logger.info(
+        "wa_branch_connected", branch_id=branch_id, waba_id=body.waba_id,
+        status=branch.wa_status, phone_registered=result.get("registered"),
+    )
+    return {
+        "branch_id": branch_id,
+        "wa_status": branch.wa_status,
+        "wa_waba_id": branch.wa_waba_id,
+        "wa_verified_name": branch.wa_verified_name,
+        "wa_connected_at": branch.wa_connected_at.isoformat() if branch.wa_connected_at else None,
+        "phone_registered": result.get("registered"),
+    }
+
+
+@router.delete("/{branch_id}/whatsapp/connect")
+@audit("branch.wa_disconnected", resource_type="branch")
+async def disconnect_whatsapp(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Clear this clinic's stored WhatsApp credentials. org_admin only.
+    Clears wa_phone_number_id too (not just the token) so wa_service.wa_enabled
+    fails closed immediately rather than reporting a stale linked-but-tokenless
+    state. Does not call Meta to revoke the subscription — the clinic can
+    reconnect later through the same flow."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    branch.wa_waba_id = None
+    branch.wa_token_enc = None
+    branch.wa_verified_name = None
+    branch.wa_phone_number_id = None
+    branch.wa_status = "disconnected"
+    await db.commit()
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+
+    logger.info("wa_branch_disconnected", branch_id=branch_id)
+    return {"branch_id": branch_id, "wa_status": branch.wa_status}
 
 
 @router.get(

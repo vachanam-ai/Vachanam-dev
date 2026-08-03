@@ -110,6 +110,14 @@ class Branch(Base):
     wa_phone_number_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, unique=True
     )
+    # The Rs1,499 WhatsApp add-on (spec 2026-08-02 pricing §1, migration nn37).
+    # Lets a Lite/Starter clinic buy WhatsApp without upgrading to Clinic.
+    # Per-BRANCH because WhatsApp is provisioned per number: each branch holds
+    # its own WABA and its own Meta billing, so an org with three branches
+    # genuinely needs three numbers and three add-ons.
+    whatsapp_addon: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     # Clinic-owned WhatsApp Business Account (spec 2026-08-02, migration mm36).
     # The clinic holds its own WABA and its own Meta billing; we send on its
     # behalf with ITS token. UNIQUE so one WABA can only ever be claimed by one
@@ -199,6 +207,11 @@ class Doctor(Base):
     daily_token_limit: Mapped[int | None] = mapped_column(Integer)
     # whatsapp_number: doctor's personal WhatsApp for receiving commands and EOD summaries
     whatsapp_number: Mapped[str | None] = mapped_column(String(20))
+    # RETIRED 2026-08-03 (Vinay): doctor-level Google Calendars are no longer
+    # used anywhere in resolution — every clinic has exactly ONE calendar
+    # (Branch.google_calendar_id) and doctors see their bookings in the web
+    # dashboard instead. Column is kept (unused) so this stays reversible
+    # without a migration; do not read or write it in new code.
     google_calendar_id: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(
         Enum("active", "inactive", name="doctor_status"),

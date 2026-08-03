@@ -217,7 +217,9 @@ function groupLeave(rows) {
 }
 
 /* Caller messages the agent took for the doctor (#349) — pending count badge,
-   urgent flagged, done button. Hidden entirely when there are no messages. */
+   urgent flagged, done button. Hidden entirely when there are no messages.
+   Vinay 2026-08-03: the list is pending-only — "Done" removes it from the
+   desk (the row survives in the patient's treatment thread). */
 function MessagesCard({ branchId }) {
   const qc = useQueryClient();
   const { data } = useQuery({
@@ -248,7 +250,7 @@ function MessagesCard({ branchId }) {
       </header>
       <ul className="divide-y divide-hairline">
         {msgs.map((m) => (
-          <li key={m.id} className={`flex items-start gap-3 px-5 py-3 ${m.status === "done" ? "opacity-50" : ""}`}>
+          <li key={m.id} className="flex items-start gap-3 px-5 py-3">
             <div className="min-w-0 flex-1">
               <p className="font-ui text-sm text-ink">{m.message}</p>
               <p className="mt-1 font-ui text-xs text-slate">
@@ -258,15 +260,13 @@ function MessagesCard({ branchId }) {
                 {m.created_at ? ` · ${new Date(m.created_at).toLocaleString()}` : ""}
               </p>
             </div>
-            {m.status === "pending" && (
-              <button
-                className="btn-ghost shrink-0 text-xs"
-                disabled={done.isPending}
-                onClick={() => done.mutate(m.id)}
-              >
-                Done
-              </button>
-            )}
+            <button
+              className="btn-ghost shrink-0 text-xs"
+              disabled={done.isPending}
+              onClick={() => done.mutate(m.id)}
+            >
+              Done
+            </button>
           </li>
         ))}
       </ul>

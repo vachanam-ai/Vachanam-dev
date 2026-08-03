@@ -28,7 +28,7 @@ from tenacity import (
 )
 
 from backend.config import settings
-from backend.services.billing_math import WHATSAPP_PLANS
+from backend.services.billing_math import whatsapp_enabled
 from backend.services.crypto import decrypt_secret
 
 logger = structlog.get_logger()
@@ -78,9 +78,15 @@ def wa_enabled(branch, plan: str | None) -> bool:
             branch_id=str(getattr(branch, "id", None)),
         )
         return False
-    if (plan or "") not in WHATSAPP_PLANS:
+    # The ₹1,499 add-on lets Lite/Starter buy WhatsApp without upgrading to
+    # Clinic. getattr defaults to False so a branch object loaded before the
+    # column existed (or a bare test stub) can never accidentally grant a paid
+    # feature. Flag lives on the BRANCH because WhatsApp is provisioned per
+    # number — each branch has its own WABA and its own Meta billing.
+    addon = bool(getattr(branch, "whatsapp_addon", False))
+    if not whatsapp_enabled(plan or "", addon):
         logger.info(
-            "wa_skipped_plan", plan=plan,
+            "wa_skipped_plan", plan=plan, addon=addon,
             branch_id=str(getattr(branch, "id", None)),
         )
         return False

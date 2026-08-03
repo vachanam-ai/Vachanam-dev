@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     meta_waba_id: str = ""
     meta_webhook_verify_token: str = ""
     meta_app_secret: str = ""
+    # Embedded Signup / Tech Provider (WA MVP1 Task 9). The Facebook App ID
+    # paired with meta_app_secret for the authorization-code -> business-token
+    # exchange (GET /oauth/access_token). Public (used client-side by Meta's
+    # embedded signup JS SDK too) but kept in settings, never hardcoded.
+    meta_app_id: str = ""
 
     # Google
     google_oauth_client_id: str = ""
