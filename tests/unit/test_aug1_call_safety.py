@@ -121,12 +121,20 @@ async def test_availability_question_cannot_call_confirm_booking():
         last_user_utterance='మార్నింగ్ 10:00కి ఉంటారా?',
     )
     agent = _agent(state)
-    with pytest.raises(ToolError, match='did not ask to book'):
+    # The INVARIANT is that asking "are you free at 10?" cannot write a booking.
+    # The message changed 2026-08-03 (it now drives the confirmation question
+    # instead of refusing aloud), so match on what must stay true, not on the
+    # old sentence.
+    with pytest.raises(ToolError) as blocked:
         await agent.confirm_booking(
             context=None, doctor_id=str(uuid4()), patient_name='Caller',
             complaint='dental', booking_date='2026-08-04',
             appointment_time='10:00',
         )
+    text = str(blocked.value)
+    assert 'Not authorized YET' in text
+    # ...and it must tell the model to ASK, since refusing was the deadlock.
+    assert 'Shall I book it?' in text
 
 
 @pytest.mark.asyncio

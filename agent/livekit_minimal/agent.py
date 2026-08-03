@@ -1796,9 +1796,12 @@ _BOOKING_AUTH_TERMS = (
 _AFFIRMATIVE_REPLIES = {
     'yes', 'yes please', 'yeah', 'yep', 'ok', 'okay', 'sure', 'confirm',
     'go ahead', 'do it', 'okay do it', 'ok do it',
-    'అవును', 'అవునండి', 'సరే చేయండి', 'చేసేయండి', 'ఓకే చేయండి',
-    'हाँ', 'हां', 'जी हाँ', 'कर दीजिए',
-    'ஆம்', 'ஆமாம்', 'ಹೌದು', 'हो',
+    # Bare agreement, which is what people actually say. "సరే" / "అలాగే" alone
+    # were missing, so a Telugu caller agreeing was not recognised at all.
+    'అవును', 'అవునండి', 'సరే', 'సరేనండి', 'అలాగే', 'ఓకే',
+    'సరే చేయండి', 'చేసేయండి', 'ఓకే చేయండి',
+    'हाँ', 'हां', 'जी हाँ', 'जी', 'ठीक है', 'कर दीजिए',
+    'ஆம்', 'ஆமாம்', 'சரி', 'ಹೌದು', 'ಸರಿ', 'हो', 'बरं',
 }
 _CANCEL_AUTH_TERMS = (
     'remove the appointment', 'క్యాన్సిల్', 'రద్దు', 'కాన్సిల్',
@@ -1854,10 +1857,37 @@ def _caller_authorized_booking(text: str) -> bool:
 
 
 
+_NEGATION_TERMS = (
+    'no', 'not', "don't", 'dont', 'do not', 'never', 'cancel that', 'wait',
+    'వద్దు', 'లేదు', 'కాదు', 'नहीं', 'नही', 'मत', 'இல்லை', 'ಇಲ್ಲ', 'नको',
+)
+
+
 def _caller_affirmed(text: str) -> bool:
-    return _normalised_utterance(text) in {
-        _normalised_utterance(value) for value in _AFFIRMATIVE_REPLIES
-    }
+    """Did the caller say yes to the question just asked?
+
+    Exact set-membership was too strict to be usable: a real caller answers
+    "yes book it" or a bare Telugu "సరే", neither of which equals any entry, so
+    the yes never counted and confirm_booking stayed blocked however many times
+    they agreed (Vinay, 2026-08-03 — 12 blocked attempts in one call).
+
+    Accept an affirmation that OPENS the reply, which is how agreement is
+    actually spoken, while a negation anywhere fails closed — "no, don't book"
+    opens with a negative and must never authorize a write.
+    """
+    norm = _normalised_utterance(text)
+    if not norm:
+        return False
+    if any(_normalised_utterance(n) in f' {norm} ' for n in _NEGATION_TERMS):
+        return False
+    affirmations = {_normalised_utterance(v) for v in _AFFIRMATIVE_REPLIES}
+    if norm in affirmations:
+        return True
+    # "yes book it", "సరే బుక్ చేయండి" — agreement plus what to do with it.
+    return any(
+        norm == a or norm.startswith(f'{a} ')
+        for a in affirmations if a
+    )
 
 
 
@@ -3190,13 +3220,41 @@ class VachanamAgent(Agent):
                 "instruction": f"{doctor.name} does not sit on {spoken_date}.",
             }
         hours = sessions_as_text(schedule.sessions)
+
+        # "When is the doctor available today?" is NOT the sitting hours: slots
+        # already booked are gone, and on today everything before now is gone
+        # too. check_availability computes exactly that — free slots merged into
+        # ranges — so ask it rather than re-deriving the arithmetic here
+        # (Vinay 2026-08-03: at 8pm with 8:15 taken, the answer is "8 to 8:15
+        # and 8:30 to 9", not the sitting block).
+        free = None
+        if doctor.booking_type != "token":
+            try:
+                free = await check_availability(
+                    doctor_id=resolved,
+                    branch_id=self._state.branch_id,
+                    booking_date=when,
+                    db=self._db,
+                    caller_phone=None,
+                )
+            except Exception as e:  # noqa: BLE001 — RULE 8: hours still answerable
+                logger.warning("get_doctor_schedule_free_failed: %s", e)
+
         return {
             "doctor": doctor.name, "date": str(when), "available": True,
-            "hours": hours,
+            "sitting_hours": hours,
+            "free_now": free,
             "instruction": (
-                f"On {spoken_date}, {doctor.name} sits {hours}. Say the sittings "
-                "exactly as given — if there are two, say BOTH, and never merge "
-                "them into one span."
+                f"On {spoken_date}, {doctor.name} sits {hours}. "
+                + (
+                    f"FREE times: {free} — when the caller asks when the doctor "
+                    "is available or free, read THESE, not the sitting hours: "
+                    "they already exclude booked slots and, for today, times "
+                    "that have passed. Give every free range in one answer."
+                    if free else
+                    "Say the sittings exactly as given — if there are two, say "
+                    "BOTH, and never merge them into one span."
+                )
             ),
         }
 
@@ -3333,9 +3391,21 @@ class VachanamAgent(Agent):
                 'booking_blocked_no_caller_authorization session=%s',
                 _privacy_safe_session_id(self._state.session_id),
             )
+            # This text reaches the MODEL, and whatever it says here the caller
+            # hears. The old wording ("wait for an explicit booking request")
+            # made it refuse out loud — "you haven't explicitly told to book
+            # appointment, without that i can't book" — and, because it then
+            # never ASKED, the caller's yes could never satisfy the affirm path
+            # below. Guard blocks -> no question -> no valid yes -> guard blocks:
+            # 12 rejections in one real call (Vinay, 2026-08-03). So the message
+            # now drives the QUESTION that unblocks it, and forbids narrating
+            # the rule.
             raise ToolError(
-                'Booking blocked: the caller did not ask to book or confirm. '
-                'Answer availability only. Wait for an explicit booking request.'
+                'Not authorized YET — you have not asked the caller to confirm. '
+                'Do NOT tell the caller anything about permission or rules. '
+                'Ask exactly one short question now, naming doctor, time and '
+                'date: "Shall I book it?" (in the active language). When they '
+                'agree, call confirm_booking again immediately.'
             )
 
         _protect_mutation(context)
@@ -4056,9 +4126,14 @@ class VachanamAgent(Agent):
                 'reschedule_blocked_no_caller_authorization session=%s',
                 _privacy_safe_session_id(self._state.session_id),
             )
+            # Same deadlock as confirm_booking: refusing aloud meant the model
+            # never asked, so the caller's agreement could never authorize.
             raise ToolError(
-                'Reschedule blocked: the caller did not ask to change the booking. '
-                'Answer availability only and wait for explicit confirmation.'
+                'Not authorized YET — you have not asked the caller to confirm '
+                'the change. Do NOT mention permission or rules. Ask one short '
+                'question naming the OLD and the NEW time and date, then: '
+                '"Shall I move it?" (in the active language). '
+                'On agreement, call reschedule_booking again immediately.'
             )
         _guard_human_booking(self._state)
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
@@ -4397,9 +4472,15 @@ class VachanamAgent(Agent):
                 'cancellation_blocked_no_caller_authorization session=%s',
                 _privacy_safe_session_id(self._state.session_id),
             )
+            # Same deadlock as confirm_booking. NOTE the asymmetry that stays:
+            # a cancellation is destructive, so the caller must still agree to
+            # THIS booking by name — the question just has to be asked.
             raise ToolError(
-                'Cancellation blocked: the caller did not ask to cancel. '
-                'Do not call cancel_booking until they explicitly request it.'
+                'Not authorized YET — you have not asked the caller to confirm '
+                'the cancellation. Do NOT mention permission or rules. Ask one '
+                'short question naming the doctor, time and date of the booking '
+                'you would cancel: "Shall I cancel it?" (in the active '
+                'language). On agreement, call cancel_booking again immediately.'
             )
         if accidental:
             if self._state.last_confirmed_token_id is None:
