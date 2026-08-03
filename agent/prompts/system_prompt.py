@@ -20,6 +20,11 @@ class DoctorContext:
     working_hours_start: str = ""  # HH:MM (24h) or empty when unset
     working_hours_end: str = ""
     available_weekdays: list[int] | None = None  # 0=Mon..6=Sun; None/[] = all
+    # The authoritative sitting hours. {"0": [{"start": "09:00", "end": "12:00"},
+    # {"start": "17:00", "end": "21:00"}], ...} — a doctor may sit SEVERAL
+    # sessions a day, which working_hours_start/end cannot express.
+    schedule: dict | None = None
+    schedule_mode: str = "recurring"  # recurring | date_specific
 
 
 # Generalized, privacy-safe disclosures per active language

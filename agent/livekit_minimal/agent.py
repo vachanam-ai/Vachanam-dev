@@ -915,6 +915,22 @@ QUESTION_ANSWER_PROMPT_EXTRA = (
 
 _FOLLOWUP_CALLTYPES = {"next_visit_book", "doctor_advice"}
 
+# Call types whose OPENING LINE is a prepared message, synthesized during ring
+# time and played the instant the patient answers. Deliberately its own set:
+# _FOLLOWUP_CALLTYPES means "owns a FollowupTask", which is a different question.
+# Reusing that one here dropped question_answer, so those callbacks opened with
+# the INBOUND greeting ("how can I help you?") instead of the answer the patient
+# was waiting for, and re-synthesized it cold — ~10s of silence before the first
+# word (Vinay, 2026-08-03).
+_PREPARED_OPENING_CALLTYPES = frozenset(
+    {"reminder", "cascade_rebook", "next_visit_book", "doctor_advice", "question_answer"}
+)
+
+
+def opens_with_prepared_message(call_type: str | None) -> bool:
+    """True when this outbound call must SPEAK FIRST from a prepared message."""
+    return (call_type or "") in _PREPARED_OPENING_CALLTYPES
+
 
 def _writeback_task_id(meta: dict, state) -> str | None:
     """Which FollowupTask gets the patient's spoken reply at call end.
@@ -5439,7 +5455,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # no-op when scripts already match). Needed for the greeting AND later
         # for every spoken line.
         _spk_clinic = await spoken_text(branch_name, lang_code)
-        _is_outbound_greet = is_reminder or is_rebook_call or is_followup
+        # Includes question_answer, which _FOLLOWUP_CALLTYPES excludes — see
+        # _PREPARED_OPENING_CALLTYPES for why those are different questions.
+        _is_outbound_greet = opens_with_prepared_message(meta.get("call_type"))
 
         # The LLM has NO clock: without this it guesses today's date (wrong
         # year even), books "tomorrow" in the past, and the past-date guard
@@ -5722,6 +5740,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 working_hours_start=d["working_hours_start"],
                 working_hours_end=d["working_hours_end"],
                 available_weekdays=d["available_weekdays"],
+                # Split shifts (9-12 and again 5-9) live here; the pair above
+                # cannot hold them. .get() so a roster cached by an older build
+                # degrades to "hours not set" instead of raising on the call path.
+                schedule=d.get("schedule"),
+                schedule_mode=d.get("schedule_mode") or "recurring",
             )
             for d in doctors
         ]
@@ -7224,6 +7247,36 @@ def _decode_branch_faq(value) -> list[dict]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _decode_jsonb(value, fallback):
+    """JSONB over raw asyncpg arrives as TEXT (no codec is registered — see
+    _decode_branch_faq). list("[0,1,2]") silently yields characters, so every
+    JSONB column read on this path must go through here."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return fallback
+    return value if isinstance(value, type(fallback)) else fallback
+
+
+def _effective_schedule(row) -> dict:
+    """recurring_schedule, or the legacy single range widened to the shape the
+    prompt renders. Mirrors backend.services.doctor_schedule.effective_* — this
+    path speaks raw asyncpg, not ORM rows, so it cannot call it directly."""
+    configured = _decode_jsonb(row["recurring_schedule"], {})
+    if configured:
+        return configured
+    start, end = row["working_hours_start"], row["working_hours_end"]
+    if not start or not end or start >= end:
+        return {}
+    session = {"start": start.strftime("%H:%M"), "end": end.strftime("%H:%M")}
+    return {
+        str(day): [session]
+        for day in _decode_jsonb(row["available_weekdays"], [])
+        if isinstance(day, int) and 0 <= day <= 6
+    }
+
+
 async def _warm_all_clinic_prompt_caches() -> None:
     """Build shared Vertex caches before a real caller needs one.
 
@@ -7251,7 +7304,8 @@ async def _warm_all_clinic_prompt_caches() -> None:
             """
             SELECT id::text, branch_id::text, name, specialization,
                    routing_keywords, booking_type::text, is_default_doctor,
-                   working_hours_start, working_hours_end, available_weekdays
+                   working_hours_start, working_hours_end, available_weekdays,
+                   recurring_schedule, schedule_mode
             FROM doctors
             WHERE status = 'active'
             """
@@ -7281,7 +7335,11 @@ async def _warm_all_clinic_prompt_caches() -> None:
                 is_default=bool(row["is_default_doctor"]),
                 working_hours_start=start.strftime("%H:%M") if start else "",
                 working_hours_end=end.strftime("%H:%M") if end else "",
-                available_weekdays=list(row["available_weekdays"] or []),
+                available_weekdays=_decode_jsonb(row["available_weekdays"], []),
+                # Same sitting hours the call path uses — a prompt cached here
+                # with different schedule text would never be hit at call time.
+                schedule=_effective_schedule(row),
+                schedule_mode=row["schedule_mode"] or "recurring",
             )
         )
 

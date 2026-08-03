@@ -551,6 +551,47 @@ def _attr(value: object, limit: int = 500) -> str:
 _one_line = _attr
 
 
+def _fmt_clock(hhmm: str) -> str:
+    """"17:00" -> "5:00 PM". Speech-shaped; the model never reads HH:MM aloud."""
+    try:
+        h, m = (int(part) for part in str(hhmm).split(":"))
+    except (ValueError, TypeError):
+        return str(hhmm)
+    return f"{h % 12 or 12}:{m:02d} {'AM' if h < 12 else 'PM'}"
+
+
+def _schedule_label(d: DoctorContext) -> str:
+    """The doctor's real sitting hours, per weekday, multi-session aware.
+
+    d028e44 removed the schedule from this prompt when split shifts landed,
+    because working_hours_start/end cannot express "9-12 and again 5-9". Nothing
+    replaced it, so the model had NO schedule ground truth: asked for a doctor's
+    timings it invented "9 to 6" for a 9-12 + 5-9 doctor, and left doctors out
+    when listing who sits when (real call, 2026-08-03). Grounding beats omission
+    — check_availability only answers for a specific DATE, so it can never cover
+    a plain "what are his timings?".
+    """
+    if getattr(d, "schedule_mode", "recurring") == "date_specific":
+        return "only on dates the clinic publishes — check the exact date"
+    schedule = getattr(d, "schedule", None) or {}
+    # Group days that share the same hours: "Mon,Tue,Wed 9:00 AM-12:00 PM".
+    by_hours: dict[str, list[str]] = {}
+    for day in range(7):
+        sessions = schedule.get(str(day)) or []
+        if not sessions:
+            continue
+        hours = " and ".join(
+            f"{_fmt_clock(s.get('start', ''))}-{_fmt_clock(s.get('end', ''))}"
+            for s in sessions
+            if isinstance(s, dict)
+        )
+        if hours:
+            by_hours.setdefault(hours, []).append(_DAYS[day])
+    if not by_hours:
+        return "hours not set"
+    return "; ".join(f"{','.join(days)} {hours}" for hours, days in by_hours.items())
+
+
 def _doctor_rows(doctors: list[DoctorContext]) -> str:
     rows = []
     for d in doctors:
@@ -565,7 +606,8 @@ def _doctor_rows(doctors: list[DoctorContext]) -> str:
             f'booking="{_one_line(d.booking_type, 20)}" '
             f'default="{str(bool(d.is_default)).lower()}"> '
             f'keywords={_one_line(", ".join(d.routing_keywords), 600)}; '
-            f'{mode}; schedule intentionally omitted — retrieve exact date</doctor>'
+            f'sits {_schedule_label(d)}; {mode}; '
+            f'leave and one-off changes are NOT here — check the exact date</doctor>'
         )
     return "\n".join(rows) or "<none />"
 

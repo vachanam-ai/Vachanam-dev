@@ -27,6 +27,8 @@ from uuid import UUID
 
 import structlog
 
+from backend.services.doctor_schedule import effective_recurring_schedule
+
 logger = structlog.get_logger()
 
 # Backstop only — explicit invalidation below is what keeps this accurate.
@@ -34,7 +36,10 @@ CLINIC_CACHE_TTL_S = 900
 
 
 def doctors_key(branch_id: UUID | str) -> str:
-    return f"clinic:doctors:{branch_id}"
+    # v2: the payload gained `schedule`/`schedule_mode`. A new key retires every
+    # v1 entry instantly instead of serving up to CLINIC_CACHE_TTL_S of rosters
+    # with no sitting hours in them.
+    return f"clinic:doctors:v2:{branch_id}"
 
 
 def _fmt_time(t: time | None) -> str:
@@ -58,6 +63,13 @@ def serialize_doctors(rows) -> list[dict]:
             "working_hours_start": _fmt_time(d.working_hours_start),
             "working_hours_end": _fmt_time(d.working_hours_end),
             "available_weekdays": list(d.available_weekdays or []),
+            # The authoritative hours. working_hours_start/end above cannot
+            # express a split shift (9-12 and again 5-9), so shipping only that
+            # pair left the agent quoting hours the doctor does not sit.
+            # effective_* falls back to the legacy pair when a clinic has not
+            # moved to multi-session yet.
+            "schedule": effective_recurring_schedule(d),
+            "schedule_mode": getattr(d, "schedule_mode", None) or "recurring",
         }
         for d in rows
     ]
