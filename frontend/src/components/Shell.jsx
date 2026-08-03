@@ -44,6 +44,7 @@ const NAV = {
     { to: "/availability", label: "Doctor leave", icon: "availability" },
     { to: "/my-schedule", label: "Doctors", icon: "schedule" },
     { to: "/whatsapp", label: "WhatsApp", icon: "whatsapp" },
+    { to: "/whatsapp/chats", label: "WhatsApp chats", icon: "whatsapp" },
     { to: "/settings", label: "Settings", icon: "settings" },
     { to: "/tickets", label: "Support", icon: "support" }
   ],
@@ -203,7 +204,12 @@ export default function Shell() {
   });
   const hasWhatsapp =
     WHATSAPP_LIVE || Boolean(plan.data?.whatsapp_included || plan.data?.whatsapp_addon);
-  const links = (NAV[role] ?? []).filter((l) => l.to !== "/whatsapp" || hasWhatsapp);
+  // startsWith, not equality: /whatsapp/chats is just as gated as /whatsapp,
+  // and an exact match would have leaked the chats link to clinics that never
+  // bought WhatsApp.
+  const links = (NAV[role] ?? []).filter(
+    (l) => !l.to.startsWith("/whatsapp") || hasWhatsapp,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [branchNames, setBranchNames] = useState({});
   const location = useLocation();

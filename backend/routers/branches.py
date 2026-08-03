@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
@@ -1179,6 +1180,128 @@ class WaConnectBody(BaseModel):
         if not value.isdigit():
             raise ValueError("Must be a numeric Meta id")
         return value
+
+
+# ── WhatsApp chats — read-only view of what the bot said to patients ────────
+# Vinay 2026-08-02: "we also need whatsapp pages to choose template, track
+# chats etc". Templates are above; this is the tracking half.
+#
+# Read-only on purpose. A staff "reply" box would collide with the bot: under
+# Coexistence the clinic's own WhatsApp app is still live on the same number,
+# so a receptionist already has a place to type — their phone. Adding a second
+# one here would produce two replies to one patient message.
+#
+# RULE 1: every query branch-scoped, and assert_branch_access additionally
+# locks super_admin out entirely (DPDP: Vinay is a Data Processor, patient
+# chat content is clinic PII).
+
+_CHAT_PAGE_SIZE = 50
+
+
+@router.get("/{branch_id}/whatsapp/chats")
+async def list_whatsapp_chats(
+    branch_id: str,
+    limit: int = _CHAT_PAGE_SIZE,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """Conversation list, most recently active first.
+
+    Returns a PREVIEW only (last turn, truncated) — the full transcript costs
+    a second request, so opening the page does not pull every clinic
+    conversation's message history into a browser at once.
+    """
+    await assert_branch_access(current_user, branch_id, db)
+    from backend.models.schema import WhatsAppSession
+
+    rows = (
+        await db.execute(
+            select(WhatsAppSession)
+            .where(WhatsAppSession.branch_id == uuid.UUID(branch_id))  # RULE 1
+            .order_by(WhatsAppSession.updated_at.desc().nullslast())
+            .limit(max(1, min(int(limit or _CHAT_PAGE_SIZE), 200)))
+        )
+    ).scalars().all()
+
+    out: list[dict] = []
+    for row in rows:
+        turns = ((row.session_data or {}).get("turns") or [])
+        last = turns[-1] if turns else {}
+        out.append({
+            "phone": row.patient_phone,
+            "phone_last4": (row.patient_phone or "")[-4:],
+            "turn_count": len(turns),
+            "last_role": last.get("role"),
+            "last_text": (last.get("text") or "")[:120],
+            "last_at": last.get("at"),
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        })
+    return out
+
+
+@router.get("/{branch_id}/whatsapp/chats/{phone}")
+async def get_whatsapp_chat(
+    branch_id: str,
+    phone: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Full stored transcript for one patient thread at THIS branch.
+
+    Only what wa_session already retains (last N turns, expiring rows) — this
+    route reads that store, it never extends retention, so the figures quoted
+    in docs/legal/*.md stay accurate.
+    """
+    await assert_branch_access(current_user, branch_id, db)
+    from backend.models.schema import WhatsAppSession
+
+    row = (
+        await db.execute(
+            select(WhatsAppSession).where(
+                WhatsAppSession.branch_id == uuid.UUID(branch_id),  # RULE 1
+                WhatsAppSession.patient_phone == phone,
+            )
+        )
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No conversation found")
+    return {
+        "phone": row.patient_phone,
+        "phone_last4": (row.patient_phone or "")[-4:],
+        "turns": (row.session_data or {}).get("turns") or [],
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.get("/{branch_id}/whatsapp/signup-config")
+async def get_whatsapp_signup_config(
+    branch_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """What the browser needs to open Meta's Embedded Signup popup.
+
+    Only app_id / config_id / graph_version — all three are PUBLIC by design
+    (they ship inside Meta's own JS snippet). The secret half of the pair,
+    `meta_app_secret`, stays server-side and is used solely in the
+    authorization-code exchange (wa_connect._exchange_code). RULE 9: nothing
+    here is a credential, so nothing here is logged either way.
+
+    Served from settings rather than baked into the frontend bundle so that
+    moving to a different Meta app — or fixing a wrong config id — is an env
+    change, not a rebuild-and-redeploy of the PWA.
+
+    `configured` false means the Connect button must say so plainly instead of
+    opening a popup Meta would reject with an unhelpful error.
+    """
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+    return {
+        "app_id": settings.meta_app_id,
+        "config_id": settings.meta_config_id,
+        "graph_version": settings.meta_graph_version,
+        "configured": bool(settings.meta_app_id and settings.meta_config_id),
+    }
 
 
 @router.get("/{branch_id}/whatsapp/connect")

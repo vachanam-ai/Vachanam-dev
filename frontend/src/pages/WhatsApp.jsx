@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import PageHeader from "../components/PageHeader.jsx";
 import TemplateEditor from "../components/TemplateEditor.jsx";
+import WaConnectCard from "../components/WaConnectCard.jsx";
 import {
   createWaTemplate,
   deleteWaTemplate,
@@ -113,11 +114,20 @@ export default function WhatsApp() {
         </button>
       </PageHeader>
 
+      {/* Connection first: a template the clinic can't submit is a dead end,
+          so the one action that unblocks everything leads the page. */}
+      <div className="card p-5">
+        <h2 className="mb-3 font-ui text-sm font-semibold text-ink">
+          Your WhatsApp number
+        </h2>
+        <WaConnectCard branchId={branchId} />
+      </div>
+
       {notConnected && (
         <div className="rounded-xl border border-teal-pale bg-pill p-4 font-ui text-sm text-ink-soft">
-          Your clinic's WhatsApp Business Account isn't connected yet, so templates
-          created here can't be submitted to Meta until it is. You can still draft
-          and preview them below.
+          Templates created here can't be submitted to Meta until your WhatsApp
+          Business Account is connected above. You can still draft and preview
+          them below.
         </div>
       )}
 

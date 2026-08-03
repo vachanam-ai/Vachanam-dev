@@ -59,6 +59,18 @@ class Settings(BaseSettings):
     # exchange (GET /oauth/access_token). Public (used client-side by Meta's
     # embedded signup JS SDK too) but kept in settings, never hardcoded.
     meta_app_id: str = ""
+    # The Embedded Signup CONFIGURATION id, created in the Meta app dashboard
+    # under WhatsApp > Embedded Signup. It encodes which permissions and setup
+    # steps the clinic is walked through, so the browser passes only this id to
+    # FB.login — never a permission list. Public by design (it ships to the
+    # browser); the SECRET half of the pair is meta_app_secret, server-side
+    # only. Unset = the Connect button reports "not configured yet" instead of
+    # opening a popup that Meta would reject.
+    meta_config_id: str = ""
+    # Graph API version used by the browser SDK. Pinned so a Meta default bump
+    # cannot silently change the session_info payload shape the connect flow
+    # parses.
+    meta_graph_version: str = "v21.0"
 
     # Google
     google_oauth_client_id: str = ""

@@ -45,6 +45,7 @@ function loadRazorpay() {
     document.body.appendChild(s);
   });
 }
+import WaConnectCard from "../components/WaConnectCard.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
@@ -650,34 +651,20 @@ export default function Settings() {
         </div>
       </Section>
 
-      {/* WhatsApp is exposed only by the deployment feature flag. */}
-      {WHATSAPP_LIVE && (
+      {/* Shown once the clinic actually HAS WhatsApp — bundled in the plan or
+          bought as the add-on. Gating this on the build flag meant a clinic
+          that had just paid ₹1,499 saw no way to connect until someone
+          redeployed the frontend (same bug as the nav gate).
+
+          Self-serve since 2026-08-04: the owner presses one button and walks
+          through Meta's Embedded Signup with the number they already use. The
+          old copy here asked them to EMAIL US to book a 15-minute concierge
+          call, which does not survive contact with more than a handful of
+          clinics. */}
+      {(WHATSAPP_LIVE || plan.data?.whatsapp_included || plan.data?.whatsapp_addon) && (
       <Section id="whatsapp" title="WhatsApp"
         sub="Booking confirmations, reminders and post-visit rating asks on your clinic's own WhatsApp number.">
-        {(() => {
-          const st = WA_STATUS_LABEL[data?.whatsapp_status] ?? WA_STATUS_LABEL.none;
-          return (
-            <p className="font-ui text-sm">
-              <span className={`${st.chip} shrink-0`}>{st.label}</span>
-              {data?.whatsapp_status === "connected" ? (
-                <>
-                  {" "}Your WhatsApp number is connected
-                  {data?.whatsapp_masked_number ? <> (<span className="numeral">{data.whatsapp_masked_number}</span>)</> : null}
-                  {" "}— patients get confirmations and can reply here.
-                </>
-              ) : (
-                <>
-                  {" "}Not connected yet. We connect your clinic's WhatsApp number together
-                  with you (about 15 minutes, you keep using your WhatsApp app) —{" "}
-                  <a className="text-teal underline underline-offset-2"
-                    href={`mailto:hello@vachanam.in?subject=WhatsApp%20setup%20—%20${encodeURIComponent(data?.name ?? "clinic")}`}>
-                    request setup
-                  </a>.
-                </>
-              )}
-            </p>
-          );
-        })()}
+        <WaConnectCard branchId={branchId} />
       </Section>
       )}
 

@@ -198,6 +198,21 @@ export const createWaTemplate = (branchId, payload) =>
   api.post(`/branches/${branchId}/whatsapp/templates`, payload).then((r) => r.data);
 export const deleteWaTemplate = (branchId, name) =>
   api.delete(`/branches/${branchId}/whatsapp/templates/${encodeURIComponent(name)}`).then((r) => r.data);
+// ── WhatsApp Embedded Signup — clinic connects its OWN WABA in one click ──
+export const fetchWaConnection = (branchId) =>
+  api.get(`/branches/${branchId}/whatsapp/connect`).then((r) => r.data);
+export const fetchWaSignupConfig = (branchId) =>
+  api.get(`/branches/${branchId}/whatsapp/signup-config`).then((r) => r.data);
+export const connectWa = (branchId, payload) =>
+  api.post(`/branches/${branchId}/whatsapp/connect`, payload).then((r) => r.data);
+export const disconnectWa = (branchId) =>
+  api.delete(`/branches/${branchId}/whatsapp/connect`).then((r) => r.data);
+
+export const fetchWaChats = (branchId) =>
+  api.get(`/branches/${branchId}/whatsapp/chats`).then((r) => r.data);
+export const fetchWaChat = (branchId, phone) =>
+  api.get(`/branches/${branchId}/whatsapp/chats/${encodeURIComponent(phone)}`).then((r) => r.data);
+
 export const fetchStaff = (branchId) =>
   api.get(`/branches/${branchId}/staff`).then((r) => r.data);
 export const addStaff = (branchId, payload) =>

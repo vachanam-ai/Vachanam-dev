@@ -39,7 +39,7 @@ def test_prompt_carries_conversation_history():
     assert "tomorrow morning" in p and "10:30 or 11:00" in p
 
 
-def test_intents_are_exactly_the_eight():
+def test_intents_are_exactly_the_nine():
     """doctor_info joined the set 2026-08-03. Before it, "is Dr Srinivas
     available" had no intent to land on, fell through to ask_doctor, and
     became a ClinicQuestion + "let me check with the doctor" for a fact the
@@ -47,7 +47,7 @@ def test_intents_are_exactly_the_eight():
     from agent.prompts.whatsapp_prompt import INTENTS
 
     assert set(INTENTS) == {
-        "book", "reschedule", "cancel", "doctor_info", "location",
+        "greeting", "book", "reschedule", "cancel", "doctor_info", "location",
         "faq", "ask_doctor", "off_topic",
     }
 

@@ -74,8 +74,8 @@ _JSON_CONTRACT = (
     # (as an f-string/format template would need) literally instructed the
     # model to emit `{{...}}`, which is not JSON.
     "\n\nReply as compact JSON only, with EXACTLY these keys and no others:\n"
-    '{"intent": "<one of book, reschedule, cancel, doctor_info, location, '
-    'faq, ask_doctor, off_topic>", '
+    '{"intent": "<one of greeting, book, reschedule, cancel, doctor_info, '
+    'location, faq, ask_doctor, off_topic>", '
     '"answer": "<ONLY when intent=faq — the reply text, answering strictly '
     "from the clinic FAQ above, plain text, max 3 sentences, same language "
     'as the patient; empty otherwise>", '
@@ -279,7 +279,7 @@ def _offer_reply(slots: list[Slot]) -> str:
     if slots[0].booking_type == "token":
         return f"{doctor_name} can see you on {day} — reply yes to book the next available token."
     times = ", ".join(
-        s.appointment_time.strftime("%H:%M") for s in slots[:_MAX_OFFER_LINES] if s.appointment_time
+        _hhmm(s.appointment_time) for s in slots[:_MAX_OFFER_LINES] if s.appointment_time
     )
     return f"{doctor_name} has {times} open on {day} — reply with a time to confirm."
 
@@ -287,7 +287,10 @@ def _offer_reply(slots: list[Slot]) -> str:
 def _confirmation_reply(slot: Slot, token: Token) -> str:
     day = slot.date.strftime("%d %b")
     if token.appointment_time:
-        return f"You're booked with {slot.doctor_name} on {day} at {token.appointment_time.strftime('%H:%M')}."
+        return (
+            f"You're booked with {slot.doctor_name} on {day} at "
+            f"{_hhmm(token.appointment_time)}. Please be on time."
+        )
     return f"You're booked with {slot.doctor_name} on {day} — token number {token.token_number}."
 
 
@@ -408,7 +411,15 @@ def _merge_to_ranges(slots: list[time], duration_minutes: int) -> list[tuple[tim
 
 
 def _hhmm(value: time) -> str:
-    return value.strftime("%H:%M")
+    """12-hour clock, the way a patient reads a time.
+
+    Vinay 2026-08-04: "Available from 9 to 13 doesn't look good." Nobody in a
+    clinic says 13:00. Drops the leading zero and the :00 on the hour, so
+    09:00 -> "9 am" and 17:30 -> "5:30 pm".
+    """
+    hour = value.strftime("%I").lstrip("0") or "12"
+    suffix = value.strftime("%p").lower()
+    return f"{hour} {suffix}" if value.minute == 0 else f"{hour}:{value.strftime('%M')} {suffix}"
 
 
 async def _doctor_line(
@@ -582,6 +593,19 @@ async def handle_text(
             await _no_existing_booking(
                 db, branch, plan, sender, "reschedule" if intent == "reschedule" else "cancel"
             )
+        return
+
+    if intent == "greeting":
+        # "Hey" used to fall to off_topic and get "I can only help with
+        # booking, appointments and questions about the clinic here" — reading
+        # like a rejection to someone who had merely said hello (Vinay
+        # 2026-08-04). Greet back, by clinic name, and leave the door open.
+        reply = (
+            f"Welcome to {branch.name}! I can help you book an appointment, "
+            f"move or cancel one, or tell you when a doctor is in. What do you need?"
+        )
+        await wa_session.append(db, branch.id, sender, "bot", reply)
+        await wa_service.send_text(branch, sender, reply, plan=plan)
         return
 
     if intent == "doctor_info":

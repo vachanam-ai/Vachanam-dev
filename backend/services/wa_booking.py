@@ -135,9 +135,20 @@ class _LazyGoogleCalendar:
 
     def _get(self) -> Any:
         if self._svc is None:
-            from backend.services.calendar_service import GoogleCalendarService
+            # CalendarService, NOT GoogleCalendarService. confirm_booking calls
+            # create_booking_event with the LEGACY keyword names
+            # (patient_name / patient_phone / token_number / booking_date /
+            # appointment_time / slot_duration_minutes); only this subclass
+            # accepts them and maps them onto the real implementation. Passing
+            # them to the base class raised TypeError inside the retry wrapper,
+            # so every WhatsApp appointment booking died as
+            # "calendar write failed: RetryError[... raised TypeError]" and the
+            # patient read "Something went wrong completing that booking"
+            # (Vinay 2026-08-04, live thread). The voice path never hit this —
+            # it imports the same subclass via agent.services.calendar_proxy.
+            from backend.services.calendar_service import CalendarService
 
-            self._svc = GoogleCalendarService()
+            self._svc = CalendarService()
         return self._svc
 
     async def create_booking_event(self, **kwargs: Any) -> str:

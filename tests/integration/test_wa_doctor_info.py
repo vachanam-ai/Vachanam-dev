@@ -78,7 +78,8 @@ async def test_named_doctor_availability_is_answered_not_deferred(db):
 
     assert "Srinivas" in reply
     assert "check that with the doctor" not in reply.lower()
-    assert "09:00" in reply, reply
+    assert "9 am" in reply, reply
+    assert "09:00" not in reply, "24-hour times must never reach a patient"
 
 
 @pytest.mark.asyncio
@@ -193,6 +194,30 @@ def test_a_booked_slot_splits_the_range():
 
 def test_no_free_slots_merges_to_nothing():
     assert wa_chat._merge_to_ranges([], 15) == []
+
+
+# ── times read the way a patient reads them ──────────────────────────────────
+
+@pytest.mark.parametrize("value,expected", [
+    (time(9, 0), "9 am"),
+    (time(13, 0), "1 pm"),          # Vinay: "available from 9 to 13 doesn't look good"
+    (time(17, 30), "5:30 pm"),
+    (time(21, 0), "9 pm"),
+    (time(0, 0), "12 am"),          # midnight is 12 am, never 0 am
+    (time(12, 0), "12 pm"),         # noon is 12 pm, never 0 pm
+    (time(12, 30), "12:30 pm"),
+])
+def test_times_are_written_on_the_12_hour_clock(value, expected):
+    assert wa_chat._hhmm(value) == expected
+
+
+def test_no_24_hour_time_reaches_the_patient(db):
+    """A guard on the whole reply, not just the formatter: any bare 13:00-23:59
+    in an outgoing line means a 24-hour clock slipped through somewhere."""
+    import re
+
+    for t in (time(13, 0), time(19, 45), time(23, 15)):
+        assert not re.match(r"^(1[3-9]|2[0-3]):", wa_chat._hhmm(t))
 
 
 # ── name matching ────────────────────────────────────────────────────────────
