@@ -163,6 +163,12 @@ export const publishDoctorSchedule = (branchId, doctorId, date, payload) =>
 export const deleteDoctorSchedule = (branchId, doctorId, date) =>
   api.delete(`/availability/${branchId}/${doctorId}/schedule/${date}`);
 
+// WhatsApp add-on (₹1,499/mo). One-off charge for the rest of this cycle; from
+// the next renewal it is bundled into the plan invoice, so there is never a
+// second subscription to manage.
+export const createWhatsappAddonOrder = () =>
+  api.post("/api/whatsapp-addon/order").then((r) => r.data);
+
 // ── Branch settings / team ──
 export const fetchBranchSettings = (branchId) =>
   api.get(`/branches/${branchId}/settings`).then((r) => r.data);

@@ -5,6 +5,7 @@ import {
   addStaff,
   changePlan,
   createPaymentOrder,
+  createWhatsappAddonOrder,
   deleteAccount,
   fetchBranchSettings,
   fetchDoctors,
@@ -242,6 +243,52 @@ export default function Settings() {
     }
   };
 
+  // WhatsApp add-on — same server-priced order → checkout → verify path as the
+  // subscription above. Deliberately NOT a second Razorpay subscription: this
+  // charges ₹1,499 once for the remainder of the cycle, and from the next
+  // renewal the amount rides on the plan invoice (Vinay: "from next month on
+  // entire billing should come together").
+  const [buyingWa, setBuyingWa] = useState(false);
+  const buyWhatsapp = async () => {
+    setBuyingWa(true);
+    try {
+      await loadRazorpay();
+      const order = await createWhatsappAddonOrder();
+      await new Promise((resolve, reject) => {
+        const rzp = new window.Razorpay({
+          key: order.key_id,
+          order_id: order.order_id,
+          amount: order.amount,
+          currency: order.currency,
+          name: "Vachanam",
+          description: "WhatsApp add-on",
+          prefill: { email: user?.email ?? "" },
+          theme: { color: "#1b1b1a" },
+          modal: { ondismiss: () => reject(new Error("Payment window closed")) },
+          handler: async (resp) => {
+            try {
+              await verifyPayment({
+                razorpay_order_id: resp.razorpay_order_id,
+                razorpay_payment_id: resp.razorpay_payment_id,
+                razorpay_signature: resp.razorpay_signature
+              });
+              toast.success("WhatsApp is on — patients can message your clinic number.");
+              plan.refetch();
+              resolve();
+            } catch (e) {
+              reject(new Error(e?.response?.data?.detail ?? "Payment verification failed — if money was deducted it activates automatically in a minute"));
+            }
+          }
+        });
+        rzp.open();
+      });
+    } catch (e) {
+      if (e?.message !== "Payment window closed") toast.error(e?.message ?? "Payment failed");
+    } finally {
+      setBuyingWa(false);
+    }
+  };
+
   // Soniox voice catalog for the clinic's language (drives the picker).
   const voices = useQuery({
     queryKey: ["branch-voices", branchId, data?.language],
@@ -460,6 +507,44 @@ export default function Settings() {
         )}
         {/* #358: GSTIN field removed on Vinay's call ("complicates things") —
             the /api/billing/gstin endpoint stays for TD-038. */}
+        {/* WhatsApp add-on. Four states, because selling a clinic something
+            their plan already includes is worse than not selling it at all. */}
+        {plan.data && (
+          <div className="mt-4 border-t border-hairline pt-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-ui text-sm font-medium text-ink">WhatsApp</p>
+                <p className="mt-1 font-ui text-xs text-slate">
+                  {plan.data.whatsapp_included
+                    ? "Included in your plan — patients can message your clinic number."
+                    : plan.data.whatsapp_addon
+                      ? "Active. From your next renewal it is billed together with your plan."
+                      : plan.data.whatsapp_included_pending
+                        ? `Included from ${plan.data.pending_plan_effective} when you move to ${plan.data.pending_plan} — no need to buy it.`
+                        : "Patients book, reschedule and ask questions over WhatsApp. ₹1,499/mo — charged now for this cycle, then billed with your plan."}
+                </p>
+              </div>
+              {plan.data.whatsapp_included || plan.data.whatsapp_addon ? (
+                <span className="chip whitespace-nowrap">on</span>
+              ) : plan.data.whatsapp_included_pending ? (
+                <span className="chip whitespace-nowrap">from {plan.data.pending_plan_effective}</span>
+              ) : (
+                <button className="btn-primary whitespace-nowrap px-4 py-2 text-sm"
+                  disabled={buyingWa || plan.data.status !== "active"}
+                  onClick={buyWhatsapp}>
+                  {buyingWa ? "Opening…" : "Add WhatsApp · ₹1,499"}
+                </button>
+              )}
+            </div>
+            {plan.data.status !== "active"
+              && !plan.data.whatsapp_included
+              && !plan.data.whatsapp_addon && (
+              <p className="mt-2 font-ui text-xs text-slate">
+                Activate your plan first — WhatsApp is billed alongside it.
+              </p>
+            )}
+          </div>
+        )}
         <p className="mt-3 font-ui text-xs text-slate">
           A detailed receipt (PDF attached) is emailed to you after every successful payment.
         </p>

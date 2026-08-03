@@ -284,6 +284,7 @@ def subscription_order_breakdown(
     cycle_minutes_used: float = 0.0,
     adjustment: int = 0,
     subscription_started_at=None,
+    whatsapp_addon: bool = False,
 ) -> dict:
     """What a Razorpay activation/renewal order charges (#341, Vinay 2026-07-12:
     GST ON TOP, overage collected WITH the renewal).
@@ -302,7 +303,17 @@ def subscription_order_breakdown(
     included = max(0, p.included_minutes + (adjustment or 0))
     over_min = max(0, int(round(cycle_minutes_used)) - included)
     overage_amount = round(over_min * p.overage_per_min, 2)
-    subtotal = round(base + overage_amount, 2)
+    # WhatsApp rides on the PLAN invoice from the renewal after purchase — one
+    # bill, not a second subscription to manage (Vinay 2026-08-03: "from next
+    # month on entire billing should come together (number+whatsapp)"). Charged
+    # only where it is an add-on: on clinic/multi/wa it is already in the price,
+    # so billing it again would double-charge.
+    addon_amount = (
+        float(WHATSAPP_ADDON_RUPEES)
+        if whatsapp_addon and plan in WHATSAPP_ADDON_PLANS
+        else 0.0
+    )
+    subtotal = round(base + overage_amount + addon_amount, 2)
     gst = _gst_on(subtotal)
     total = round(subtotal + gst, 2)
     return {
@@ -311,6 +322,26 @@ def subscription_order_breakdown(
         "is_offer": is_offer,
         "overage_minutes": over_min,
         "overage_amount": overage_amount,
+        "whatsapp_addon": addon_amount,
+        "gst": gst,
+        "total": total,
+        "amount_paise": int(round(total * 100)),
+    }
+
+
+def whatsapp_addon_order_breakdown() -> dict:
+    """The one-off charge that switches WhatsApp on mid-cycle.
+
+    Full ₹1,499 for the remainder of the current cycle, not pro-rated (Vinay's
+    call): pro-rating a ₹1,499 line adds cycle-boundary and refund edge cases to
+    a money path for a few rupees. From the next renewal the amount is folded
+    into subscription_order_breakdown instead, so this is charged exactly once.
+    """
+    base = float(WHATSAPP_ADDON_RUPEES)
+    gst = _gst_on(base)
+    total = round(base + gst, 2)
+    return {
+        "base": WHATSAPP_ADDON_RUPEES,
         "gst": gst,
         "total": total,
         "amount_paise": int(round(total * 100)),

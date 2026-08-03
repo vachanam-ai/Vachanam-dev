@@ -177,6 +177,10 @@ async def create_order(
     bd = subscription_order_breakdown(
         plan, used, int(getattr(org, "minutes_adjustment", 0) or 0),
         subscription_started_at=getattr(org, "subscription_started_at", None),
+        # Bought WhatsApp mid-cycle? From this renewal on it is ONE invoice
+        # (Vinay: "entire billing should come together"), so the renewal order
+        # must carry it or the clinic silently gets the feature for free.
+        whatsapp_addon=await _org_wa_addon(db, org.id),
     )
 
     client = _get_client()
@@ -235,6 +239,11 @@ class PlanInfo(BaseModel):
     # whether it is the first-3-months offer price — UI shows exact numbers.
     next_base_rupees: int = 0
     is_offer: bool = False
+    # WhatsApp: bundled by the plan, bought as the ₹1,499 add-on, or arriving
+    # with a scheduled plan change. The Settings card renders one of the three.
+    whatsapp_included: bool = False
+    whatsapp_addon: bool = False
+    whatsapp_included_pending: bool = False
 
 
 class PlanChangeRequest(BaseModel):
@@ -296,11 +305,18 @@ async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
     return last.cycle_end if last else None
 
 
-def _plan_info(org: Organization, last_cycle=None) -> "PlanInfo":
+def _plan_info(org: Organization, last_cycle=None, wa_addon: bool = False) -> "PlanInfo":
+    from backend.services.billing_math import WHATSAPP_PLANS
+
     _base, _is_offer = effective_price(org.plan, org.subscription_started_at)
     return PlanInfo(
         next_base_rupees=_base,
         is_offer=_is_offer,
+        # Three distinct states, because offering to SELL a clinic something
+        # their plan already includes is worse than not offering it at all.
+        whatsapp_included=org.plan in WHATSAPP_PLANS,
+        whatsapp_addon=bool(wa_addon),
+        whatsapp_included_pending=(org.pending_plan or "") in WHATSAPP_PLANS,
         plan=org.plan,
         status=org.status,
         pending_plan=org.pending_plan,
@@ -326,7 +342,162 @@ async def get_plan(
 ) -> "PlanInfo":
     """Caller's current plan + any scheduled change + current cycle end."""
     org = await _load_my_org(current_user, db)
-    return _plan_info(org, await _latest_cycle(db, org.id))
+    return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
+
+
+async def _enable_whatsapp_addon(db: "AsyncSession", notes: dict, payment_id: str) -> None:
+    """Switch WhatsApp on for the branch the ORDER named.
+
+    The branch id comes from the server-set order notes, never the client, so a
+    forged verify call cannot enable a paid feature on another clinic's branch
+    (RULE 1). Idempotent: Razorpay redelivers, and a second verify of the same
+    order must be a no-op rather than a second charge's worth of state.
+    """
+    from backend.models.schema import Branch
+
+    branch_id = (notes or {}).get("branch_id")
+    org_id = (notes or {}).get("org_id")
+    if not branch_id or not org_id:
+        logger.error("wa_addon_notes_incomplete", payment_id=payment_id)
+        return
+    branch = (
+        await db.execute(
+            select(Branch).where(
+                Branch.id == _uuid.UUID(str(branch_id)),
+                Branch.org_id == _uuid.UUID(str(org_id)),  # belt AND braces
+            )
+        )
+    ).scalar_one_or_none()
+    if branch is None:
+        logger.error("wa_addon_branch_missing", payment_id=payment_id)
+        return
+    if branch.whatsapp_addon:
+        logger.info("wa_addon_already_on", branch_id=str(branch.id))
+        return
+    branch.whatsapp_addon = True
+    await db.commit()
+    # The agent/API caches the roster and plan gates; drop it so the very next
+    # inbound message is answered instead of dropped as wa_skipped_plan.
+    try:
+        from backend.services.clinic_cache import invalidate
+
+        await invalidate(branch.id)
+    except Exception as e:  # noqa: BLE001 — cache is an accelerator (RULE 8)
+        logger.warning("wa_addon_cache_invalidate_failed", error=str(e)[:120])
+    logger.info("wa_addon_enabled", branch_id=str(branch.id), payment_id=payment_id)
+
+
+async def _org_wa_addon(db: "AsyncSession", org_id) -> bool:
+    """True when any branch of this org has bought the WhatsApp add-on.
+
+    The flag lives per BRANCH because WhatsApp is provisioned per number, but
+    the billing card is per org — one bought number is enough to show it as on.
+    """
+    from backend.models.schema import Branch
+
+    row = (
+        await db.execute(
+            select(Branch.id).where(
+                Branch.org_id == org_id, Branch.whatsapp_addon.is_(True)
+            ).limit(1)
+        )
+    ).first()
+    return row is not None
+
+
+@router.post(
+    "/whatsapp-addon/order",
+    response_model=CreateOrderResponse,
+    dependencies=[Depends(create_order_limit)],
+)
+async def create_whatsapp_addon_order(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CreateOrderResponse:
+    """One-off ₹1,499 that switches WhatsApp on for the rest of this cycle.
+
+    From the NEXT renewal the amount is folded into the plan invoice by
+    subscription_order_breakdown, so a clinic never manages two subscriptions
+    (Vinay 2026-08-03: "from next month on entire billing should come
+    together"). Replaces the super-admin linking script — a clinic can now turn
+    WhatsApp on itself, which is the only way this scales past clinic #1.
+
+    Amount is server-derived and the branch is resolved server-side: neither is
+    client-supplied, so a tampered request cannot buy a cheaper add-on or turn
+    it on for somebody else's branch (RULE 1).
+    """
+    from backend.models.schema import Branch
+    from backend.services.billing_math import (
+        WHATSAPP_ADDON_PLANS, WHATSAPP_PLANS, whatsapp_addon_order_breakdown,
+    )
+
+    if current_user.role != "org_admin" or not current_user.org_id:
+        raise HTTPException(status_code=403, detail="Only a clinic owner can buy this")
+
+    org = await _load_my_org(current_user, db)
+    if org.plan in WHATSAPP_PLANS:
+        raise HTTPException(
+            status_code=409, detail="WhatsApp is already included in your plan"
+        )
+    if org.plan not in WHATSAPP_ADDON_PLANS:
+        raise HTTPException(
+            status_code=409, detail="This plan cannot take the WhatsApp add-on"
+        )
+    if org.status != "active":
+        raise HTTPException(
+            status_code=409,
+            detail="Activate your plan first — WhatsApp is billed alongside it",
+        )
+
+    branches = (
+        await db.execute(select(Branch).where(Branch.org_id == org.id))
+    ).scalars().all()
+    if not branches:
+        raise HTTPException(status_code=409, detail="No branch to enable WhatsApp on")
+    unbought = [b for b in branches if not b.whatsapp_addon]
+    if not unbought:
+        raise HTTPException(status_code=409, detail="WhatsApp add-on is already active")
+    if len(unbought) > 1:
+        # Per NUMBER, so a multi-branch org must say which. Not guessed: the
+        # wrong guess bills for one number and enables another.
+        raise HTTPException(
+            status_code=409,
+            detail="Several branches — enable WhatsApp per branch from that branch's settings",
+        )
+    branch = unbought[0]
+
+    bd = whatsapp_addon_order_breakdown()
+    client = _get_client()
+    try:
+        order = client.order.create({
+            "amount": bd["amount_paise"],
+            "currency": "INR",
+            "receipt": f"waaddon_{_uuid.uuid4().hex[:10]}",
+            # notes are SERVER-SET — verify/webhook trust only these.
+            "notes": {
+                "org_id": str(org.id),
+                "kind": "whatsapp_addon",
+                "branch_id": str(branch.id),
+                "base": str(bd["base"]),
+                "gst": str(bd["gst"]),
+            },
+        })
+    except razorpay.errors.BadRequestError as e:
+        logger.error("razorpay_wa_addon_order_failed", error=str(e)[:200])
+        raise HTTPException(status_code=502, detail="Could not start the payment") from e
+
+    logger.info(
+        "wa_addon_order_created",
+        org_id=str(org.id), branch_id=str(branch.id), amount_paise=bd["amount_paise"],
+    )
+    request.state.audit_resource_id = order["id"]
+    return CreateOrderResponse(
+        order_id=order["id"],
+        amount=bd["amount_paise"],
+        currency="INR",
+        key_id=settings.razorpay_key_id,
+    )
 
 
 @router.post("/plan-change", response_model=PlanInfo)
@@ -499,7 +670,15 @@ async def verify_payment(
     # payment_id, so webhook redelivery after this is a no-op). Before this,
     # activation lived ONLY in the webhook — unconfigured dashboards meant n
     # successful checkouts produced ZERO cycles, no lock, no invoice.
-    if org_id is not None:
+    # A WhatsApp add-on order buys a FEATURE, not a billing cycle — running
+    # activate_subscription on it would start a cycle nobody paid a plan for.
+    if (trusted_notes or {}).get("kind") == "whatsapp_addon":
+        try:
+            await _enable_whatsapp_addon(db, trusted_notes, req.razorpay_payment_id)
+        except Exception as e:  # noqa: BLE001 — money taken; never fail the
+            # verified response. Support/webhook resolves it.
+            logger.error("wa_addon_enable_failed", error=str(e)[:160])
+    elif org_id is not None:
         try:
             plan_note = (trusted_notes.get("plan") or "").strip().lower() or None
             act = await activate_subscription(
@@ -624,6 +803,8 @@ async def activate_subscription(
         bd = subscription_order_breakdown(
             chosen_plan, used_closing, int(getattr(org, "minutes_adjustment", 0) or 0),
             subscription_started_at=org.subscription_started_at,
+            # The receipt must show the SAME numbers the order charged.
+            whatsapp_addon=await _org_wa_addon(db, org.id),
         )
         await send_payment_invoice(
             to_email=org.owner_email or "", org_name=org.name,
