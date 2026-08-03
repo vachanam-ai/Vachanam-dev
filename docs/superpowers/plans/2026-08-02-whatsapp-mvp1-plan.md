@@ -671,6 +671,134 @@ messages directly.
 
 ---
 
+### Task 10: WhatsApp page — per-clinic templates with live preview
+
+**Added 2026-08-03 (Vinay):** *"in UI clinic specific templates can be allowed
+to be created. make UI by referring real whatsapp providers."* This was MVP3 in
+the hub spec's batching; pulled forward.
+
+The layout was already chosen during brainstorming — **option C, list + live
+preview** — over a card grid (doesn't scale past ~15 templates) and a bare
+table (reads like an admin console; gives no sense of what the patient
+receives). Vinay: *"C feels good… C looks clean."*
+
+Why the preview earns its keep: custom templates are the risky part. A clinic
+writing raw text with `{{1}}` markers gets rejected by Meta and blames us. A
+preview rendered with the clinic's own name, doctor and token makes the
+placeholders legible, and an approval chip on every row makes rejection
+visible rather than mysterious.
+
+**Files:**
+- Create: `frontend/src/pages/WhatsApp.jsx`, `frontend/src/components/TemplateEditor.jsx`
+- Modify: `backend/routers/branches.py`, `frontend/src/api/client.js`, the sidebar nav
+- Test: `tests/integration/test_wa_template_admin.py`, `frontend/src/pages/__tests__/WhatsApp.test.jsx`
+
+**Interfaces consumed:** `wa_service.token_for(branch)` (Task 2) — the clinic's
+own WABA token, since templates live per-WABA.
+**Interfaces produced:**
+- `GET /branches/{id}/whatsapp/templates` → `[{name, language, status, category, components}]`
+- `POST /branches/{id}/whatsapp/templates` → submits one for Meta review
+- `DELETE /branches/{id}/whatsapp/templates/{name}`
+
+- [ ] **Step 1: Write the failing backend tests**
+
+```python
+async def test_templates_are_listed_from_the_branch_own_waba(client, db, httpx_mock):
+    """Templates live PER WABA. Listing must use THIS branch's token and WABA —
+    never the platform token, or a clinic sees another clinic's templates."""
+    r = await client.get(f"/branches/{branch.id}/whatsapp/templates", headers=owner)
+    assert r.status_code == 200
+    assert {t["name"] for t in r.json()} == {"booking_confirm"}
+
+async def test_a_clinic_cannot_read_another_clinics_templates(client, db):
+    """RULE 1 — branch scoping is not optional because the data lives at Meta."""
+    r = await client.get(f"/branches/{other_branch.id}/whatsapp/templates", headers=owner)
+    assert r.status_code in (403, 404)
+
+async def test_template_name_is_validated_before_meta_sees_it(client, db):
+    """Meta requires lowercase alphanumeric + underscore. Rejecting locally
+    gives an instant, readable error instead of an opaque Graph 400."""
+    r = await client.post(
+        f"/branches/{branch.id}/whatsapp/templates",
+        json={"name": "Booking Confirm!", "category": "UTILITY", "body": "hi"},
+        headers=owner,
+    )
+    assert r.status_code == 422 and "lowercase" in r.text.lower()
+
+async def test_body_placeholders_must_be_sequential_from_one(client, db):
+    """{{1}},{{3}} is a guaranteed Meta rejection. Catch it here."""
+    r = await client.post(
+        f"/branches/{branch.id}/whatsapp/templates",
+        json={"name": "x", "category": "UTILITY", "body": "Hi {{1}} on {{3}}",
+              "examples": ["Ravi", "Monday"]},
+        headers=owner,
+    )
+    assert r.status_code == 422 and "sequential" in r.text.lower()
+
+async def test_every_placeholder_needs_an_example(client, db):
+    """Meta rejects a parameterised template with no example values."""
+    r = await client.post(
+        f"/branches/{branch.id}/whatsapp/templates",
+        json={"name": "x", "category": "UTILITY", "body": "Hi {{1}}", "examples": []},
+        headers=owner,
+    )
+    assert r.status_code == 422
+
+async def test_the_four_system_templates_cannot_be_deleted(client, db):
+    """booking_confirm / appt_reminder / rating_ask / leave_rebook are wired
+    into the send paths — deleting one silently breaks confirmations."""
+    r = await client.delete(
+        f"/branches/{branch.id}/whatsapp/templates/booking_confirm", headers=owner)
+    assert r.status_code == 409
+
+async def test_receptionist_cannot_create_templates(client, db):
+    r = await client.post(f"/branches/{branch.id}/whatsapp/templates",
+                          json={...}, headers=receptionist)
+    assert r.status_code == 403
+```
+
+- [ ] **Step 2: Run — expect 404s (routes absent).**
+
+- [ ] **Step 3: Implement the routes.** Reuse `wa_service.token_for(branch)` and
+`branch.wa_waba_id`. Validate name, placeholder sequence and examples BEFORE
+calling Meta. Map Graph errors to readable messages — the clinic must never see
+a raw Graph payload. `@audit("branch.wa_template_created")`, org_admin only.
+
+- [ ] **Step 4: Write the failing frontend tests**
+
+```jsx
+it("previews the message with the clinic's own data, not {{1}}", async () => {
+  render(<TemplateEditor branch={{name: "Venkateshwara Clinic"}} />);
+  await userEvent.type(screen.getByLabelText(/body/i), "Namaste {{1}}, see you {{2}}");
+  expect(screen.getByTestId("preview")).toHaveTextContent("Namaste Ravi, see you tomorrow 10:30 AM");
+});
+
+it("shows Meta's approval state on every template", () => {
+  render(<WhatsApp templates={[{name:"booking_confirm", status:"APPROVED"},
+                               {name:"diwali", status:"REJECTED"}]} />);
+  expect(screen.getByText(/approved/i)).toBeInTheDocument();
+  expect(screen.getByText(/rejected/i)).toBeInTheDocument();
+});
+
+it("blocks submit until every placeholder has an example", async () => {
+  render(<TemplateEditor />);
+  await userEvent.type(screen.getByLabelText(/body/i), "Hi {{1}}");
+  expect(screen.getByRole("button", {name: /submit/i})).toBeDisabled();
+});
+```
+
+- [ ] **Step 5: Build the page.** Left: template list, each row with an approval
+chip. Right: a phone-shaped preview rendering the body with sample values
+substituted live, plus the fields (name, category, language, body, buttons).
+Follow the monochrome "clinic desk" system — General Sans, the `teal*` token
+names kept as neutral accents, working in light AND dark mode. Category
+defaults to **Utility**: Marketing costs more per message and is rejected
+harder.
+
+- [ ] **Step 6: Full backend suite + `npm run lint && npx vitest run && npm run build`. Step 7: Commit.**
+
+---
+
 ## Ship checklist
 
 - [ ] `python -m alembic upgrade head` against prod (manual — Render free tier has no `preDeployCommand`)

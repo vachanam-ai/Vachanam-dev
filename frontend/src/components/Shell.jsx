@@ -18,8 +18,13 @@ const I = {
   settings: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
   support: "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0",
   admin: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01",
-  monitoring: "M22 12h-4l-3 9L9 3l-3 9H2"
+  monitoring: "M22 12h-4l-3 9L9 3l-3 9H2",
+  whatsapp: "M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
 };
+
+// WA MVP1: gated behind the same deploy flag as the Settings status chip —
+// don't surface the templates page before Meta onboarding is live.
+const WHATSAPP_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
 
 const NAV = {
   receptionist: [
@@ -38,6 +43,7 @@ const NAV = {
     { to: "/patients", label: "Patients", icon: "patients" },
     { to: "/availability", label: "Doctor leave", icon: "availability" },
     { to: "/my-schedule", label: "Doctors", icon: "schedule" },
+    { to: "/whatsapp", label: "WhatsApp", icon: "whatsapp" },
     { to: "/settings", label: "Settings", icon: "settings" },
     { to: "/tickets", label: "Support", icon: "support" }
   ],
@@ -184,7 +190,7 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, 
 export default function Shell() {
   const { user, role, logout, branchId, branchIds, selectBranch } = useAuth();
   const qc = useQueryClient();
-  const links = NAV[role] ?? [];
+  const links = (NAV[role] ?? []).filter((l) => l.to !== "/whatsapp" || WHATSAPP_LIVE);
   const [menuOpen, setMenuOpen] = useState(false);
   const [branchNames, setBranchNames] = useState({});
   const location = useLocation();

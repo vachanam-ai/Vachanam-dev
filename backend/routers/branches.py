@@ -970,6 +970,123 @@ async def _probe_calendar(svc, calendar_id: str) -> bool:
     return await _asyncio.to_thread(_probe)
 
 
+class WaTemplateCreate(BaseModel):
+    """WA MVP1 Task 10 — a clinic-authored template submitted for Meta review.
+    Validation (name shape, sequential placeholders, example coverage) is
+    enforced in wa_template_admin BEFORE Meta ever sees the payload."""
+    name: str = Field(..., min_length=1, max_length=512)
+    category: str = "UTILITY"
+    body: str = Field(..., min_length=1, max_length=1024)
+    examples: list[str] = Field(default_factory=list, max_length=10)
+    buttons: list[str] = Field(default_factory=list, max_length=3)
+    language: str = "en"
+
+
+@router.get("/{branch_id}/whatsapp/templates")
+async def list_whatsapp_templates(
+    branch_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    """This clinic's own WhatsApp templates, from ITS WABA — never the
+    platform token, or a clinic would see another clinic's templates
+    (RULE 1). A branch with no WABA connected yet just has none."""
+    await assert_branch_access(current_user, branch_id, db)
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    from backend.services import wa_template_admin
+
+    try:
+        return await wa_template_admin.list_templates(branch)
+    except wa_template_admin.NotConnected:
+        return []
+    except wa_template_admin.TemplateAdminError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
+@router.post("/{branch_id}/whatsapp/templates", status_code=201)
+@audit("branch.wa_template_created", resource_type="branch")
+async def create_whatsapp_template(
+    branch_id: str,
+    body: WaTemplateCreate,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Submit a clinic-authored template for Meta review. org_admin only —
+    a WhatsApp template is brand-facing, same bar as the FAQ/voice."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    from backend.services import wa_template_admin
+
+    try:
+        result = await wa_template_admin.create_template(
+            branch,
+            name=body.name,
+            category=body.category,
+            body=body.body,
+            examples=body.examples,
+            buttons=body.buttons,
+            language=body.language,
+        )
+    except wa_template_admin.TemplateAdminError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    # RULE 9 / PII_DENYLIST: no "name" key (denylist matches "name" as a
+    # substring) — category alone is enough forensic context.
+    request.state.audit_metadata = {"category": body.category.upper()}
+    logger.info("wa_template_submitted", branch_id=branch_id)
+    return result
+
+
+@router.delete("/{branch_id}/whatsapp/templates/{name}")
+@audit("branch.wa_template_deleted", resource_type="branch")
+async def delete_whatsapp_template(
+    branch_id: str,
+    name: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """org_admin only. The four system templates are wired into live send
+    paths and can never be deleted here (409) — see wa_template_admin."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    from backend.services import wa_template_admin
+
+    try:
+        await wa_template_admin.delete_template(branch, name)
+    except wa_template_admin.TemplateAdminError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info("wa_template_deleted_route", branch_id=branch_id)
+    return {"deleted": True}
+
+
 @router.get(
     "/{branch_id}/staff",
     response_model=list[StaffMember],

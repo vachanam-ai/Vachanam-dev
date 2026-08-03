@@ -180,6 +180,14 @@ export const saveBranchFaq = (branchId, faq) =>
   api.put(`/branches/${branchId}/faq`, { faq }).then((r) => r.data);
 export const testCalendar = (branchId) =>
   api.post(`/branches/${branchId}/calendar-test`).then((r) => r.data);
+
+// ── WhatsApp templates (WA MVP1 Task 10) — clinic-authored, per-WABA ──
+export const fetchWaTemplates = (branchId) =>
+  api.get(`/branches/${branchId}/whatsapp/templates`).then((r) => r.data);
+export const createWaTemplate = (branchId, payload) =>
+  api.post(`/branches/${branchId}/whatsapp/templates`, payload).then((r) => r.data);
+export const deleteWaTemplate = (branchId, name) =>
+  api.delete(`/branches/${branchId}/whatsapp/templates/${encodeURIComponent(name)}`).then((r) => r.data);
 export const fetchStaff = (branchId) =>
   api.get(`/branches/${branchId}/staff`).then((r) => r.data);
 export const addStaff = (branchId, payload) =>
