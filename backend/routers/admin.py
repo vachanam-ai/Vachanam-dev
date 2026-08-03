@@ -1091,6 +1091,11 @@ async def set_branch_wa_number(
         if branch is None:
             raise HTTPException(status_code=404, detail="Branch not found")
         branch.wa_phone_number_id = value
+        # Keep Branch.wa_status (mm36, surfaced read-only in Settings — WA
+        # MVP1 Task 8) in step with the concierge link until Task 9's
+        # Embedded Signup sets it directly. Clearing the link must not leave
+        # a stale "connected" chip.
+        branch.wa_status = "connected" if value else "none"
         try:
             await db.commit()
         except IntegrityError:
@@ -1100,4 +1105,4 @@ async def set_branch_wa_number(
                 detail="This phone_number_id is already linked to another branch",
             )
     logger.info("wa_branch_linked", branch_id=branch_id, linked=bool(value))
-    return {"branch_id": branch_id, "wa_phone_number_id": value}
+    return {"branch_id": branch_id, "wa_phone_number_id": value, "wa_status": branch.wa_status}

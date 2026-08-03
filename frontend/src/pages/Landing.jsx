@@ -419,6 +419,21 @@ export default function Landing() {
             Start with Lite
           </Link>
         </div>
+        {/* WhatsApp-only: no phone line, clearly labelled so nobody buys it expecting voice */}
+        <div data-item className="mt-3 flex flex-col gap-3 rounded-xl border border-hairline bg-pill px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="font-ui text-sm">
+              <span className="font-semibold">WhatsApp · <span className="numeral text-teal-deep">₹1,499</span>/mo</span>
+              <span className="text-slate"> — WhatsApp only, no phone line</span>
+            </p>
+            <p className="font-ui text-xs text-slate">
+              Patients book, reschedule, cancel and get answers entirely in WhatsApp chat — no AI voice calls, no DID. 3 doctors.
+            </p>
+          </div>
+          <Link to="/register?plan=wa" className="btn-ghost shrink-0 px-5 py-2 text-sm">
+            Start with WhatsApp
+          </Link>
+        </div>
         <div className="mt-6 grid gap-6 lg:grid-cols-3">
           {PLANS.map((p) => (
             <div

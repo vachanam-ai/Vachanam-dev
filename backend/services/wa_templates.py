@@ -2,9 +2,12 @@
 
 Pure functions: each returns (template_name, lang, body_params, buttons).
 Template names + {{n}} slot order MUST match the Meta-registered templates in
-docs/runbooks/META_TEMPLATES.md. Day-1 languages: te + en — a patient whose
-preferred language is anything else gets en (template must exist in the sent
-language or Meta rejects the send).
+docs/runbooks/META_TEMPLATES.md. Templates are ENGLISH ONLY (spec
+2026-08-02-whatsapp-pricing-design §D5, MVP1 plan Task 8): one approved copy
+per template beats several half-approved translations, and a te template does
+not exist on the WABA — sending it would fail outright. Free-text chat
+replies (wa_chat.py) still mirror the patient's language; only the
+Meta-registered templates are English.
 
 Button-id grammar (consumed by the T5 webhook dispatcher):
     rs:{token_id}              reschedule this booking
@@ -20,13 +23,13 @@ from __future__ import annotations
 from datetime import date, time
 from urllib.parse import quote
 
-_DAY1_LANGS = {"te", "en"}
-
 
 def template_lang(preferred: str | None) -> str:
-    """Language the template is sent in (te/en day 1, everyone else en)."""
-    p = (preferred or "").lower().strip()
-    return p if p in _DAY1_LANGS else "en"
+    """Language every Meta template is sent in. Always "en" — clinics use
+    English on WhatsApp (spec D5); ignores the patient's preferred language so
+    a Telugu patient never triggers a request for a "te" template that does
+    not exist on the WABA (the send would fail)."""
+    return "en"
 
 
 def _when(booking_date: date, appointment_time: time | None,

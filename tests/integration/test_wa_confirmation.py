@@ -51,6 +51,9 @@ def wa_capture(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_confirmation_sends_template(db, wa_capture):
+    """WA MVP1 Task 8: templates are English-only (spec D5) regardless of the
+    patient's preferred language — a "te" template does not exist on the
+    WABA, so requesting one would fail the send outright."""
     b = await _org_branch(db)
     bid, tid = b.id, str(uuid.uuid4())
     await MetaService().send_booking_confirmation(
@@ -61,7 +64,7 @@ async def test_confirmation_sends_template(db, wa_capture):
     )
     assert len(wa_capture) == 1
     s = wa_capture[0]
-    assert s["template"] == "booking_confirm" and s["lang"] == "te"
+    assert s["template"] == "booking_confirm" and s["lang"] == "en"
     assert s["params"][0] == "WaBranch" and s["params"][1] == "Dr S"
     assert "15 July" in s["params"][2] and "6:00 PM" in s["params"][2]
     assert "maps.google.com" in s["params"][3]
@@ -92,7 +95,7 @@ async def test_unknown_language_falls_back_to_en(db, wa_capture):
         token_number=3, appointment_time=None,
         branch_id=b.id, token_id=str(uuid.uuid4()), patient_lang="bn",
     )
-    assert wa_capture[0]["lang"] == "en"  # bn template not registered day 1
+    assert wa_capture[0]["lang"] == "en"  # every language sends the en template
 
 
 @pytest.mark.asyncio

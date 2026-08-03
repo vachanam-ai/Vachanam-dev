@@ -95,8 +95,25 @@ class BranchSettings(BaseModel):
     staff_count: int = 0
     did_wired: bool | None = None  # set on PATCH when DID trunk sync runs
     whatsapp_linked: bool = False  # WA T9: read-only status (linking is concierge)
+    # WA MVP1 Task 8: connection status from Branch.wa_status (migration mm36)
+    # — none/connected/disconnected/error. Set by the concierge link script
+    # today; by Embedded Signup (Task 9) once shipped. NEVER expose
+    # wa_token_enc or any token here — masked number only (RULE 9).
+    whatsapp_status: str = "none"
+    whatsapp_masked_number: str | None = None
 
 
+
+
+def _masked_whatsapp_number(branch: Branch) -> str | None:
+    """Last-4 only (RULE 9 — never the full number, never any token), and only
+    once WhatsApp is actually connected. `Branch.whatsapp_number` holds a
+    `pending-<uuid>` placeholder until a real number is linked — never mask
+    that as if it were a phone number."""
+    if getattr(branch, "wa_status", None) != "connected":
+        return None
+    digits = "".join(c for c in (getattr(branch, "whatsapp_number", None) or "") if c.isdigit())
+    return f"…{digits[-4:]}" if len(digits) >= 4 else None
 
 
 async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, did_wired: bool | None = None) -> BranchSettings:
@@ -140,6 +157,8 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         staff_count=staff_count,
         did_wired=did_wired,
         whatsapp_linked=bool(getattr(branch, "wa_phone_number_id", None)),
+        whatsapp_status=getattr(branch, "wa_status", None) or "none",
+        whatsapp_masked_number=_masked_whatsapp_number(branch),
     )
 
 

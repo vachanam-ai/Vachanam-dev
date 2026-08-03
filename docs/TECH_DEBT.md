@@ -147,6 +147,18 @@ When closing a future row, append here with this format:
   agent process), then stop the old one (LiveKit SIGTERM drain already
   finishes active calls). Until then: deploy in idle windows only.
 - **TD-038 (P2, #342)** — invoice numbers are `VAC-YYYYMMDD-{payment-tail}` (unique + traceable, NOT statutory consecutive serials). GST rules require consecutive invoice serials per FY once we issue real tax invoices. When VACHANAM_GSTIN lands: add a DB sequence (per-FY) and store the number on BillingCycle. Also revisit CGST/SGST vs IGST split (currently one "GST @ 18%" line — needs place-of-supply once registered). TD-028 partially resolved by #340/#341: cycles are now anniversary-anchored end-to-end and overage meters against the cycle window; the leftover is only the legacy `next_cycle_start` fallback (unused in the main path).
+- **TD-040 (P3, found during WA MVP1 Task 8 full-suite run 2026-08-03)** —
+  `tests/integration/test_livekit_rule3_hold_release.py::test_release_hold_decrements_slot_hold`
+  fails ONLY as part of the full `pytest tests/` run (passes standalone and
+  passes when `tests/integration` runs alone — proven both ways); some earlier
+  test (in `tests/unit` or `tests/security`) leaves shared state that makes
+  `VachanamAgent._release_hold`'s DECR miss the key the test just set (`get`
+  returns `None` where "0" is expected). `_release_hold` opens its own ad-hoc
+  `aioredis.from_url(settings.redis_url, ...)` connection rather than reusing
+  the test's `redis` fixture connection — a likely seam for whatever the
+  pollution turns out to be. Not caused by and unrelated to the WhatsApp MVP1
+  work (no WA change touches Redis, LiveKit holds, or `settings.redis_url`).
+  Needs a bisection of the full suite to find the polluting test before fixing.
 
 ## Paid down — 2026-07-12 (ledger cleanup pass, FIXLOG #344)
 

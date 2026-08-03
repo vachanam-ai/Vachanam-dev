@@ -9,7 +9,7 @@ import { revealStagger } from "../lib/motion.js";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
 import PasswordField from "../components/PasswordField.jsx";
 
-const PLANS = { lite: "Lite", solo: "Starter", clinic: "Clinic", multi: "Multi" };
+const PLANS = { lite: "Lite", solo: "Starter", clinic: "Clinic", multi: "Multi", wa: "WhatsApp" };
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 // Mirror backend validators so the user gets instant, identical feedback.
@@ -206,7 +206,7 @@ export default function Register() {
         </h1>
         <p data-reveal className="mt-2 font-ui text-sm text-slate">
           {step === "details"
-            ? "Launch offer — first 3 months at the offer price"
+            ? (form.plan === "wa" ? "₹1,499/mo — no launch-offer discount on this plan" : "Launch offer — first 3 months at the offer price")
             : `Enter the 6-digit code we emailed to ${form.email}.`}
         </p>
 
@@ -247,16 +247,22 @@ export default function Register() {
 
             <div>
               <label className="label">Plan</label>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 {Object.entries(PLANS).map(([k, v]) => (
                   <button type="button" key={k} onClick={() => setForm((f) => ({ ...f, plan: k }))}
-                    className={`flex-1 rounded-xl border px-3 py-2 font-ui text-sm font-medium transition ${
+                    className={`min-w-[calc(50%-0.25rem)] flex-1 rounded-xl border px-3 py-2 font-ui text-sm font-medium transition ${
                       form.plan === k ? "border-accent bg-pill text-ink" : "border-hairline bg-surface text-ink-soft hover:border-line2"
                     }`}>
                     {v}
                   </button>
                 ))}
               </div>
+              {form.plan === "wa" && (
+                <p className="mt-1.5 font-ui text-xs text-slate">
+                  WhatsApp only — no phone line. ₹1,499/mo, patients book, reschedule and
+                  cancel entirely in chat. No AI voice calls on this plan.
+                </p>
+              )}
             </div>
             {/* DPDP consent — the clinic is the Data Fiduciary; Vachanam is the
                 Data Processor acting on its instructions. Server enforces too. */}

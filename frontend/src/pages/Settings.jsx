@@ -20,8 +20,18 @@ import {
   verifyPayment
 } from "../api/client.js";
 
-const PLAN_LABELS = { lite: "Lite · ₹1,999/mo", solo: "Starter · ₹5,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹17,999/mo" };
-const PLAN_PRICES = { lite: 1999, solo: 5999, clinic: 9999, multi: 17999 };
+const PLAN_LABELS = { lite: "Lite · ₹1,999/mo", solo: "Starter · ₹5,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹17,999/mo", wa: "WhatsApp · ₹1,499/mo" };
+const PLAN_PRICES = { lite: 1999, solo: 5999, clinic: 9999, multi: 17999, wa: 1499 };
+
+// WA MVP1 Task 8: read-only connection status chip (Branch.wa_status, mm36).
+// Linking is concierge-only (super_admin runs scripts/wa_link_branch.py) —
+// no Connect button here yet, that ships with Task 9's Embedded Signup.
+const WA_STATUS_LABEL = {
+  none: { label: "Not connected", chip: "chip-muted" },
+  connected: { label: "Connected", chip: "chip-token" },
+  disconnected: { label: "Disconnected", chip: "chip-danger" },
+  error: { label: "Connection error", chip: "chip-danger" }
+};
 
 // Razorpay checkout script — loaded on demand, once.
 function loadRazorpay() {
@@ -559,22 +569,30 @@ export default function Settings() {
       {WHATSAPP_LIVE && (
       <Section id="whatsapp" title="WhatsApp"
         sub="Booking confirmations, reminders and post-visit rating asks on your clinic's own WhatsApp number.">
-        {data?.whatsapp_linked ? (
-          <p className="font-ui text-sm">
-            <span className="chip bg-teal-mint text-teal">Linked</span>{" "}
-            Your WhatsApp number is connected — patients get confirmations and
-            can reply here.
-          </p>
-        ) : (
-          <p className="font-ui text-sm text-slate">
-            Not linked yet. We connect your clinic's WhatsApp number together
-            with you (about 15 minutes, you keep using your WhatsApp app) —{" "}
-            <a className="text-teal underline underline-offset-2"
-              href={`mailto:hello@vachanam.in?subject=WhatsApp%20setup%20—%20${encodeURIComponent(data?.name ?? "clinic")}`}>
-              request setup
-            </a>.
-          </p>
-        )}
+        {(() => {
+          const st = WA_STATUS_LABEL[data?.whatsapp_status] ?? WA_STATUS_LABEL.none;
+          return (
+            <p className="font-ui text-sm">
+              <span className={`${st.chip} shrink-0`}>{st.label}</span>
+              {data?.whatsapp_status === "connected" ? (
+                <>
+                  {" "}Your WhatsApp number is connected
+                  {data?.whatsapp_masked_number ? <> (<span className="numeral">{data.whatsapp_masked_number}</span>)</> : null}
+                  {" "}— patients get confirmations and can reply here.
+                </>
+              ) : (
+                <>
+                  {" "}Not connected yet. We connect your clinic's WhatsApp number together
+                  with you (about 15 minutes, you keep using your WhatsApp app) —{" "}
+                  <a className="text-teal underline underline-offset-2"
+                    href={`mailto:hello@vachanam.in?subject=WhatsApp%20setup%20—%20${encodeURIComponent(data?.name ?? "clinic")}`}>
+                    request setup
+                  </a>.
+                </>
+              )}
+            </p>
+          );
+        })()}
       </Section>
       )}
 
