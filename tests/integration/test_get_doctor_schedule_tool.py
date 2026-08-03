@@ -12,7 +12,7 @@ had no way to fetch them, so a timing question either got an invented answer
 message to the clinic"). get_doctor_schedule resolves the date against the DB.
 """
 import uuid
-from datetime import date, time, timedelta
+from datetime import date, timedelta
 
 import pytest
 
