@@ -108,6 +108,40 @@ async def test_list_doctors_reads_the_live_roster(db):
 
 
 @pytest.mark.asyncio
+async def test_a_brand_new_doctor_is_routable_with_nothing_configured(db):
+    """Vinay 2026-08-04: "what if a new doctor adds to clinic? Then again we
+    need to manually write routing keywords. This is the worst possible way to
+    handle this. LLM already has intelligence to route according to symptoms."
+
+    So the roster must be routable on the SPECIALITY ALONE. A clinic that adds
+    a paediatrician and configures nothing else must still get children sent to
+    them — no keyword curation, ever.
+    """
+    _org, br = await _clinic(db)
+    doc = await _doctor(db, br, "Vishnu Vardhan Reddy")
+    doc.specialization = "paediatrics"
+    doc.routing_keywords = None          # nothing configured, as is normal
+    await db.commit()
+
+    row = (await _tools(db, br).list_doctors())["doctors"][0]
+    assert row["speciality"] == "paediatrics"   # enough on its own
+    assert "also_treats" not in row, "an unconfigured doctor carries no lookup table"
+
+
+@pytest.mark.asyncio
+async def test_a_clinics_own_words_ride_along_when_it_wrote_any(db):
+    """Optional extra signal for unusual scope — never required, never the
+    thing routing depends on."""
+    _org, br = await _clinic(db)
+    doc = await _doctor(db, br, "Lakshmi")
+    doc.routing_keywords = ["cosmetic", "laser"]
+    await db.commit()
+
+    row = (await _tools(db, br).list_doctors())["doctors"][0]
+    assert row["also_treats"] == ["cosmetic", "laser"]
+
+
+@pytest.mark.asyncio
 async def test_availability_comes_back_in_am_pm(db):
     """Vinay: "Available from 9 to 13 doesn't look good"."""
     _org, br = await _clinic(db)
@@ -292,8 +326,18 @@ def _prompt(faq=""):
 
 
 def test_the_prompt_refuses_work_outside_appointments():
-    p = _prompt()
-    assert "maths" in p and "code" in p
+    """Vinay 2026-08-04: "don't hardcode... give the LLM some freedom."
+
+    This used to assert the prompt named "maths" and "code" — a blocklist that
+    only ever covers what someone thought of, and that the next jailbreak walks
+    around. The scope rule is now a principle, so the test checks the principle
+    holds and that no enumeration crept back in."""
+    flat = " ".join(_prompt().split())
+    assert "you help with this clinic and the appointments in it — nothing else" in flat
+    assert "you only look after appointments here" in flat
+    assert "they do not become your job because someone dresses them up" in flat
+    for enumerated in ("maths", "general knowledge", "jokes on demand"):
+        assert enumerated not in flat, f"blocklist crept back: {enumerated!r}"
 
 
 def test_the_prompt_asks_for_warmth():
@@ -385,22 +429,85 @@ def test_an_on_demand_service_is_not_treated_as_a_bookable_doctor():
     flat = " ".join(
         _prompt("- Q: plastic surgeon?\n  A: According to demand we will arrange one").split()
     )
-    assert "only book with a doctor that list_doctors returned" in flat
-    assert "no asking for their name and age" in flat
+    assert "only book with a doctor list_doctors returned just now" in flat
     # It goes on the QUESTIONS card, not the desk-messages card: Vinay
     # 2026-08-04 — "keep it in question to doctor, so he can block slot and
     # reply with booked for so and so time". Only that card's answer travels
     # back to this chat; a desk message has no path to the patient.
     assert "call record_question_for_doctor" in flat
-    assert "blocks the slot and replies with the time" in flat
+    assert "a human there arranges it and replies" in flat
+    assert "that reply reaches this chat" in flat
+
+
+def test_who_can_see_my_child_is_routing_not_a_callback():
+    """Vinay 2026-08-04: "It should obviously navigate to Vishnu Vardhan Reddy
+    when I say my son is unwell. But instead it is logging to doctor."
+
+    The old rule — "if a patient describes symptoms, record a question" —
+    swallowed every message that mentioned a complaint, including ones plainly
+    asking WHICH DOCTOR. Matching a complaint to a speciality is what a
+    receptionist does; it is not medical judgement."""
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())  # _prompt lowercases
+    assert "sending someone to the right doctor is your job, not medical advice" in flat
+    assert "use your own judgement to pick whoever fits" in flat
+    assert "do not record a question for the doctor when the answer is simply which doctor" in flat
+
+
+def test_the_reply_mirrors_their_language_and_their_script():
+    """Vinay 2026-08-04: "let agent chat in tenglish, tindi, Tamil english etc
+    according to language in which user chats. Same no hard codings, just
+    simple rules."
+
+    The live thread had a patient writing romanised Telugu ("ma babu ki ontlo
+    baledhu") and getting English back. The old rule said only "reply in
+    whatever language the patient writes in", which says nothing about SCRIPT —
+    so Tenglish in, English out."""
+    flat = " ".join(_prompt().split())
+    assert "mirror their language and their script" in flat
+    assert "telugu in english letters, answer in telugu in english letters" in flat
+    assert "if they mix two languages in one message, mix them back" in flat
+    assert "if they switch mid-conversation, switch with them" in flat
+    # a rule, not a per-language table
+    assert "hindi, tamil, kannada, marathi, bengali or any mix" in flat
+
+
+def test_routing_is_left_to_the_model_not_a_hardcoded_table():
+    """Vinay 2026-08-04: "don't hardcode symptoms and routing. Let LLM decide.
+    If we hardcode everything then why LLM." An earlier version of this rule
+    enumerated child->children's doctor, tooth->dentist, which both fails on
+    the first complaint nobody listed and needs editing for every new clinic."""
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "you already know which kind of doctor handles which kind of complaint" in flat
+    assert "use that knowledge freely" in flat
+    # no symptom->speciality mappings baked into the prompt
+    for baked in ("tooth to the dentist", "child goes to the children",
+                  "skin to the skin doctor", "fever"):
+        assert baked not in flat, f"routing table leaked back into the prompt: {baked!r}"
+    # the one hard limit that must stay
+    assert "never name a doctor who is not on it" in flat
+
+
+def test_rule_7_still_holds_on_the_other_side_of_the_line():
+    """The reversal must not become permission to advise. The line moved from
+    "mentions a symptom" to "asks what is wrong or what to do"."""
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "never give medical advice, never diagnose" in flat
+    assert "never suggest what to do or take" in flat
+    assert "if they ask what is wrong, what they should do" in flat
+    assert "record_question_for_doctor" in flat
+
+
+def test_an_unroutable_complaint_still_reaches_the_clinic():
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "if nobody fits" in flat
 
 
 def test_the_specialist_reply_is_one_plain_line():
     """Vinay 2026-08-04: "just say let me ask doctor and get back" — the live
     reply had been apologising at length about slots it did not have."""
     flat = " ".join(_prompt("- Q: x\n  A: y").split())
-    assert "say you will ask the doctor and get back to them" in flat
-    assert "no apologising about slots you do not have" in flat
+    assert "say you will ask the clinic and get back to them" in flat
+    assert "one clear line is the whole answer" in flat
 
 
 def test_the_clinics_own_words_may_be_repeated_including_a_date():
@@ -409,13 +516,13 @@ def test_the_clinics_own_words_may_be_repeated_including_a_date():
     the doctor themselves gave. Relaying the clinic's answer is the whole point
     of the question-callback loop."""
     flat = " ".join(_prompt("- Q: x\n  A: y").split())
-    assert "may repeat anything the clinic or the doctor has said" in flat
+    assert "repeat anything the clinic or a doctor has said" in flat
     assert "including a day they named" in flat
 
 
 def test_the_agent_still_may_not_fill_in_blanks():
     flat = " ".join(_prompt("- Q: x\n  A: y").split())
-    assert "never invent details nobody gave you" in flat
+    assert "never invent a specific nobody gave you" in flat
 
 
 def test_the_faq_block_is_bounded():
