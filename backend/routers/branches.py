@@ -330,6 +330,7 @@ async def get_faq(
             .where(
                 ClinicQuestion.branch_id == uuid.UUID(branch_id),
                 ClinicQuestion.answer.is_(None),
+                ClinicQuestion.status != "dismissed",  # ignored, never asked again
             )
             .order_by(ClinicQuestion.created_at.desc())
             .limit(30)
@@ -466,6 +467,7 @@ async def list_questions(
             .where(
                 ClinicQuestion.branch_id == uuid.UUID(branch_id),
                 ClinicQuestion.answer.is_(None),
+                ClinicQuestion.status != "dismissed",  # ignored, never asked again
             )
             .order_by(ClinicQuestion.created_at.desc())
             .limit(50)
@@ -600,6 +602,63 @@ async def answer_question(
         "added_to_faq": q.added_to_faq,
         "callback_queued": q.status == "answered",
     }
+
+
+@router.post("/{branch_id}/questions/{question_id}/dismiss")
+@audit("branch.question_dismissed", resource_type="clinic_question")
+async def dismiss_question(
+    branch_id: str,
+    question_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Drop a question without answering it — nothing reaches the caller.
+
+    Vinay 2026-08-04: "some sarcastic questions are also dropping... include
+    option to delete question without answering, which will never go to user
+    and will be dropped." Answering was the only exit, so a joke or a
+    duplicate sat on the desk until someone wrote a reply that then got
+    PHONED to the caller.
+
+    The row is KEPT (it is a record of what callers ask, and retention/erasure
+    own its lifetime) — it just leaves the desk and the Settings backlog.
+    `status='dismissed'` with `answer` still NULL is what makes it terminal:
+    the callback job only ever selects `status == 'answered'`, so a dismissed
+    question can never be dialed.
+    """
+    await assert_branch_access(current_user, branch_id, db)
+    from backend.models.schema import ClinicQuestion
+
+    q = (
+        await db.execute(
+            select(ClinicQuestion).where(
+                ClinicQuestion.id == uuid.UUID(question_id),
+                ClinicQuestion.branch_id == uuid.UUID(branch_id),  # RULE 1
+            )
+        )
+    ).scalar_one_or_none()
+    if q is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+    if q.answer:
+        # Already answered means a callback is queued or done. Dismissing then
+        # would imply we can unsend it, and we cannot.
+        raise HTTPException(
+            status_code=409, detail="Already answered — the caller has been replied to"
+        )
+
+    q.status = "dismissed"
+    await db.commit()
+    logger.info(
+        "clinic_question_dismissed",
+        branch_id=branch_id,
+        question_id=question_id,
+        phone_last4=(q.caller_phone or "")[-4:] or None,  # RULE 9
+    )
+    request.state.audit_resource_id = str(q.id)
+    request.state.audit_branch_id = branch_id
+    request.state.audit_metadata = {"status": "dismissed"}
+    return {"id": str(q.id), "status": q.status}
 
 
 @router.get("/{branch_id}/messages")

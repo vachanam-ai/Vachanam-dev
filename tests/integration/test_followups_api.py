@@ -73,6 +73,52 @@ async def test_doctor_reply_creates_advice_task(db):
         assert task.channel == "voice"
         assert task.scheduled_date == date.today()
         assert task.created_by_user_id == usr.id
+        assert task.target_date is None  # no date asked for → plain relay
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_a_doctor_can_ask_for_a_different_day_on_the_reply(db):
+    """Vinay 2026-08-04: the doctor reads the patient's report and wants them
+    in sooner than the note said. That date has to survive the reply — it is
+    what turns the follow-up call into a RESCHEDULE instead of a second
+    booking. `ReplyIn.next_reporting_date` existed but was dropped on the
+    floor."""
+    from datetime import timedelta
+
+    o = uuid.uuid4()
+    db.add(_org(o)); await db.flush()
+    usr = _user(o)
+    br = Branch(id=uuid.uuid4(), org_id=o, name="C", whatsapp_number="+910000000045")
+    db.add_all([usr, br]); await db.flush()
+    doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token",
+                 user_id=usr.id)
+    pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000045")
+    db.add_all([doc, pat]); await db.commit()
+    tomorrow = date.today() + timedelta(days=1)
+    app.dependency_overrides[get_current_user] = lambda: _u(br.id, o, user_id=usr.id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            r = await ac.post(f"/treatment/patients/{pat.id}/followups", json={
+                "branch_id": str(br.id), "doctor_id": str(doc.id),
+                "message": "Come in tomorrow instead, don't wait.",
+                "next_reporting_date": tomorrow.isoformat()})
+            assert r.status_code == 201, r.text
+
+            # A day that has already passed cannot be asked for.
+            past = await ac.post(f"/treatment/patients/{pat.id}/followups", json={
+                "branch_id": str(br.id), "doctor_id": str(doc.id),
+                "message": "Come yesterday.",
+                "next_reporting_date": (date.today() - timedelta(days=1)).isoformat()})
+            assert past.status_code == 422, past.text
+
+        task = (await db.execute(
+            select(FollowupTask).where(FollowupTask.patient_id == pat.id))).scalar_one()
+        assert task.target_date == tomorrow
+        # The CALL still goes out today — the target date is where the visit
+        # lands, not when the patient is phoned.
+        assert task.scheduled_date == date.today()
     finally:
         app.dependency_overrides.clear()
 

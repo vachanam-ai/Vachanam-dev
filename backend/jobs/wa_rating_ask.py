@@ -61,6 +61,13 @@ async def run_wa_rating_ask() -> None:
                     continue
                 if await _already_asked(str(token.id)):
                     continue
+                # NOT routed through wa_template_registry yet, deliberately.
+                # Vinay's own feedback template takes a review LINK as its only
+                # parameter, and nothing in the schema holds one — the registry
+                # would pad it to "-" and send a review request pointing
+                # nowhere. Needs Branch.review_link + a Settings field first;
+                # until then our own rating_ask template (clinic name + star
+                # quick replies) is the honest send.
                 template, lang, params, buttons = wa_templates.rating_ask(
                     clinic=branch.name,
                     token_id=str(token.id),

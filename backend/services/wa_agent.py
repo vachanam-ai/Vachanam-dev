@@ -84,6 +84,25 @@ If a question is not covered there and no tool can answer it, do not invent an
 answer and do not settle for "no" — call record_question_for_doctor so the
 clinic replies.
 
+What the clinic has TOLD a patient and what you can BOOK are two different
+things. You may repeat anything the clinic or the doctor has said — including a
+day they named, like a visiting specialist coming on Saturday. Say it plainly;
+it is true and it is theirs to say.
+
+But you can only BOOK with a doctor that list_doctors returned just now. A
+visiting or on-request specialist is not on that list, so there is no slot to
+give. When someone asks to book one, keep it short: call
+record_question_for_doctor with exactly what they want, and say you will ask
+the doctor and get back to them. Nothing more — no apologising about slots you
+do not have, no explaining how the clinic works, no asking for their name and
+age, no claiming an appointment is made, and never repeating the same line
+hoping a booking appears. A human at the clinic then blocks the slot and
+replies with the time, and that reply reaches this chat.
+
+Never invent details nobody gave you: a day, a fee, a doctor's name, a slot.
+Repeating the clinic's own words is right; filling in the blanks around them
+is not.
+
 Never give medical advice, never diagnose, never say how urgent something is.
 If a patient describes symptoms, call record_question_for_doctor so a doctor
 calls them back.
@@ -521,9 +540,38 @@ async def _call_model(system: str, contents: list, tools: list[dict]) -> object:
             # and told a patient "I've made a note for the doctor" without
             # calling the tool that makes the note.
             temperature=0.4,
-            max_output_tokens=500,
+            # gemini-2.5-flash is a THINKING model and its reasoning tokens are
+            # charged against max_output_tokens. With thinking on, a long think
+            # ate the budget and the reply was guillotined mid-sentence —
+            # "I don't have specific appointment slots for the plastic surgeon
+            # to" (Vinay 2026-08-04). Every other Gemini call in this repo
+            # already runs thinking_budget=0; this one was the exception.
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+            max_output_tokens=800,
         ),
     )
+
+
+def _whole_sentences(reply: str) -> str:
+    """Never send a dangling half-sentence.
+
+    Belt to thinking_budget=0's braces: any future cap change, or a model that
+    simply runs long, must degrade to a shorter COMPLETE message rather than a
+    clause that stops mid-word. Only trims when the text does not already end
+    on punctuation, and only when a sentence boundary exists to fall back to —
+    a single unfinished sentence is left alone, because sending nothing is
+    worse than sending something.
+    """
+    # Indic full stops count as endings — a complete Hindi reply ends in "।",
+    # and without it here a message containing an earlier ". " would be
+    # truncated for finishing correctly in its own script (RULE 6 territory).
+    text = (reply or "").strip()
+    if not text or text[-1] in ".!?…।॥":
+        return text
+    cut = max(
+        text.rfind(". "), text.rfind("! "), text.rfind("? "), text.rfind("। ")
+    )
+    return text[: cut + 1].strip() if cut > 0 else text
 
 
 def _history(turns: list[dict], text: str) -> list:
@@ -635,7 +683,7 @@ async def handle(
             phone_last4=(sender or "")[-4:], error=f"{type(e).__name__}: {e}"[:200],
         )
 
-    reply = reply or FALLBACK_REPLY
+    reply = _whole_sentences(reply) or FALLBACK_REPLY
 
     # Make the promise true (see _CALLBACK_CLAIMS).
     if "record_question_for_doctor" not in called and _claims_a_callback(reply):

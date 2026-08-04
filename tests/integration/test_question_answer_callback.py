@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from backend.main import app
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
@@ -259,3 +260,77 @@ def test_compose_message_carries_question_and_answer():
     msg = compose_message("Do you do root canal in one sitting?", "Yes, we do.")
     assert "root canal in one sitting" in msg
     assert "Yes, we do." in msg
+
+
+# ── a question can be dropped without answering (Vinay 2026-08-04) ───────────
+
+@pytest.mark.asyncio
+async def test_dismiss_drops_the_question_without_contacting_the_caller(db):
+    """Vinay: "some sarcastic questions are also dropping... include option to
+    delete question without answering, which will never go to user."
+
+    Answering was the only exit, and answering PHONES the caller — so a joke
+    could only be cleared by calling someone back about it.
+    """
+    org_id, br, _pat, q = await _seed(db, "+910000000097")
+    qid = q.id  # capture before expire_all — a later attribute read would be a
+    # sync lazy-load on the async session (MissingGreenlet)
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            r = await ac.post(f"/branches/{br.id}/questions/{q.id}/dismiss")
+            assert r.status_code == 200, r.text
+            assert r.json()["status"] == "dismissed"
+
+            # Off the desk...
+            listed = await ac.get(f"/branches/{br.id}/questions")
+            assert listed.json()["questions"] == []
+            assert listed.json()["pending"] == 0
+            # ...and out of the Settings backlog too.
+            faq = await ac.get(f"/branches/{br.id}/faq")
+            assert faq.json()["asked"] == []
+
+        db.expire_all()
+        row = (await db.execute(
+            select(ClinicQuestion).where(ClinicQuestion.id == qid)
+        )).scalar_one()
+        assert row.status == "dismissed"
+        # No answer means the callback job — which only ever selects
+        # status == 'answered' — can never dial this person.
+        assert row.answer is None
+        assert row.answered_at is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_an_answered_question_cannot_be_dismissed(db):
+    """Once answered the callback is queued or already made; dismissing would
+    imply we can unsend it."""
+    org_id, br, _pat, q = await _seed(db, "+910000000098")
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            ok = await ac.post(
+                f"/branches/{br.id}/questions/{q.id}/answer",
+                json={"answer": "Yes, usually one sitting.", "add_to_faq": False},
+            )
+            assert ok.status_code == 200, ok.text
+            r = await ac.post(f"/branches/{br.id}/questions/{q.id}/dismiss")
+            assert r.status_code == 409, r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_dismissing_another_branchs_question_is_404(db):
+    """RULE 1: the id alone must never be enough."""
+    org_a, br_a, _pa, q_a = await _seed(db, "+910000000099")
+    _org_b, br_b, _pb, _q_b = await _seed(db, "+910000000100", phone="+919876500001")
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br_b.id, _org_b)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            r = await ac.post(f"/branches/{br_b.id}/questions/{q_a.id}/dismiss")
+            assert r.status_code == 404, r.text
+    finally:
+        app.dependency_overrides.clear()

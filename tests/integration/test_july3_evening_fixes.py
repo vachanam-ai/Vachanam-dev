@@ -79,13 +79,30 @@ async def test_t1_one_row_per_patient_doctor_pair(db):
 
 
 def test_t2_followup_prompts_dont_push_booking_on_problem():
+    """SUPERSEDED IN PART, 2026-08-04 (Vinay), and deliberately kept rather
+    than deleted so the reversal is visible.
+
+    The 07-03 rule was "a problem report ends with inform-doctor, not a sales
+    pitch" — no booking offered to a patient in pain. Vinay reversed it for the
+    FIRST follow-up call: the doctor reads that report afterwards and may want
+    them in sooner, and if no booking exists there is nothing to move. So the
+    next_visit call now offers however they answer.
+
+    What did NOT change, and is what this test now guards: the problem still
+    reaches the doctor, the offer is never dressed up as treatment (RULE 7),
+    and a doctor_advice relay still does not offer a visit off a NEW problem —
+    there the doctor has already spoken, so a fresh complaint goes back to them.
+    """
     nv = NEXT_VISIT_PROMPT_EXTRA
-    assert "do NOT push the booking" in nv
-    assert "ONLY if the patient THEMSELVES explicitly asks" in nv
-    assert "DO THIS EVEN IF" not in nv  # the old always-offer directive is gone
+    assert "STILL offer the visit" in nv          # the reversal
+    assert "I will inform the doctor" in nv       # unchanged: it reaches them
+    # RULE 7 — offering a slot is not medical advice; claiming it helps would be
+    assert "Never say the appointment will fix anything" in nv
+    assert "never say it can wait" in nv
+    assert "If they say no, accept it" in nv      # never argued into it
     da = DOCTOR_ADVICE_PROMPT_EXTRA
     assert "never push one otherwise" in da
-    assert "do NOT offer a booking" in da
+    assert "do NOT offer a visit" in da
 
 
 @pytest.mark.asyncio

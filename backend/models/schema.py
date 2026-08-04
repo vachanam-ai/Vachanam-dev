@@ -764,6 +764,13 @@ class FollowupTask(Base):
     # 'next_visit_book' | 'doctor_advice' — no DB enum change.
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # target_date (migration ss42): the date the DOCTOR asked for ON THIS TASK —
+    # "come tomorrow instead", written when they reply. Distinct from the note's
+    # next_reporting_date on purpose: the dispatcher strips the NOTE's date off
+    # doctor_advice calls (RULE 9), and must still be able to carry a date the
+    # doctor set deliberately. When set on a doctor_advice task it is the date
+    # the patient's existing booking should MOVE to, not a second appointment.
+    target_date: Mapped[date | None] = mapped_column(Date)
 
     branch: Mapped["Branch"] = relationship()
     doctor: Mapped["Doctor"] = relationship(back_populates="followup_tasks")

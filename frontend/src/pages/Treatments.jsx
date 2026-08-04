@@ -156,6 +156,9 @@ export default function Treatments() {
   const [isFinal, setIsFinal] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [replyMessage, setReplyMessage] = useState("");
+  // Optional: the doctor pulling the patient in sooner than the note said. Sent
+  // as next_reporting_date; the follow-up call MOVES an existing booking to it.
+  const [replyDate, setReplyDate] = useState("");
   const [confirmEnd, setConfirmEnd] = useState(false);
   // Mass end-treatment: selected thread keys "patientId:doctorId".
   const [selected, setSelected] = useState(() => new Set());
@@ -293,11 +296,13 @@ export default function Treatments() {
       replyToPatient(patientId, {
         branch_id: branchId,
         doctor_id: doctorId || null,
-        message: replyMessage.trim()
+        message: replyMessage.trim(),
+        next_reporting_date: replyDate || null
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["followups", patientId, branchId, threadDoctorId] });
       setReplyMessage("");
+      setReplyDate("");
       toast.success("Reply queued for the patient");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Couldn't send the reply")
@@ -621,6 +626,25 @@ export default function Treatments() {
                   ? "Advice to relay on the next call…"
                   : "Unlocks after the patient's first reply — until then, put your message in the visit note's follow-up question below."}
               />
+              <label className="label" htmlFor="reply-date">
+                Want them in on a particular day? (optional)
+              </label>
+              <input
+                id="reply-date"
+                type="date"
+                className="field"
+                value={replyDate}
+                // LOCAL today, not toISOString() — that is UTC, and in IST it
+                // resolves to yesterday before 05:30, letting the doctor pick a
+                // day the API then rejects with a 422.
+                min={new Date().toLocaleDateString("en-CA")}
+                onChange={(e) => setReplyDate(e.target.value)}
+                disabled={!hasPatientReply}
+              />
+              <p className="font-ui text-xs text-slate">
+                Set a day and the call will move their existing appointment to it
+                — not add a second one. Leave it blank to just relay your message.
+              </p>
               <button type="submit" disabled={!canReply} className="btn-primary w-full py-3">
                 {reply.isPending ? "Sending…" : "Send reply"}
               </button>

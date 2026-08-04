@@ -540,6 +540,15 @@ async def doctor_reply(
     branch_timezone = (
         await db.execute(select(Branch.timezone).where(Branch.id == body.branch_id))
     ).scalar_one_or_none() or "Asia/Kolkata"
+    today_local = datetime.now(ZoneInfo(branch_timezone)).date()
+    # The doctor may pull the patient in sooner than the note said ("come
+    # tomorrow instead"). That date rides on THIS task, not on the note — the
+    # dispatcher strips a note's date off advice calls (RULE 9) and would
+    # otherwise have no way to tell a deliberate new instruction from the old
+    # plan. A date already in the past cannot be asked for.
+    target = body.next_reporting_date
+    if target is not None and target < today_local:
+        raise HTTPException(status_code=422, detail="next_reporting_date is in the past")
     task = FollowupTask(
         branch_id=body.branch_id,
         doctor_id=body.doctor_id,
@@ -548,7 +557,8 @@ async def doctor_reply(
         task_type="doctor_advice",
         channel="voice",
         what_to_ask=body.message,
-        scheduled_date=datetime.now(ZoneInfo(branch_timezone)).date(),
+        target_date=target,
+        scheduled_date=today_local,
         status="pending",
         created_by_user_id=uuid.UUID(user.user_id) if user.user_id else None,
     )

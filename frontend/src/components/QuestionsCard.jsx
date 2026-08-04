@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { answerQuestion, fetchQuestions } from "../api/client.js";
+import { answerQuestion, dismissQuestion, fetchQuestions } from "../api/client.js";
 import { revealNow } from "../lib/motion.js";
 
 /* Questions the AI could not answer (2026-08-02). The doctor opens one, types
@@ -15,10 +15,20 @@ function QuestionRow({ branchId, q }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [toFaq, setToFaq] = useState(true);
+  const [confirmDrop, setConfirmDrop] = useState(false);
   const save = useMutation({
     mutationFn: () => answerQuestion(branchId, q.id, text, toFaq),
     onSuccess: () => {
       setOpen(false);
+      qc.invalidateQueries({ queryKey: ["questions", branchId] });
+      qc.invalidateQueries({ queryKey: ["branch-faq", branchId] });
+    },
+  });
+  // Vinay 2026-08-04: sarcastic and duplicate questions land here too, and
+  // answering was the only way off the desk — which then PHONES the caller.
+  const drop = useMutation({
+    mutationFn: () => dismissQuestion(branchId, q.id),
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["questions", branchId] });
       qc.invalidateQueries({ queryKey: ["branch-faq", branchId] });
     },
@@ -38,10 +48,39 @@ function QuestionRow({ branchId, q }) {
             {q.created_at ? ` · ${new Date(q.created_at).toLocaleString()}` : ""}
           </p>
         </div>
-        <button className="btn-ghost shrink-0 text-xs" onClick={() => setOpen((o) => !o)}>
-          {open ? "Close" : "Answer"}
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {confirmDrop ? (
+            <>
+              <button
+                className="btn-ghost text-xs text-danger"
+                disabled={drop.isPending}
+                onClick={() => drop.mutate()}
+              >
+                {drop.isPending ? "Ignoring…" : "Yes, ignore"}
+              </button>
+              <button className="btn-ghost text-xs" onClick={() => setConfirmDrop(false)}>
+                Keep
+              </button>
+            </>
+          ) : (
+            <button
+              className="btn-ghost text-xs text-slate"
+              title="Drop this question — the patient is not contacted"
+              onClick={() => setConfirmDrop(true)}
+            >
+              Ignore
+            </button>
+          )}
+          <button className="btn-ghost text-xs" onClick={() => setOpen((o) => !o)}>
+            {open ? "Close" : "Answer"}
+          </button>
+        </div>
       </div>
+      {drop.isError && (
+        <p className="mt-1 font-ui text-xs text-danger">
+          {drop.error?.response?.data?.detail || "Could not ignore this one"}
+        </p>
+      )}
       {open && (
         <div className="mt-3 space-y-2">
           <textarea

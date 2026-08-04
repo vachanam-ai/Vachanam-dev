@@ -12,7 +12,7 @@ thread can settle; whether "book" actually writes a row, whether one patient
 can touch another's booking, and whether a cancelled seat is freed are not.
 """
 import uuid
-from datetime import date, time, timedelta
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -20,7 +20,7 @@ from sqlalchemy import select
 from backend.models.schema import (
     Branch, ClinicQuestion, Doctor, DoctorUnavailability, Organization, Token,
 )
-from backend.services import wa_agent, wa_booking, wa_service
+from backend.services import wa_agent, wa_service
 
 
 async def _clinic(db):
@@ -375,12 +375,99 @@ def test_a_clinic_with_no_faq_still_builds_a_prompt():
     _prompt(wa_agent._faq_block(_FaqBranch([])))  # must not raise
 
 
+def test_an_on_demand_service_is_not_treated_as_a_bookable_doctor():
+    """Vinay 2026-08-04, live thread: a patient asked to book the visiting
+    plastic surgeon. The doctor had genuinely answered "coming Saturday we are
+    planning to bring one, you can book or directly visit", so the agent had a
+    TRUE date — but no such doctor exists in list_doctors, so the booking could
+    never complete and it looped, asking for name and age and repeating the
+    line."""
+    flat = " ".join(
+        _prompt("- Q: plastic surgeon?\n  A: According to demand we will arrange one").split()
+    )
+    assert "only book with a doctor that list_doctors returned" in flat
+    assert "no asking for their name and age" in flat
+    # It goes on the QUESTIONS card, not the desk-messages card: Vinay
+    # 2026-08-04 — "keep it in question to doctor, so he can block slot and
+    # reply with booked for so and so time". Only that card's answer travels
+    # back to this chat; a desk message has no path to the patient.
+    assert "call record_question_for_doctor" in flat
+    assert "blocks the slot and replies with the time" in flat
+
+
+def test_the_specialist_reply_is_one_plain_line():
+    """Vinay 2026-08-04: "just say let me ask doctor and get back" — the live
+    reply had been apologising at length about slots it did not have."""
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "say you will ask the doctor and get back to them" in flat
+    assert "no apologising about slots you do not have" in flat
+
+
+def test_the_clinics_own_words_may_be_repeated_including_a_date():
+    """The correction that matters: an earlier version of this rule said
+    "never say a date", which would have GAGGED the agent from repeating a day
+    the doctor themselves gave. Relaying the clinic's answer is the whole point
+    of the question-callback loop."""
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "may repeat anything the clinic or the doctor has said" in flat
+    assert "including a day they named" in flat
+
+
+def test_the_agent_still_may_not_fill_in_blanks():
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "never invent details nobody gave you" in flat
+
+
 def test_the_faq_block_is_bounded():
     """A clinic pasting a hundred rows must not blow up every message's
     system prompt."""
     rows = [{"q": f"q{i}", "a": f"a{i}"} for i in range(100)]
     block = wa_agent._faq_block(_FaqBranch(rows))
     assert block.count("- Q:") == wa_agent._FAQ_MAX
+
+
+# ── no half-sentences reach a patient ────────────────────────────────────────
+
+def test_thinking_is_off_so_the_budget_is_not_eaten_by_reasoning():
+    """Root cause of the truncation Vinay saw: gemini-2.5-flash is a THINKING
+    model and its reasoning is charged against max_output_tokens, so a long
+    think left too little for the answer and the reply stopped mid-clause."""
+    import inspect
+
+    src = inspect.getsource(wa_agent._call_model)
+    assert "thinking_budget=0" in src
+
+
+def test_a_guillotined_reply_is_cut_back_to_whole_sentences():
+    """The exact message Vinay received."""
+    out = wa_agent._whole_sentences(
+        "I've asked the doctor and will get back to you. I'm sorry, I don't "
+        "have specific appointment slots for the plastic surgeon to"
+    )
+    assert out == "I've asked the doctor and will get back to you."
+
+
+@pytest.mark.parametrize("done", [
+    "Booked for 11 am, see you then.",
+    "Shall I book it?",
+    "Great!",
+    "See you at 5 pm…",
+    "ठीक है. डॉक्टर से पूछकर बताता हूँ।",   # Hindi ends in danda, not a period
+])
+def test_a_complete_reply_is_left_alone(done):
+    assert wa_agent._whole_sentences(done) == done
+
+
+def test_a_single_unfinished_sentence_is_still_sent():
+    """Trimming to nothing would be worse than an awkward line — silence on
+    WhatsApp reads as the clinic ignoring you."""
+    text = "Let me check that with the doctor and"
+    assert wa_agent._whole_sentences(text) == text
+
+
+def test_empty_stays_empty_so_the_fallback_fires():
+    assert wa_agent._whole_sentences("") == ""
+    assert wa_agent._whole_sentences(None) == ""
 
 
 # ── a promised callback must be a real one ───────────────────────────────────

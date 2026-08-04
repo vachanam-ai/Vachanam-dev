@@ -1,5 +1,45 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-08-04 — WHATSAPP READS THE CLINIC FAQ AGAIN; DOCTOR CAN PULL A PATIENT IN.**
+> **Live on Render (`2425ebb`):** the WhatsApp agent lost the FAQ when the
+> tool-based rewrite replaced `wa_chat`'s intent router — `wa_agent` had no FAQ
+> tool and no FAQ in its prompt, so a clinic whose own FAQ said "plastic
+> surgeon? according to demand we will arrange one" got "we don't have a
+> plastic surgery person here", grounded correctly on `list_doctors` and still
+> wrong. The FAQ is now in the prompt and OUTRANKS the doctor list; anything
+> uncovered goes to `record_question_for_doctor` instead of a flat no. FAQ edits
+> need NO deploy — the branch row is read fresh per message, and the voice
+> prompt-cache key is a digest of the whole instruction string, so an edited FAQ
+> is a new entry rather than a stale hit. Also live: split-session doctor hours
+> reach the calendar (a doctor sitting 9-12 and again 5-9 was previously classed
+> "complex" and DELETED), queue cards no longer latch invisible, 24h-before
+> reminders, WhatsApp questions answered on WhatsApp, voice bookings confirmed
+> over WhatsApp, discount pricing retired. FIXLOG #476, #477.
+>
+> **Built, pending push (full suite running):** a doctor replying on a treatment
+> thread can name a DATE ("come tomorrow instead"). It rides on
+> `followup_tasks.target_date` (migration **ss42**, DEPLOY-GATED) rather than the
+> note's field, because the dispatcher's RULE 9 guard must tell "asked for on
+> this reply" from "the note always said that". With a date present the
+> follow-up call now calls `find_my_bookings` FIRST and RESCHEDULES the existing
+> booking — `confirm_booking` is explicitly forbidden on that branch, which is
+> what previously would have left a patient holding two appointments. The first
+> follow-up call now offers the visit however the patient answers, problem still
+> relayed to the doctor (supersedes the 2026-07-03 no-booking-after-a-problem
+> rule, on Vinay's 2026-08-04 instruction); RULE 7 tightened alongside — never
+> claim the appointment helps, never say it can wait. FIXLOG #478.
+>
+> **Known gaps:** all 7 Meta templates still PENDING approval — nothing
+> template-based sends until Vinay gets them approved. The post-visit feedback
+> template is NOT wired to the registry on purpose: it takes a review LINK as
+> its only parameter and no such field exists, so the registry would send a
+> review request pointing at "-". Needs `Branch.review_link` + a Settings input.
+> The exposed Meta token still needs rotating. Fly agent was stale at v267
+> because `b0c4650` was RED in CI (`needs: [lint, test, frontend, secret-scan]`
+> gates the tag+deploy job) — `2425ebb` fixes those two calendar tests, so the
+> tag and Fly deploy should follow. Backfill runbook for the ₹1,499 add-on:
+> `docs/runbooks/backfill-whatsapp-addon.md`.
+
 > **2026-08-02 — QUESTIONS FOR THE DOCTOR (answer + automatic callback).**
 > A caller question the AI could not answer now appears on the Dashboard with
 > who asked it (name + number), not just as an anonymous line in the Settings

@@ -117,6 +117,11 @@ export const answerQuestion = (branchId, questionId, answer, addToFaq) =>
       add_to_faq: addToFaq,
     })
     .then((r) => r.data);
+// Drop a question without answering — nothing reaches the caller (2026-08-04).
+export const dismissQuestion = (branchId, questionId) =>
+  api
+    .post(`/branches/${branchId}/questions/${questionId}/dismiss`)
+    .then((r) => r.data);
 
 // ── WhatsApp post-visit ratings (WA T9) ──
 export const fetchRatingsSummary = (branchId) =>

@@ -851,9 +851,9 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "check_availability and the booking.\n"
     "1) Your OPENING line already asked the doctor's question (\"{message}\"). Do "
     "NOT ask it again — just listen to their answer and respond warmly in one line.\n"
-    "2) BOOKING — only on a GOOD report. The doctor has asked this patient to come "
-    "back around {target_date}, so IF their answer is fine/normal (\"అంతా బాగానే "
-    "ఉంది\"), tell them the doctor wants them back on that date and offer to book. "
+    "2) BOOKING — offer it however they answer. The doctor has asked this patient "
+    "to come back around {target_date}, so tell them so and offer to book, whether "
+    "their answer is fine (\"అంతా బాగానే ఉంది\") or they report a problem. "
     "On agreement, FIRST ask what time of day suits them (\"ఏ టైమ్ వీలవుతుందండి?\") — "
     "NEVER pick a time yourself; the patient chooses the time, you check it with "
     "check_availability. Then assign a slot with {doctor} within 2 days of that date "
@@ -862,11 +862,15 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "ONLY — never read the parenthesis or digits aloud.\n"
     "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
     "triage. IF the patient reports ANY problem, pain, or discomfort: say warmly "
-    "'I will inform the doctor and they will get back to you as soon as possible', "
-    "and do NOT push the booking — the doctor will decide the next step when they "
-    "get back. (Vinay 2026-07-03: a problem report ends with inform-doctor, not a "
-    "sales pitch.) Book in this case ONLY if the patient THEMSELVES explicitly asks "
-    "for an appointment. Do not advise.\n"
+    "'I will inform the doctor and they will get back to you as soon as possible' — "
+    "and STILL offer the visit the doctor asked for, because a patient in trouble is "
+    "the one who most needs the appointment held. Booking a visit is not medical "
+    "advice; deciding what is wrong or how urgent it is would be, so do neither. "
+    "Never say the appointment will fix anything, never say it can wait. If they say "
+    "no, accept it in one line and leave the message with the doctor. (Supersedes "
+    "Vinay 2026-07-03's no-booking-after-a-problem rule, on his 2026-08-04 "
+    "instruction: the doctor reads the report afterwards and may pull them in "
+    "sooner, and there must be a booking to move.)\n"
     "4) BOOKING — the patient is ALREADY on record, so keep it tight (this OVERRIDES "
     "the normal new-patient details flow):\n"
     "   - The patient's name is '{patient}'. Do NOT ask their name, do NOT ask their "
@@ -892,14 +896,31 @@ DOCTOR_ADVICE_PROMPT_EXTRA = (
     "concern and wrote a message. RELAY it warmly and faithfully in the clinic's "
     "language — do NOT add, interpret, or invent any medical content of your own "
     "(RULE 7). The doctor's message: \"{message}\".\n"
-    "After relaying, ask if they have more concerns. Offer a booking ONLY if the "
-    "doctor's message itself asks them to come in (then a target date "
-    "{target_date} may be given — book within 2 days of it; SPEAK the date using "
-    "the words before the parenthesis; the parenthesis is the ISO for tools only) "
-    "OR the patient explicitly asks for an appointment — never push one otherwise. "
-    "If they report a new problem, say 'I will inform the doctor and get back to "
-    "you as soon as possible' and do NOT offer a booking. Two short sentences per "
-    "reply."
+    "The patient's name is '{patient}' and the doctor is {doctor}. Do NOT ask "
+    "their name or age — they are already on record.\n"
+    "After relaying, ask if they have more concerns. Offer a visit ONLY if the "
+    "doctor's message itself asks them to come in, or a date is given below, or "
+    "the patient explicitly asks — never push one otherwise. If they report a "
+    "NEW problem, say 'I will inform the doctor and get back to you as soon as "
+    "possible' and do NOT offer a visit.\n"
+    "THE DATE THE DOCTOR ASKED FOR: {target_date}\n"
+    "IF that date is present, the doctor has changed when they want to see this "
+    "patient, and your job is to MOVE any visit they already have — never to add "
+    "a second one:\n"
+    "   - FIRST call find_my_bookings, before offering anything.\n"
+    "   - If they already have an upcoming booking with {doctor}: tell them the "
+    "doctor wants to see them on the new date instead, ask what time suits them "
+    "(NEVER pick a time yourself), check it with check_availability, then call "
+    "reschedule_booking with that booking's token_id. Do NOT call confirm_booking "
+    "— that would leave them holding two appointments.\n"
+    "   - Only if they have NO upcoming booking do you book a new one with "
+    "confirm_booking, passing patient_name='{patient}'.\n"
+    "   - Either way stay within 2 days of the date. SPEAK the date using the "
+    "words BEFORE the parenthesis; the value in parentheses is the ISO date for "
+    "the tools ONLY — never read the parenthesis or digits aloud.\n"
+    "   - Once the move or the booking has succeeded, it is DONE: give ONE "
+    "confirmation and never offer again.\n"
+    "Two short sentences per reply."
 )
 
 QUESTION_ANSWER_PROMPT_EXTRA = (
@@ -1056,7 +1077,14 @@ async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
             return None
         doc = (await db.execute(_sel(_D).where(_D.id == task.doctor_id))).scalars().first()
         target_iso = ""
-        if task.treatment_note_id:
+        if task.task_type == "doctor_advice":
+            # A doctor_advice task carries only the date the DOCTOR asked for on
+            # their reply. The NOTE's date belongs to the next_visit_book task
+            # and must not leak onto an advice call (RULE 9, mirrors the
+            # outbound dispatcher).
+            if getattr(task, "target_date", None):
+                target_iso = task.target_date.isoformat()
+        elif task.treatment_note_id:
             tn = (await db.execute(
                 _sel(_TN).where(_TN.id == task.treatment_note_id)
             )).scalars().first()
@@ -5825,22 +5853,39 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         f"requested date ONCE (Vinay 2026-07-14 — the date must never "
                         f"go unsaid): the doctor wants them back around {_td} for a "
                         f"follow-up with {inbound_followup['doctor_name']}.\n"
-                        "IF their answer is fine/normal: OFFER TO BOOK that visit — "
+                        "OFFER TO BOOK that visit however they answer — "
                         f"book with {inbound_followup['doctor_name']}, never ask which "
                         "doctor. On agreement, FIRST ask what time of day suits them — "
                         "NEVER pick a time yourself; the patient chooses, you check it "
                         "with check_availability. The patient is already in our records "
                         "— do NOT ask their name or age; book on their existing record. "
-                        "IF instead they report a problem/pain: say you will inform the "
-                        "doctor AND still mention the requested date in the same breath "
-                        "('doctor wanted to see you around {date} anyway'), then ask if "
-                        "they want it booked now or after the doctor's reply — book "
-                        "only on a yes. IF they CLEARLY refuse the visit ('రాను', "
-                        "'not coming'): call followup_visit_declined with their "
-                        "words — never argue; a vague 'later' is NOT a decline. "
+                        "IF they report a problem/pain: say you will inform the "
+                        "doctor AND still offer the visit in the same breath ('doctor "
+                        "wanted to see you around {date} anyway') — booking a visit is "
+                        "not medical advice, but never say it will fix anything and "
+                        "never say it can wait. IF they CLEARLY refuse the visit "
+                        "('రాను', 'not coming'): call followup_visit_declined with "
+                        "their words — never argue; a vague 'later' is NOT a decline. "
                         "Speak the date using the words BEFORE the "
                         "parenthesis; the parenthesis is the ISO for tools only."
                     )
+                    if (
+                        inbound_followup.get("task_type") == "doctor_advice"
+                        and inbound_followup.get("target_date")
+                    ):
+                        # The doctor named a NEW date on their reply, so this is
+                        # a MOVE. Same rule as the outbound advice call
+                        # (DOCTOR_ADVICE_PROMPT_EXTRA): booking on top of an
+                        # existing visit leaves the patient holding two.
+                        caller_prompt_extra += (
+                            "\nTHE DOCTOR CHANGED THE DATE, so MOVE the visit they "
+                            "already have — never add a second one. FIRST call "
+                            "find_my_bookings. If an upcoming booking with "
+                            f"{inbound_followup['doctor_name']} exists, use "
+                            "reschedule_booking with that booking's token_id; do NOT "
+                            "call confirm_booking. Only if they have NO upcoming "
+                            "booking do you book a new one."
+                        )
                     try:
                         state.followup_task_id = UUID(inbound_followup["task_id"])
                         # Inbound has no dispatch meta — route the patient's reply
@@ -6160,9 +6205,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         elif meta.get("call_type") == "doctor_advice":
             extra_tail += DOCTOR_ADVICE_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
+                doctor=followup_meta.get("doctor_name", "the doctor"),
+                patient=followup_meta.get("patient_name", "the patient"),
                 target_date=_spoken_target_date(
                     followup_meta.get("target_date", ""), lang_code
-                ),
+                ) or "(none — the doctor did not ask for a specific date)",
             )
             state.call_type = "doctor_advice"
         elif is_qa_call:

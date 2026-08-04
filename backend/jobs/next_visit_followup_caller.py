@@ -61,10 +61,22 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
                     "phone_number": patient.phone, "task_id": str(task.id),
                     "patient_name": patient.name, "doctor_name": doctor.name,
                     "doctor_id": str(doctor.id), "message": task.what_to_ask or ""}
-            # RULE 9: target_date/window are a BOOKING concern only — never leak a
-            # booking hint onto a doctor_advice task linked to the same note.
-            if target_date and task.task_type == "next_visit_book":
-                meta["target_date"] = target_date
+            # RULE 9: the NOTE's date is a booking concern belonging to the
+            # next_visit_book task — never leak it onto a doctor_advice call
+            # linked to the same note. A date the DOCTOR typed on this reply is
+            # different: it is the instruction being relayed, so it travels, and
+            # it means MOVE the existing booking rather than add one (#478).
+            if task.task_type == "next_visit_book":
+                if target_date:
+                    meta["target_date"] = target_date
+                    meta["window"] = 2
+            # getattr, not attribute access: _dispatch's whole body is inside a
+            # broad try/except that returns False, so an AttributeError here
+            # does not raise — it silently reports "dispatch failed" for EVERY
+            # follow-up, leaving tasks pending until they exhaust and go
+            # unreachable. The loop would have died quietly.
+            elif getattr(task, "target_date", None):
+                meta["target_date"] = task.target_date.isoformat()
                 meta["window"] = 2
             room = f"followup-{uuid.uuid4().hex[:10]}"
             await lkapi.agent_dispatch.create_dispatch(lk_api.CreateAgentDispatchRequest(
