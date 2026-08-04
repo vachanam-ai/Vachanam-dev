@@ -224,8 +224,12 @@ async def test_chat_medical_goes_to_the_doctor_never_triaged(db, wa_env, monkeyp
     b, _, _ = await _setup(db)
 
     async def _fake_gemini(prompt):
-        # RULE 7: prompt itself must forbid medical judgment
-        assert "never give medical advice" in prompt
+        # RULE 7: prompt itself must forbid medical judgment. Case-insensitive
+        # — the prompt is hand-edited and capitalises its rules for emphasis;
+        # a case-sensitive assert here failed INSIDE the stub, was swallowed by
+        # handle_text's fallback, and showed up as a missing ClinicQuestion row
+        # rather than as the wording mismatch it actually was.
+        assert "never give medical advice" in prompt.lower()
         return json.dumps({"intent": "ask_doctor", "answer": ""})
 
     monkeypatch.setattr(wa_chat, "_call_gemini", _fake_gemini)

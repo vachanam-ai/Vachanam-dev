@@ -125,7 +125,7 @@ async def _handle_value(db: AsyncSession, value: dict) -> None:
         return
     branch, plan = row
 
-    from backend.services import wa_actions, wa_chat
+    from backend.services import wa_actions, wa_agent, wa_chat
 
     for msg in messages:
         mid = msg.get("id") or ""
@@ -145,9 +145,19 @@ async def _handle_value(db: AsyncSession, value: dict) -> None:
                     db, branch, plan, sender, (msg.get("button") or {}).get("payload") or ""
                 )
             elif msg.get("type") == "text":
-                await wa_chat.handle_text(
-                    db, branch, plan, sender, (msg.get("text") or {}).get("body") or ""
-                )
+                # wa_agent (a short prompt + database tools) replaced
+                # wa_chat's nine-intent router + canned replies on
+                # 2026-08-04 — see wa_agent's module docstring. The old
+                # router is kept behind WA_AGENT_TOOLS=false as a one-flag
+                # way back if the tool loop misbehaves on a live number.
+                if settings.wa_agent_tools:
+                    await wa_agent.handle(
+                        db, branch, plan, sender, (msg.get("text") or {}).get("body") or ""
+                    )
+                else:
+                    await wa_chat.handle_text(
+                        db, branch, plan, sender, (msg.get("text") or {}).get("body") or ""
+                    )
             else:
                 logger.info("wa_unsupported_type", mtype=msg.get("type"))
         except Exception as e:  # noqa: BLE001 — never dead-end the patient (RULE 8)

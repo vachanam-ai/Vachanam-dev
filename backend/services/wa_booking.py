@@ -422,6 +422,7 @@ async def confirm(
     preferred_language: str | None = None,
     calendar_service: Any = None,
     meta_service: Any = None,
+    exclude_token_id: uuid.UUID | None = None,
 ) -> BookingResult:
     """Book ``slot`` for ``phone`` — the ONLY place chat ever reserves a seat.
 
@@ -489,6 +490,11 @@ async def confirm(
                 different_person if different_person is not None else slot.different_person
             ),
             preferred_language=preferred_language or slot.preferred_language,
+            # A reschedule books the new seat while the old one is still
+            # confirmed, so confirm_booking's duplicate guard would refuse it
+            # as `already_booked` — the patient's own appointment blocking
+            # their own move. This is exactly what that parameter is for.
+            exclude_token_id=exclude_token_id,
         )
     except Exception as exc:  # noqa: BLE001 — RULE 4: calendar write is part of the booking
         # Nothing half-written: undo the flushed-but-uncommitted Token insert
@@ -553,3 +559,137 @@ def _default_meta_service() -> Any:
     from backend.services.meta_service import MetaService
 
     return MetaService()
+
+
+# ── change an existing booking (WhatsApp's own, deliberately small) ──────────
+# Vinay 2026-08-04: "Keep WhatsApp flow completely separate. Make it simple."
+# The voice equivalents live inside the LiveKit agent class and are tangled
+# with speech concerns — barge-in protection, spoken fillers, StopResponse,
+# authorization-by-utterance. None of that exists in a text thread, so these
+# are written plainly here instead of extracted from there.
+
+
+async def upcoming(db: AsyncSession, branch: Branch, phone: str) -> list[Token]:
+    """This caller's changeable bookings at THIS branch, soonest first.
+
+    `Token.date >= today` rather than "still in the future": someone who
+    missed this morning's 8:45 and messages at 11 to move it must still find
+    it (the same rule the voice path learned on 2026-08-03).
+    """
+    last10 = _phone_last10(phone)
+    if not last10:
+        return []
+    today = (await _branch_now(branch.id, db)).date()
+    return list(
+        (
+            await db.execute(
+                select(Token)
+                .join(Patient, Patient.id == Token.patient_id)
+                .where(
+                    Token.branch_id == branch.id,  # RULE 1
+                    Token.status == "confirmed",
+                    Token.date >= today,
+                    Patient.phone.like(f"%{last10}"),
+                )
+                .order_by(Token.date, Token.appointment_time.asc().nullslast())
+            )
+        ).scalars().all()
+    )
+
+
+async def _owned_token(
+    db: AsyncSession, branch: Branch, phone: str, token_id: str
+) -> Token | None:
+    """The booking, only if this number owns it. RULE 1 + the ownership check
+    that stops an invented id touching somebody else's appointment."""
+    last10 = _phone_last10(phone)
+    if not last10:
+        return None
+    try:
+        tid = uuid.UUID(str(token_id))
+    except (ValueError, AttributeError, TypeError):
+        return None
+    return (
+        await db.execute(
+            select(Token)
+            .join(Patient, Patient.id == Token.patient_id)
+            .where(
+                Token.id == tid,
+                Token.branch_id == branch.id,  # RULE 1
+                Patient.phone.like(f"%{last10}"),
+            )
+        )
+    ).scalars().first()
+
+
+def _phone_last10(phone: str | None) -> str:
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+async def cancel(db: AsyncSession, branch: Branch, phone: str, token_id: str) -> bool:
+    """Cancel one of this caller's bookings. True only if something changed.
+
+    Frees the seat as well as marking the row: the Redis reservation is given
+    back and the calendar event deleted, or the slot stays blocked for a
+    patient who is no longer coming. Calendar failure does NOT undo the
+    cancel — the patient has been told it is cancelled, and a stale calendar
+    entry is a smaller wrong than a booking the clinic still thinks is live.
+    """
+    token = await _owned_token(db, branch, phone, token_id)
+    if token is None or token.status != "confirmed":
+        return False
+
+    token.status = "cancelled_by_patient"
+    token.cancellation_reason = "patient cancelled on WhatsApp"
+    await db.commit()
+
+    if token.appointment_time is not None:
+        await _release_hold(
+            f"slot:{token.doctor_id}:{branch.id}:{token.date}:"
+            f"{token.appointment_time.strftime('%H%M')}"
+        )
+    else:
+        await _release_hold(f"token:{token.doctor_id}:{branch.id}:{token.date}")
+
+    event_id = getattr(token, "google_calendar_event_id", None)
+    if event_id:
+        try:
+            await _LazyGoogleCalendar().delete_event(branch.google_calendar_id, event_id)
+        except Exception as e:  # noqa: BLE001 — see docstring
+            logger.warning(
+                "wa_cancel_calendar_delete_failed",
+                branch_id=str(branch.id), error=str(e)[:150],
+            )
+    logger.info(
+        "wa_booking_cancelled", branch_id=str(branch.id), phone_last4=_last4(phone),
+    )
+    return True
+
+
+async def reschedule(
+    db: AsyncSession, branch: Branch, phone: str, token_id: str, slot: Slot,
+    **confirm_kwargs: Any,
+) -> BookingResult:
+    """Move a booking: take the NEW seat first, and only then release the old.
+
+    Order is the whole point. Cancelling first and then failing to rebook
+    leaves the patient with nothing — the exact failure the voice path guards
+    against with its "replacement booking is NOT confirmed yet" tripwire.
+    """
+    old = await _owned_token(db, branch, phone, token_id)
+    if old is None or old.status != "confirmed":
+        return BookingResult(reason="booking_not_found")
+
+    result = await confirm(
+        db, branch, phone, slot, exclude_token_id=old.id, **confirm_kwargs
+    )
+    if result.token is None:
+        return result  # nothing taken, old booking untouched and still valid
+
+    await cancel(db, branch, phone, str(old.id))
+    logger.info(
+        "wa_booking_rescheduled", branch_id=str(branch.id),
+        phone_last4=_last4(phone),
+    )
+    return result
