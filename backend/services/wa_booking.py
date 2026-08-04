@@ -396,6 +396,20 @@ async def _existing_self_patient(db: AsyncSession, branch_id: uuid.UUID, phone: 
     return rows[0] if len(rows) == 1 else None
 
 
+# Release must never CREATE a key and never drive one negative. A bare DECR
+# does both: Redis mints a missing key at -1, with NO TTL, so releasing a hold
+# that had already expired (holds live 15 min) or been released left a negative
+# counter behind forever. Found in prod 2026-08-05 —
+# `slot:...:2026-08-05:0900 = -1 ttl=-1` — while Vinay could not book.
+# A negative floor also hides a real hold: the next INCR climbs from -1, so one
+# genuine reservation reads as free.
+_RELEASE_LUA = """
+local cur = tonumber(redis.call('GET', KEYS[1]))
+if cur and cur > 0 then return redis.call('DECR', KEYS[1]) end
+return cur or 0
+"""
+
+
 async def _release_hold(redis_key: str | None) -> None:
     """RULE 2 — DECR is rollback-only, never primary. Gives back a token that
     was atomically allocated but whose booking did not complete."""
@@ -403,7 +417,7 @@ async def _release_hold(redis_key: str | None) -> None:
         return
     try:
         async with _redis() as r:
-            await r.decr(redis_key)
+            await r.eval(_RELEASE_LUA, 1, redis_key)
     except Exception as e:  # noqa: BLE001 — best-effort cleanup only
         logger.error("wa_booking_hold_release_failed", redis_key=redis_key, error=str(e)[:150])
 
