@@ -497,11 +497,29 @@ def test_the_clinics_faq_rows_reach_the_prompt():
     assert "according to demand we will arrange one" in _prompt(block)
 
 
-def test_the_faq_outranks_the_doctor_list():
-    """The failing answer was technically true from list_doctors and still
-    wrong — the clinic's own words have to win."""
-    p = _prompt("- Q: x\n  A: y")
-    assert "outrank" in p
+def test_the_faq_wins_for_what_only_the_clinic_knows():
+    """The FAQ answers things no tool can: fees, timings, parking, policy."""
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "for anything only the clinic can know" in flat
+    assert "they are the truth" in flat
+
+
+def test_the_live_roster_wins_for_who_works_here():
+    """Vinay 2026-08-05: the agent said the clinic offers "skin, hair, dental
+    and ENT" — quoting the FAQ verbatim, because an earlier version of this
+    rule said the FAQ OUTRANKS the doctor list.
+
+    It was not a hallucination: that FAQ row is real, and was true when typed.
+    Karishma (ENT) has since been set inactive, so the FAQ went stale while the
+    roster stayed live — and my rule made stale text beat live data. A clinic
+    promising ENT it cannot deliver is a patient turning up for nothing."""
+    flat = " ".join(_prompt("- Q: x\n  A: y").split())
+    assert "these were typed once and are not kept up to date" in flat
+    assert "for who works here and what they treat, the roster wins" in flat
+    assert "do not tell the patient the clinic offers it" in flat
+    assert "never promise a treatment nobody on the roster can give" in flat
+    # and the honest fallback rather than a flat no
+    assert "record_question_for_doctor" in flat
 
 
 def test_an_unanswered_question_goes_to_the_doctor_not_a_flat_no():
@@ -609,13 +627,37 @@ def test_routing_is_left_to_the_model_not_a_hardcoded_table():
     assert "never name a doctor who is not on it" in flat
 
 
+def test_answering_and_forwarding_are_mutually_exclusive():
+    """Vinay 2026-08-05: "Still forwarding issues to doctors. This is bad. Only
+    forward when it doesn't know answer or critical."
+
+    Live thread: "Rashes chustara?" got the right answer — "Dr. Lakshmi skin
+    specialist kabatti, rashes kuda chustaru" — AND a recorded question with a
+    callback promise, twice. The patient thinks they still have to wait, and
+    the clinic's desk fills with questions that were already handled."""
+    flat = " ".join(_prompt().split())
+    assert "forwarding to the doctor is a last resort, not a habit" in flat
+    assert "if you answered the question, you are done" in flat
+    assert "do not also record it" in flat
+    assert "record for the doctor in exactly two cases" in flat
+
+
+def test_naming_a_condition_to_ask_who_treats_it_is_answerable():
+    """The distinction the model kept getting wrong: a symptom WORD does not
+    make it a medical question."""
+    flat = " ".join(_prompt().split())
+    assert "naming a condition to ask who treats it is a clinic question" in flat
+    assert "does dr x see skin problems?" in flat      # answer this
+    assert "why do i keep getting rashes?" in flat     # forward this
+
+
 def test_rule_7_still_holds_on_the_other_side_of_the_line():
     """The reversal must not become permission to advise. The line moved from
     "mentions a symptom" to "asks what is wrong or what to do"."""
     flat = " ".join(_prompt("- Q: x\n  A: y").split())
     assert "never give medical advice, never diagnose" in flat
     assert "never suggest what to do or take" in flat
-    assert "if they ask what is wrong, what they should do" in flat
+    assert "asking what is wrong, what to do, or whether it is serious" in flat
     assert "record_question_for_doctor" in flat
 
 
