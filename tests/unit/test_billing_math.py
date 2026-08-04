@@ -18,13 +18,13 @@ from backend.services.billing_math import (
 )
 
 
-def test_subscription_order_first_activation_offer_no_gst():
-    # 2026-07-21: first activation starts the three-paid-month offer window.
+def test_subscription_order_first_activation_is_list_price():
+    # 2026-08-04: discounts removed — first activation bills the list price.
     bd = subscription_order_breakdown("solo")
-    assert bd["base"] == 3999 and bd["is_offer"] is True
+    assert bd["base"] == 5999 and bd["is_offer"] is False
     assert bd["overage_minutes"] == 0
-    assert bd["gst"] == 0.0
-    assert bd["amount_paise"] == 399900
+    assert bd["gst"] == 0.0  # GST_WAIVED still True — a separate lever
+    assert bd["amount_paise"] == 599900
 
 
 def test_subscription_order_after_offer_window_standard_base(monkeypatch):
@@ -51,7 +51,7 @@ def test_subscription_order_honors_minute_adjustment():
     # +100 goodwill minutes → bucket 1600, so 1550 used = no overage.
     bd = subscription_order_breakdown("clinic", cycle_minutes_used=1550, adjustment=100)
     assert bd["overage_minutes"] == 0
-    assert bd["amount_paise"] == 699900  # offer base, no GST
+    assert bd["amount_paise"] == 999900  # list base, no GST
 
 
 def test_overage_breakdown_solo_1000_minutes():

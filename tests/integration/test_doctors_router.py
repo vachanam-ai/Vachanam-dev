@@ -351,8 +351,14 @@ async def test_patch_doctor_working_hours_triggers_recurring_cal_upsert(
     clinic,
     org_admin_jwt,
 ):
-    """PATCH working_hours on a token-doctor with a calendar_id should call
-    GoogleCalendarService.upsert_doctor_hours_event exactly once.
+    """PATCH working_hours on a token-doctor with a calendar_id should publish
+    the doctor's week to the clinic calendar exactly once.
+
+    2026-08-04: the router used to call `upsert_doctor_hours_event` (ONE
+    start/end pair), which could not express a split-session week and deleted
+    those doctors' hours instead. It now calls `sync_doctor_session_events`
+    with a window per session. The contract under test is unchanged — editing
+    hours must reach Google — only the mechanism moved.
 
     The mock patches the class inside the doctors router module so the
     router's instantiation picks up the mock instance.
@@ -382,8 +388,8 @@ async def test_patch_doctor_working_hours_triggers_recurring_cal_upsert(
     # PATCH working_hours — should trigger upsert
     with patch("backend.routers.doctors.GoogleCalendarService") as mock_cls:
         mock_instance = mock_cls.return_value
-        mock_instance.upsert_doctor_hours_event = AsyncMock(
-            return_value="evt_recurring_999"
+        mock_instance.sync_doctor_session_events = AsyncMock(
+            return_value=["evt_recurring_999"]
         )
 
         patch_r = await client.patch(
@@ -398,7 +404,7 @@ async def test_patch_doctor_working_hours_triggers_recurring_cal_upsert(
         )
 
     assert patch_r.status_code == 200, patch_r.text
-    mock_instance.upsert_doctor_hours_event.assert_called_once()
+    mock_instance.sync_doctor_session_events.assert_called_once()
 
 
 async def test_doctor_hours_always_go_to_the_clinic_calendar(
@@ -443,7 +449,7 @@ async def test_doctor_hours_always_go_to_the_clinic_calendar(
     with patch("backend.routers.doctors.GoogleCalendarService") as mock_cls:
         inst = mock_cls.return_value
         inst.delete_event = AsyncMock(return_value=None)
-        inst.upsert_doctor_hours_event = AsyncMock(return_value="evt_clinic")
+        inst.sync_doctor_session_events = AsyncMock(return_value=["evt_clinic"])
 
         patch_r = await client.patch(
             f"/doctors/{clinic['branch_id']}/{doctor_id}",
@@ -451,8 +457,12 @@ async def test_doctor_hours_always_go_to_the_clinic_calendar(
             headers=_auth(org_admin_jwt),
         )
     assert patch_r.status_code == 200, patch_r.text
-    _, kwargs = inst.upsert_doctor_hours_event.call_args
+    _, kwargs = inst.sync_doctor_session_events.call_args
     assert kwargs["calendar_id"] == "clinic-cal@group.calendar.google.com"
+    # The doctor's real hours travel with it, and the block already on the
+    # calendar is handed over to be replaced — not orphaned there.
+    assert kwargs["windows"], "the doctor's hours must reach Google"
+    assert "evt_existing" in kwargs["existing_event_ids"]
     # Nothing to move, so nothing is deleted off another calendar.
     inst.delete_event.assert_not_awaited()
 

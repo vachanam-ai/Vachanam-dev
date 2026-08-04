@@ -285,6 +285,115 @@ class GoogleCalendarService:
             )
             raise CalendarWriteFailed(str(exc)) from exc
 
+    async def sync_doctor_session_events(
+        self,
+        *,
+        calendar_id: str,
+        doctor_name: str,
+        windows: list[tuple[time, time, list[int]]],
+        existing_event_ids: list[str],
+    ) -> list[str]:
+        """Publish a doctor's WHOLE week — one recurring event per window.
+
+        `upsert_doctor_hours_event` above models a doctor as a single repeating
+        block, which cannot express "9–12 and again 5–9". Callers therefore
+        skipped anything more complicated and DELETED the block, so every
+        split-session doctor had no hours on the clinic calendar and whatever
+        was there dated from clinic setup (Vinay 2026-08-04: "doctors and their
+        slots appear static from creation of clinic").
+
+        `windows` is (start, end, weekdays) already grouped by the caller — a
+        doctor sitting 9–12 Mon-Sat and 5–9 Mon-Fri is two windows, so two
+        weekly events with their own BYDAY, not thirteen one-off events.
+
+        Old events are deleted only AFTER the new ones are written: a failure
+        part-way leaves the calendar showing stale hours rather than none,
+        which is the less wrong of the two.
+        """
+        anchor = _date.today()
+        created: list[str] = []
+        for start, end, weekdays in windows:
+            if not weekdays or start >= end:
+                continue
+            codes = ",".join(WEEKDAY_TO_RFC5545[w] for w in sorted(set(weekdays)))
+            body = {
+                "summary": f"Dr {doctor_name} — clinic hours",
+                "description": "",
+                "start": {
+                    "dateTime": datetime.combine(anchor, start).isoformat(),
+                    "timeZone": "Asia/Kolkata",
+                },
+                "end": {
+                    "dateTime": datetime.combine(anchor, end).isoformat(),
+                    "timeZone": "Asia/Kolkata",
+                },
+                "recurrence": [f"RRULE:FREQ=WEEKLY;BYDAY={codes}"],
+            }
+            try:
+                event = await asyncio.to_thread(
+                    lambda b=body: self._service.events()
+                    .insert(calendarId=calendar_id, body=b)
+                    .execute()
+                )
+                created.append(event["id"])
+            except HttpError as exc:
+                logger.error(
+                    "calendar_doctor_session_failed",
+                    calendar_id=calendar_id, doctor_name=doctor_name,
+                    error=str(exc),
+                )
+                raise CalendarWriteFailed(str(exc)) from exc
+
+        for old in existing_event_ids or []:
+            try:
+                await self.delete_event(calendar_id, old)
+            except Exception as exc:  # noqa: BLE001 — a stale block is not fatal
+                logger.warning(
+                    "calendar_doctor_session_cleanup_failed",
+                    calendar_id=calendar_id, event_id=old, error=str(exc),
+                )
+        logger.info(
+            "calendar_doctor_sessions_synced",
+            calendar_id=calendar_id, doctor_name=doctor_name,
+            windows=len(created), replaced=len(existing_event_ids or []),
+        )
+        return created
+
+    async def create_timed_event(
+        self,
+        *,
+        calendar_id: str,
+        summary: str,
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> str:
+        """A single non-recurring block. Used for date-specific sessions, where
+        a weekly RRULE would be wrong — "next Tuesday I sit 10-1" describes
+        that Tuesday, not every Tuesday forever.
+
+        RULE 9: summary carries the doctor's name and nothing about a patient;
+        description stays empty.
+        """
+        body = {
+            "summary": summary,
+            "description": "",
+            "start": {"dateTime": start_dt.isoformat(), "timeZone": "Asia/Kolkata"},
+            "end": {"dateTime": end_dt.isoformat(), "timeZone": "Asia/Kolkata"},
+        }
+        try:
+            event = await asyncio.to_thread(
+                lambda: self._service.events()
+                .insert(calendarId=calendar_id, body=body)
+                .execute()
+            )
+            return event["id"]
+        except HttpError as exc:
+            logger.error(
+                "calendar_timed_event_failed",
+                calendar_id=calendar_id, error=str(exc),
+            )
+            raise CalendarWriteFailed(str(exc)) from exc
+
     # ── SHARED HELPERS ────────────────────────────────────────────────────────
 
     async def delete_event(self, calendar_id: str, event_id: str) -> None:

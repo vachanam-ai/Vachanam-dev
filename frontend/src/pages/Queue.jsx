@@ -84,9 +84,17 @@ export default function Queue() {
     setDay(`${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}-${String(base.getDate()).padStart(2, "0")}`);
   };
 
+  // Depend on `data`, NOT Boolean(data). Cards render at opacity 0 until this
+  // marks them revealed (index.css: [data-reveal]:not([data-revealed])), and
+  // Boolean(data) flips false->true exactly once. With placeholderData keeping
+  // `data` truthy forever, every card that mounted LATER — a booking arriving
+  // on the 20s refetch, or the whole board after stepping to another day —
+  // never got revealed and stayed permanently invisible. The page looked stuck
+  // (Vinay 2026-08-04). revealStagger only touches :not([data-revealed]), so
+  // re-running it per refetch is idempotent and cheap.
   useEffect(() => {
     if (data) revealStagger(pageRef.current);
-  }, [Boolean(data)]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data]);
 
   const queueKey = ["queue", branchId, day];
   const optimistic = (statusValue) => ({

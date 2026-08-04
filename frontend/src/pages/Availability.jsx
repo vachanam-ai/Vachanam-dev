@@ -42,7 +42,9 @@ export default function Availability() {
   // until reload (live 2026-07-12, FIXLOG #334).
   useEffect(() => {
     if (!isLoading) revealStagger(pageRef.current);
-  }, [isLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `doctorsRaw` too: isLoading flips once, so rows added afterwards never
+    // reveal and sit at CSS opacity 0.
+  }, [isLoading, doctorsRaw]);
 
   const mark = useMutation({
     mutationFn: () =>

@@ -10,14 +10,14 @@ import { API_BASE } from "../api/client.js";
 // #391 launch offer (Vinay 2026-07-17): actual price struck through, offer
 // price for the first 3 months shown big. Source of truth: billing_math
 // OFFER_PRICES — keep in sync (guarded by tests/unit/test_launch_offer.py).
-// 2026-07-21: 14-day trial, then acquisition price for the first 3 paid months;
-// standard list price thereafter. Keep in sync with billing_math.OFFER_PRICES.
+// 2026-08-04 (Vinay: "remove discount pricings"): list price from the first
+// paid month. billing_math.OFFER_PRICES is empty, so the site must not keep
+// advertising an acquisition price the invoice will not honour.
 const PLANS = [
   {
     name: "Starter",
     key: "solo",
-    price: "₹3,999",
-    actual: "₹5,999",
+    price: "₹5,999",
     per: "/month + ₹5/min after",
     tagline: "Small clinics, up to 3 doctors",
     points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 7 Indian languages", "Natural human-like AI voice", "Token booking + calendar", "Reminder calls + receptionist app"]
@@ -25,8 +25,7 @@ const PLANS = [
   {
     name: "Clinic",
     key: "clinic",
-    price: "₹6,999",
-    actual: "₹9,999",
+    price: "₹9,999",
     per: "/month + ₹5/min after",
     tagline: "Growing clinics, up to 5 doctors",
     popular: true,
@@ -35,8 +34,7 @@ const PLANS = [
   {
     name: "Multi",
     key: "multi",
-    price: "₹11,999",
-    actual: "₹17,999",
+    price: "₹17,999",
     per: "/month + ₹5/min after",
     tagline: "Multi-specialty, unlimited doctors",
     points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 7 Indian languages", "Natural human-like AI voice", "WhatsApp confirmations + reminders", "Multi-doctor routing", "Branch-level analytics"]
@@ -408,7 +406,7 @@ export default function Landing() {
         <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-pill px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-ui text-sm">
-              <span className="font-semibold">Lite · <span className="mr-1 text-slate line-through">₹1,999</span><span className="numeral text-teal-deep">₹1,799</span>/mo</span>
+              <span className="font-semibold">Lite · <span className="numeral text-teal-deep">₹1,999</span>/mo</span>
               <span className="text-slate"> + ₹5/min after</span>
             </p>
             <p className="font-ui text-xs text-slate">
@@ -449,11 +447,9 @@ export default function Landing() {
               <h3 className="font-display text-xl font-semibold">{p.name}</h3>
               <p className="font-ui text-sm text-slate">{p.tagline}</p>
               <p className="mt-4">
-                <span className="mr-2 font-ui text-lg text-slate line-through">{p.actual}</span>
                 <span className="numeral text-4xl text-teal-deep">{p.price}</span>
                 <span className="font-ui text-sm text-slate"> {p.per}</span>
               </p>
-              <p className="mt-1 font-ui text-xs font-semibold text-gold-ink">Offer price — first 3 paid months</p>
               {trialOn && (
                 <p className="mt-1 font-ui text-xs font-semibold text-teal">
                   Start with a 14-day free trial

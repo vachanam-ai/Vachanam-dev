@@ -335,7 +335,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (queue) revealStagger(pageRef.current);
-  }, [Boolean(queue)]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `queue`, not Boolean(queue) — see the note in Queue.jsx: a latch that
+    // flips once leaves every later-mounting card at opacity 0 forever.
+  }, [queue]);
 
   if (isLoading) return <p className="font-ui text-slate">Reading today&rsquo;s ledger…</p>;
 

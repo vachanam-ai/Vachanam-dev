@@ -7,12 +7,23 @@ next_steps."""
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.schema import TreatmentNote, FollowupTask
+
+# The follow-up caller works in branch-local IST (its calling window is
+# 09:00-20:00 IST), so "today" must be IST too — on a UTC server, date.today()
+# points at yesterday between 00:00 and 05:30 IST and would schedule a
+# follow-up for a day that has already started.
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _today_ist() -> date:
+    return datetime.now(_IST).date()
 
 
 async def _cancel_pending(patient_id: uuid.UUID, doctor_id: uuid.UUID, db: AsyncSession) -> None:
@@ -41,7 +52,14 @@ async def sync_note_followup(note: TreatmentNote, followup_question: str | None,
     db.add(FollowupTask(
         branch_id=note.branch_id, doctor_id=note.doctor_id, patient_id=note.patient_id,
         treatment_note_id=note.id, task_type="next_visit_book", channel="voice",
-        what_to_ask=followup_question, scheduled_date=note.visit_date + timedelta(days=1),
+        what_to_ask=followup_question,
+        # Vinay 2026-08-04: "the call for 1st message from doctor should
+        # trigger next day". visit_date + 1 alone is only next-day when the
+        # note is written on the day of the visit; a doctor writing up
+        # Monday's visit on Thursday produced a scheduled_date already in the
+        # past, so the job called the patient within 15 minutes — the opposite
+        # of a day's grace. Anchor on the later of the visit and today.
+        scheduled_date=max(note.visit_date, _today_ist()) + timedelta(days=1),
         status="pending", created_by_user_id=created_by,
     ))
     await db.commit()

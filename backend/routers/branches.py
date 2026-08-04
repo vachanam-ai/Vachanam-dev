@@ -560,6 +560,18 @@ async def answer_question(
     # Still no number to dial (walk-in-style unknown caller, or an ambiguous
     # last-4) → nothing to call back.
     q.status = "answered" if q.caller_phone else "unreachable"
+
+    # A question that ARRIVED on WhatsApp is answered on WhatsApp. Someone who
+    # chose to type did so to avoid a phone call, and ringing them with the
+    # answer ignores that choice (Vinay 2026-08-04). Only if the message cannot
+    # be delivered — most often Meta's 24-hour service window having closed
+    # since they wrote in — do we fall back to the callback the voice path uses.
+    if q.status == "answered" and getattr(q, "channel", "voice") == "whatsapp":
+        from backend.services import wa_whatsapp_answer
+
+        if await wa_whatsapp_answer.reply(db, uuid.UUID(branch_id), q, answer):
+            q.status = "replied"  # terminal: the callback job skips it
+
     await db.commit()
     if q.status == "answered":
         # Wake the callback job's gate so the patient is dialed on the next
@@ -1121,6 +1133,12 @@ async def create_whatsapp_template(
     # RULE 9 / PII_DENYLIST: no "name" key (denylist matches "name" as a
     # substring) — category alone is enough forensic context.
     request.state.audit_metadata = {"category": body.category.upper()}
+    # The purpose -> template map is cached for an hour; drop it so a clinic
+    # that just added, say, its cancellation template starts using it on the
+    # next send rather than after the TTL expires.
+    from backend.services import wa_template_registry
+
+    await wa_template_registry.invalidate(branch.id)
     logger.info("wa_template_submitted", branch_id=branch_id)
     return result
 
@@ -1155,6 +1173,9 @@ async def delete_whatsapp_template(
     request.state.audit_resource_id = branch_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
+    from backend.services import wa_template_registry
+
+    await wa_template_registry.invalidate(branch.id)
     logger.info("wa_template_deleted_route", branch_id=branch_id)
     return {"deleted": True}
 

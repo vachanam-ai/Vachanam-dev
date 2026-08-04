@@ -4471,6 +4471,31 @@ class VachanamAgent(Agent):
             bool(old_is_gone),
             str(self._state.branch_id),
         )
+
+        # The move is durable at this point. Send the RESCHEDULE template (not
+        # the cancellation one _do_cancel would otherwise have sent — hence the
+        # reason="reschedule" it was called with) so the patient has the new
+        # time in writing. RULE 4: fire-and-forget, never affects the move.
+        try:
+            from backend.services.meta_service import MetaService
+
+            new_time = assigned.get("appointment_time")
+            await MetaService().send_reschedule_confirmation(
+                self._state.patient_phone or "",
+                branch_id=self._state.branch_id,
+                patient_name=await self._patient_name_for(old_token),
+                clinic_name=await self._clinic_name(),
+                doctor_name=await self._doctor_name_for(old_token.doctor_id),
+                on_date=booking_date.strftime("%d %B"),
+                at_time=new_time or (
+                    f"token {assigned['token_number']}"
+                    if assigned.get("token_number") else "-"
+                ),
+                token_id=str(new_id),
+            )
+        except Exception as e:  # noqa: BLE001 — notification only
+            logger.warning("reschedule_whatsapp_notify_failed: %s", e)
+
         return {
             "success": True,
             "new_token_number": assigned["token_number"],
@@ -4593,6 +4618,57 @@ class VachanamAgent(Agent):
                 await r.aclose()
         except Exception as e:
             logger.warning("reschedule_hold_release_failed: %s", e)
+
+    async def _clinic_name(self) -> str:
+        """Branch name for a notification template. SessionState does not carry
+        it, and padding the clinic slot with a dash would reach the patient."""
+        try:
+            from backend.models.schema import Branch
+
+            row = await self._db.execute(
+                select(Branch.name).where(Branch.id == self._state.branch_id)
+            )
+            return row.scalar_one_or_none() or "the clinic"
+        except Exception:  # noqa: BLE001
+            return "the clinic"
+
+    async def _doctor_name_for(self, doctor_id) -> str:
+        """Doctor's display name for a WhatsApp notification. Best-effort: a
+        miss yields "the doctor", never an exception on a notification path."""
+        try:
+            from backend.models.schema import Doctor
+
+            row = await self._db.execute(
+                select(Doctor.name).where(Doctor.id == doctor_id)
+            )
+            return row.scalar_one_or_none() or "the doctor"
+        except Exception:  # noqa: BLE001
+            return "the doctor"
+
+    @staticmethod
+    def _when_parts(token) -> tuple[str, str]:
+        """(date, time) as SEPARATE strings.
+
+        Clinic templates give date and time their own placeholders ({{3}} and
+        {{4}} in Vinay's reschedule/cancel), so one combined "5 August, 9:00 AM"
+        would fill the date slot and leave the time slot padded with a dash.
+        """
+        on_date = token.date.strftime("%d %B")
+        if token.appointment_time is not None:
+            return on_date, token.appointment_time.strftime("%I:%M %p").lstrip("0")
+        return on_date, (f"token {token.token_number}" if token.token_number else "-")
+
+    async def _patient_name_for(self, token) -> str:
+        """Templates address the patient by name in {{1}}. Best-effort."""
+        try:
+            from backend.models.schema import Patient
+
+            row = await self._db.execute(
+                select(Patient.name).where(Patient.id == token.patient_id)
+            )
+            return row.scalar_one_or_none() or "there"
+        except Exception:  # noqa: BLE001
+            return "there"
 
     async def _do_cancel(self, token_id: str, reason: str = "patient_cancelled_or_rescheduled_on_call") -> dict:
         """Shared cancel core (no guards) — used by cancel_booking and
@@ -4784,6 +4860,33 @@ class VachanamAgent(Agent):
             token_id[-8:],
             str(self._state.branch_id),
         )
+
+        # Vinay 2026-08-04: "all confirmations from calls should reflect in
+        # whatsapp". A cancellation agreed on the phone must leave the patient
+        # something written down. RULE 4 — this is a notification, so it is
+        # fire-and-forget and can never affect the cancellation above, which
+        # has already committed.
+        # A reschedule cancels the old row as an implementation step ("rescheduled")
+        # and may compensate the new one ("reschedule_compensation"). Neither is
+        # a cancellation from the patient's point of view — telling them their
+        # appointment was cancelled mid-move would be flatly untrue. Prefix
+        # match, because those two strings are what the call sites actually pass.
+        if not reason.startswith("resched"):
+            try:
+                from backend.services.meta_service import MetaService
+
+                on_date, at_time = self._when_parts(token)
+                await MetaService().send_cancellation_confirmation(
+                    self._state.patient_phone or "",
+                    branch_id=self._state.branch_id,
+                    patient_name=await self._patient_name_for(token),
+                    clinic_name=await self._clinic_name(),
+                    doctor_name=await self._doctor_name_for(token.doctor_id),
+                    on_date=on_date, at_time=at_time,
+                )
+            except Exception as e:  # noqa: BLE001 — notification only
+                logger.warning("cancel_whatsapp_notify_failed: %s", e)
+
         return {
             "success": True,
             "instruction": (

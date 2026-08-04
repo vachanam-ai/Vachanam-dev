@@ -359,6 +359,23 @@ async def publish_date_schedule(
     await db.commit()
     await invalidate_clinic_cache(branch_uuid)
 
+    # Publish this day's sessions to the clinic calendar.
+    #
+    # This endpoint never touched Google Calendar, so a doctor who publishes
+    # next week's plan — the whole reason date-specific schedules exist —
+    # changed nothing the clinic could see there (Vinay 2026-08-04). RULE 4
+    # discipline: best-effort, and a calendar failure never fails the publish
+    # that has already committed above.
+    try:
+        from backend.services.doctor_calendar import sync_date_schedule_events
+
+        await sync_date_schedule_events(db, branch_uuid, doctor_uuid, target_date)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "date_schedule_calendar_sync_failed",
+            branch_id=branch_id, doctor_id=doctor_id, error=str(exc)[:200],
+        )
+
     request.state.audit_resource_id = str(row.id)
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id

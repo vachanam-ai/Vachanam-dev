@@ -75,6 +75,15 @@ first with a tool, every single time. Doctors change, schedules change, and a
 confident wrong answer costs the clinic a patient. If a tool gives you nothing,
 say so plainly rather than guessing.
 
+The clinic has written its own answers to the questions patients ask most.
+These are the clinic's words and they OUTRANK anything you would otherwise
+infer — including the doctor list. If one of them covers what the patient
+asked, answer from it, in your own warm phrasing.
+{faq}
+If a question is not covered there and no tool can answer it, do not invent an
+answer and do not settle for "no" — call record_question_for_doctor so the
+clinic replies.
+
 Never give medical advice, never diagnose, never say how urgent something is.
 If a patient describes symptoms, call record_question_for_doctor so a doctor
 calls them back.
@@ -474,6 +483,9 @@ class WaTools:
             caller_last4=(self.sender or "")[-4:],
             patient_id=patient.id if patient else None,
             caller_phone=self.sender,
+            # Answer where they asked. Someone who chose to type does not want
+            # a phone call back (Vinay 2026-08-04).
+            channel="whatsapp",
         ))
         await self.db.commit()
         logger.info(
@@ -529,6 +541,31 @@ def _history(turns: list[dict], text: str) -> list:
     return contents
 
 
+_FAQ_MAX = 20
+
+
+def _faq_block(branch: Branch) -> str:
+    """The clinic's own FAQ rows, verbatim, for the system prompt.
+
+    Vinay 2026-08-04: a clinic had written "is there a plastic surgeon? —
+    according to demand we will arrange one", and WhatsApp answered "we don't
+    have a plastic surgery person here". The rows saved fine; the agent rewrite
+    simply never read them (the retired wa_chat router did). Prompt, not tool:
+    at most 20 short pairs, relevant to any message, and a tool round-trip to
+    fetch them would just be latency.
+    """
+    rows = getattr(branch, "faq", None) or []
+    lines = []
+    for item in rows[:_FAQ_MAX]:
+        q = str((item or {}).get("q") or "").strip()
+        a = str((item or {}).get("a") or "").strip()
+        if q and a:
+            lines.append(f"- Q: {q}\n  A: {a}")
+    if not lines:
+        return "(The clinic has not written any yet.)"
+    return "\n".join(lines)
+
+
 async def handle(
     db: AsyncSession, branch: Branch, plan: str, sender: str, text: str
 ) -> None:
@@ -550,6 +587,7 @@ async def handle(
         clinic=branch.name,
         today=now.date().isoformat(),
         weekday=now.strftime("%A"),
+        faq=_faq_block(branch),
     )
     tools = WaTools(db, branch, sender, plan)
     contents = _history(turns, text)

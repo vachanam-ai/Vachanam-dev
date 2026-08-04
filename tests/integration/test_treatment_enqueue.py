@@ -47,9 +47,41 @@ async def test_enqueue_creates_next_visit_book(db):
     tasks = (await db.execute(select(FollowupTask).where(FollowupTask.patient_id == pat.id))).scalars().all()
     assert len(tasks) == 1
     assert tasks[0].task_type == "next_visit_book"
-    assert tasks[0].scheduled_date == date(2026, 6, 23)   # visit_date + 1
+    # TOMORROW, not visit_date + 1. This note's visit_date is in the past
+    # (a doctor writing up an old visit), and visit_date + 1 put the task in
+    # the past too — so the caller treated it as overdue and rang the patient
+    # within 15 minutes, the opposite of the day's grace Vinay asked for
+    # (2026-08-04: "the call for 1st message from doctor should trigger next
+    # day"). Anchored on the later of the visit and today.
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    tomorrow_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1)
+    assert tasks[0].scheduled_date == tomorrow_ist
     assert tasks[0].what_to_ask == "how is the pain?"
     assert tasks[0].status == "pending" and tasks[0].channel == "voice"
+
+
+@pytest.mark.asyncio
+async def test_a_note_written_on_the_visit_day_still_calls_the_next_day(db):
+    """The ordinary case must be unchanged: same-day note -> visit_date + 1."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    br, doc, pat = await _seed(db)
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    n = TreatmentNote(
+        branch_id=br.id, doctor_id=doc.id, patient_id=pat.id, visit_date=today,
+        next_reporting_date=today + timedelta(days=7),
+    )
+    db.add(n)
+    await db.flush()
+    await sync_note_followup(n, followup_question="how is the pain?", created_by=None, db=db)
+
+    tasks = (
+        await db.execute(select(FollowupTask).where(FollowupTask.patient_id == pat.id))
+    ).scalars().all()
+    assert tasks[0].scheduled_date == today + timedelta(days=1)
 
 
 @pytest.mark.asyncio

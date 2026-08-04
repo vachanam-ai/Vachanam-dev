@@ -409,6 +409,44 @@ async def _maybe_upsert_recurring_cal_event(
     cal_id = branch.google_calendar_id
     if not cal_id:
         return
+
+    # Publish the doctor's REAL week: one recurring event per session window.
+    #
+    # Everything below this block was the old single-window path, which could
+    # express only one start/end pair. A doctor sitting 9-12 and again 5-9 was
+    # classed "complex", had the block DELETED, and the calendar kept showing
+    # the simple hours written at clinic setup — so every split-session doctor
+    # looked frozen since the clinic was created (Vinay 2026-08-04).
+    from backend.services.doctor_calendar import doctor_windows
+
+    windows = doctor_windows(doc)
+    if windows:
+        try:
+            old_ids = list(doc.calendar_event_ids_recurring or [])
+            if doc.calendar_event_id_recurring:
+                old_ids.append(doc.calendar_event_id_recurring)
+            new_ids = await GoogleCalendarService().sync_doctor_session_events(
+                calendar_id=cal_id,
+                doctor_name=doc.name,
+                windows=windows,
+                existing_event_ids=old_ids,
+            )
+            doc.calendar_event_ids_recurring = new_ids
+            doc.calendar_event_id_recurring = None  # superseded by the list
+            await db.commit()
+            logger.info(
+                "doctor_sessions_published",
+                doctor_id=str(doc.id), branch_id=str(branch.id),
+                windows=len(new_ids),
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort, never blocks a save
+            logger.warning(
+                "doctor_sessions_publish_failed",
+                doctor_id=str(doc.id), branch_id=str(branch.id),
+                error=str(exc)[:200],
+            )
+        return
+
     recurring_values = [
         sessions for sessions in (doc.recurring_schedule or {}).values() if sessions
     ]

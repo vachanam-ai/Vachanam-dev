@@ -285,9 +285,9 @@ async def test_a_symptom_question_is_recorded_for_the_doctor(db):
 
 # ── the prompt says what Vinay asked it to say ───────────────────────────────
 
-def _prompt():
+def _prompt(faq=""):
     return wa_agent.SYSTEM_PROMPT.format(
-        clinic="Test Clinic", today="2026-08-04", weekday="Tuesday"
+        clinic="Test Clinic", today="2026-08-04", weekday="Tuesday", faq=faq
     ).lower()
 
 
@@ -323,6 +323,64 @@ def test_no_doctor_facts_are_baked_into_the_prompt():
     p = wa_agent.SYSTEM_PROMPT
     for leak in ("recurring_schedule", "09:00-12:00", "Dr.", "speciality:"):
         assert leak not in p
+
+
+# ── the clinic's own FAQ answers reach WhatsApp ──────────────────────────────
+
+class _FaqBranch:
+    def __init__(self, faq):
+        self.faq = faq
+        self.name = "Test Clinic"
+
+
+def test_the_clinics_faq_rows_reach_the_prompt():
+    """Vinay 2026-08-04: the clinic had written "is there a plastic surgeon? —
+    according to demand we will arrange one" and WhatsApp answered "we don't
+    have a plastic surgery person here". The rows saved; the agent never read
+    them."""
+    block = wa_agent._faq_block(_FaqBranch([
+        {"q": "Is there any plastic surgeon in your clinic?",
+         "a": "According to demand we will arrange one"},
+    ]))
+    assert "plastic surgeon" in block
+    assert "According to demand we will arrange one" in block
+    assert "according to demand we will arrange one" in _prompt(block)
+
+
+def test_the_faq_outranks_the_doctor_list():
+    """The failing answer was technically true from list_doctors and still
+    wrong — the clinic's own words have to win."""
+    p = _prompt("- Q: x\n  A: y")
+    assert "outrank" in p
+
+
+def test_an_unanswered_question_goes_to_the_doctor_not_a_flat_no():
+    p = _prompt()
+    assert "record_question_for_doctor" in p
+
+
+def test_half_written_faq_rows_are_dropped():
+    block = wa_agent._faq_block(_FaqBranch([
+        {"q": "Question with no answer", "a": ""},
+        {"q": "", "a": "Answer with no question"},
+        {"q": "Real one?", "a": "Real answer"},
+    ]))
+    assert "no answer" not in block and "no question" not in block
+    assert "Real answer" in block
+
+
+def test_a_clinic_with_no_faq_still_builds_a_prompt():
+    for empty in (None, []):
+        assert wa_agent._faq_block(_FaqBranch(empty))
+    _prompt(wa_agent._faq_block(_FaqBranch([])))  # must not raise
+
+
+def test_the_faq_block_is_bounded():
+    """A clinic pasting a hundred rows must not blow up every message's
+    system prompt."""
+    rows = [{"q": f"q{i}", "a": f"a{i}"} for i in range(100)]
+    block = wa_agent._faq_block(_FaqBranch(rows))
+    assert block.count("- Q:") == wa_agent._FAQ_MAX
 
 
 # ── a promised callback must be a real one ───────────────────────────────────

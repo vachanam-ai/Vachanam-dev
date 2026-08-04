@@ -132,9 +132,11 @@ async def test_webhook_activates_subscription(client, db, org, monkeypatch):
         )
     ).scalar_one()
     assert bc.status == "paid"
-    # #391: a fresh activation is inside the first-3-months launch-offer
-    # window — the cycle records the OFFER base actually charged, not list.
-    assert bc.base_amount == 6999
+    # The cycle records what was ACTUALLY charged (#391). With discounts
+    # removed 2026-08-04 that is the list price — but the contract under test
+    # is unchanged: the ledger must never record a number the customer was not
+    # billed, whichever way pricing goes.
+    assert bc.base_amount == 9999
 
 
 async def test_webhook_idempotent_on_redelivery(client, db, org, monkeypatch):

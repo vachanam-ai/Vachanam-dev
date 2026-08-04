@@ -540,7 +540,9 @@ export default function DoctorSchedule() {
 
   useEffect(() => {
     if (doctors.length) revealStagger(pageRef.current);
-  }, [doctors.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    // On `doctors`, not its length: editing a doctor re-renders its card
+    // without changing the count, and the new card would stay invisible.
+  }, [doctors]);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["doctors", branchId] });
 

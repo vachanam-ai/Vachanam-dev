@@ -77,12 +77,15 @@ OFFER_MONTHS = 3
 # an acquisition price. Starter/Clinic/Multi retain 10–15% margin at the
 # conservative full-bucket cost model. Lite is the known exception because its
 # fixed DID cost makes a 10% worst-case margin impossible below its list price.
-OFFER_PRICES: dict[str, int] = {
-    "lite": 1_799,
-    "solo": 3_999,
-    "clinic": 6_999,
-    "multi": 11_999,
-}
+# EMPTIED 2026-08-04 (Vinay: "remove discount pricings"). Every plan now bills
+# at its list price from the first paid month.
+#
+# The mechanism is kept rather than deleted: `effective_price` falls through to
+# the standard price when a plan has no entry here, so re-running an
+# acquisition offer later is one dict away — and, more importantly, nothing
+# else in billing has to change to turn it off. The same lever was used on
+# 2026-07-20 and the offer restored on 07-21.
+OFFER_PRICES: dict[str, int] = {}
 
 
 def in_offer_window(subscription_started_at, now=None) -> bool:

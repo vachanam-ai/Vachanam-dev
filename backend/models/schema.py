@@ -260,6 +260,15 @@ class Doctor(Base):
         nullable=True,
         comment="Token-doctor only: Google Cal event ID for recurring clinic-hours event.",
     )
+    # One event id per SESSION WINDOW. A doctor sitting 9-12 and again 5-9 is
+    # two recurring events, and a single String column could hold only one —
+    # which is why split-session doctors had their hours deleted from the
+    # calendar instead of published (Vinay 2026-08-04).
+    calendar_event_ids_recurring: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Google Cal event IDs, one per recurring session window.",
+    )
     # user_id: links Doctor row to User account for doctor-role login.
     # SET NULL on user deletion — preserves the Doctor row.
     user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -361,8 +370,16 @@ class ClinicQuestion(Base):
     added_to_faq: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     # pending (awaiting the doctor) | answered (queued for callback)
     # | called (dispatched) | unreachable (no phone / attempts exhausted)
+    # | replied (answered ON WHATSAPP — terminal, never dialled)
     status: Mapped[str] = mapped_column(String(12), default="pending", nullable=False, index=True)
     call_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # How the patient asked: "voice" (default — the agent took it on a call) or
+    # "whatsapp". Vinay 2026-08-04: "questions asked in whatsapp should get
+    # whatsapp reply after getting confirmation from clinic. not call. because,
+    # those people whatsapp clinic because they don't want to talk." Phoning
+    # someone who deliberately chose to type is the wrong answer, however good
+    # the content.
+    channel: Mapped[str] = mapped_column(String(12), default="voice", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -499,7 +516,13 @@ class Token(Base):
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
     call_duration_seconds: Mapped[int | None] = mapped_column(Integer)
     google_calendar_event_id: Mapped[str | None] = mapped_column(String(255))
+    # The ~30-minute-before reminder.
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The day-before reminder, sent only when the booking was made ≥24h ahead
+    # (Vinay 2026-08-04). Its own flag: one boolean cannot say "the day-before
+    # call went, the half-hour one has not", and sharing it would mean the
+    # first reminder silently cancels the second.
+    reminder_24h_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # marked_by_user_id: UUID of User who marked attendance (plain UUID, no FK to avoid circular deps)

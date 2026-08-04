@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -569,6 +570,31 @@ def _default_meta_service() -> Any:
 # are written plainly here instead of extracted from there.
 
 
+# A reschedule cancels the old booking as an internal step. Without this, the
+# patient would get "your appointment is cancelled" a second before "your
+# appointment is moved" — two contradictory messages for one action.
+_suppress_notify: ContextVar[bool] = ContextVar("wa_suppress_cancel_notify", default=False)
+
+
+def _when_parts(token: Token) -> tuple[str, str]:
+    """(date, time) SEPARATELY — clinic templates give each its own {{n}}, so
+    one combined string would fill the date slot and pad the time slot."""
+    on_date = token.date.strftime("%d %B")
+    if token.appointment_time is not None:
+        return on_date, token.appointment_time.strftime("%I:%M %p").lstrip("0")
+    return on_date, (f"token {token.token_number}" if token.token_number else "-")
+
+
+async def _patient_name(db: AsyncSession, token: Token) -> str:
+    """Templates address the patient by name in {{1}}."""
+    try:
+        return (
+            await db.execute(select(Patient.name).where(Patient.id == token.patient_id))
+        ).scalar_one_or_none() or "there"
+    except Exception:  # noqa: BLE001
+        return "there"
+
+
 async def upcoming(db: AsyncSession, branch: Branch, phone: str) -> list[Token]:
     """This caller's changeable bookings at THIS branch, soonest first.
 
@@ -664,6 +690,25 @@ async def cancel(db: AsyncSession, branch: Branch, phone: str, token_id: str) ->
     logger.info(
         "wa_booking_cancelled", branch_id=str(branch.id), phone_last4=_last4(phone),
     )
+
+    # Same written confirmation the phone path now sends, so a patient gets the
+    # same record whichever channel they used. RULE 4: notification only.
+    if not _suppress_notify.get():
+        try:
+            from backend.services.meta_service import MetaService
+
+            doctor = (
+                await db.execute(select(Doctor.name).where(Doctor.id == token.doctor_id))
+            ).scalar_one_or_none()
+            on_date, at_time = _when_parts(token)
+            await MetaService().send_cancellation_confirmation(
+                phone, branch_id=branch.id,
+                patient_name=await _patient_name(db, token),
+                clinic_name=branch.name, doctor_name=doctor or "the doctor",
+                on_date=on_date, at_time=at_time,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("wa_cancel_notify_failed", error=str(e)[:150])
     return True
 
 
@@ -687,9 +732,26 @@ async def reschedule(
     if result.token is None:
         return result  # nothing taken, old booking untouched and still valid
 
-    await cancel(db, branch, phone, str(old.id))
+    token = _suppress_notify.set(True)  # one message for one action, not two
+    try:
+        await cancel(db, branch, phone, str(old.id))
+    finally:
+        _suppress_notify.reset(token)
+
     logger.info(
         "wa_booking_rescheduled", branch_id=str(branch.id),
         phone_last4=_last4(phone),
     )
+    try:
+        from backend.services.meta_service import MetaService
+
+        on_date, at_time = _when_parts(result.token)
+        await MetaService().send_reschedule_confirmation(
+            phone, branch_id=branch.id,
+            patient_name=await _patient_name(db, result.token),
+            clinic_name=branch.name, doctor_name=slot.doctor_name,
+            on_date=on_date, at_time=at_time, token_id=str(result.token.id),
+        )
+    except Exception as e:  # noqa: BLE001 — notification only
+        logger.warning("wa_reschedule_notify_failed", error=str(e)[:150])
     return result
