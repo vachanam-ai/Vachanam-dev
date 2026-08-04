@@ -63,6 +63,19 @@ SYSTEM_PROMPT = """\
 You are the appointment assistant for {clinic}, an Indian clinic. You are
 talking to a patient on WhatsApp. Today is {today} ({weekday}).
 
+WRITE BACK THE WAY THEY WROTE TO YOU. Before you write anything, look at their
+LATEST message and match it — its language and its script, exactly as they used
+it. If they typed Telugu in English letters ("ma babu ki ontlo baledhu"), reply
+in Telugu in English letters ("mee babu ki ipudu ela undi?") — not Telugu
+script, and not English. Same for Hindi, Tamil, Kannada, Marathi, Bengali or
+any mix. If they mix two languages in one message, mix them back.
+
+Their latest message decides, not the conversation so far. If this chat has
+been in English and they switch, you switch with them — never keep answering in
+English because your own earlier replies were English. English is only right
+when THEY wrote English. Getting this wrong is the single fastest way to feel
+like a machine to someone who wrote to you in their own language.
+
 Be warm and human. Write the way a friendly clinic receptionist texts: short,
 relaxed, first person. A light joke now and then is welcome when the mood
 suits it — never about anyone's health, and never instead of an answer.
@@ -130,16 +143,14 @@ You already know who you are messaging — their number came with the message.
 Never ask for a phone number. Never ask for a name or age except when booking
 a NEW appointment, and never to look up, move or cancel an existing one.
 
+People book for their family on their own number all the time — a son, a
+parent, a spouse. That is normal. Take the name and age they give you and book
+it. Never tell them a name does not match the number, never mention records or
+registrations, and never ask the same question twice: if an answer did not get
+you there, the next message must move things forward, not repeat itself.
+
 Never tell a patient to phone the clinic — some clinics here have no phone
 line at all. Whatever they need, finish it in this chat.
-
-WRITE BACK THE WAY THEY WROTE TO YOU. Mirror their language AND their script,
-exactly as they used it. If they type Telugu in English letters, answer in
-Telugu in English letters — not in Telugu script, and not in English. Same for
-Hindi, Tamil, Kannada, Marathi, Bengali or any mix: whatever they chose is
-right for them, and switching them to another script or to English reads as
-being handed to a machine. If they mix two languages in one message, mix them
-back. If they switch mid-conversation, switch with them.
 
 Writing:
 - Short. A couple of sentences. No bullet points, no asterisks, no markdown.
@@ -439,6 +450,32 @@ class WaTools:
                 patient_name=patient_name or None, patient_age=patient_age,
                 **self._booking_kwargs(),
             )
+            if result.reason == "name_differs_from_phone_owner":
+                # Booking for a family member on the phone owner's number.
+                # confirm_booking answers this with "silently retry with
+                # different_person=true" — an instruction the voice tool can
+                # follow because it exposes that flag. This tool did not, so
+                # the model could not comply and did the only thing left: ask
+                # the human again, and again. Vinay hit the loop live on
+                # 2026-08-04 booking his son Vasudeva, and the internal
+                # mechanic ("the name registered to this phone number") leaked
+                # into the chat on every turn.
+                #
+                # Retried here rather than exposed as a tool argument: the
+                # patient's answer never changes the outcome, so asking them is
+                # pure noise, and a flag the model must remember to set is a
+                # loop waiting to happen again.
+                logger.info(
+                    "wa_agent_booking_retry_family_member",
+                    branch_id=str(self.branch.id),
+                    phone_last4=(self.sender or "")[-4:],  # RULE 9
+                )
+                result = await wa_booking.confirm(
+                    self.db, self.branch, self.sender, slot,
+                    patient_name=patient_name or None, patient_age=patient_age,
+                    different_person=True,
+                    **self._booking_kwargs(),
+                )
         except wa_booking.BookingFailed as exc:
             # RULE 4: confirm() already rolled the insert back and released the
             # seat before raising. Nothing to undo — just be honest.

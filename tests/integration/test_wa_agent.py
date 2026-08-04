@@ -218,6 +218,52 @@ async def test_the_same_seat_cannot_be_booked_twice(db, redis):
     assert second["success"] is False, "double booking is never acceptable"
 
 
+@pytest.mark.asyncio
+async def test_booking_for_a_family_member_on_your_own_number(db, redis):
+    """Vinay 2026-08-04, live thread: booking his son Vasudeva on his own
+    number looped forever — the agent asked "confirm your son's name and age",
+    he answered "Vasudeva, 7", and it repeated the IDENTICAL message.
+
+    confirm_booking refuses a clearly-different name with
+    reason='name_differs_from_phone_owner' and an instruction to retry with
+    different_person=true. The VOICE tool exposes that flag; this one did not,
+    so the model was handed an instruction it could not follow and fell back to
+    re-asking the human. It also leaked the mechanic ("the name registered to
+    this phone number") into the chat.
+    """
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+
+    # The phone owner books for himself first — this creates the primary record.
+    mine = await _tools(db, br).book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="09:00",
+        patient_name="Vinay", patient_age=24,
+    )
+    assert mine["success"] is True, mine
+
+    # Now his son, on the same number, at a different time.
+    son = await _tools(db, br).book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="09:15",
+        patient_name="Vasudeva", patient_age=7,
+    )
+    assert son["success"] is True, f"a family booking must not need a second ask: {son}"
+
+    from backend.models.schema import Patient
+
+    people = (await db.execute(
+        select(Patient).where(Patient.branch_id == br.id)
+    )).scalars().all()
+    names = sorted(p.name for p in people)
+    assert names == ["Vasudeva", "Vinay"], "the son gets his own record, not Vinay's"
+    # Exactly one primary — the phone's owner. The son must not steal it.
+    assert [p.name for p in people if p.is_primary] == ["Vinay"]
+
+    # Two real bookings, one each.
+    rows = (await db.execute(select(Token).where(Token.branch_id == br.id))).scalars().all()
+    assert len(rows) == 2
+    assert {r.patient_id for r in rows} == {p.id for p in people}
+
+
 # ── cancel and reschedule ────────────────────────────────────────────────────
 
 async def _book(db, br):
@@ -463,12 +509,28 @@ def test_the_reply_mirrors_their_language_and_their_script():
     whatever language the patient writes in", which says nothing about SCRIPT —
     so Tenglish in, English out."""
     flat = " ".join(_prompt().split())
-    assert "mirror their language and their script" in flat
-    assert "telugu in english letters, answer in telugu in english letters" in flat
+    assert "write back the way they wrote to you" in flat
+    assert "reply in telugu in english letters" in flat
     assert "if they mix two languages in one message, mix them back" in flat
-    assert "if they switch mid-conversation, switch with them" in flat
     # a rule, not a per-language table
     assert "hindi, tamil, kannada, marathi, bengali or any mix" in flat
+
+
+def test_the_latest_message_decides_the_language_not_the_thread():
+    """Vinay 2026-08-04, still seeing English after the first fix: "also no
+    tenglish".
+
+    A thread that opened in English stays in English, because the model keeps
+    matching its OWN previous replies. The rule has to say which turn wins, and
+    it has to appear before the model has read anything else."""
+    p = _prompt()
+    flat = " ".join(p.split())
+    assert "their latest message decides, not the conversation so far" in flat
+    assert "never keep answering in english because your own earlier replies were english" in flat
+    assert "english is only right when they wrote english" in flat
+    # Position matters as much as wording: this must be read before the prompt
+    # settles into English by default.
+    assert p.index("write back the way they wrote to you") < p.index("be warm and human")
 
 
 def test_routing_is_left_to_the_model_not_a_hardcoded_table():
