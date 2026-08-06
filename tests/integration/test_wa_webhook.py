@@ -256,3 +256,71 @@ async def test_chat_gemini_down_static_fallback(db, wa_env, monkeypatch):
     reply = wa_env[-1]["text"].lower()
     assert reply  # a reply was sent — never a dead end
     assert "call us" not in reply and "call the clinic" not in reply
+
+
+# ── the WABA id arrives on the webhook, nowhere else ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_the_waba_id_is_learned_from_the_webhook(client, db, wa_env):
+    """Vinay 2026-08-05 got all 7 templates approved and still saw nothing send.
+
+    Template discovery lists /{waba_id}/message_templates, but a branch linked
+    by phone_number_id alone has wa_waba_id NULL — and the Graph API will not
+    walk phone_number_id -> WABA (`whatsapp_business_account` is not a field on
+    the phone node). The ONLY place that id reaches us is `entry.id` on the
+    webhook, which was being discarded. So every template send resolved to "no
+    template for this purpose" and silently skipped.
+    """
+    from sqlalchemy import select
+
+    from backend.models.schema import Branch
+
+    b, _pat, _tok = await _setup(db)
+    b.wa_waba_id = None
+    # Capture BEFORE commit — commit expires the ORM object, and a later
+    # attribute read would be a sync lazy-load on the async session.
+    bid, pnid = b.id, b.wa_phone_number_id
+    await db.commit()
+
+    payload = _event(pnid,
+                     {"id": "m-waba", "type": "text", "from": "919000000042",
+                      "text": {"body": "hi"}})
+    payload["entry"][0]["id"] = "555000111222"
+    raw = json.dumps(payload).encode()
+    r = await client.post(
+        "/webhooks/whatsapp", content=raw,
+        headers={"X-Hub-Signature-256": _sig(raw), "Content-Type": "application/json"},
+    )
+    assert r.status_code == 200
+
+    db.expire_all()
+    fresh = (await db.execute(select(Branch).where(Branch.id == bid))).scalar_one()
+    assert fresh.wa_waba_id == "555000111222"
+
+
+@pytest.mark.asyncio
+async def test_a_known_waba_id_is_never_overwritten(client, db, wa_env):
+    """Only ever fills a hole. A branch already connected keeps its id even if
+    a stray webhook arrives claiming another."""
+    from sqlalchemy import select
+
+    from backend.models.schema import Branch
+
+    b, _pat, _tok = await _setup(db)
+    b.wa_waba_id = "111aaa"
+    bid, pnid = b.id, b.wa_phone_number_id
+    await db.commit()
+
+    payload = _event(pnid,
+                     {"id": "m-waba2", "type": "text", "from": "919000000042",
+                      "text": {"body": "hi"}})
+    payload["entry"][0]["id"] = "999zzz"
+    raw = json.dumps(payload).encode()
+    await client.post(
+        "/webhooks/whatsapp", content=raw,
+        headers={"X-Hub-Signature-256": _sig(raw), "Content-Type": "application/json"},
+    )
+
+    db.expire_all()
+    fresh = (await db.execute(select(Branch).where(Branch.id == bid))).scalar_one()
+    assert fresh.wa_waba_id == "111aaa"

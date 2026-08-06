@@ -23,7 +23,7 @@ import hmac
 
 import structlog
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -88,6 +88,13 @@ async def inbound(request: Request, db: AsyncSession = Depends(get_db)):
         return {"ok": True}
 
     for entry in body.get("entry", []):
+        # entry.id IS the WABA id. Nothing else we receive carries it, and the
+        # Graph API will not walk phone_number_id -> WABA, so without this a
+        # branch connected by phone number alone has wa_waba_id NULL — and
+        # template discovery (which lists /{waba_id}/message_templates) returns
+        # nothing, so every template send silently skips. Found 2026-08-05
+        # after Vinay got all 7 templates approved and still saw no messages.
+        await _learn_waba_id(db, entry.get("id"), entry.get("changes", []))
         for change in entry.get("changes", []):
             value = change.get("value", {})
             try:
@@ -95,6 +102,44 @@ async def inbound(request: Request, db: AsyncSession = Depends(get_db)):
             except Exception as e:  # noqa: BLE001 — always 200 to Meta
                 logger.error("wa_inbound_error", error=str(e)[:300])
     return {"ok": True}
+
+
+async def _learn_waba_id(db: AsyncSession, waba_id, changes: list) -> None:
+    """Backfill Branch.wa_waba_id from the webhook that just arrived.
+
+    Best-effort by contract: this runs on the inbound path, so a failure here
+    must never cost the patient their reply (RULE 8).
+    """
+    if not waba_id:
+        return
+    try:
+        pnids = {
+            str((c.get("value") or {}).get("metadata", {}).get("phone_number_id") or "")
+            for c in changes
+        } - {""}
+        if not pnids:
+            return
+        res = await db.execute(
+            update(Branch)
+            .where(
+                Branch.wa_phone_number_id.in_(pnids),
+                Branch.wa_waba_id.is_(None),  # never overwrite a known id
+            )
+            .values(wa_waba_id=str(waba_id))
+        )
+        if res.rowcount:
+            await db.commit()
+            logger.info("wa_waba_id_learned", waba_id=str(waba_id), branches=res.rowcount)
+            # The cached template map was built while the WABA was unknown
+            # (i.e. empty) — drop it so the next send rediscovers.
+            from backend.services import wa_template_registry
+
+            for br in (await db.execute(
+                select(Branch.id).where(Branch.wa_waba_id == str(waba_id))
+            )).scalars().all():
+                await wa_template_registry.invalidate(br)
+    except Exception as e:  # noqa: BLE001 — never block an inbound message
+        logger.warning("wa_waba_learn_failed", error=str(e)[:150])
 
 
 async def _handle_value(db: AsyncSession, value: dict) -> None:
