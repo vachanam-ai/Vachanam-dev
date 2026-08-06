@@ -64,7 +64,15 @@ _MAX_OFFERED_SLOTS = 5
 # for. Other refusals (missing details, past slot, off-grid time, ...) are
 # not an occupancy race and are surfaced as-is so the router can react
 # correctly (e.g. ask for the patient's age, or a different date).
-_CAPACITY_REASONS = frozenset({"full", "already_booked", "slot_full"})
+# Reasons that genuinely mean "that seat is gone" — the patient must pick a
+# different time. `already_booked` is deliberately NOT one of them: it means
+# the patient ALREADY HAS this doctor that day, so the seat they asked for is
+# usually still free. Reporting it as capacity made the agent say "sorry, the
+# slot is full, please select a different time" right after truthfully saying
+# 10am was available (Vinay 2026-08-06). confirm_booking's own instruction for
+# this case even forbids it: "NEVER invent a different reason like 'slot not
+# available'" — it wants the existing booking surfaced and a MOVE offered.
+_CAPACITY_REASONS = frozenset({"full", "slot_full"})
 
 
 class BookingFailed(Exception):
@@ -108,6 +116,11 @@ class BookingResult:
     alternatives: list[Slot] = field(default_factory=list)
     reason: str | None = None
     instruction: str | None = None
+    # Set only for reason="already_booked": the patient's EXISTING booking with
+    # that doctor that day. Carried so the agent can offer to MOVE it instead
+    # of dead-ending — reschedule_appointment needs exactly this id.
+    existing_token_id: str | None = None
+    existing_time: str | None = None
 
 
 def _last4(phone: str | None) -> str:
@@ -551,7 +564,12 @@ async def confirm(
             branch_id=str(branch_id), doctor_id=str(slot.doctor_id),
             phone_last4=_last4(phone), reason=reason,
         )
-        return BookingResult(reason=reason, instruction=result.get("instruction"))
+        return BookingResult(
+            reason=reason,
+            instruction=result.get("instruction"),
+            existing_token_id=result.get("existing_token_id"),
+            existing_time=result.get("existing_time"),
+        )
 
     token_row = (
         await db.execute(
@@ -739,6 +757,24 @@ async def reschedule(
     old = await _owned_token(db, branch, phone, token_id)
     if old is None or old.status != "confirmed":
         return BookingResult(reason="booking_not_found")
+
+    # WHOSE booking is being moved. Without this, confirm() fell back to
+    # _existing_self_patient — the PRIMARY patient on the number — so moving a
+    # family member's appointment cancelled theirs and created one for the
+    # phone's owner instead. Vinay hit this live on 2026-08-06 rescheduling
+    # Narayana from his own number: "it instead cancelled".
+    #
+    # different_person mirrors confirm_booking's own rule: the primary record
+    # IS the phone's owner, so anyone else on that number is a family member
+    # and must stay a distinct, name-matched record.
+    old_patient = (
+        await db.execute(select(Patient).where(Patient.id == old.patient_id))
+    ).scalar_one_or_none()
+    if old_patient is not None:
+        confirm_kwargs.setdefault("patient_name", old_patient.name)
+        confirm_kwargs.setdefault("different_person", not bool(old_patient.is_primary))
+        confirm_kwargs.setdefault("patient_age", old_patient.age)
+        confirm_kwargs.setdefault("patient_gender", old_patient.gender)
 
     result = await confirm(
         db, branch, phone, slot, exclude_token_id=old.id, **confirm_kwargs

@@ -539,6 +539,24 @@ class WaTools:
                         _ampm(s.appointment_time) for s in result.alternatives
                         if s.appointment_time
                     ]}
+        if result.reason == "already_booked":
+            # NOT a capacity problem — the time they asked for is usually still
+            # free. Say what is actually true and offer the move, never "the
+            # slot is full" (Vinay 2026-08-06).
+            return {
+                "success": False,
+                "error": "this patient already has a booking with this doctor that day",
+                "existing_appointment_id": result.existing_token_id,
+                "existing_time": _ampm(_existing) if (
+                    _existing := _parse_time(result.existing_time or "")
+                ) else None,
+                "what_to_say": (
+                    "Tell them they already have that appointment and ask if "
+                    "they want it MOVED to the new time. Never say the slot is "
+                    "full or unavailable. If they say yes, call "
+                    "reschedule_appointment with existing_appointment_id."
+                ),
+            }
         return {"success": False, "error": result.reason or "could not book",
                 "detail": result.instruction}
 

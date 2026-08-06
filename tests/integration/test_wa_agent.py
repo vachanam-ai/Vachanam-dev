@@ -13,12 +13,14 @@ can touch another's booking, and whether a cancelled seat is freed are not.
 """
 import uuid
 from datetime import date, timedelta
+from datetime import time as time_cls
 
 import pytest
 from sqlalchemy import select
 
 from backend.models.schema import (
-    Branch, ClinicQuestion, Doctor, DoctorUnavailability, Organization, Token,
+    Branch, ClinicQuestion, Doctor, DoctorUnavailability, Organization, Patient,
+    Token,
 )
 from backend.services import wa_agent, wa_service
 
@@ -792,3 +794,126 @@ async def test_a_promised_callback_is_recorded_even_when_the_model_forgot(db, mo
     assert len(rows) == 1, "a promised callback must leave a row the clinic can act on"
     assert "tooth" in rows[0].question
     assert sent, "the patient still gets their reply"
+
+
+# ── 2026-08-06 (Vinay, live WhatsApp) ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_rescheduling_a_family_members_booking_keeps_it_theirs(db, redis):
+    """Vinay: "i asked to reschedule appointment of narayana, which i booked
+    using my number. it instead cancelled".
+
+    reschedule() passed no patient to confirm(), which then fell back to
+    _existing_self_patient -- the PRIMARY record on that number. So the family
+    member's appointment was cancelled and a NEW one created for the phone's
+    owner. From the patient's side that is a cancellation, not a move.
+    """
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+    tools = _tools(db, br)
+
+    # The phone's owner books first, so he is the primary record.
+    assert (await tools.book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="09:00",
+        patient_name="Vinay", patient_age=24,
+    ))["success"] is True
+    # A family member on the SAME number.
+    assert (await tools.book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="10:00",
+        patient_name="Narayana", patient_age=60,
+    ))["success"] is True
+
+    appts = (await tools.my_appointments())["appointments"]
+    narayana = next(a for a in appts if a.get("patient") == "Narayana") \
+        if any("patient" in a for a in appts) else None
+    if narayana is None:  # tool may not surface the name; fall back to the row
+        row = (await db.execute(
+            select(Token).join(Patient, Patient.id == Token.patient_id)
+            .where(Patient.name == "Narayana")
+        )).scalar_one()
+        narayana = {"appointment_id": str(row.id)}
+
+    out = await tools.reschedule_appointment(
+        appointment_id=narayana["appointment_id"], date=_tomorrow(), time="11:00",
+    )
+    assert out["success"] is True, out
+
+    # The MOVED booking must still belong to Narayana, not to the phone owner.
+    moved = (await db.execute(
+        select(Token).where(Token.status == "confirmed",
+                            Token.appointment_time == time_cls(11, 0))
+    )).scalar_one()
+    owner = (await db.execute(
+        select(Patient.name).where(Patient.id == moved.patient_id)
+    )).scalar_one()
+    assert owner == "Narayana", f"the move re-assigned the booking to {owner}"
+
+    # And Vinay's own 09:00 is untouched.
+    still = (await db.execute(
+        select(Token).where(Token.status == "confirmed",
+                            Token.appointment_time == time_cls(9, 0))
+    )).scalar_one()
+    assert still is not None
+
+
+@pytest.mark.asyncio
+async def test_an_existing_booking_is_never_reported_as_a_full_slot(db, redis):
+    """Vinay: "when i asked is slot available at 10am it said slot available.
+    when i asked to book, it is saying sorry slot is full".
+
+    already_booked means the PATIENT already has that doctor that day -- the
+    seat is usually still free. It was in _CAPACITY_REASONS, so it came back as
+    taken=True and the agent said the slot was full. confirm_booking's own
+    instruction forbids exactly that: "NEVER invent a different reason like
+    'slot not available'".
+    """
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+    tools = _tools(db, br)
+
+    assert (await tools.book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="09:00",
+        patient_name="Vinay", patient_age=24,
+    ))["success"] is True
+
+    # Same patient, same doctor, same day, a DIFFERENT and free time.
+    avail = await tools.check_availability(doctor_name="srinivas", date=_tomorrow())
+    assert "10:00" in avail["book_with"], "precondition: 10:00 is genuinely free"
+
+    out = await tools.book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="10:00",
+        patient_name="Vinay", patient_age=24,
+    )
+    assert out["success"] is False
+    # Scoped to the reason the model reports, not the whole payload: the
+    # what_to_say guidance legitimately contains the word "full" (it FORBIDS
+    # saying it).
+    reported = out["error"].lower()
+    assert "full" not in reported, f"must not claim the slot is full: {out}"
+    assert "taken" not in reported and "unavailable" not in reported
+    assert "already has a booking" in reported
+    assert out.get("existing_appointment_id"), "the agent needs the id to offer a move"
+    assert "moved" in out["what_to_say"].lower()
+
+
+@pytest.mark.asyncio
+async def test_already_booked_still_leaves_the_seat_free(db, redis):
+    """The refused attempt must give its Redis hold back, or the patient's own
+    duplicate attempt would block the slot for everyone else."""
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+
+    assert (await _tools(db, br).book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="09:00",
+        patient_name="Vinay", patient_age=24,
+    ))["success"] is True
+    await _tools(db, br).book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="10:00",
+        patient_name="Vinay", patient_age=24,
+    )
+
+    other = await _tools(db, br, sender="919876500077").book_appointment(
+        doctor_name="srinivas", date=_tomorrow(), time="10:00",
+        patient_name="Someone Else", patient_age=31,
+    )
+    assert other["success"] is True, f"10:00 must still be bookable: {other}"
