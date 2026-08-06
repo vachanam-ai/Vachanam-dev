@@ -76,14 +76,25 @@ def test_a_doctors_date_does_not_hijack_the_booking_call():
 
 # ── 3. the prompt moves a booking instead of adding one ──────────────────────
 
-def _advice_prompt(target="the fifth of August (2026-08-05)"):
-    from agent.livekit_minimal.agent import DOCTOR_ADVICE_PROMPT_EXTRA
+def _advice_prompt(target_iso="2026-08-05"):
+    """Build the real prompt through the real date builder.
+
+    2026-08-06: the date used to be interpolated as "words (ISO)" and the
+    prompt carried a rule telling the model never to speak the parenthesis.
+    It spoke it on a live call, so the ISO date now travels in its own
+    labelled field via `_followup_date_block` (FIXLOG #483). Pass
+    target_iso=None/"" for the no-date case.
+    """
+    from agent.livekit_minimal.agent import (
+        DOCTOR_ADVICE_PROMPT_EXTRA,
+        _followup_date_block,
+    )
 
     return DOCTOR_ADVICE_PROMPT_EXTRA.format(
         message="Please come in tomorrow instead.",
         doctor="Dr Srinivas",
         patient="Vinay",
-        target_date=target,
+        target_date=_followup_date_block(target_iso, "en"),
     )
 
 
@@ -118,10 +129,30 @@ def test_the_time_is_always_the_patients_choice():
 
 def test_no_date_means_no_reschedule_instructions_fire():
     """With no date the relay is just a relay — the move branch is explicitly
-    conditional so it cannot fire on an ordinary advice call."""
-    p = _advice_prompt("(none — the doctor did not ask for a specific date)")
-    assert "IF that date is present" in p
-    assert "none —" in p
+    conditional so it cannot fire on an ordinary advice call.
+
+    The conditional is unchanged; only how "no date" is expressed changed. It
+    used to be the prose placeholder "(none — the doctor did not ask for a
+    specific date)" substituted INTO the prompt, which the agent read out to
+    patients (Vinay 2026-08-06, "reading out instructions and all"). Absent
+    now means absent — no text at all.
+    """
+    p = _advice_prompt(None)
+    assert "IF such a date is given above" in p, "the move branch must stay conditional"
+    assert "none —" not in p, "a no-date placeholder must never reach the prompt"
+    assert "THE DATE THE DOCTOR ASKED FOR" not in p
+
+
+def test_a_date_is_spoken_as_words_with_the_iso_kept_out_of_speech():
+    """The regression that caused #483: the ISO date must not sit inside the
+    sentence the model speaks, and must not depend on a suppression rule."""
+    p = _advice_prompt("2026-08-05")
+    assert "5 August" in p, "the spoken form is words (leading zero stripped)"
+    assert "2026-08-05" in p, "the ISO form is still available to the tools"
+    assert "BEFORE the parenthesis" not in p, "no suppression rule may remain"
+    # The ISO must be explicitly marked as data, not speech.
+    iso_line = next(ln for ln in p.splitlines() if "2026-08-05" in ln)
+    assert "never" in iso_line.lower() and "spoken" in iso_line.lower()
 
 
 def test_the_relay_never_becomes_medical_advice():

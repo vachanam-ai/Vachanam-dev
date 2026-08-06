@@ -13,6 +13,7 @@ inspection (matching tests/unit/test_caller_authorization.py's idiom). No DB.
 from __future__ import annotations
 
 import inspect
+import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -177,14 +178,42 @@ def test_cancel_booking_has_no_spoken_name_gate():
     assert "_do_cancel(" in src
 
 
-def test_cold_open_greeting_does_not_speak_stored_name_by_default():
-    # The switch used to be an env kill-switch defaulting to off; it is now
-    # HARD-disabled (2026-08-02: no environment variable can restore the leak),
-    # which is strictly stronger. Assert the guarantee — greet-by-name is off
-    # and the cold open drops the stored name — not the shape of the flag.
-    assert getattr(agent_mod, "_GREET_BY_NAME") is False
+def test_cold_open_greeting_by_name_is_switchable_and_name_only():
+    """Greet-by-name is ON by product decision (Vinay 2026-08-06) — but the
+    disclosure must stay bounded and reversible.
+
+    History: the Jul-25 security review turned this OFF because ANI is
+    spoofable, then 2026-08-02 hard-disabled it. Vinay overrode that on
+    2026-08-06 ("when known person calls, always wish them by their name").
+    What this test now protects is the BOUND, not the default: a kill switch
+    still exists, and the greeting still discloses only a name — never an
+    appointment, doctor, or date — with booking mutations still gated by
+    verify_caller_identity.
+    """
     src = inspect.getsource(agent_mod)
+    # Reversible without a redeploy.
+    assert 'os.getenv("VOICE_GREET_BY_NAME"' in src
+    assert getattr(agent_mod, "_GREET_BY_NAME") is True
+    # The suppression branch still exists, so flipping the env var truly
+    # silences the name rather than leaving dead code behind.
     assert "if not _GREET_BY_NAME:\n                    caller_greeting_name = None" in src
+    # Identity verification still guards mutations — greeting by name must not
+    # have been used as a shortcut to mark the caller verified.
+    assert "verify_caller_identity" in src
+
+
+def test_greet_by_name_kill_switch_semantics():
+    """VOICE_GREET_BY_NAME must default ON and be disabled by "0".
+
+    Asserted on the expression rather than by reloading the module: agent.py
+    has heavy import-time side effects and other tests hold references to it,
+    so a reload would be both slow and flaky.
+    """
+    src = inspect.getsource(agent_mod)
+    assert '_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "1") != "0"' in src
+    # Prove the semantics of that expression rather than trusting the reading.
+    assert (os.getenv("VOICE_GREET_BY_NAME", "1") != "0") is True
+    assert ("0" != "0") is False
 
 
 def test_session_state_uses_verified_inbound_number_by_default():

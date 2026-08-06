@@ -622,9 +622,12 @@ async def create_walkin(
             from backend.redis_client import get_redis as _get_redis
 
             try:
+                from agent.tools.booking_tools import release_slot_hold
+
                 _r = _get_redis()
-                if int(await _r.get(key) or 0) > 0:
-                    await _r.decr(key)
+                # Atomic: GET-then-DECR could race the key's own expiry and
+                # leave a permanent -1 behind (see _SLOT_RELEASE_LUA).
+                await release_slot_hold(_r, key)
             except Exception:
                 _drop_redis()  # forget a dead socket so it's never reused
         raise HTTPException(status_code=500, detail="Could not save walk-in")

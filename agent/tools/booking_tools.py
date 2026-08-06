@@ -47,6 +47,43 @@ end
 return redis.call('INCR', KEYS[1])
 """
 
+# A slot counter must never be able to go below zero, and a release must never
+# CREATE the key. Redis DECR on a missing key sets it to -1 with NO TTL, so a
+# release that raced its own hold's expiry left a permanent -1 behind. The next
+# INCR then returned 0, assign_token handed out token_number=0, and
+# confirm_booking hit the uq_token_number_confirmed unique index -> the caller
+# heard "there is a problem in booking" and only the RETRY (counter now 0 -> 1)
+# succeeded. Found 2026-08-06 on live Redis:
+#   slot:dc5c32d0…:2026-08-05:0900 = -1 ttl=-1
+# The old guard was GET-then-DECR across two round-trips, which is also a race.
+# Both operations are now single atomic server-side steps.
+_SLOT_RELEASE_LUA = """
+local cur = tonumber(redis.call('GET', KEYS[1]))
+if cur and cur > 0 then return redis.call('DECR', KEYS[1]) end
+return cur or 0
+"""
+
+# Repair-then-increment: a counter left negative by any historical bare DECR is
+# floored to 0 before incrementing, so the returned hold number is always >= 1.
+_SLOT_REPAIR_INCR_LUA = """
+local cur = tonumber(redis.call('GET', KEYS[1]))
+if cur and cur < 0 then redis.call('SET', KEYS[1], '0') end
+return redis.call('INCR', KEYS[1])
+"""
+
+
+async def release_slot_hold(r, key: str) -> int:
+    """RULE 2/3: give back a slot hold atomically, never below zero.
+
+    DECR is rollback-only. This is the single release path for every caller
+    (voice agent, walk-in desk, cascade-cancel) so no site can reintroduce the
+    bare-DECR defect above.
+    """
+    if not key or not str(key).startswith("slot:"):
+        return 0  # token counters are the queue sequence — never decremented
+    return int(await r.eval(_SLOT_RELEASE_LUA, 1, key))
+
+
 # iter1 #12: the spoken complaint is fully attacker-controlled (the caller can
 # say anything, including "ignore your instructions and ..."). Before it reaches
 # the routing LLM prompt we strip control/newline characters (which a prompt
@@ -639,6 +676,7 @@ async def check_availability(
     async with _redis() as r:
         reserved_counts = await _redis_int_values(r, slot_keys)
     for slot, key, reserved in zip(all_slots, slot_keys, reserved_counts):
+        reserved = max(reserved, 0)  # a corrupt negative key is not "free-er"
         if key == held_slot_key and reserved > 0:
             reserved -= 1
         booked = max(reserved, db_counts.get(slot, 0))
@@ -939,7 +977,9 @@ async def assign_token(
         slot_key = f"slot:{doctor_id}:{branch_id}:{booking_date}:{appointment_time.strftime('%H%M')}"
 
         async with _redis() as r:
-            slot_count = await r.incr(slot_key)
+            # Repair-then-INCR: a key left negative by a historical bare DECR
+            # would otherwise return 0 here and produce token_number=0.
+            slot_count = int(await r.eval(_SLOT_REPAIR_INCR_LUA, 1, slot_key))
             # Bounded hold TTL (see SLOT_HOLD_TTL_SECONDS): outlive the call, not
             # the wait until the appointment. DB confirmed rows are the lasting
             # source of truth, so a leaked hold self-heals fast instead of
@@ -947,7 +987,7 @@ async def assign_token(
             await r.expire(slot_key, SLOT_HOLD_TTL_SECONDS)
 
             if max(slot_count, db_confirmed + 1) > max_per_slot:
-                await r.decr(slot_key)  # rollback
+                await release_slot_hold(r, slot_key)  # rollback (never below 0)
                 return {"success": False, "reason": "full"}
 
         logger.info(

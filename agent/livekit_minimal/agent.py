@@ -759,10 +759,20 @@ KNOWN_CALLER_BOOKING_EXTRA = (
     "on the same day."
 )
 
-# SEC: inbound caller ID is the appointment scope, but it is not permission to
-# disclose a stored patient's name in the cold open. This is hard-disabled;
-# there is no environment switch that can accidentally restore the leak.
-_GREET_BY_NAME = False
+# Greet a RECOGNISED caller by their stored name in the cold open.
+#
+# Vinay 2026-08-06: "when a new number calls, we can speak as normal, but, when
+# known person calls, always wish them by their name."
+#
+# SECURITY TRADEOFF, ACCEPTED BY VINAY. Caller ID (ANI) is spoofable, so
+# speaking the stored name discloses one PII field — the patient's own name,
+# to someone calling from the patient's own number — before any further
+# verification. The Jul-25 security review disabled this for that reason. It is
+# now a product requirement, so it is ON, but it is deliberately kept to a
+# NAME ONLY: verify_caller_identity still gates every booking mutation, and no
+# appointment, doctor, date, or medical detail is disclosed in the greeting.
+# Set VOICE_GREET_BY_NAME=0 to turn it back off without a redeploy.
+_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "1") != "0"
 
 # On a language switch, append a recency-salient language-lock to the carried
 # history so the old-language turns cannot pull the model back (see
@@ -852,14 +862,13 @@ NEXT_VISIT_PROMPT_EXTRA = (
     "1) Your OPENING line already asked the doctor's question (\"{message}\"). Do "
     "NOT ask it again — just listen to their answer and respond warmly in one line.\n"
     "2) BOOKING — offer it however they answer. The doctor has asked this patient "
-    "to come back around {target_date}, so tell them so and offer to book, whether "
+    "to come back around the date below, so tell them so and offer to book, whether "
     "their answer is fine (\"అంతా బాగానే ఉంది\") or they report a problem. "
     "On agreement, FIRST ask what time of day suits them (\"ఏ టైమ్ వీలవుతుందండి?\") — "
     "NEVER pick a time yourself; the patient chooses the time, you check it with "
     "check_availability. Then assign a slot with {doctor} within 2 days of that date "
-    "and confirm in one breath. SPEAK the date using the words BEFORE the parenthesis "
-    "(e.g. 'ఇరవై తొమ్మిది'); the value in parentheses is the ISO date for the tools "
-    "ONLY — never read the parenthesis or digits aloud.\n"
+    "and confirm in one breath.\n"
+    "{target_date}"
     "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
     "triage. IF the patient reports ANY problem, pain, or discomfort: say warmly "
     "'I will inform the doctor and they will get back to you as soon as possible' — "
@@ -903,8 +912,8 @@ DOCTOR_ADVICE_PROMPT_EXTRA = (
     "the patient explicitly asks — never push one otherwise. If they report a "
     "NEW problem, say 'I will inform the doctor and get back to you as soon as "
     "possible' and do NOT offer a visit.\n"
-    "THE DATE THE DOCTOR ASKED FOR: {target_date}\n"
-    "IF that date is present, the doctor has changed when they want to see this "
+    "{target_date}"
+    "IF such a date is given above, the doctor has changed when they want to see this "
     "patient, and your job is to MOVE any visit they already have — never to add "
     "a second one:\n"
     "   - FIRST call find_my_bookings, before offering anything.\n"
@@ -915,9 +924,7 @@ DOCTOR_ADVICE_PROMPT_EXTRA = (
     "— that would leave them holding two appointments.\n"
     "   - Only if they have NO upcoming booking do you book a new one with "
     "confirm_booking, passing patient_name='{patient}'.\n"
-    "   - Either way stay within 2 days of the date. SPEAK the date using the "
-    "words BEFORE the parenthesis; the value in parentheses is the ISO date for "
-    "the tools ONLY — never read the parenthesis or digits aloud.\n"
+    "   - Either way stay within 2 days of the date.\n"
     "   - Once the move or the booking has succeeded, it is DONE: give ONE "
     "confirmation and never offer again.\n"
     "Two short sentences per reply."
@@ -980,17 +987,40 @@ def _followup_meta_safe(meta: dict) -> dict:
 
 
 def _spoken_target_date(raw: str, lang_code: str) -> str:
-    """Render an ISO target date for the follow-up prompt as 'Telugu words (ISO)'
-    so the agent SPEAKS it correctly (29 → ఇరవై తొమ్మిది, not '29th') while still
-    having the ISO date for the booking tools. Falls back to raw on parse failure."""
+    """Render an ISO target date as SPEAKABLE words only (29 → ఇరవై తొమ్మిది).
+
+    This used to return "ఇరవై తొమ్మిది (2026-08-29)" and rely on a prompt rule
+    telling the model never to read the parenthesis. On real follow-up calls it
+    read it anyway — the patient heard the raw ISO date (Vinay 2026-08-06,
+    "it is reading out instructions and all"). Anything not meant to be spoken
+    must not sit inside the sentence the model is speaking, so the ISO date is
+    now carried in its own clearly-labelled field (see _followup_date_block).
+    Falls back to raw on parse failure."""
     if not raw:
         return raw
     try:
         d = date_cls.fromisoformat(raw)
     except (ValueError, TypeError):
         return raw
-    spoken = telugu_date(d) if lang_code == "te" else d.strftime("%d %B").lstrip("0")
-    return f"{spoken} ({raw})"
+    return telugu_date(d) if lang_code == "te" else d.strftime("%d %B").lstrip("0")
+
+
+def _followup_date_block(raw: str, lang_code: str) -> str:
+    """The doctor-requested date as prompt text, or '' when there is none.
+
+    An ABSENT date must produce NO text at all. The old code substituted the
+    prose placeholder "(none — the doctor did not ask for a specific date)"
+    into the prompt, which the model then read out loud to the patient."""
+    spoken = _spoken_target_date(raw, lang_code)
+    if not spoken:
+        return ""
+    return (
+        f"\nTHE DATE THE DOCTOR ASKED FOR — say it aloud exactly as: "
+        f"\"{spoken}\".\n"
+        f"ISO form of that same date, for tool arguments ONLY — this is data, "
+        f"never speech, and must never be spoken, spelled, or referred to: "
+        f"{raw}\n"
+    )
 
 
 async def _localize_message(message: str, lang_code: str) -> str:
@@ -2419,6 +2449,12 @@ class VachanamAgent(Agent):
         # Empty until primed, and staying empty simply speaks the Latin name.
         self._name_sub = None
         self._name_hold = None
+        # Install the deterministic word rules (English weekdays; English
+        # numbers on an English call) NOW rather than waiting for the
+        # pronunciation map. That map arrives late on a cache miss and not at
+        # all if its lookup fails, and these rules must hold from the first
+        # word of the call.
+        self.set_pronunciations({})
 
     async def _current_doctors_speech(self, language: str) -> str:
         '''One-query, DB-grounded current-shift response; never use the LLM.'''
@@ -2443,14 +2479,29 @@ class VachanamAgent(Agent):
 
     def set_pronunciations(self, mapping: dict) -> None:
         """Install the clinic+language pronunciation map (see
-        agent/services/pronunciation.py). Safe to call with {} — that disables
-        the substitution and speaks names exactly as stored."""
+        agent/services/pronunciation.py). Safe to call with {} — the
+        deterministic word rules below still apply.
+
+        The same streaming replacer also carries the two ALWAYS-ON word rules
+        (agent/services/spoken_words.py): English weekday names in every
+        language, and English number words on an English call. Merging them
+        here rather than at each call site means no path can install a
+        pronunciation map that silently drops them. The pronunciation map wins
+        on a key collision — a clinic-specific spelling is more specific than a
+        generic word rule.
+        """
         try:
             from agent.services.pronunciation import build_replacer
+            from agent.services.spoken_words import speech_map
 
-            self._name_sub, self._name_hold = build_replacer(mapping or {})
-            if self._name_sub is not None:
-                logger.info("pronunciations_installed entries=%d", len(mapping))
+            merged = speech_map(self._lang_code)
+            merged.update(mapping or {})
+            self._name_sub, self._name_hold = build_replacer(merged)
+            if self._name_sub is not None and mapping:
+                logger.info(
+                    "pronunciations_installed entries=%d total=%d",
+                    len(mapping), len(merged),
+                )
         except Exception as e:  # noqa: BLE001 — pronunciation is never fatal
             logger.warning("pronunciation_install_failed: %s", str(e)[:140])
             self._name_sub, self._name_hold = None, None
@@ -3401,8 +3452,15 @@ class VachanamAgent(Agent):
         context: RunContext,
         doctor_id: str,
         patient_name: str,
-        complaint: str,
         booking_date: str,
+        # OPTIONAL for the same reason token_number is (below): a REQUIRED arg
+        # the model omits is rejected by function-call validation before the
+        # body ever runs, so the caller hears "there is a problem in booking"
+        # and the model then re-asks the complaint it already had (Vinay, real
+        # call 2026-08-06). The body already tolerates an empty complaint — it
+        # only length-checks it — so a default here changes nothing except
+        # removing a hard-fail path.
+        complaint: str = "",
         # Vinay 2026-07-24: NEVER ask the patient "is follow-up okay" — the
         # question sounded robotic and added a turn. Follow-up calls are part
         # of the service; default True, LLM never collects it.
@@ -4638,10 +4696,13 @@ class VachanamAgent(Agent):
         if not key.startswith("slot:"):
             return
         try:
+            from agent.tools.booking_tools import release_slot_hold
+
             r = aioredis.from_url(settings.redis_url, decode_responses=True)
             try:
-                if int(await r.get(key) or 0) > 0:
-                    await r.decr(key)
+                # Atomic release — a GET-then-DECR pair could race its own
+                # expiry and leave a permanent -1 (see _SLOT_RELEASE_LUA).
+                await release_slot_hold(r, key)
             finally:
                 await r.aclose()
         except Exception as e:
@@ -4840,13 +4901,14 @@ class VachanamAgent(Agent):
             try:
                 r = aioredis.from_url(settings.redis_url, decode_responses=True)
                 try:
+                    from agent.tools.booking_tools import release_slot_hold
+
                     key = (
                         f"slot:{token.doctor_id}:{token.branch_id}:{token.date}:"
                         f"{token.appointment_time.strftime('%H%M')}"
                     )
-                    # guard: never push an absent/zero key negative
-                    if int(await r.get(key) or 0) > 0:
-                        await r.decr(key)
+                    # Atomic guard: never push an absent/zero key negative.
+                    await release_slot_hold(r, key)
                 finally:
                     await r.aclose()
             except Exception as e:
@@ -5846,7 +5908,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         )
                     # The GREETING (below) deterministically asks the doctor's question;
                     # this extra just drives the booking offer + locks the doctor.
-                    _td = _spoken_target_date(inbound_followup.get("target_date", ""), lang_code)
+                    _td_raw = inbound_followup.get("target_date", "") or ""
+                    _td = _spoken_target_date(_td_raw, lang_code)
                     caller_prompt_extra += (
                         "\n\nPENDING FOLLOW-UP: your opening already asked the doctor's "
                         "question. After their answer, ALWAYS mention the doctor's "
@@ -5860,14 +5923,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         "with check_availability. The patient is already in our records "
                         "— do NOT ask their name or age; book on their existing record. "
                         "IF they report a problem/pain: say you will inform the "
-                        "doctor AND still offer the visit in the same breath ('doctor "
-                        "wanted to see you around {date} anyway') — booking a visit is "
-                        "not medical advice, but never say it will fix anything and "
-                        "never say it can wait. IF they CLEARLY refuse the visit "
-                        "('రాను', 'not coming'): call followup_visit_declined with "
-                        "their words — never argue; a vague 'later' is NOT a decline. "
-                        "Speak the date using the words BEFORE the "
-                        "parenthesis; the parenthesis is the ISO for tools only."
+                        "doctor AND still offer the visit in the same breath "
+                        + (
+                            f"(\"the doctor wanted to see you around {_td} anyway\") "
+                            if _td else ""
+                        )
+                        + "— booking a "
+                        "visit is not medical advice, but never say it will fix "
+                        "anything and never say it can wait. IF they CLEARLY refuse "
+                        "the visit ('రాను', 'not coming'): call "
+                        "followup_visit_declined with their words — never argue; a "
+                        "vague 'later' is NOT a decline.\n"
+                        + (
+                            f"ISO form of that date, for tool arguments ONLY — this is "
+                            f"data, never speech, and must never be spoken or spelled "
+                            f"out: {_td_raw}\n"
+                            if _td_raw else ""
+                        )
                     )
                     if (
                         inbound_followup.get("task_type") == "doctor_advice"
@@ -6197,7 +6269,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 message=followup_meta.get("message", ""),
                 doctor=followup_meta.get("doctor_name", "the doctor"),
                 patient=followup_meta.get("patient_name", "the patient"),
-                target_date=_spoken_target_date(
+                target_date=_followup_date_block(
                     followup_meta.get("target_date", ""), lang_code
                 ),
             )
@@ -6207,9 +6279,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 message=followup_meta.get("message", ""),
                 doctor=followup_meta.get("doctor_name", "the doctor"),
                 patient=followup_meta.get("patient_name", "the patient"),
-                target_date=_spoken_target_date(
+                # Absent date -> EMPTY string, never prose. The old
+                # "(none — the doctor did not ask for a specific date)"
+                # placeholder was read out to patients.
+                target_date=_followup_date_block(
                     followup_meta.get("target_date", ""), lang_code
-                ) or "(none — the doctor did not ask for a specific date)",
+                ),
             )
             state.call_type = "doctor_advice"
         elif is_qa_call:
@@ -6710,19 +6785,38 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     and not state.token_confirmed
                     and state.token_redis_key
                 ):
+                    from agent.tools.booking_tools import release_slot_hold
+
                     r = aioredis.from_url(settings.redis_url, decode_responses=True)
                     try:
-                        # Only roll back if OUR number is still the latest —
-                        # a blind DECR after someone else INCRed would make the
-                        # counter reissue their number (same bug as cancel's).
-                        current = int(await r.get(state.token_redis_key) or 0)
-                        if state.token_number is not None and current == state.token_number:
-                            await r.decr(state.token_redis_key)
+                        key = state.token_redis_key
+                        if key.startswith("slot:"):
+                            # Slot holds release atomically and never below 0.
+                            # The old GET-then-DECR could fire when the key had
+                            # already expired (current==0) and token_number was
+                            # 0, writing a permanent -1 that then handed the
+                            # NEXT caller token_number=0 (unique-index failure).
+                            await release_slot_hold(r, key)
                             logger.warning(
-                                "token_released_on_disconnect token=%s branch_id=%s",
-                                state.token_number,
+                                "slot_released_on_disconnect branch_id=%s",
                                 str(state.branch_id),
                             )
+                        else:
+                            # Token queue: only roll back if OUR number is still
+                            # the latest — a blind DECR after someone else INCRed
+                            # would reissue their number (same bug as cancel's).
+                            current = int(await r.get(key) or 0)
+                            if (
+                                state.token_number is not None
+                                and current == state.token_number
+                                and current > 0
+                            ):
+                                await r.decr(key)
+                                logger.warning(
+                                    "token_released_on_disconnect token=%s branch_id=%s",
+                                    state.token_number,
+                                    str(state.branch_id),
+                                )
                     finally:
                         await r.aclose()
                 # Call log — analytics + minute metering (Rule 9: last-4 only).

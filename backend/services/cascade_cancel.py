@@ -203,13 +203,15 @@ async def cascade_for_unavailability(
 
             _r = _aioredis.from_url(_settings.redis_url, decode_responses=True)
             try:
+                from agent.tools.booking_tools import release_slot_hold
+
                 for s in slot_snaps:
                     key = (
                         f"slot:{s['doctor_id']}:{s['branch_id']}:{s['date']}:"
                         f"{s['appointment_time'].strftime('%H%M')}"
                     )
-                    if int(await _r.get(key) or 0) > 0:
-                        await _r.decr(key)
+                    # Atomic — never create the key, never go below zero.
+                    await release_slot_hold(_r, key)
             finally:
                 await _r.aclose()
         except Exception as exc:
