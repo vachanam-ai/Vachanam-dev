@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     soniox_tts_model: str = "tts-rt-v1"  # per Soniox RT-TTS docs; sandbox-validated
     soniox_jp_tts_ws_url: str = "wss://tts-rt.jp.soniox.com/tts-websocket"
     soniox_tts_default_voice: str = "Priya"
+
+    # ── TTS sandbox (Vinay 2026-08-07) ────────────────────────────────────
+    # Swap the voice engine WITHOUT touching the tuned Soniox path. Default
+    # is "soniox", so production behaviour is unchanged unless a deployment
+    # explicitly sets TTS_PROVIDER=cartesia (the sandbox Fly app does).
+    tts_provider: str = "soniox"
+    cartesia_api_key: str = ""
+    cartesia_model: str = "sonic-2"
+    cartesia_voice: str = ""          # Cartesia voice id; blank = plugin default
+    cartesia_sample_rate: int = 24000
     soniox_tts_sample_rate: int = 24000
 
     # #5 tool prefetch (2026-07-24): on a high-confidence booking turn, run the

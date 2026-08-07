@@ -144,7 +144,12 @@ from backend.models.schema import Patient as _PatientModel  # noqa: E402
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vachanam-agent")
 
-AGENT_NAME = "vachanam-agent"
+# Overridable ONLY so the TTS sandbox can register under its own name
+# (Vinay 2026-08-07). Two workers sharing a name both accept dispatch for the
+# same number, so a sandbox using the production name would silently take real
+# patient calls — the exact opposite of "without disturbing existing things".
+# Unset everywhere in production, so the value there is unchanged.
+AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "vachanam-agent")
 
 # The VAD must report a possible boundary quickly; it must not be the component
 # that decides a Telugu utterance is final. Soniox's cancellable 200 ms finalize
@@ -1190,10 +1195,49 @@ def _soniox_prewarm_matches(warm, voice_id: str, tts_lang: str) -> bool:
     )
 
 
+def _build_cartesia_tts(tts_lang: str):
+    """SANDBOX ONLY — Cartesia in place of Soniox (Vinay 2026-08-07).
+
+    Reached only when TTS_PROVIDER=cartesia, which no production deployment
+    sets. The Soniox path below is untouched: weeks of latency tuning live
+    there, so this is a separate branch rather than an edit to it.
+    """
+    from livekit.agents import tokenize as _tokenize
+    from livekit.plugins import cartesia
+
+    kw = dict(
+        api_key=settings.cartesia_api_key,
+        model=settings.cartesia_model,
+        language=tts_lang,
+        sample_rate=settings.cartesia_sample_rate,
+        # Same sentence tokenizer as Soniox so this compares the ENGINE, not
+        # two different chunking strategies.
+        tokenizer=_tokenize.blingfire.SentenceTokenizer(
+            min_sentence_len=8, stream_context_len=4, retain_format=True,
+        ),
+    )
+    if settings.cartesia_voice:
+        kw["voice"] = settings.cartesia_voice
+    try:
+        from livekit.agents import utils
+
+        kw["http_session"] = utils.http_context.http_session()
+    except Exception:  # noqa: BLE001 — no job context: plugin opens its own
+        pass
+    logger.info("tts_provider_cartesia model=%s lang=%s", settings.cartesia_model, tts_lang)
+    return cartesia.TTS(**kw)
+
+
 def _build_session_tts(
     voice_id: str, tts_lang: str, prewarmed_soniox=None
 ) -> "soniox.TTS":
     """The sole session TTS. A missing Soniox key is a configuration error."""
+    # Sandbox swap, checked before the Soniox key requirement so a Cartesia-only
+    # deployment does not need a Soniox key at all.
+    if (settings.tts_provider or "soniox").lower() == "cartesia":
+        if not settings.cartesia_api_key:
+            raise RuntimeError("TTS_PROVIDER=cartesia but CARTESIA_API_KEY is unset")
+        return _build_cartesia_tts(tts_lang)
     if not settings.soniox_jp_api_key:
         raise RuntimeError("SONIOX_JP_API_KEY is required: Soniox is the only TTS provider")
     primary = (
