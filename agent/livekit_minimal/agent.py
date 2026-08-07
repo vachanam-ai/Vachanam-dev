@@ -2751,6 +2751,18 @@ class VachanamAgent(Agent):
         utterance = self._message_text(new_message).strip()
         self._state.last_user_utterance = utterance
 
+        # Remember consent instead of re-deriving it every turn. "book me an
+        # appointment tomorrow at 10" is authorization for the booking that
+        # follows, and answering "vinay, 28" two turns later does not withdraw
+        # it — but the old per-utterance check read exactly that as a caller
+        # who had never asked, and made the agent ask again (Vinay, prod
+        # 2026-08-07). A flat no clears it; nothing else does.
+        if utterance:
+            if _caller_refused_outright(utterance):
+                self._state.caller_asked_to_book = False
+            elif _caller_authorized_booking(utterance):
+                self._state.caller_asked_to_book = True
+
         # Language selection is infrastructure state, not a creative LLM choice.
         # Switch the active prompt/STT/TTS agent before generating any reply.
         requested_language = _explicit_language_request(utterance)
@@ -3624,7 +3636,16 @@ class VachanamAgent(Agent):
             _caller_authorized_booking(utterance)
             or (
                 not declined
-                and self._last_assistant_requested_booking_confirmation()
+                and (
+                    # Consent given earlier in this call and never withdrawn.
+                    # This is what makes the confirmation question asked ONCE:
+                    # the guard stops rejecting, so it never emits the
+                    # ToolError that ordered the model to ask again. The
+                    # question still gets asked — the prompt asks for it — but
+                    # nothing can now force a second one.
+                    self._state.caller_asked_to_book
+                    or self._last_assistant_requested_booking_confirmation()
+                )
             )
         ):
             logger.warning(
@@ -3791,6 +3812,11 @@ class VachanamAgent(Agent):
         if result.get("success"):
             self._state.token_confirmed = True
             self._state.any_booking_confirmed = True
+            # Consent is spent. A SECOND booking on this call — the other
+            # family member — is a new decision and gets its own confirmation
+            # question. Cleared here rather than at authorization above so a
+            # retry after a transient failure does not have to re-ask.
+            self._state.caller_asked_to_book = False
             try:
                 self._state.last_confirmed_token_id = UUID(str(result['token_id']))
             except (KeyError, TypeError, ValueError):

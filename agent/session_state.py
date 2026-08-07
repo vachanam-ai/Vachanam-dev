@@ -59,6 +59,23 @@ class SessionState:
     # to reschedule ... it is repeating n number of times", and booking
     # confirmations asked 3 times before a plain "yes" took).
     pending_confirmation: str | None = None
+    # The caller has asked to book at some point in THIS call, and has not
+    # withdrawn it. Consent for a booking, remembered.
+    #
+    # Vinay 2026-08-07: "we need shall i book once and only once before
+    # booking." It was asked over and over because authorization was re-derived
+    # from the LATEST utterance every time, so it evaporated the moment the
+    # caller answered a question instead of repeating themselves:
+    #
+    #     "book an appointment tomorrow at 10"  -> authorized
+    #     "your name and age?"
+    #     "vinay, 28"                           -> no booking words: BLOCKED
+    #                                           -> "shall I book?" -> loop
+    #
+    # They consented at turn one. A flag is how you remember that. Set on any
+    # turn that asks to book, cleared by a flat refusal and after each booking
+    # completes, so a second booking in the same call asks its own question.
+    caller_asked_to_book: bool = False
     # Exact durable booking created most recently in THIS call. If the caller
     # immediately says the booking was accidental, cancellation is pinned to
     # this id instead of trusting an older/arbitrary id selected by the LLM.

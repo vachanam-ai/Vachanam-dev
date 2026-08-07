@@ -53,7 +53,12 @@ def test_naming_a_time_is_treated_as_a_booking_request():
 
 def test_exactly_one_confirmation_question_then_book():
     text = _prompt()
-    assert "shall I book it?" in text
+    # Vinay 2026-08-07 gave the exact shape he wants, and it names the patient:
+    # "okay vinay, shall i confirm your appointment at 9am with dr.srinivas?"
+    # Same single question as the 08-03 rule this test was written for — the
+    # name and the date were added, the "ask it once" contract is unchanged.
+    assert "shall I confirm your appointment" in text
+    assert "Okay <name>" in text
     assert "confirm_booking IMMEDIATELY" in text
     assert "Ask that question ONCE" in text
     assert "never re-confirm a booking already made" in text
@@ -93,5 +98,5 @@ def test_the_rule_survives_every_language_render(language):
     """The prompt is rebuilt per active language; a rule that only exists in the
     English render protects nobody — this clinic runs in Telugu."""
     text = _prompt(language)
-    assert "shall I book it?" in text
+    assert "shall I confirm your appointment" in text
     assert "NEVER tell a caller you lack permission" in text
