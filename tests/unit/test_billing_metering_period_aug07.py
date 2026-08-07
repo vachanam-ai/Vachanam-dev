@@ -22,9 +22,8 @@ the thing that did not exist.
 subscription/signup day a real cycle uses, so the number does not jump when
 the first cycle is finally created.
 """
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
-import pytest
 
 from backend.routers.payments import _metering_period
 from backend.services.billing_math import add_month

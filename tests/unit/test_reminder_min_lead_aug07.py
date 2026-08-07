@@ -13,7 +13,7 @@ already measures it (booked_far_enough_ahead).
 Inclusive at exactly one hour, which is the case he named: booked at 5 for 6
 gets no call.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
