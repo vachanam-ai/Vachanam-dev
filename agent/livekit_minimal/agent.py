@@ -6472,6 +6472,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 patient=meta.get("patient_name", ""),
             )
             state.call_type = "cascade_rebook"
+            # WE rang THEM to rebook a visit the clinic itself cancelled, so
+            # asking the patient to first request a booking is backwards — see
+            # the seed note on next_visit_book below.
+            state.caller_asked_to_book = True
             if meta.get("followup_task_id"):
                 try:
                     state.followup_task_id = UUID(meta["followup_task_id"])
@@ -6490,6 +6494,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ),
             )
             state.call_type = "next_visit_book"
+            # SEED THE CONSENT. On an inbound call the patient asks to book and
+            # `caller_asked_to_book` records it. On THIS call the clinic rang
+            # the patient because their doctor asked them to come back — the
+            # patient never says "book me an appointment", so that flag can
+            # never be set, and the guard fell through to matching the model's
+            # own phrasing. "Thursday 10 AM tho confirm chestara?" matches none
+            # of the listed phrases, so the patient's "sare" was REFUSED and
+            # the guard made the agent ask a second time. Proven by simulation
+            # 2026-08-07 before this line existed.
+            #
+            # The doctor's instruction plus the patient's agreement IS the
+            # consent here; requiring them to request a booking they were
+            # phoned about is the wrong question. A flat "no" still clears it
+            # (on_user_turn_completed), and the prompt still asks before
+            # booking.
+            state.caller_asked_to_book = True
         elif meta.get("call_type") == "doctor_advice":
             extra_tail += DOCTOR_ADVICE_PROMPT_EXTRA.format(
                 message=followup_meta.get("message", ""),
@@ -6503,6 +6523,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ),
             )
             state.call_type = "doctor_advice"
+            # Same seed, both mutations. The doctor replied with advice and
+            # possibly a date, and this call MOVES the existing visit rather
+            # than adding a second one (FIXLOG #490 / migration ss42) — so it
+            # may need to book OR reschedule, and the patient asked for
+            # neither in words. They were phoned about it.
+            state.caller_asked_to_book = True
+            state.caller_asked_to_reschedule = True
         elif is_qa_call:
             extra_tail += QUESTION_ANSWER_PROMPT_EXTRA
             state.call_type = "question_answer"
