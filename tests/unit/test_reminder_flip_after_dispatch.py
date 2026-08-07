@@ -34,7 +34,13 @@ async def _seed_in_window(db):
     db.add_all([doc, pat]); await db.flush()
     tok = Token(id=uuid.uuid4(), branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
                 token_number=1, date=appt.date(), appointment_time=appt.time().replace(microsecond=0),
-                status="confirmed", reminder_sent=False, source="voice")
+                status="confirmed", reminder_sent=False, source="voice",
+                # Booked yesterday. Without this, created_at defaults to now and
+                # the appointment is 20 minutes away — a booking made inside the
+                # one-hour lead window, which by design gets no reminder at all
+                # (booked_too_close). These tests are about dispatch/retry
+                # behaviour, so the booking has to be one that qualifies.
+                created_at=now - timedelta(days=1))
     db.add(tok); await db.commit()
     return tok
 

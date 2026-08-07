@@ -133,6 +133,12 @@ async def _seed_in_window(db, plan: str, linked: bool = True):
         token_number=1, date=appt.date(),
         appointment_time=appt.time().replace(microsecond=0),
         status="confirmed", reminder_sent=False, source="voice",
+        # Booked yesterday — see the same note in
+        # test_reminder_flip_after_dispatch: a default created_at makes this a
+        # booking made 20 minutes before its own appointment, which gets no
+        # reminder by design (booked_too_close). This test is about plan
+        # gating, so the booking must be reminder-eligible in the first place.
+        created_at=now - timedelta(days=1),
     )
     db.add(tok)
     await db.commit()

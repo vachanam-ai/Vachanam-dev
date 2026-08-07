@@ -60,6 +60,37 @@ def appointment_in_window(
     return lo <= appt <= hi
 
 
+# Vinay 2026-08-07: "if appointment is booked at 5:40 for 6pm. then remainder
+# call not needed. say it for 1hr. like if i book at 5 for 6 then appointment
+# call not needed."
+#
+# Ringing someone half an hour after they arranged the appointment to tell
+# them about that appointment is not a service, it is a nuisance — they were
+# on the phone with us minutes ago. Inclusive at exactly one hour, which is
+# the case he named.
+MIN_LEAD_MINUTES = 60
+
+
+def booked_too_close(created_at, token_date, appointment_time, tz) -> bool:
+    """True when the booking was made within MIN_LEAD_MINUTES of its own
+    appointment — i.e. there is nothing to remind them about yet.
+
+    Same shape as booked_far_enough_ahead, and the same principle: eligibility
+    is measured from when the booking was MADE, not only from when the
+    appointment is. A missing created_at returns False so an unknown booking
+    time still gets its reminder — losing a reminder is worse than one extra.
+    """
+    if created_at is None or appointment_time is None:
+        return False
+    appt = datetime.combine(token_date, appointment_time, tzinfo=tz)
+    created = created_at
+    if created.tzinfo is None:
+        from datetime import timezone as _tz
+
+        created = created.replace(tzinfo=_tz.utc)
+    return (appt - created) <= timedelta(minutes=MIN_LEAD_MINUTES)
+
+
 # ── the day-before reminder ──────────────────────────────────────────────────
 # Vinay 2026-08-04: "for appointments schedule a call 24hrs before if booked
 # days before. and 30mins before as is."
@@ -204,6 +235,23 @@ async def run_pre_appt_reminders() -> None:
 
             for token, doctor, patient in rows:
                 if not appointment_in_window(token.date, token.appointment_time, lo, hi):
+                    continue
+                if booked_too_close(
+                    token.created_at, token.date, token.appointment_time, tz
+                ):
+                    # Booked within the hour — they arranged it minutes ago and
+                    # already have the confirmation. Mark it so this row is not
+                    # rescanned every minute until the appointment passes. This
+                    # also suppresses the WhatsApp reminder below, deliberately:
+                    # it would repeat the booking confirmation they just got.
+                    token.reminder_sent = True
+                    await db.commit()
+                    logger.info(
+                        "reminder_skipped_booked_within_lead",
+                        branch_id=str(branch.id),
+                        token_id=str(token.id),
+                        lead_minutes=MIN_LEAD_MINUTES,
+                    )
                     continue
                 if not patient.phone:
                     # Nothing to dial — mark sent so we don't rescan it forever.
