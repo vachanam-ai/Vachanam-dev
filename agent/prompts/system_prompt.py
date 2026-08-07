@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date as dt_date
 from datetime import datetime, timedelta
 import zoneinfo
 
@@ -51,9 +52,25 @@ def get_clinic_now(tz_identifier: str = "Asia/Kolkata") -> datetime:
     return datetime.now(tz=zoneinfo.ZoneInfo(tz_identifier))
 
 
-def build_date_context(now_local: datetime) -> str:
-    """Give the model an explicit eight-day date table to eliminate LLM date arithmetic errors."""
-    today = now_local.date()
+def build_date_table(today: dt_date) -> str:
+    """The eight-day date table, WITHOUT the wall clock.
+
+    Split out from build_date_context so the table can ride in the model
+    INSTRUCTIONS while the clock stays out of them. Both halves have to live
+    where they do:
+
+    * The table must be in the instructions, because instructions are resent
+      on every inference and are never trimmed. Seeded into chat history
+      instead, it is the FIRST thing the window drops on a long call — which
+      is how a live call on 2026-08-07 announced "11 August 2026" at turn 28
+      (and, before it, "2 December 2024").
+    * The clock must NOT be in the instructions, because the prompt cache is
+      keyed on their digest. A HH:MM that ticks every minute would mint a new
+      CachedContent entry every minute and the cache would never warm.
+
+    Stable for a whole calendar day, so the cache re-keys once at midnight —
+    which is exactly right: a stale date can then never be served from cache.
+    """
     labels = {0: "today ", 1: "tomorrow "}
     rows = [
         f"  {labels.get(i, '')}{(today + timedelta(days=i)).strftime('%A')} "
@@ -62,8 +79,7 @@ def build_date_context(now_local: datetime) -> str:
     ]
     table = "\n".join(rows)
     return (
-        f"\n\nTODAY IS {now_local.strftime('%A, %d %B %Y')} ({today.isoformat()}), "
-        f"current time {now_local.strftime('%H:%M')}.\n"
+        f"\n\nTODAY IS {today.strftime('%A, %d %B %Y')} ({today.isoformat()}).\n"
         "DATE LOOKUP — when the caller names a weekday, 'today', or 'tomorrow', "
         "use the EXACT date from this list. NEVER calculate a date yourself:\n"
         f"{table}\n"
@@ -75,6 +91,14 @@ def build_date_context(now_local: datetime) -> str:
         "pair is not a row, you are wrong. If the caller corrects your date or "
         "weekday, NEVER argue: re-read the list and use the row matching THEIR "
         "weekday."
+    )
+
+
+def build_date_context(now_local: datetime) -> str:
+    """The date table plus the wall clock — for the per-call runtime block."""
+    return (
+        build_date_table(now_local.date())
+        + f"\nRight now the current time {now_local.strftime('%H:%M')}."
     )
 
 

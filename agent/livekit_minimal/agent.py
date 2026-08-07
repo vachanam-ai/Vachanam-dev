@@ -89,7 +89,7 @@ from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
 from agent.livekit_minimal.confirm_speech import build_confirm_text  # noqa: E402
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
-    build_date_context,
+    build_date_table,
 )
 from agent.prompts.grounded_prompt import (  # noqa: E402
     build_grounded_prompt,
@@ -1905,6 +1905,15 @@ _AFFIRMATIVE_REPLIES = {
     'సరే చేయండి', 'చేసేయండి', 'ఓకే చేయండి',
     'हाँ', 'हां', 'जी हाँ', 'जी', 'ठीक है', 'कर दीजिए',
     'ஆம்', 'ஆமாம்', 'சரி', 'ಹೌದು', 'ಸರಿ', 'हो', 'बरं',
+    # ROMANISED. Soniox returns Hindi in Latin letters on a real call, so the
+    # native-script entries above never matched a single spoken "yes": the
+    # caller said "haan", the guard saw no affirmation, the model re-asked, and
+    # the loop only ended when Vinay hung up (2026-08-07, prod, 3 blocked
+    # confirm_booking calls in the last 40 seconds of the call).
+    'haan', 'han', 'ha', 'haa', 'ji', 'jee', 'ji haan', 'ji han',
+    'theek hai', 'thik hai', 'kar dijiye', 'kar do', 'bilkul',
+    'avunu', 'sare', 'sarey', 'sari', 'alage', 'cheyyandi',
+    'aama', 'aamaam', 'houdu', 'ho', 'bara',
 }
 _CANCEL_AUTH_TERMS = (
     'remove the appointment', 'క్యాన్సిల్', 'రద్దు', 'కాన్సిల్',
@@ -1963,7 +1972,65 @@ def _caller_authorized_booking(text: str) -> bool:
 _NEGATION_TERMS = (
     'no', 'not', "don't", 'dont', 'do not', 'never', 'cancel that', 'wait',
     'వద్దు', 'లేదు', 'కాదు', 'नहीं', 'नही', 'मत', 'இல்லை', 'ಇಲ್ಲ', 'नको',
+    # Romanised, for the same reason as the affirmations above.
+    'nahi', 'nahin', 'nako', 'vaddu', 'ledu', 'kadu', 'venda', 'beda',
 )
+
+
+# A refusal that is the WHOLE reply. Exact match, deliberately — see
+# _caller_refused_outright.
+_OUTRIGHT_REFUSALS = frozenset({
+    'no', 'nope', 'no thanks', 'no thank you', 'not now', 'dont', "don't",
+    'do not', 'cancel that', 'wait', 'leave it', 'forget it',
+    'nahi', 'nahin', 'nahi ji', 'nako', 'vaddu', 'ledu', 'venda', 'beda',
+    'नहीं', 'नही', 'नको', 'వద్దు', 'లేదు', 'இல்லை', 'ಇಲ್ಲ',
+})
+
+
+def _caller_refused_outright(text: str) -> bool:
+    """Is the caller's ENTIRE reply a refusal?
+
+    Vinay 2026-08-07: "llm can understand the intent right. So haan, nahi,
+    chesey, book it. Any thing can book if it is intent based. Instead of
+    strict keyword."
+
+    He is right, and this function is what is left after taking him seriously.
+    Deciding whether a reply MEANS yes is the model's job — it is the only
+    part of this system that is fluent in seven languages and both scripts,
+    and every attempt to encode that judgement as a phrase list has produced a
+    loop instead (2026-08-03 Telugu, 2026-08-07 Hindi). So the guard no longer
+    tries. It asks one question the model cannot be trusted with, because a
+    wrong answer writes to the database: did the caller say a flat no?
+
+    EXACT match, not "contains". A containment test is what made "yes, book it
+    now" a refusal ("no" inside "now") and would make "no problem, go ahead"
+    one too. A bare "no" is unambiguous in a way that "no ..." is not, and
+    everything longer goes to the model, which can read it properly.
+    """
+    norm = _normalised_utterance(text)
+    if not norm:
+        return False
+    return norm in {_normalised_utterance(r) for r in _OUTRIGHT_REFUSALS}
+
+
+def _caller_declined(text: str) -> bool:
+    """Did the caller say NO to the question just asked?
+
+    Matches on WORD boundaries. The old substring test read the letters "no"
+    inside "now" and vetoed "yes, book it now" as a refusal — an affirmation
+    the guard then refused to accept, which is one half of the confirm_booking
+    deadlock. A negation anywhere in the reply still counts: "yes, but no, not
+    today" must never authorize a write.
+    """
+    norm = _normalised_utterance(text)
+    if not norm:
+        return False
+    padded = f' {norm} '
+    return any(
+        f' {t} ' in padded
+        for t in (_normalised_utterance(n) for n in _NEGATION_TERMS)
+        if t
+    )
 
 
 def _caller_affirmed(text: str) -> bool:
@@ -1981,7 +2048,7 @@ def _caller_affirmed(text: str) -> bool:
     norm = _normalised_utterance(text)
     if not norm:
         return False
-    if any(_normalised_utterance(n) in f' {norm} ' for n in _NEGATION_TERMS):
+    if _caller_declined(text):
         return False
     affirmations = {_normalised_utterance(v) for v in _AFFIRMATIVE_REPLIES}
     if norm in affirmations:
@@ -3536,10 +3603,27 @@ class VachanamAgent(Agent):
         # yes is accepted only after an audible booking-confirmation question.
         self._state.quality_intent = 'booking'
         utterance = self._state.last_user_utterance
+        # Once we have DEMANDED the confirmation question (pending_confirmation
+        # armed), the MODEL decides whether the caller agreed — it is the only
+        # component here fluent in seven languages and both scripts. Matching
+        # the answer against a phrase list cannot work for the same reason
+        # matching the QUESTION could not (see _awaiting_confirmation): the
+        # guard tells the model to ask "in the active language", and the caller
+        # then answers in that language, in whatever script the STT emits. The
+        # list held no romanised Hindi at all, so "haan" was not a yes and the
+        # caller was asked to confirm until he hung up (Vinay, prod 2026-08-07).
+        # A bare "no" is the one answer we still decide ourselves, because
+        # getting it wrong writes to the database.
+        declined = utterance is not None and _caller_refused_outright(utterance)
+        if declined:
+            # A refusal ends THIS question. Left armed, a flag raised for a
+            # question already answered "no" would still be standing later in
+            # the call and could authorize a booking nobody agreed to.
+            self._state.pending_confirmation = None
         if utterance is not None and not (
             _caller_authorized_booking(utterance)
             or (
-                _caller_affirmed(utterance)
+                not declined
                 and self._last_assistant_requested_booking_confirmation()
             )
         ):
@@ -4279,10 +4363,15 @@ class VachanamAgent(Agent):
         new_time (HH:MM) required only for schedule (appointment) doctors."""
         self._state.quality_intent = 'reschedule'
         utterance = self._state.last_user_utterance
+        # Same deadlock, same fix as confirm_booking above — and this one has
+        # already bitten once in Hindi (2026-07-27, looped until hang-up).
+        declined = utterance is not None and _caller_refused_outright(utterance)
+        if declined:
+            self._state.pending_confirmation = None
         if utterance is not None and not (
             _caller_authorized_reschedule(utterance)
             or (
-                _caller_affirmed(utterance)
+                not declined
                 and self._last_assistant_requested_reschedule()
             )
         ):
@@ -5901,9 +5990,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             now_b = datetime_cls.now(ZoneInfo(branch.timezone or "Asia/Kolkata"))
         except Exception:
             now_b = datetime_cls.now()
-        # Explicit date table (build_date_context) — LLM weekday math was
-        # off-by-one (booked Tuesday on Wednesday's date); now it looks up.
-        date_context = build_date_context(now_b)
+        # The date TABLE now rides in the instructions (_compose_instructions),
+        # which are never trimmed. Only the wall clock is left here: it changes
+        # every minute, and instructions are the prompt-cache key.
+        date_context = (
+            f"\nRight now the current time is {now_b.strftime('%H:%M')} "
+            f"on {now_b.strftime('%A, %d %B %Y')}.\n"
+        )
 
         # CALLER IDENTIFICATION (requirement 2026-06-14): on a normal INBOUND
         # call, look the caller up by their number BEFORE the greeting so the
@@ -6250,7 +6343,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
 
         def _compose_instructions(lc: str) -> str:
-            """Clinic-wide stable prompt: safe to share across every caller."""
+            """Clinic-wide stable prompt: safe to share across every caller.
+
+            The date TABLE belongs here and not in the seeded history below.
+            Instructions are resent on every inference and never trimmed;
+            history is trimmed oldest-first, and the seeded date block is the
+            oldest thing in it. On 2026-08-07 a call reached turn 28, the block
+            fell out of the window, and the agent told the caller it was
+            11 August. Only the calendar day is here — the wall clock stays in
+            the runtime block, because instructions are the prompt-cache key.
+            """
             return (
                 build_grounded_prompt(
                     clinic_name=branch_name,
@@ -6262,6 +6364,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     faq=getattr(branch, "faq", None),
                     recording_active=_recording_active,
                 )
+                + build_date_table(now_b.date())
                 + get_lines(lc).brevity
             )
 

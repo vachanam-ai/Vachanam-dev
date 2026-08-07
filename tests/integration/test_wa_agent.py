@@ -584,7 +584,7 @@ def test_who_can_see_my_child_is_routing_not_a_callback():
     assert "do not record a question for the doctor when the answer is simply which doctor" in flat
 
 
-def test_the_reply_mirrors_their_language_and_their_script():
+def test_the_reply_mirrors_their_language_in_english_letters():
     """Vinay 2026-08-04: "let agent chat in tenglish, tindi, Tamil english etc
     according to language in which user chats. Same no hard codings, just
     simple rules."
@@ -592,13 +592,23 @@ def test_the_reply_mirrors_their_language_and_their_script():
     The live thread had a patient writing romanised Telugu ("ma babu ki ontlo
     baledhu") and getting English back. The old rule said only "reply in
     whatever language the patient writes in", which says nothing about SCRIPT —
-    so Tenglish in, English out."""
+    so Tenglish in, English out.
+
+    Vinay 2026-08-07 closed the other half: "issue with Telugu is if user
+    speaks in Tenglish, AI may reply in telugu. which users may find
+    unprofessional... lets keep every reply in English. if user/patient
+    explicitly asked/mentioned telugu. then, we can use Tenglish."
+
+    The two agree, and together they fix SCRIPT in both directions: the
+    language still follows the patient, but it is always written in English
+    letters. Telugu script never goes out. `wa_service.send_text` enforces
+    that; this asserts the model is asked for it in the first place."""
     flat = " ".join(_prompt().split())
-    assert "write back the way they wrote to you" in flat
-    assert "reply in telugu in english letters" in flat
-    assert "if they mix two languages in one message, mix them back" in flat
+    assert "always write in english letters" in flat
+    assert "never send telugu, devanagari, tamil, kannada, bengali or malayalam script" in flat
+    assert "reply in telugu written in english letters" in flat
     # a rule, not a per-language table
-    assert "hindi, tamil, kannada, marathi, bengali or any mix" in flat
+    assert "same for hindi, tamil, kannada, marathi, bengali" in flat
 
 
 def test_the_latest_message_decides_the_language_not_the_thread():
@@ -607,15 +617,21 @@ def test_the_latest_message_decides_the_language_not_the_thread():
 
     A thread that opened in English stays in English, because the model keeps
     matching its OWN previous replies. The rule has to say which turn wins, and
-    it has to appear before the model has read anything else."""
+    it has to appear before the model has read anything else.
+
+    Still true under the 08-07 English-by-default rule, and it now has to cut
+    BOTH ways: a patient who switches to Telugu gets Tenglish, and one who
+    switches back to English gets English again."""
     p = _prompt()
     flat = " ".join(p.split())
     assert "their latest message decides, not the conversation so far" in flat
-    assert "never keep answering in english because your own earlier replies were english" in flat
-    assert "english is only right when they wrote english" in flat
+    assert "if this chat has been in english and they switch, you switch with them" in flat
+    assert "if they switch back you go back to english" in flat
+    # English is the default, but only until they give a reason otherwise.
+    assert "english unless they gave you a reason to use another one" in flat
     # Position matters as much as wording: this must be read before the prompt
     # settles into English by default.
-    assert p.index("write back the way they wrote to you") < p.index("be warm and human")
+    assert p.index("always write in english letters") < p.index("be warm and human")
 
 
 def test_routing_is_left_to_the_model_not_a_hardcoded_table():

@@ -204,7 +204,16 @@ async def send_template(
 
 async def send_text(branch, to: str, text: str, plan: str | None = None) -> bool:
     """Free-form session reply — only valid inside Meta's 24h service window,
-    which every caller of this function is by construction (we only reply)."""
+    which every caller of this function is by construction (we only reply).
+
+    Every free-text reply in the product goes out through here, which is why
+    the English-letters rule (Vinay 2026-08-07) is enforced at this line and
+    not at each of the fourteen call sites. The prompt asks the model for
+    Latin script; a prompt is a request, and this is the guarantee.
+    """
+    from agent.i18n.transliterate import to_latin
+
+    text = await to_latin(text)
     payload = {
         "messaging_product": "whatsapp",
         "to": to,

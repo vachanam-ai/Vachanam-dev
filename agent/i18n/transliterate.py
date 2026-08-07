@@ -111,6 +111,33 @@ async def spoken_text(text: str | None, lang_code: str | None) -> str:
     return result
 
 
+async def to_latin(text: str | None) -> str:
+    """Render text in English letters, whatever Indic script it arrived in.
+
+    The inverse of `spoken_text`, and for the opposite medium: a phone call
+    hears sound, but a WhatsApp message is READ, and Vinay 2026-08-07 ruled
+    that a patient who types "ma babu ki ontlo baledhu" and gets Telugu script
+    back finds it unprofessional. The prompt tells the model to write in
+    English letters; this is the backstop for when it does not.
+
+    Best-effort (RULE 8): an unreachable Sarvam returns the text unchanged,
+    because a reply in the wrong script still beats no reply at all.
+    """
+    text = (text or "").strip()
+    if not text:
+        return text
+    src = _detect_script(text)
+    if src == "en-IN":
+        return text  # already Latin — the overwhelmingly common case, no I/O
+
+    key = (text, f"{src}>en-IN")
+    if key in _cache:
+        return _cache[key]
+    result = await _sarvam_hop(text, src, "en-IN") or text
+    _cache[key] = result
+    return result
+
+
 async def spoken_name(name: str | None, lang_code: str | None) -> str:
     """Return ``name`` rendered in the call language's script for TTS.
 
