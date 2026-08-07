@@ -65,6 +65,27 @@ def _show(rules) -> None:
         )
 
 
+async def _set_numbers(lk, rules, rule_id: str, numbers: list[str]):
+    """Change ONLY inbound_numbers on an existing rule.
+
+    The `update` message has no inbound_numbers field — that lives on
+    `replace`, which takes a whole SIPDispatchRuleInfo. So copy the live rule
+    verbatim and change the one field, rather than reconstructing it and
+    silently dropping something (the agent dispatch, say).
+    """
+    from livekit import api
+
+    current = next((r for r in rules if r.sip_dispatch_rule_id == rule_id), None)
+    if current is None:
+        raise SystemExit(f"rule {rule_id} not found — refusing to guess")
+    new = api.SIPDispatchRuleInfo()
+    new.CopyFrom(current)
+    del new.inbound_numbers[:]
+    new.inbound_numbers.extend(numbers)
+    # SDK takes (rule_id, full rule) and does the `replace` wrapping itself.
+    return await lk.sip.update_sip_dispatch_rule(rule_id, new)
+
+
 async def status() -> None:
     lk = _api()
     try:
@@ -87,11 +108,7 @@ async def apply() -> None:
 
         # 1. Pin the live rule to the REAL clinic so it can never match the
         #    test number once a second rule exists.
-        upd = await lk.sip.update_sip_dispatch_rule(
-            api.UpdateSIPDispatchRuleRequest(
-                sip_dispatch_rule_id=PROD_RULE_ID, inbound_numbers=[SKINCARE],
-            )
-        )
+        upd = await _set_numbers(lk, before, PROD_RULE_ID, [SKINCARE])
         print(f"pinned {upd.sip_dispatch_rule_id} -> {list(upd.inbound_numbers)}")
 
         # 2. Test number -> sandbox worker.
@@ -133,11 +150,7 @@ async def revert() -> None:
                 )
                 print(f"deleted sandbox rule {r.sip_dispatch_rule_id}")
 
-        upd = await lk.sip.update_sip_dispatch_rule(
-            api.UpdateSIPDispatchRuleRequest(
-                sip_dispatch_rule_id=PROD_RULE_ID, inbound_numbers=[],
-            )
-        )
+        upd = await _set_numbers(lk, await _rules(lk), PROD_RULE_ID, [])
         print(f"restored {upd.sip_dispatch_rule_id} -> catch-all ({PROD_AGENT})")
         print("\nNow:")
         _show(await _rules(lk))
