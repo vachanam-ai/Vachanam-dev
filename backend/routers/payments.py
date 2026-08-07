@@ -302,6 +302,36 @@ async def _latest_cycle(db: AsyncSession, org_id):
     ).scalar_one_or_none()
 
 
+def _metering_period(org: Organization, today: date) -> tuple[date, date]:
+    """The window being metered RIGHT NOW when no BillingCycle row exists yet.
+
+    Vinay 2026-08-07: "billing page is completely empty." It was, and only for
+    the clinics that matter most — the ones still deciding whether to pay. The
+    first BillingCycle row is written by the first payment, and usage was read
+    only from inside a cycle, so a clinic with no cycle reported zero minutes
+    no matter how many calls it had actually taken. The minutes were real; the
+    invoice was the thing that did not exist yet.
+
+    Anchored on the subscription/signup day, the same anchor a real cycle
+    uses, so the figure does not jump the moment the first cycle is created.
+    """
+    from backend.services.billing_math import add_month
+
+    anchor = None
+    if org.subscription_started_at is not None:
+        anchor = org.subscription_started_at.date()
+    elif org.created_at is not None:
+        anchor = org.created_at.date()
+    if anchor is None or anchor > today:
+        return today, add_month(today)
+    start = anchor
+    while True:
+        nxt = add_month(start)
+        if nxt > today:
+            return start, nxt
+        start = nxt
+
+
 async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
     last = await _latest_cycle(db, org_id)
     return last.cycle_end if last else None
@@ -374,6 +404,7 @@ class BillingSummary(BaseModel):
     status: str
     cycle_start: str | None = None
     cycle_end: str | None = None
+    has_billed: bool = False
     included_minutes: int = 0
     minutes_used: int = 0
     overage_minutes: int = 0
@@ -407,9 +438,14 @@ async def billing_summary(
     last = await _latest_cycle(db, org.id)
     wa_addon = await _org_wa_addon(db, org.id)
 
-    used = 0.0
+    # Meter the CURRENT period whether or not it has been invoiced yet — see
+    # _metering_period. A clinic that has not paid still makes calls, and those
+    # minutes are what tells them whether the plan fits.
     if last is not None:
-        used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
+        period_start, period_end = last.cycle_start, last.cycle_end
+    else:
+        period_start, period_end = _metering_period(org, date.today())
+    used = await _cycle_minutes_used(db, org.id, period_start, period_end)
     used_min = int(round(used))
     included = plan_def.included_minutes if plan_def else 0
     over_min = max(0, used_min - included)
@@ -436,8 +472,13 @@ async def billing_summary(
         plan=plan_key,
         plan_label=(plan_def.display_name if plan_def else plan_key),
         status=org.status or "paused",
-        cycle_start=last.cycle_start.isoformat() if last else None,
-        cycle_end=last.cycle_end.isoformat() if last else None,
+        cycle_start=period_start.isoformat(),
+        cycle_end=period_end.isoformat(),
+        # Whether that period has ever been invoiced. The dates above are real
+        # either way, but "Renews on" and "First charge on" are different
+        # sentences and the page must not promise a renewal to a clinic that
+        # has not paid once.
+        has_billed=last is not None,
         included_minutes=included,
         minutes_used=used_min,
         overage_minutes=over_min,

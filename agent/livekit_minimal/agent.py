@@ -2102,7 +2102,22 @@ def _caller_authorized_reschedule(text: str) -> bool:
     if re.search(r'\bwhat (?:is|are).*\breschedul(?:e|ing)\b', raw):
         return False
     low = _normalised_utterance(text)
-    return any(_normalised_utterance(term) in low for term in _RESCHEDULE_AUTH_TERMS)
+    # A PHRASE LIST CANNOT COVER ENGLISH. The list held "move the appointment"
+    # but not "move MY appointment", so the commonest way to ask was not a
+    # request at all and the guard made the caller confirm twice (Vinay
+    # 2026-08-07). Match the verb and its object instead of the exact wording,
+    # the same way _caller_authorized_booking matches a bare \bbook\b.
+    english_action = (
+        re.search(r'\b(?:reschedul(?:e|ed|ing)|postpone|prepone)\b', raw) is not None
+        or re.search(
+            r'\b(?:move|change|shift|push)\b[^.?!]{0,40}?'
+            r'\b(?:appointment|booking|slot|token|timing|time|it)\b',
+            raw,
+        ) is not None
+    )
+    return english_action or any(
+        _normalised_utterance(term) in low for term in _RESCHEDULE_AUTH_TERMS
+    )
 
 
 
@@ -2760,8 +2775,15 @@ class VachanamAgent(Agent):
         if utterance:
             if _caller_refused_outright(utterance):
                 self._state.caller_asked_to_book = False
-            elif _caller_authorized_booking(utterance):
-                self._state.caller_asked_to_book = True
+                self._state.caller_asked_to_reschedule = False
+                self._state.caller_asked_to_cancel = False
+            else:
+                if _caller_authorized_booking(utterance):
+                    self._state.caller_asked_to_book = True
+                if _caller_authorized_reschedule(utterance):
+                    self._state.caller_asked_to_reschedule = True
+                if _caller_authorized_cancellation(utterance):
+                    self._state.caller_asked_to_cancel = True
 
         # Language selection is infrastructure state, not a creative LLM choice.
         # Switch the active prompt/STT/TTS agent before generating any reply.
@@ -4398,7 +4420,10 @@ class VachanamAgent(Agent):
             _caller_authorized_reschedule(utterance)
             or (
                 not declined
-                and self._last_assistant_requested_reschedule()
+                and (
+                    self._state.caller_asked_to_reschedule
+                    or self._last_assistant_requested_reschedule()
+                )
             )
         ):
             logger.warning(
@@ -4705,6 +4730,9 @@ class VachanamAgent(Agent):
             if current_id == str(old_token.id):
                 self._state.booking_replacements[stale_id] = new_id
         self._state.booking_replacements[str(old_token.id)] = new_id
+        # Consent spent. A SECOND move on this call is a new decision and asks
+        # its own question (mirrors confirm_booking).
+        self._state.caller_asked_to_reschedule = False
         # Live call 2026-07-03 16:55Z: a reschedule that SUCCEEDED (DB showed the
         # moved booking) was announced as "unable to reschedule" — the model
         # misread the result. Log it (evidence for next time) and make success
@@ -4770,12 +4798,25 @@ class VachanamAgent(Agent):
             utterance is not None
             and _caller_rejected_accidental_booking(utterance)
         )
+        # The asymmetry stays: cancelling is destructive, so a bare "not a
+        # refusal" is NOT enough — the caller must actually say yes. What
+        # changes is that the yes no longer has to arrive on the same turn as
+        # the word "cancel", and the question no longer has to match one of
+        # five hardcoded phrases. Both were true before, which is why the
+        # reschedule flow asked twice and this one would have too.
+        declined = utterance is not None and _caller_refused_outright(utterance)
+        if declined:
+            self._state.pending_confirmation = None
         if utterance is not None and not (
             accidental
             or _caller_authorized_cancellation(utterance)
             or (
                 _caller_affirmed(utterance)
-                and self._last_assistant_requested_cancellation()
+                and not declined
+                and (
+                    self._state.caller_asked_to_cancel
+                    or self._last_assistant_requested_cancellation()
+                )
             )
         ):
             logger.warning(
@@ -5109,6 +5150,8 @@ class VachanamAgent(Agent):
             token_id[-8:],
             str(self._state.branch_id),
         )
+        # Consent spent — cancelling a SECOND booking must be asked for again.
+        self._state.caller_asked_to_cancel = False
 
         # Vinay 2026-08-04: "all confirmations from calls should reflect in
         # whatsapp". A cancellation agreed on the phone must leave the patient

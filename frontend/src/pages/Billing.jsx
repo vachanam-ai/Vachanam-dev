@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import PageHeader from "../components/PageHeader.jsx";
+import { revealStagger } from "../lib/motion.js";
 import { cancelSubscription, fetchBillingSummary } from "../api/client.js";
 
 /* Dedicated billing page (Vinay 2026-08-07: "this is money part right. so, i
@@ -100,8 +101,20 @@ export default function Billing() {
   });
   const d = q.data;
 
+  // Without this the page is INVISIBLE, not empty (Vinay 2026-08-07: "billing
+  // page is completely empty"). index.css pre-hides every [data-reveal] block
+  // at opacity 0 until a reveal pass stamps [data-revealed] on it, and this
+  // page marks its header and all five sections. Re-run when the query lands
+  // as well as on mount: the cards only exist once `d` is set, so a
+  // mount-only reveal would leave them hidden forever — the same failure
+  // Availability hit on 2026-07-12 (FIXLOG #334).
+  const pageRef = useRef(null);
+  useEffect(() => {
+    revealStagger(pageRef.current);
+  }, [q.isLoading, q.isError, d, confirming]);
+
   return (
-    <div className="space-y-6">
+    <div ref={pageRef} className="space-y-6">
       <PageHeader
         eyebrow="Money"
         title="Billing"
@@ -136,9 +149,15 @@ export default function Billing() {
                 </p>
               )}
               <p className="mt-3 font-ui text-sm text-slate">
-                {d.cycle_end
-                  ? <>Renews on <span className="font-medium text-ink">{day(d.cycle_end)}</span></>
-                  : "No active cycle yet — the first payment starts one."}
+                {d.has_billed ? (
+                  <>Renews on <span className="font-medium text-ink">{day(d.cycle_end)}</span></>
+                ) : (
+                  <>
+                    First charge on{" "}
+                    <span className="font-medium text-ink">{day(d.cycle_end)}</span>. Your
+                    usage below is already being counted.
+                  </>
+                )}
               </p>
               <Link to="/settings" className="btn-primary mt-4 inline-flex">
                 Adjust plan
@@ -151,6 +170,7 @@ export default function Billing() {
               <h2 className="section-title text-xl">Usage</h2>
               <p className="mt-1 font-ui text-xs text-slate">
                 {d.cycle_start ? `${day(d.cycle_start)} — ${day(d.cycle_end)}` : "—"}
+                {!d.has_billed && " · not invoiced yet"}
               </p>
               <UsageBar used={d.minutes_used} included={d.included_minutes} />
               <div className="mt-4 grid grid-cols-3 gap-4 border-t border-line pt-4">

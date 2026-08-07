@@ -76,6 +76,16 @@ class SessionState:
     # turn that asks to book, cleared by a flat refusal and after each booking
     # completes, so a second booking in the same call asks its own question.
     caller_asked_to_book: bool = False
+    # The same memory for the other two mutations. Vinay 2026-08-07:
+    # "reschedule call asking 2 times to confirm." confirm_booking got sticky
+    # consent and these did not, so they kept the old shape: the caller says
+    # "move it to 11", the model asks "shall I move it to 11?", and that
+    # phrasing is not one of the five hardcoded strings
+    # _last_assistant_requested_reschedule matches — so the first yes is
+    # refused, the guard THEN arms pending_confirmation and orders a re-ask,
+    # and the second yes works. Exactly two questions, every time.
+    caller_asked_to_reschedule: bool = False
+    caller_asked_to_cancel: bool = False
     # Exact durable booking created most recently in THIS call. If the caller
     # immediately says the booking was accidental, cancellation is pinned to
     # this id instead of trusting an older/arbitrary id selected by the LLM.
