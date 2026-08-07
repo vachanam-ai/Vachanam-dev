@@ -1021,7 +1021,26 @@ def _names_match(stored: str, spoken: str) -> bool:
     if a == b or a in b or b in a:
         return True
     if not (a.isascii() and b.isascii()):
-        return True  # cross-script — keep the old attach-to-primary behavior
+        # CROSS-SCRIPT. This used to fail open unconditionally, which meant a
+        # booking for a family member whose name arrived in a different script
+        # from the stored one was silently attached to the PHONE OWNER — the
+        # caller's own record. Vinay hit it in a live Telugu->English E2E on
+        # 2026-08-07: the patient was stored as "వినయ్" from a Telugu booking,
+        # then "book for my father Narayana" attached to Vinay and came back
+        # "Narayana already has an appointment" — describing Vinay's.
+        #
+        # A consonant fingerprint decides it offline (no Sarvam hop, no key
+        # dependency): "వినయ్"/"Vinay" -> "vny" == "vny" is the SAME person
+        # spelled in two scripts, while "వినయ్"/"Narayana" -> "vny" vs "nryn"
+        # is plainly someone else. Still fail OPEN whenever the fingerprint is
+        # too short to be evidence, so only a confident difference splits a
+        # record.
+        from agent.i18n.transliterate import consonant_skeleton
+
+        ka, kb = consonant_skeleton(a), consonant_skeleton(b)
+        if len(ka) >= 3 and len(kb) >= 3:
+            return ka == kb or ka in kb or kb in ka
+        return True
     # tiny Levenshtein (names are short; O(len^2) is nothing)
     prev = list(range(len(b) + 1))
     for i, ca in enumerate(a, 1):

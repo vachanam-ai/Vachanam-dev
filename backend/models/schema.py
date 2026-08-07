@@ -47,6 +47,11 @@ class Organization(Base):
     # A daily job applies it. Both NULL = no pending change.
     pending_plan: Mapped[str | None] = mapped_column(String(20))
     pending_plan_effective: Mapped[date | None] = mapped_column(Date)
+    # End-of-cycle cancellation (Vinay 2026-08-07). A DATE, not a flag: the
+    # clinic has paid for the cycle it is in and keeps full service until it
+    # ends. The daily job that promotes pending_plan flips status to
+    # "cancelled" once this date arrives.
+    cancellation_effective: Mapped[date | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     branches: Mapped[list["Branch"]] = relationship(back_populates="organization")

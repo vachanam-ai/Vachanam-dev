@@ -354,3 +354,68 @@ def test_whatsapp_plans_gate():
     for key in ("lite", "solo"):
         assert key not in WHATSAPP_PLANS
         assert whatsapp_enabled(key) is False
+
+
+# ── autopay mandate ceiling (Vinay 2026-08-07) ───────────────────────────────
+
+def test_mandate_ceiling_covers_a_heavy_but_plausible_month():
+    """The ceiling must survive the worst month it claims to cover: base +
+    add-on + the modelled overage, WITH GST switched back on."""
+    from backend.services import billing_math as bm
+
+    for plan, p in bm.PLANS.items():
+        if p.included_minutes <= 0:
+            continue
+        for addon in (False, True):
+            ceiling = bm.mandate_max_amount(plan, addon)
+            worst = (
+                p.base_rupees
+                + (bm.WHATSAPP_ADDON_RUPEES
+                   if addon and plan in bm.WHATSAPP_ADDON_PLANS else 0)
+                + bm.mandate_worst_overage_minutes(plan) * p.overage_per_min
+            ) * 1.18  # GST back on — the mandate must not need re-signing
+            assert ceiling >= worst, (
+                f"{plan} ceiling {ceiling} cannot cover its own worst case {worst:.0f}"
+            )
+
+
+def test_mandate_ceiling_stays_low_enough_to_sign():
+    """Vinay: "keep it as low as possible". A ceiling many multiples of the
+    monthly price is what makes a clinic refuse to authorise the mandate."""
+    from backend.services import billing_math as bm
+
+    for plan, p in bm.PLANS.items():
+        if p.included_minutes <= 0:
+            continue
+        ratio = bm.mandate_max_amount(plan, False) / p.base_rupees
+        assert ratio <= 3.5, f"{plan} ceiling is {ratio:.1f}x its price — too alarming"
+
+
+def test_mandate_ceiling_is_a_round_number():
+    from backend.services import billing_math as bm
+
+    for plan in bm.PLANS:
+        assert bm.mandate_max_amount(plan) % 500 == 0
+
+
+def test_whatsapp_only_plan_has_no_overage_headroom():
+    """`wa` buys no telephony, so there is no overage to leave room for."""
+    from backend.services import billing_math as bm
+
+    assert bm.mandate_worst_overage_minutes("wa") == 0
+    assert bm.mandate_max_amount("wa") >= bm.PLANS["wa"].base_rupees
+
+
+def test_addon_only_widens_the_ceiling_for_plans_that_can_buy_it():
+    from backend.services import billing_math as bm
+
+    for plan in ("lite", "solo"):
+        assert bm.mandate_max_amount(plan, True) > bm.mandate_max_amount(plan, False)
+    for plan in ("clinic", "multi"):  # WhatsApp already included
+        assert bm.mandate_max_amount(plan, True) == bm.mandate_max_amount(plan, False)
+
+
+def test_unknown_plan_authorises_nothing():
+    from backend.services import billing_math as bm
+
+    assert bm.mandate_max_amount("nonexistent") == 0

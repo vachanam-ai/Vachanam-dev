@@ -471,3 +471,64 @@ def call_blocked(
     if p is not None and p.included_minutes == 0:
         return "no_voice_plan"
     return None
+
+
+# ── autopay mandate ceiling (Vinay 2026-08-07) ───────────────────────────────
+# A UPI e-mandate fixes ONE number up front: the most we may ever debit. Vinay:
+# "keep it as low as possible and still covered to any extent. calculate it
+# cleverly by taking max calls cases into consideration."
+#
+# Low and covered pull against each other, so the ceiling is derived, not
+# guessed:
+#
+#   ceiling = (base + whatsapp_addon + worst_overage) x GST headroom
+#
+# WORST_OVERAGE is where the "max calls" thinking goes. The theoretical maximum
+# is meaningless — one DID carries one call at a time, so a month is ~43,200
+# minutes and a ceiling covering that would be lakhs, which is exactly what
+# makes a clinic refuse to sign. Two bounds make it realistic instead:
+#
+#   1. Volume bound: a clinic running 3x its plan (its bucket plus two more)
+#      is already an upgrade conversation, not a normal month.
+#   2. Money bound: overage is capped at OVERAGE_CEILING_MINUTES. Rs15,000 of
+#      overage in one month is an extreme month for any single-DID clinic, and
+#      beyond it the mandate is the wrong instrument anyway — the debit falls
+#      back to a payment link (that fallback has to exist regardless, because
+#      no finite ceiling can cover every case).
+#
+# GST_HEADROOM is applied even while GST_WAIVED is True. If GST is ever
+# switched back on, every debit rises 18% overnight; a ceiling set without it
+# would reject every debit and force every clinic to re-authorise a mandate.
+# Headroom is free — an unused ceiling costs nobody anything.
+
+OVERAGE_MULTIPLE = 2          # bucket + 2 more = 3x plan volume
+OVERAGE_CEILING_MINUTES = 3_000
+MANDATE_GST_HEADROOM = 1.18   # applied even while GST_WAIVED (see above)
+
+
+def mandate_worst_overage_minutes(plan: str) -> int:
+    """Overage minutes a mandate ceiling should still cover for this plan."""
+    p = PLANS.get(plan)
+    if not p or p.included_minutes <= 0:
+        return 0  # WhatsApp-only buys no telephony — no overage exists
+    return min(p.included_minutes * OVERAGE_MULTIPLE, OVERAGE_CEILING_MINUTES)
+
+
+def mandate_max_amount(plan: str, whatsapp_addon: bool = False) -> int:
+    """Rupees to authorise on the e-mandate for PLAN.
+
+    Covers: the plan's base, the WhatsApp add-on when the clinic buys it, a
+    heavy-but-plausible overage month, and GST headroom — rounded UP to the
+    next Rs500 so the figure a clinic signs is a round one.
+    """
+    p = PLANS.get(plan)
+    if not p:
+        return 0
+    addon = (
+        WHATSAPP_ADDON_RUPEES
+        if whatsapp_addon and plan in WHATSAPP_ADDON_PLANS
+        else 0
+    )
+    overage = mandate_worst_overage_minutes(plan) * p.overage_per_min
+    raw = (p.base_rupees + addon + overage) * MANDATE_GST_HEADROOM
+    return int(-(-raw // 500) * 500)  # ceil to the next Rs500

@@ -244,6 +244,8 @@ class PlanInfo(BaseModel):
     whatsapp_included: bool = False
     whatsapp_addon: bool = False
     whatsapp_included_pending: bool = False
+    # End-of-cycle cancellation: the date service stops, or None.
+    cancellation_effective: str | None = None
 
 
 class PlanChangeRequest(BaseModel):
@@ -343,6 +345,133 @@ async def get_plan(
     """Caller's current plan + any scheduled change + current cycle end."""
     org = await _load_my_org(current_user, db)
     return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
+
+
+class BillingCycleOut(BaseModel):
+    """One past cycle, for the billing history table."""
+    cycle_start: str
+    cycle_end: str
+    plan: str
+    base_amount: int
+    minutes_used: int
+    overage_minutes: int
+    overage_amount: int
+    total: int
+    status: str
+    invoice_number: str | None = None
+
+
+class BillingSummary(BaseModel):
+    """Everything the Billing page shows, in one call.
+
+    Vinay 2026-08-07 asked for a dedicated billing page: "this is money part
+    right". Money screens must not make the reader do arithmetic, so the
+    server sends the finished figures rather than parts the UI adds up — the
+    UI can never disagree with the invoice that way.
+    """
+    plan: str
+    plan_label: str
+    status: str
+    cycle_start: str | None = None
+    cycle_end: str | None = None
+    included_minutes: int = 0
+    minutes_used: int = 0
+    overage_minutes: int = 0
+    overage_rate: float = 0.0
+    overage_amount: int = 0
+    base_next: int = 0
+    whatsapp_addon_amount: int = 0
+    gst_amount: float = 0.0
+    total_next: int = 0
+    is_offer: bool = False
+    autopay_enabled: bool = False
+    cancellation_effective: str | None = None
+    history: list[BillingCycleOut] = []
+
+
+@router.get("/billing/summary", response_model=BillingSummary)
+async def billing_summary(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: "AsyncSession" = Depends(get_db),
+) -> "BillingSummary":
+    """Current cycle usage + what the next charge will be + past cycles."""
+    from backend.models.schema import BillingCycle
+    from backend.services.billing_math import (
+        _gst_on, PLANS, WHATSAPP_ADDON_PLANS, WHATSAPP_ADDON_RUPEES,
+        effective_price,
+    )
+
+    org = await _load_my_org(current_user, db)
+    plan_key = org.plan or "clinic"
+    plan_def = PLANS.get(plan_key)
+    last = await _latest_cycle(db, org.id)
+    wa_addon = await _org_wa_addon(db, org.id)
+
+    used = 0.0
+    if last is not None:
+        used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
+    used_min = int(round(used))
+    included = plan_def.included_minutes if plan_def else 0
+    over_min = max(0, used_min - included)
+    rate = plan_def.overage_per_min if plan_def else 0.0
+    over_amt = int(round(over_min * rate))
+
+    base_next, is_offer = effective_price(plan_key, org.subscription_started_at)
+    addon_amt = (
+        WHATSAPP_ADDON_RUPEES if wa_addon and plan_key in WHATSAPP_ADDON_PLANS else 0
+    )
+    subtotal = base_next + addon_amt + over_amt
+    gst = _gst_on(subtotal)
+
+    rows = (
+        await db.execute(
+            select(BillingCycle)
+            .where(BillingCycle.org_id == org.id)
+            .order_by(BillingCycle.cycle_start.desc())
+            .limit(24)
+        )
+    ).scalars().all()
+
+    return BillingSummary(
+        plan=plan_key,
+        plan_label=(plan_def.display_name if plan_def else plan_key),
+        status=org.status or "paused",
+        cycle_start=last.cycle_start.isoformat() if last else None,
+        cycle_end=last.cycle_end.isoformat() if last else None,
+        included_minutes=included,
+        minutes_used=used_min,
+        overage_minutes=over_min,
+        overage_rate=rate,
+        overage_amount=over_amt,
+        base_next=int(base_next),
+        whatsapp_addon_amount=addon_amt,
+        gst_amount=gst,
+        total_next=int(round(subtotal + gst)),
+        is_offer=bool(is_offer),
+        # Autopay is designed but not built (spec 2026-08-07). The field exists
+        # so the page can render the real state the day it ships, instead of
+        # the UI having to guess.
+        autopay_enabled=False,
+        cancellation_effective=(
+            org.cancellation_effective.isoformat()
+            if org.cancellation_effective else None
+        ),
+        history=[
+            BillingCycleOut(
+                cycle_start=c.cycle_start.isoformat(),
+                cycle_end=c.cycle_end.isoformat(),
+                plan=c.plan,
+                base_amount=c.base_amount,
+                minutes_used=c.minutes_used or 0,
+                overage_minutes=c.overage_minutes or 0,
+                overage_amount=c.overage_amount or 0,
+                total=(c.base_amount or 0) + (c.overage_amount or 0),
+                status=c.status,
+                invoice_number=c.invoice_number,
+            )
+            for c in rows
+        ],
+    )
 
 
 async def _enable_whatsapp_addon(db: "AsyncSession", notes: dict, payment_id: str) -> None:
@@ -569,6 +698,65 @@ async def change_plan(
         effective=org.pending_plan_effective.isoformat() if org.pending_plan_effective else None,
     )
     return _plan_info(org)
+
+
+class CancelRequest(BaseModel):
+    # False undoes a scheduled cancellation — a clinic must be able to change
+    # its mind for as long as it is still paying.
+    cancel: bool = True
+
+
+@router.post("/plan-cancel", response_model=PlanInfo)
+async def cancel_subscription(
+    req: CancelRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: "AsyncSession" = Depends(get_db),
+) -> "PlanInfo":
+    """Schedule (or undo) a full cancellation at the end of the paid cycle.
+
+    Vinay 2026-08-07: "they can exit completely. and effect will take place
+    from coming month (after their current cycle ends)."
+
+    Service is NOT cut here. The clinic paid for the cycle it is in and keeps
+    everything until it ends; a daily job flips the org to `cancelled` when the
+    date arrives. Cancelling mid-cycle would be taking money for a service we
+    then withdrew.
+
+    Dropping VOICE but keeping WhatsApp is NOT this endpoint — that is
+    /api/plan-change to `wa`, which the same end-of-cycle rule already covers.
+    Cancelling also clears any pending plan change: there is nothing left to
+    change into.
+    """
+    if current_user.role != "org_admin":
+        raise HTTPException(
+            status_code=403, detail="Only a clinic owner can cancel the subscription"
+        )
+    org = await _load_my_org(current_user, db)
+
+    if not req.cancel:
+        org.cancellation_effective = None
+        await db.commit()
+        await db.refresh(org)
+        logger.info("cancellation_withdrawn", org_id=current_user.org_id)
+        return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
+
+    cycle_end = await _latest_cycle_end(db, org.id)
+    if cycle_end and cycle_end > date.today():
+        org.cancellation_effective = cycle_end
+    else:
+        # Nothing paid-for left to honour (trial / paused / already lapsed).
+        org.status = "cancelled"
+        org.cancellation_effective = None
+    org.pending_plan = None
+    org.pending_plan_effective = None
+    await db.commit()
+    await db.refresh(org)
+    logger.info(
+        "cancellation_scheduled",
+        org_id=current_user.org_id,
+        effective=org.cancellation_effective.isoformat() if org.cancellation_effective else "now",
+    )
+    return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
 
 
 class GstinBody(BaseModel):

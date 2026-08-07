@@ -249,5 +249,27 @@ async def run_pending_plan_changes(today: date | None = None) -> None:
             logger.info(
                 "pending_plan_applied", org_id=str(org.id), from_plan=old, to_plan=org.plan
             )
-        if rows:
+
+        # Scheduled cancellations land the same way (Vinay 2026-08-07): the
+        # clinic paid for the cycle it is in, so service continues untouched
+        # until the date it chose, then the org goes cancelled and the AI line
+        # answers with the blocked line. A clinic that only wanted to drop
+        # VOICE is not here — that is a plan change to `wa` above.
+        cancelling = (
+            await db.execute(
+                select(Organization).where(
+                    and_(
+                        Organization.cancellation_effective.is_not(None),
+                        Organization.cancellation_effective <= today,
+                        Organization.status != "cancelled",
+                    )
+                )
+            )
+        ).scalars().all()
+        for org in cancelling:
+            org.status = "cancelled"
+            org.cancellation_effective = None
+            logger.info("org_cancellation_applied", org_id=str(org.id))
+
+        if rows or cancelling:
             await db.commit()

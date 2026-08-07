@@ -152,3 +152,86 @@ async def spoken_name(name: str | None, lang_code: str | None) -> str:
 
     _cache[key] = out
     return out
+
+
+# ── offline, script-independent name matching ────────────────────────────────
+# Vinay 2026-08-07, live E2E in Telugu: the patient asked for "శ్రీనివాస్" and
+# the clinic answered "we don't have a doctor named Srinivas" — the roster
+# stores Latin names, and wa_agent's matcher stripped every non-Latin character
+# before comparing, so a Telugu-script name became an EMPTY token set. Any
+# patient naming their doctor in their own script could not book at all, which
+# on a Telugu-first product is the whole flow.
+#
+# Deliberately OFFLINE and deterministic, unlike spoken_name() above: matching
+# runs on every message, must not depend on the Sarvam key being set, and must
+# never add a network hop to a lookup. #478 reverted offline transliteration
+# for SPEAKING names (mechanical mapping mangles proper nouns) — that objection
+# does not apply here, because this output is never spoken or shown. It exists
+# only to be compared.
+#
+# Every Indic block below follows the same ISCII-derived ordering, so ONE table
+# indexed by (codepoint - block_start) serves Telugu, Devanagari, Tamil,
+# Kannada, Malayalam, Bengali and Gujarati alike.
+
+_INDIC_BLOCKS: tuple[tuple[int, int], ...] = (
+    (0x0900, 0x097F),  # Devanagari (hi, mr)
+    (0x0980, 0x09FF),  # Bengali
+    (0x0A80, 0x0AFF),  # Gujarati
+    (0x0B80, 0x0BFF),  # Tamil
+    (0x0C00, 0x0C7F),  # Telugu
+    (0x0C80, 0x0CFF),  # Kannada
+    (0x0D00, 0x0D7F),  # Malayalam
+)
+
+# Consonant offsets 0x15..0x39, already folded into coarse phonetic CLASSES:
+# aspirates collapse onto their plain form (kha->k), retroflex onto dental
+# (Ta->t), and all three sibilants onto s. That folding is what makes
+# "శ్రీనివాస్" and "Srinivas" compare equal despite spelling apart.
+_CONSONANTS = {
+    0x15: "k", 0x16: "k", 0x17: "g", 0x18: "g", 0x19: "n",
+    0x1A: "c", 0x1B: "c", 0x1C: "j", 0x1D: "j", 0x1E: "n",
+    0x1F: "t", 0x20: "t", 0x21: "d", 0x22: "d", 0x23: "n",
+    0x24: "t", 0x25: "t", 0x26: "d", 0x27: "d", 0x28: "n", 0x29: "n",
+    0x2A: "p", 0x2B: "p", 0x2C: "b", 0x2D: "b", 0x2E: "m",
+    0x2F: "y", 0x30: "r", 0x31: "r", 0x32: "l", 0x33: "l", 0x34: "l",
+    0x35: "v", 0x36: "s", 0x37: "s", 0x38: "s", 0x39: "h",
+}
+
+_LATIN_FOLD = str.maketrans({"c": "k", "w": "v", "f": "p", "z": "j", "q": "k"})
+_VOWELS = set("aeiou")
+
+
+def consonant_skeleton(text: str | None) -> str:
+    """A script-independent consonant fingerprint of a name.
+
+    "Srinivas", "శ్రీనివాస్" and "श्रीनिवास" all reduce to "srnvs", so a name
+    can be matched across scripts without a network call. Vowels are dropped
+    entirely: they are exactly where transliteration and STT disagree most
+    (long vs short, "ee" vs "i"), and they carry the least identifying signal.
+    """
+    if not text:
+        return ""
+    out: list[str] = []
+    for ch in text:
+        o = ord(ch)
+        mapped = None
+        for start, end in _INDIC_BLOCKS:
+            if start <= o <= end:
+                mapped = _CONSONANTS.get(o - start, "")  # vowels/signs -> ""
+                break
+        if mapped is not None:
+            out.append(mapped)
+        elif ch.isascii() and ch.isalpha():
+            out.append(ch.lower())
+    skeleton = "".join(out).translate(_LATIN_FOLD)
+    # Drop vowels, then aspiration ('bh' -> 'b'), then collapse doubles so
+    # "Lakshmi"/"లక్ష్మి" and "Sunitha"/"Sunita" cannot disagree.
+    skeleton = "".join(c for c in skeleton if c not in _VOWELS)
+    skeleton = "".join(
+        c for i, c in enumerate(skeleton) if c != "h" or i == 0
+    )
+    squeezed: list[str] = []
+    for c in skeleton:
+        if not squeezed or squeezed[-1] != c:
+            squeezed.append(c)
+    return "".join(squeezed)

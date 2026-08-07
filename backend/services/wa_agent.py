@@ -63,6 +63,12 @@ SYSTEM_PROMPT = """\
 You are the appointment assistant for {clinic}, an Indian clinic. You are
 talking to a patient on WhatsApp. Today is {today} ({weekday}).
 
+DATES ARE LOOKED UP, NEVER CALCULATED. Use this table for any day the patient
+names — "today", "tomorrow", "Monday", "next Friday". Never ask a patient for
+a calendar date they already gave you in words; "tomorrow" IS a date, and
+asking them to spell it out is the kind of thing that makes people give up.
+{date_table}
+
 WRITE BACK THE WAY THEY WROTE TO YOU. Before you write anything, look at their
 LATEST message and match it — its language and its script, exactly as they used
 it. If they typed Telugu in English letters ("ma babu ki ontlo baledhu"), reply
@@ -269,10 +275,22 @@ TOOLS: list[dict] = [
             "type": "object",
             "properties": {
                 "appointment_id": {"type": "string"},
-                "date": {"type": "string", "description": "YYYY-MM-DD"},
+                "date": {
+                    "type": "string",
+                    "description": (
+                        "YYYY-MM-DD. OPTIONAL — omit it to keep the booking on "
+                        "its current date and only change the time."
+                    ),
+                },
                 "time": {"type": "string", "description": "24-hour HH:MM"},
             },
-            "required": ["appointment_id", "date", "time"],
+            # `date` is deliberately NOT required. "move it to 11:30" almost
+            # never restates the date, and a required argument the model
+            # cannot confidently fill makes it stall instead of act: on a live
+            # Hindi turn (2026-08-07) it called my_appointments, never called
+            # this tool, and still told the patient the booking had moved.
+            # Same failure class as confirm_booking's `complaint` (FIXLOG #482).
+            "required": ["appointment_id", "time"],
         },
     },
     {
@@ -327,6 +345,38 @@ def _claims_a_callback(reply: str) -> bool:
     return any(marker in low for marker in _CALLBACK_CLAIMS)
 
 
+# The three tools that actually change a booking. A reply that tells the
+# patient their appointment moved/was booked/was cancelled is only true if one
+# of these ran this turn.
+_MUTATION_TOOLS = frozenset({
+    "book_appointment", "reschedule_appointment", "cancel_appointment",
+})
+
+# Claims of a COMPLETED or PROMISED change, across the scripts patients write
+# in. Deliberately excludes questions ("shall I move it?") and availability
+# talk — those make no promise. Kept to unambiguous verbs so a false positive
+# only costs one extra model round.
+_MUTATION_CLAIMS = (
+    # English
+    "have booked", "has been booked", "is booked", "i've booked", "i have moved",
+    "have moved", "has been moved", "i've moved", "have changed", "has been changed",
+    "i've changed", "have cancelled", "has been cancelled", "i've cancelled",
+    "have canceled", "has been canceled", "will move", "will change it",
+    "i'll move", "i'll change", "i'll book", "will book it",
+    # Telugu — booked / changed / cancelled
+    "బుక్ చేయబడింది", "బుక్ చేశాను", "మార్చాను", "మార్చబడింది", "మారుస్తాను",
+    "రద్దు చేయబడింది", "రద్దు చేశాను",
+    # Hindi/Marathi — booked / changed / cancelled
+    "बुक कर दिया", "बुक हो गया", "बदल दिया", "बदल देती हूँ", "बदल देता हूँ",
+    "बदल दूंगी", "बदल दूंगा", "रद्द कर दिया",
+)
+
+def _claims_a_mutation(reply: str) -> bool:
+    """Does REPLY tell the patient a booking was (or is being) changed?"""
+    low = (reply or "").lower()
+    return any(marker in low for marker in _MUTATION_CLAIMS)
+
+
 def _ampm(value: time_cls) -> str:
     hour = value.strftime("%I").lstrip("0") or "12"
     suffix = value.strftime("%p").lower()
@@ -362,22 +412,54 @@ async def _doctors(db: AsyncSession, branch: Branch) -> list[Doctor]:
     )
 
 
+_TITLE_WORDS = ("doctor", "the", "garu", "sir", "madam", "dr")
+
+
 def _match_doctor(doctors: list[Doctor], asked: str) -> Doctor | None:
     """Loose name match — patients type "dr.srinivas", "Srinivas garu",
     "srinivass". Any shared word of 3+ letters wins; a bare title matches
-    nobody, so "doctor" never resolves to whoever sorts first."""
+    nobody, so "doctor" never resolves to whoever sorts first.
+
+    CROSS-SCRIPT (Vinay, live Telugu E2E 2026-08-07): the roster stores Latin
+    names but a Telugu patient writes "శ్రీనివాస్". The Latin-only pass below
+    strips every non-Latin character, so that name became an empty token set
+    and the clinic answered "we don't have a doctor named Srinivas" — no
+    Telugu, Hindi or Tamil patient could book by naming their doctor. So on a
+    miss we fall back to a script-independent consonant fingerprint
+    (agent.i18n.transliterate.consonant_skeleton), which reduces "Srinivas",
+    "శ్రీనివాస్" and "श्रीनिवास" all to "srnvs". Offline and deterministic —
+    no network hop on a lookup, and no dependency on the Sarvam key.
+    """
     import re
 
     strip = re.compile(r"[^a-z\s]")
     ask = {
         w for w in strip.sub(" ", (asked or "").lower()).split()
-        if len(w) >= 3 and w not in ("doctor", "the", "garu", "sir", "madam")
+        if len(w) >= 3 and w not in _TITLE_WORDS
     }
-    if not ask:
-        return None
     for doc in doctors:
         words = {w for w in strip.sub(" ", doc.name.lower()).split() if len(w) >= 3}
         if words & ask:
+            return doc
+
+    # Cross-script fallback.
+    from agent.i18n.transliterate import consonant_skeleton
+
+    titles = {consonant_skeleton(t) for t in _TITLE_WORDS}
+    # 3+ consonants keeps this specific: a 2-letter fingerprint would match far
+    # too much of a sentence.
+    asked_keys = {
+        k for k in (consonant_skeleton(w) for w in (asked or "").split())
+        if len(k) >= 3 and k not in titles
+    }
+    if not asked_keys:
+        return None
+    for doc in doctors:
+        doc_keys = {
+            k for k in (consonant_skeleton(w) for w in (doc.name or "").split())
+            if len(k) >= 3
+        }
+        if doc_keys & asked_keys:
             return doc
     return None
 
@@ -567,10 +649,29 @@ class WaTools:
         queue_doctors = {
             d.id for d in all_docs if (d.booking_type or "appointment") == "token"
         }
+        # WHOSE booking each one is. Several family members share one number
+        # (that is the whole point of different_person), and without the name
+        # the model cannot tell which row "my father's appointment" means — so
+        # it could not pick an appointment_id to reschedule. On a live Hindi
+        # turn (2026-08-07, "मेरे पिता का अपॉइंटमेंट 11:30 बजे कर दीजिए") it
+        # gave up on the tool entirely and still told the patient the booking
+        # had moved. Not a RULE 9 concern: these are the bookings made on this
+        # sender's own number, by people they named themselves; logs still
+        # carry only phone[-4:].
+        names = {}
+        if rows:
+            names = dict((
+                await self.db.execute(
+                    select(Patient.id, Patient.name).where(
+                        Patient.id.in_({t.patient_id for t in rows})
+                    )
+                )
+            ).all())
         return {
             "appointments": [
                 {
                     "appointment_id": str(t.id),
+                    "patient": names.get(t.patient_id) or "this patient",
                     "doctor": docs.get(t.doctor_id, "the doctor"),
                     "date": t.date.isoformat(),
                     "time": _ampm(t.appointment_time) if t.appointment_time else None,
@@ -597,9 +698,12 @@ class WaTools:
             return {"success": False, "error": "no booking of yours with that id"}
         docs = await _doctors(self.db, self.branch)
         doc = next((d for d in docs if d.id == old.doctor_id), None)
-        target, when = _parse_date(date), _parse_time(time)
+        when = _parse_time(time)
+        # No date given -> keep the booking on the day it is already on. The
+        # patient who says "move it to 11:30" means the same day.
+        target = _parse_date(date) if date else old.date
         if doc is None or target is None or when is None:
-            return {"success": False, "error": "need date as YYYY-MM-DD and time as HH:MM"}
+            return {"success": False, "error": "need a time as HH:MM"}
 
         slot = Slot(
             doctor_id=doc.id, doctor_name=doc.name,
@@ -728,6 +832,30 @@ def _history(turns: list[dict], text: str) -> list:
 _FAQ_MAX = 20
 
 
+def _date_table(now) -> str:
+    """Explicit today/tomorrow/weekday -> ISO table for the prompt.
+
+    The voice path learned this the hard way (build_date_context): asked to do
+    weekday arithmetic, the model booked Tuesday on Wednesday's date. WhatsApp
+    only stated today's date and expected the model to derive the rest — on a
+    live English turn (2026-08-07) "book me tomorrow at 11:30" came back "I
+    need to know the full date for tomorrow", while Telugu (రేపు) and Hindi
+    (कल) resolved fine. A lookup table cannot be got wrong.
+    """
+    from datetime import timedelta as _td
+
+    today = now.date()
+    labels = {0: "TODAY", 1: "TOMORROW", 2: "day after tomorrow"}
+    lines = []
+    for i in range(8):
+        d = today + _td(days=i)
+        tag = labels.get(i, "")
+        lines.append(
+            f"  {d.isoformat()} = {d.strftime('%A')}{' (' + tag + ')' if tag else ''}"
+        )
+    return "\n".join(lines)
+
+
 def _faq_block(branch: Branch) -> str:
     """The clinic's own FAQ rows, verbatim, for the system prompt.
 
@@ -771,6 +899,7 @@ async def handle(
         clinic=branch.name,
         today=now.date().isoformat(),
         weekday=now.strftime("%A"),
+        date_table=_date_table(now),
         faq=_faq_block(branch),
     )
     tools = WaTools(db, branch, sender, plan)
@@ -778,12 +907,15 @@ async def handle(
 
     reply = ""
     called: set[str] = set()
-    try:
+
+    async def _run_rounds() -> str:
+        """Model <-> tool loop. Returns the model's final text."""
+        out = ""
         for _round in range(MAX_TOOL_ROUNDS):
             response = await _call_model(system, contents, TOOLS)
             calls = list(getattr(response, "function_calls", None) or [])
             if not calls:
-                reply = (getattr(response, "text", "") or "").strip()
+                out = (getattr(response, "text", "") or "").strip()
                 break
 
             contents.append(response.candidates[0].content)
@@ -813,6 +945,39 @@ async def handle(
                         name=call.name, response={"result": result},
                     )],
                 ))
+        return out
+
+    try:
+        reply = await _run_rounds()
+
+        # NEVER CONFIRM A CHANGE THAT DID NOT HAPPEN. Vinay, live Hindi E2E
+        # 2026-08-07: asked to move his father's appointment to 11:30, the
+        # model called only my_appointments and then answered "ज़रूर, मैं
+        # आपके पिता का अपॉइंटमेंट 11:30 बजे के लिए बदल देती हूँ" — the
+        # booking never moved. A patient who is told their appointment was
+        # changed stops worrying about it; that is worse than a refusal.
+        #
+        # Same shape as the callback backfill below, but a reschedule cannot
+        # be backfilled (we would be guessing which booking and what time), so
+        # the model is handed the contradiction and gets ONE more pass to
+        # either call the tool or say plainly that it has not moved yet. The
+        # correction is a tool-result-shaped turn, so the model keeps writing
+        # in the patient's language.
+        if _claims_a_mutation(reply) and not (called & _MUTATION_TOOLS):
+            # DETECTION ONLY, deliberately. A corrective re-prompt was tried
+            # here on 2026-08-07 and made things WORSE in two visible ways: the
+            # model apologised to the patient about its own previous message
+            # ("My apologies, I got ahead of myself") and, on the Hindi turn,
+            # asked the patient for the internal appointment ID. Leaking
+            # machinery to a patient is a worse failure than the claim itself,
+            # so the re-prompt was removed and this stays an OBSERVABILITY
+            # signal: grep wa_agent_unbacked_mutation_claim to see how often a
+            # reply promises a change no tool made. Fixing the underlying
+            # behaviour is still open (see docs/TECH_DEBT.md).
+            logger.warning(
+                "wa_agent_unbacked_mutation_claim",
+                branch_id=str(branch.id), phone_last4=(sender or "")[-4:],
+            )
     except Exception as e:  # noqa: BLE001 — RULE 8: never a dead end
         logger.warning(
             "wa_agent_failed", branch_id=str(branch.id),

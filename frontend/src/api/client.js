@@ -255,3 +255,9 @@ export const setOrgMinutes = (orgId, adjustment) =>
   api.post(`/admin/orgs/${orgId}/minutes`, { adjustment }).then((r) => r.data);
 export const deleteOrg = (orgId) =>
   api.delete(`/admin/orgs/${orgId}`).then((r) => r.data);
+
+// ── Billing page (clinic owner) ──
+export const fetchBillingSummary = () =>
+  api.get("/api/billing/summary").then((r) => r.data);
+export const cancelSubscription = (cancel = true) =>
+  api.post("/api/plan-cancel", { cancel }).then((r) => r.data);

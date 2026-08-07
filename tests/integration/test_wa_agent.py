@@ -412,8 +412,13 @@ async def test_a_symptom_question_is_recorded_for_the_doctor(db):
 # ── the prompt says what Vinay asked it to say ───────────────────────────────
 
 def _prompt(faq=""):
+    # date_table comes from the same builder production uses, so these tests
+    # exercise the real prompt rather than a stand-in that could drift.
+    from datetime import datetime as _dt
+
     return wa_agent.SYSTEM_PROMPT.format(
-        clinic="Test Clinic", today="2026-08-04", weekday="Tuesday", faq=faq
+        clinic="Test Clinic", today="2026-08-04", weekday="Tuesday", faq=faq,
+        date_table=wa_agent._date_table(_dt(2026, 8, 4, 10, 0)),
     ).lower()
 
 
@@ -917,3 +922,25 @@ async def test_already_booked_still_leaves_the_seat_free(db, redis):
         patient_name="Someone Else", patient_age=31,
     )
     assert other["success"] is True, f"10:00 must still be bookable: {other}"
+
+
+def test_the_prompt_carries_a_date_lookup_table():
+    """Vinay 2026-08-07 live E2E: "book me tomorrow at 11:30" was refused with
+    "I need to know the full date for tomorrow" in ENGLISH, while Telugu (రేపు)
+    and Hindi (कल) resolved fine. The prompt stated only today's date and left
+    the arithmetic to the model. The voice path already learned this
+    (build_date_context, after it booked Tuesday on Wednesday's date), so
+    WhatsApp now ships the same lookup table."""
+    p = _prompt()
+    assert "2026-08-04" in p and "tomorrow" in p
+    assert "2026-08-05" in p, "tomorrow's ISO date must be in the table"
+    assert "never ask a patient for" in p
+
+
+def test_date_table_labels_today_and_tomorrow_and_runs_a_week():
+    from datetime import datetime as _dt
+
+    table = wa_agent._date_table(_dt(2026, 8, 7, 9, 0))
+    assert "2026-08-07 = Friday (TODAY)" in table
+    assert "2026-08-08 = Saturday (TOMORROW)" in table
+    assert len(table.strip().splitlines()) == 8, "a week ahead plus today"

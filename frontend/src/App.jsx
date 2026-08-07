@@ -12,6 +12,7 @@ import SupportWidget from "./components/SupportWidget.jsx";
 // on the landing page should not download the dashboard, charts, or admin
 // consoles (PSI: landing shipped the whole 550KB bundle, FIXLOG #338).
 const Settings = lazy(() => import("./pages/Settings.jsx"));
+const Billing = lazy(() => import("./pages/Billing.jsx"));
 const Queue = lazy(() => import("./pages/Queue.jsx"));
 const WalkIn = lazy(() => import("./pages/WalkIn.jsx"));
 const Treatments = lazy(() => import("./pages/Treatments.jsx"));
@@ -136,6 +137,14 @@ export default function App() {
           element={
             <Protected roles={["org_admin"]}>
               <Settings />
+            </Protected>
+          }
+        />
+        <Route
+          path="/billing"
+          element={
+            <Protected roles={["org_admin"]}>
+              <Billing />
             </Protected>
           }
         />
