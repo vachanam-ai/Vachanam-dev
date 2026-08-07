@@ -390,6 +390,18 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
     """Create an explicit agent dispatch; the agent dials the patient. Returns
     True only when the dispatch was created (the caller marks reminder_sent on
     True, and retries next tick on False)."""
+    # One outbound call per patient at a time, across every job that dials —
+    # a reminder and a treatment follow-up due in the same minute rang the
+    # patient twice (Vinay 2026-08-08). Returning False here leaves
+    # reminder_sent unset, so the next tick retries exactly as it does for a
+    # failed dispatch.
+    from backend.services.outbound_guard import (
+        claim_outbound_call,
+        release_outbound_call,
+    )
+
+    if not await claim_outbound_call(patient.phone, "reminder"):
+        return False
     try:
         from livekit import api as lk_api
 
@@ -422,6 +434,9 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
             from backend.services.dispatch_verify import verify_or_cleanup
 
             if not await verify_or_cleanup(lkapi, room, f"reminder:{token.id}"):
+                # Nobody claimed the dispatch, so no call happened — hand the
+                # number back rather than making a real retry wait out the TTL.
+                await release_outbound_call(patient.phone)
                 return False
             logger.info(
                 "reminder_call_dispatched",
@@ -435,4 +450,5 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
             await lkapi.aclose()
     except Exception as e:
         logger.error("reminder_dispatch_failed", token_id=str(token.id), error=str(e))
+        await release_outbound_call(patient.phone)
         return False

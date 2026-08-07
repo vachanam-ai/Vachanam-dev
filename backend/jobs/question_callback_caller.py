@@ -48,6 +48,14 @@ def compose_message(question: str, answer: str) -> str:
 async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> bool:
     """Create the dispatch AND verify a worker actually joined (#423). Returns
     False when nobody picked it up — the row stays queued for the next tick."""
+    # Same collision guard as the other three dialers (Vinay 2026-08-08).
+    from backend.services.outbound_guard import (
+        claim_outbound_call,
+        release_outbound_call,
+    )
+
+    if not await claim_outbound_call(q.caller_phone, "question_answer"):
+        return False
     try:
         from livekit import api as lk_api
 
@@ -71,6 +79,7 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
             from backend.services.dispatch_verify import verify_or_cleanup
 
             if not await verify_or_cleanup(lkapi, room, f"question:{q.id}"):
+                await release_outbound_call(q.caller_phone)
                 return False
             logger.info(
                 "question_callback_dispatched",
@@ -84,6 +93,7 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
     except Exception as e:  # noqa: BLE001 — RULE 8
         logger.error("question_callback_dispatch_failed", question_id=str(q.id),
                      error=str(e)[:160])
+        await release_outbound_call(q.caller_phone)
         return False
 
 

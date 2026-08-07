@@ -5193,13 +5193,32 @@ class VachanamAgent(Agent):
         """Refuse to hang up mid-booking. The LLM once said a random
         ధన్యవాదాలు and ended the call while a token was held but never
         confirmed — the patient thought they were booked. Raises ToolError
-        (LLM-visible) unless the booking is complete or explicitly abandoned."""
-        if state.token_held and not state.token_confirmed and not abandon_pending_booking:
+        (LLM-visible) unless the booking is complete or explicitly abandoned.
+
+        Vinay 2026-08-08, live call: "i was saying my name for booking and it
+        hung up." The token-held test alone could not catch that. The model
+        routinely skips assign_token entirely — confirm_booking holds the token
+        itself when it finds none (RULE 2 is enforced there) — so through the
+        whole name-and-age exchange token_held is still False and this guard
+        was inert for exactly the stretch where the caller is doing the talking.
+
+        caller_asked_to_book is the honest boundary: it is set the moment they
+        ask, survives their answering unrelated questions, and is cleared on a
+        flat refusal and again when a booking actually completes. True means a
+        booking is in flight, whether or not a number has been reserved yet.
+        Both tests are kept — a hold with the consent latch already spent still
+        has to block."""
+        booking_in_flight = (
+            state.token_held and not state.token_confirmed
+        ) or state.caller_asked_to_book
+        if booking_in_flight and not abandon_pending_booking:
             raise ToolError(
-                "A booking is IN PROGRESS (token held, not confirmed). Do not "
-                "end the call. Either finish confirm_booking, or — ONLY if the "
-                "patient clearly said they no longer want the booking — say "
-                "goodbye and call end_call with abandon_pending_booking=true."
+                "A booking is IN PROGRESS — the patient asked to book and no "
+                "booking has been confirmed yet. Do not end the call. Ask for "
+                "whatever is still missing and finish confirm_booking, or — "
+                "ONLY if the patient clearly said they no longer want the "
+                "booking — say goodbye and call end_call with "
+                "abandon_pending_booking=true."
             )
 
     @function_tool()
@@ -5213,6 +5232,20 @@ class VachanamAgent(Agent):
         abandon_pending_booking=true ONLY when a started booking is being
         dropped because the patient clearly declined to finish it."""
         self._check_end_allowed(self._state, abandon_pending_booking)
+        # The model sometimes calls this as a BARE tool call with no text in the
+        # turn (prod 2026-08-07 19:46 UTC: completion_tokens=9, then the room
+        # was deleted 1.1s later). wait_for_playout then has nothing to wait
+        # for, so the caller hears silence and the line simply dies — which is
+        # what "it hung up on me" feels like from the other end. Say the
+        # goodbye ourselves when nothing is playing; it is the same line the
+        # silence watchdog uses, so no new copy to translate.
+        sess = getattr(context, "session", None)
+        if sess is not None and getattr(sess, "current_speech", None) is None:
+            try:
+                lines = get_lines(self._state.language or self._lang_code)
+                await sess.say(sanitize_for_tts(lines.cap_goodbye))
+            except Exception as e:  # noqa: BLE001 — RULE 8: never block the hangup
+                logger.warning("end_call_goodbye_failed: %s", e)
         try:
             # Let the goodbye finish playing before tearing the room down.
             await context.wait_for_playout()
@@ -5222,7 +5255,18 @@ class VachanamAgent(Agent):
             lkapi = api.LiveKitAPI()
             await lkapi.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
             await lkapi.aclose()
-            logger.info("call_ended_by_agent room=%s", self._room.name)
+            # RULE 9: flags only, no utterance text — enough to tell a clean
+            # wrap-up from a hangup that landed mid-booking.
+            logger.info(
+                "call_ended_by_agent room=%s asked_to_book=%s held=%s "
+                "confirmed=%s any_booking=%s abandon=%s",
+                self._room.name,
+                self._state.caller_asked_to_book,
+                self._state.token_held,
+                self._state.token_confirmed,
+                self._state.any_booking_confirmed,
+                abandon_pending_booking,
+            )
             return {"success": True}
         except Exception as e:
             logger.error("end_call_failed: %s", e)
@@ -5385,6 +5429,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     _out_greet: dict = {}
 
     async def _outbound_greet_prep() -> None:
+        # Imported HERE, not borrowed from the enclosing scope: this task is
+        # created before entrypoint's own `import time as _perf` line runs, so
+        # a closure reference could raise NameError inside the broad except
+        # below — which would look like "prep failed" and silently cost every
+        # outbound call its prepared greeting.
+        import time as _perf_prep
+
         try:
             if not meta.get("branch_id"):
                 return
@@ -5425,7 +5476,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 is_question_answer=is_qa_call,
                 recording_active=_outbound_recording_active,
             )
+            _t_synth = _perf_prep.monotonic()
             wavs = await synth_wavs(texts, _voice_for_lang(_gbr, _glang), _glang)
+            logger.info(
+                "outbound_greet_synth_ms=%.0f segments=%d",
+                (_perf_prep.monotonic() - _t_synth) * 1000.0, len(texts),
+            )
             _out_greet.update(
                 texts=texts,
                 wavs=wavs,
@@ -6186,10 +6242,32 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # if the authoritative post-answer resolution disagrees with the prep
             # (row changed mid-ring), skip the clip; live fallback covers it.
             if _greet_prep_task is not None:
+                # Vinay 2026-08-08: "lag is very very much for remainder call.
+                # 8-10sec for 1st word."
+                #
+                # THE OLD 2s CAP IS THE LAG. Prep has to finish two DB reads, a
+                # message translation, two Sarvam transliteration hops and then
+                # TTS a multi-segment opening — routinely more than 2s. When it
+                # overran, `_out_greet["wavs"]` was still empty, NO playback
+                # task was created at all, and the greeting fell through to the
+                # session.say after prompt build + prompt-cache resolve +
+                # session start. That deferral is the 8-10 seconds, not the
+                # synthesis.
+                #
+                # Waiting longer is very nearly free: this runs while the
+                # patient's phone is still RINGING, so the budget overlaps dead
+                # time we already spend. Worst case we play a moment after they
+                # answer instead of many seconds after.
+                _t_wait = _perf.monotonic()
                 try:
-                    await asyncio.wait_for(_greet_prep_task, timeout=2.0)
+                    await asyncio.wait_for(_greet_prep_task, timeout=8.0)
                 except Exception as _gw:  # noqa: BLE001
                     logger.warning("outbound_greet_prep_wait: %s", _gw)
+                logger.info(
+                    "outbound_greet_prep_waited ms=%.0f ready=%s",
+                    (_perf.monotonic() - _t_wait) * 1000.0,
+                    bool(_out_greet.get("wavs")),
+                )
             if (
                 _out_greet.get("wavs")
                 and _out_greet.get("lang") == lang_code
@@ -7967,8 +8045,14 @@ async def _warm_all_clinic_prompt_caches() -> None:
     outbound metadata remain per-call chat context and are never stored here.
     Languages are limited to each branch default plus languages actually saved
     as patient preferences, avoiding speculative caches nobody uses.
+
+    The date table IS part of the cached instructions (see the call site
+    below): it is stable for a whole calendar day, and the cache key carries
+    the date, so the entry rolls over at midnight instead of serving a stale
+    "today" — which is the property that lets it be cached at all.
     """
     import asyncpg
+    from zoneinfo import ZoneInfo
 
     dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
     conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl="require")
@@ -8097,6 +8181,17 @@ async def _warm_all_clinic_prompt_caches() -> None:
                         clinic_address=row["address"],
                         faq=_decode_branch_faq(row["faq"]),
                         recording_active=recording_active,
+                    )
+                    # MUST match _compose_instructions byte for byte. The cache
+                    # key is a digest of this string, so a warmer that composes
+                    # it even slightly differently mints an entry no call can
+                    # ever hit — the warming is wasted AND every call runs
+                    # uncached (prompt_cached_tokens: 0 in prod, 2026-08-07).
+                    # This drifted the moment the date table moved into the
+                    # instructions (#491) and only this call site was updated.
+                    # Asia/Kolkata to match _prompt_cache_key's own date.
+                    + build_date_table(
+                        datetime_cls.now(ZoneInfo("Asia/Kolkata")).date()
                     )
                     + get_lines(language).brevity
                 )

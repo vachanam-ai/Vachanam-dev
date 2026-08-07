@@ -52,6 +52,16 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
     _JOIN_TIMEOUT_S is deleted and the task stays pending — the next 15-min
     tick retries, and by then the watchdog (#411 gate) has restarted a dead
     worker. Dispatch-then-mutate preserved (FIXLOG #160)."""
+    # A follow-up and an appointment reminder falling due in the same minute
+    # rang the same patient twice (Vinay 2026-08-08). Skipping leaves the task
+    # pending, so the next tick retries — identical to a failed dispatch.
+    from backend.services.outbound_guard import (
+        claim_outbound_call,
+        release_outbound_call,
+    )
+
+    if not await claim_outbound_call(patient.phone, "next_visit"):
+        return False
     try:
         from livekit import api as lk_api
         lkapi = lk_api.LiveKitAPI()
@@ -84,6 +94,9 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
             from backend.services.dispatch_verify import verify_or_cleanup
 
             if not await verify_or_cleanup(lkapi, room, f"followup:{task.id}"):
+                # No call happened — hand the number back so a real retry
+                # does not have to wait out the guard TTL.
+                await release_outbound_call(patient.phone)
                 return False
             logger.info("followup_call_dispatched", task_id=str(task.id),
                         call_type=task.task_type, room=room,
@@ -93,6 +106,7 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
             await lkapi.aclose()
     except Exception as e:  # noqa: BLE001
         logger.error("followup_dispatch_failed", task_id=str(task.id), error=str(e)[:160])
+        await release_outbound_call(patient.phone)
         return False
 
 

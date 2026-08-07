@@ -109,6 +109,13 @@ async def run_cascade_rebook_calls() -> None:
 
 
 async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
+    # One outbound call per patient at a time across every dialing job — a
+    # rebook landing in the same minute as a reminder rang the patient twice
+    # (Vinay 2026-08-08). Skipping leaves the task queued for the next tick.
+    from backend.services.outbound_guard import claim_outbound_call
+
+    if not await claim_outbound_call(getattr(patient, "phone", None), "rebook"):
+        return
     try:
         from livekit import api as lk_api
 
