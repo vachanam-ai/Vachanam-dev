@@ -4411,34 +4411,48 @@ class VachanamAgent(Agent):
         new_time (HH:MM) required only for schedule (appointment) doctors."""
         self._state.quality_intent = 'reschedule'
         utterance = self._state.last_user_utterance
-        # Same deadlock, same fix as confirm_booking above — and this one has
-        # already bitten once in Hindi (2026-07-27, looped until hang-up).
-        declined = utterance is not None and _caller_refused_outright(utterance)
-        if declined:
+        # NO CONFIRMATION QUESTION AT ALL. Vinay 2026-08-08, third report of the
+        # same loop: "rescheduling is worst. asking for confirmation n number of
+        # times... (or better not ask for confirmation at all). (please
+        # reschedule to 11am tomorrow -> done)."
+        #
+        # #497 tried to fix this by widening the phrase list. Proven still
+        # broken against the language people actually speak — every one of these
+        # returned False from _caller_authorized_reschedule:
+        #
+        #     "repu 11 gantalaki marchandi"      (Telugu in Latin letters,
+        #     "time change cheyandi"              which is what Soniox returns)
+        #     "appointment ni marchandi"
+        #     "రీషెడ్యూల్ చేయండి"                (transliterated into Telugu)
+        #
+        # So the request was never recognised, the sticky flag never got set,
+        # and the fallback matched the model's freely-worded question against
+        # five hardcoded strings — which is the loop. #492 already reached this
+        # conclusion for confirm_booking and stopped trying to recognise
+        # agreement; reschedule kept a phrase list and kept the bug.
+        #
+        # What is left is the one thing worth deciding deterministically: a flat
+        # refusal. _caller_refused_outright is EXACT-match over a multilingual
+        # set, so it does not care about script and cannot fire on "no problem,
+        # move it". Everything else is the model's call — it is the only part of
+        # this system fluent in seven languages and two scripts.
+        #
+        # Safe to drop the gate here specifically: a reschedule MOVES a booking
+        # and the patient keeps a slot either way, the old one is released only
+        # after the new one is confirmed, and old_token_id still has to come
+        # from find_my_bookings under the caller's own phone (RULE 1 + the
+        # identity gate). cancel_booking is destructive and KEEPS its
+        # positive-yes requirement — that asymmetry is deliberate.
+        if utterance is not None and _caller_refused_outright(utterance):
             self._state.pending_confirmation = None
-        if utterance is not None and not (
-            _caller_authorized_reschedule(utterance)
-            or (
-                not declined
-                and (
-                    self._state.caller_asked_to_reschedule
-                    or self._last_assistant_requested_reschedule()
-                )
-            )
-        ):
+            self._state.caller_asked_to_reschedule = False
             logger.warning(
-                'reschedule_blocked_no_caller_authorization session=%s',
+                'reschedule_blocked_caller_refused session=%s',
                 _privacy_safe_session_id(self._state.session_id),
             )
-            self._state.pending_confirmation = 'reschedule'
-            # Same deadlock as confirm_booking: refusing aloud meant the model
-            # never asked, so the caller's agreement could never authorize.
             raise ToolError(
-                'Not authorized YET — you have not asked the caller to confirm '
-                'the change. Do NOT mention permission or rules. Ask one short '
-                'question naming the OLD and the NEW time and date, then: '
-                '"Shall I move it?" (in the active language). '
-                'On agreement, call reschedule_booking again immediately.'
+                'The caller just said NO. Do NOT move the appointment. Ask what '
+                'they would like instead, in one short line.'
             )
         self._state.pending_confirmation = None
         _guard_human_booking(self._state)

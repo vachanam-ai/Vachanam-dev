@@ -110,7 +110,12 @@ def test_empty():
 
 
 def test_sanitize_for_tts_leaves_small_numbers_for_soniox():
-    assert sanitize_for_tts("మీ టైమ్ 6:30, వయసు 48") == "మీ టైమ్ 6:30, వయసు 48"
+    """Ages, tokens and fees stay as digits for Soniox to render in the call
+    language — but a CLOCK TIME does not. This test used to assert "6:30"
+    survived untouched, which is exactly what Vinay heard read out as "six
+    colon three zero" (2026-08-08). Times are now spoken; everything else is
+    still left alone, which is what the rest of this assertion pins."""
+    assert sanitize_for_tts("మీ టైమ్ 6:30, వయసు 48") == "మీ టైమ్ six thirty, వయసు 48"
 
 
 def test_production_phone_converter_changes_only_phone_length_runs():

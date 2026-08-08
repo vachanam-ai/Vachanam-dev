@@ -98,7 +98,11 @@ def _src(name):
     return inspect.getsource(getattr(VachanamAgent, name))
 
 
-@pytest.mark.parametrize("tool", ["confirm_booking", "reschedule_booking"])
+# Reschedule left this group on 2026-08-08. Widening the recognition was tried
+# twice and failed twice; Vinay's call was to stop asking altogether ("please
+# reschedule to 11am tomorrow -> done"), which removes the loop by removing the
+# question. See test_reschedule_no_confirm_aug08.
+@pytest.mark.parametrize("tool", ["confirm_booking"])
 def test_the_guard_accepts_anything_that_is_not_a_refusal(tool):
     """After the guard has demanded the question, requiring a listed phrase is
     what produced both loops. It must gate on refusal, not on recognition."""
@@ -113,7 +117,19 @@ def test_the_guard_accepts_anything_that_is_not_a_refusal(tool):
     )
 
 
-@pytest.mark.parametrize("tool", ["confirm_booking", "reschedule_booking"])
+def test_reschedule_does_not_gate_on_recognition_at_all():
+    """The strongest form of the rule above: nothing to recognise, so nothing
+    to get wrong in a language the list never covered."""
+    src = _src("reschedule_booking")
+    gate = "\n".join(
+        line for line in src.split("_guard_human_booking")[0].splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    assert "_caller_authorized_reschedule" not in gate
+    assert "_caller_refused_outright" in gate, "a flat no must still stop it"
+
+
+@pytest.mark.parametrize("tool", ["confirm_booking"])
 def test_a_refusal_disarms_the_pending_question(tool):
     """Otherwise the flag armed for a question the caller answered "no" to is
     still standing later in the call, and authorizes a mutation nobody agreed
@@ -121,6 +137,14 @@ def test_a_refusal_disarms_the_pending_question(tool):
     src = _src(tool)
     assert "if declined:" in src
     assert "pending_confirmation = None" in src
+
+
+def test_reschedule_still_clears_the_flag_on_a_refusal():
+    """It no longer arms one, but it must not leave a flag armed by an earlier
+    mutation standing after the caller says no."""
+    src = _src("reschedule_booking")
+    assert "pending_confirmation = None" in src
+    assert "caller_asked_to_reschedule = False" in src
 
 
 # ── 5. the veto is a flat no, and nothing else ───────────────────────────────

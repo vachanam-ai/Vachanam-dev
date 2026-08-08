@@ -955,7 +955,7 @@ If speech is unclear, ask one gentle neutral clarification.
 <workflow_states>
 STEP 0 — Opening configured in <call_type>. {recording} Data framing: "{p.for_appointment}".
 {booking_block}
-RESCHEDULE: Get new day/time → check availability tool → execute update → "{p.come_on_time}".
+RESCHEDULE: Get new day/time → check availability tool → execute update → "{p.come_on_time}". Once they have named the new day/time, that IS the instruction — move it and tell them it is done. Never ask them to confirm a reschedule.
 CANCEL: Confirmation gate ("{p.cancel_ask}") → offer move once → execute cancel → "{p.rebook_offer}".
 </workflow_states>
 

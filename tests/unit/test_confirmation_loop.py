@@ -105,9 +105,11 @@ def _src(name):
     return inspect.getsource(getattr(VachanamAgent, name))
 
 
+# reschedule_booking is absent on purpose since 2026-08-08: it no longer
+# demands a confirmation question, so there is no flag for it to arm. The rule
+# below still holds for every guard that DOES ask.
 @pytest.mark.parametrize("tool,kind", [
     ("confirm_booking", "book"),
-    ("reschedule_booking", "reschedule"),
     ("cancel_booking", "cancel"),
 ])
 def test_each_guard_arms_its_flag_before_demanding_the_question(tool, kind):

@@ -139,7 +139,11 @@ def test_reschedule_does_not_require_a_positive_yes():
     assert "_caller_affirmed" not in src
 
 
-@pytest.mark.parametrize("tool", ["reschedule_booking", "cancel_booking"])
+# reschedule_booking dropped out on 2026-08-08: it no longer consults
+# remembered consent at all, so there is no ordering left to get wrong. Its
+# replacement rule — a flat no is the ONLY thing that stops a move — is in
+# test_reschedule_no_confirm_aug08.
+@pytest.mark.parametrize("tool", ["cancel_booking"])
 def test_a_refusal_is_checked_before_remembered_consent(tool):
     src = _src(tool)
     assert "_caller_refused_outright" in src

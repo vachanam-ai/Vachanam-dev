@@ -175,6 +175,11 @@ _HW_TIME = re.compile(rf"\b(\d{{1,2}})(?::([0-5]\d))?\s*{_HOUR_WORD}")
 # TTS read lowercase "am" as the word "amm" (Vinay, real call 2026-07-19).
 # Dotted capitals are the letter-by-letter rendering every TTS agrees on.
 _MER = {"am": "A.M.", "pm": "P.M."}
+# A time that STATES its meridiem needs no inference — and the meridiem has to
+# be rewritten too, or "10:00 am" keeps the bare "am" that TTS says as "amm"
+# (the very reason _MER exists). Matched before every other time pass so the
+# written meridiem always wins over one guessed from a day-part word.
+_TIME_MER = re.compile(r"\b(\d{1,2}):([0-5]\d)\s*([ap])\.?\s*m\.?", re.IGNORECASE)
 
 
 def _time_words(h: int, mi: int) -> str:
@@ -207,6 +212,13 @@ def _hw_time_sub(m: re.Match) -> str:
     if h == 0:
         return f"{_time_words(h, mi)} {_MER['am']}"
     return _time_words(h, mi)  # 1-11, no day-part: no meridiem to prove
+
+
+def _time_mer_sub(m: re.Match) -> str:
+    h, mi = int(m.group(1)), int(m.group(2))
+    if h > 23:
+        return m.group(0)
+    return f"{_time_words(h, mi)} {_MER[m.group(3).lower() + 'm']}"
 
 
 def _bare_time_sub(m: re.Match) -> str:
@@ -247,6 +259,38 @@ def spoken_english_numbers(text: str) -> str:
     return text.replace("डॉक्टर", "डाक्टर")
 
 
+def spoken_clock_times(text: str) -> str:
+    """Clock times → spoken words, in EVERY language.
+
+    Vinay 2026-08-08: "time is getting read as 6 colon zero zero instead of
+    6pm sometimes."
+
+    These three passes have existed since #415/#421 but only ever ran inside
+    spoken_english_numbers, which stopped being the production TTS boundary
+    when sanitize_for_tts moved to spoken_phone_digits — and that one leaves
+    times untouched on the theory that "Soniox can render them naturally in
+    the call language". It cannot: a bare "6:00" comes out as the literal
+    characters. "Sometimes" is the tell — the model writes "సాయంత్రం ఆరు"
+    on most turns and a numeric "6:00" on the rest, and only the numeric ones
+    broke. RULE 6: nothing reaches TTS unsanitized, and a colon is a symbol.
+
+    Word order matters. The day-part pass owns its digits and meridiem, then
+    the o'clock-word pass, then bare colon-times — narrowest first, so
+    "సాయంత్రం 6:30 గంటలకు" is consumed once rather than three times.
+
+    English words inside a Telugu sentence are deliberate, not a slip: #415 is
+    Vinay asking for exactly that ("times speak WITH am/pm — 5pm, 3:30pm,
+    10am — instead of 5 గంటలకి"), validated on real calls.
+    """
+    text = _TIME_MER.sub(_time_mer_sub, text or "")
+    text = _DP_TIME.sub(_dp_time_sub, text)
+    text = _HW_TIME.sub(_hw_time_sub, text)
+    text = _TIME.sub(_bare_time_sub, text)
+    # An o'clock-word swallowed by _HW_TIME can leave the sentence stop
+    # stranded next to the meridiem's own dot ("six P.M..").
+    return re.sub(r"\.\.+(?=\s|$)", ".", text)
+
+
 def spoken_phone_digits(text: str) -> str:
     """Read only phone-length digit runs one digit at a time in English.
 
@@ -272,6 +316,10 @@ def sanitize_for_tts(text: str) -> str:
     text = re.sub(r'^(\d+)\.\s+', r'\1 ', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*-\s+', '', text, flags=re.MULTILINE)
     text = _strip_emoji(text)
+    # Before the phone pass: times are 1-2 digit groups and phone runs are
+    # 10-15, so they cannot collide — but a time left as digits here would be
+    # the last chance to catch it.
+    text = spoken_clock_times(text)
     text = spoken_phone_digits(text)
     text = re.sub(r'  +', ' ', text)
     return text.strip()

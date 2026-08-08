@@ -115,18 +115,26 @@ def test_cancel_and_reschedule_carry_the_same_fix():
     """Vinay's same call: "i told to cancel tomorrow morning appointment... it
     said appointment canceled and ended the call. in reality nothing changed."
     Cancel and reschedule had the identical refuse-instead-of-ask wording, so
-    they deadlock the same way."""
+    they deadlocked the same way.
+
+    RESCHEDULE HAS SINCE LEFT THIS GROUP (2026-08-08). Asking at all is what
+    kept looping — the question was asked in seven languages and the answer
+    matched against a phrase list that had no Latin-script Telugu in it — so
+    Vinay's instruction was to stop asking: "please reschedule to 11am tomorrow
+    -> done". A mutation that never demands a question cannot deadlock on one.
+    Cancel keeps the ask because it is destructive."""
     import inspect
 
     from agent.livekit_minimal import agent as agent_mod
 
     src = inspect.getsource(agent_mod)
-    for phrase in ("Shall I move it?", "Shall I cancel it?"):
-        assert phrase in src, f"{phrase} must be the question the model asks"
+    assert "Shall I cancel it?" in src, "cancel must still ask, not refuse"
+    assert "Shall I move it?" not in src, \
+        "reschedule must not ask for confirmation at all"
     for dead in (
         "Answer availability only and wait for explicit confirmation",
         "Do not call cancel_booking until they explicitly request it",
     ):
         assert dead not in src, f"refuse-instead-of-ask wording survived: {dead}"
-    assert src.count("Not authorized YET") == 3, \
-        "all three mutations (book, reschedule, cancel) must ask, not refuse"
+    assert src.count("Not authorized YET") == 2, \
+        "book and cancel must ask rather than refuse; reschedule must not ask"
