@@ -2777,6 +2777,9 @@ class VachanamAgent(Agent):
                 self._state.caller_asked_to_book = False
                 self._state.caller_asked_to_reschedule = False
                 self._state.caller_asked_to_cancel = False
+                # A flat no ends the mutation too, or the hangup guard would
+                # hold the line open for work the caller just called off.
+                self._state.mutation_in_flight = None
             else:
                 if _caller_authorized_booking(utterance):
                     self._state.caller_asked_to_book = True
@@ -3727,6 +3730,9 @@ class VachanamAgent(Agent):
         # Caller ID is the authorization boundary. Family members remain
         # separate patient rows but share the verified incoming phone number.
         _guard_human_booking(self._state)
+        # From here the booking is UNDERWAY — the call may not end until it
+        # finishes or the caller calls it off (Vinay 2026-08-08).
+        self._state.mutation_in_flight = "book"
         phone, _ = _require_caller_phone(self._state)
 
         resolved = await self._resolve_doctor_id(doctor_id)
@@ -3839,6 +3845,7 @@ class VachanamAgent(Agent):
             # question. Cleared here rather than at authorization above so a
             # retry after a transient failure does not have to re-ask.
             self._state.caller_asked_to_book = False
+            self._state.mutation_in_flight = None   # booking finished
             try:
                 self._state.last_confirmed_token_id = UUID(str(result['token_id']))
             except (KeyError, TypeError, ValueError):
@@ -4456,6 +4463,7 @@ class VachanamAgent(Agent):
             )
         self._state.pending_confirmation = None
         _guard_human_booking(self._state)
+        self._state.mutation_in_flight = "reschedule"
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
@@ -4747,6 +4755,7 @@ class VachanamAgent(Agent):
         # Consent spent. A SECOND move on this call is a new decision and asks
         # its own question (mirrors confirm_booking).
         self._state.caller_asked_to_reschedule = False
+        self._state.mutation_in_flight = None   # reschedule finished
         # Live call 2026-07-03 16:55Z: a reschedule that SUCCEEDED (DB showed the
         # moved booking) was announced as "unable to reschedule" — the model
         # misread the result. Log it (evidence for next time) and make success
@@ -4863,6 +4872,7 @@ class VachanamAgent(Agent):
                     requested_id[-8:], token_id[-8:],
                 )
         _guard_human_booking(self._state)
+        self._state.mutation_in_flight = "cancel"
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
         # the old appointment, and left the patient with nothing.
@@ -5166,6 +5176,7 @@ class VachanamAgent(Agent):
         )
         # Consent spent — cancelling a SECOND booking must be asked for again.
         self._state.caller_asked_to_cancel = False
+        self._state.mutation_in_flight = None   # cancellation finished
 
         # Vinay 2026-08-04: "all confirmations from calls should reflect in
         # whatsapp". A cancellation agreed on the phone must leave the patient
@@ -5204,10 +5215,17 @@ class VachanamAgent(Agent):
 
     @staticmethod
     def _check_end_allowed(state: SessionState, abandon_pending_booking: bool) -> None:
-        """Refuse to hang up mid-booking. The LLM once said a random
-        ధన్యవాదాలు and ended the call while a token was held but never
-        confirmed — the patient thought they were booked. Raises ToolError
-        (LLM-visible) unless the booking is complete or explicitly abandoned.
+        """Refuse to hang up while a booking, reschedule or cancellation is
+        still unfinished. The LLM once said a random ధన్యవాదాలు and ended the
+        call while a token was held but never confirmed — the patient thought
+        they were booked. Raises ToolError (LLM-visible) unless the work is
+        complete or explicitly abandoned.
+
+        The agent finishes the job; the PATIENT is the one who may hang up
+        early (Vinay 2026-08-08). Nothing here can strand a caller: a flat
+        refusal clears every flag, abandon_pending_booking is an explicit
+        override, and the silence watchdog ends a dead line without ever
+        consulting this function.
 
         Vinay 2026-08-08, live call: "i was saying my name for booking and it
         hung up." The token-held test alone could not catch that. The model
@@ -5225,14 +5243,32 @@ class VachanamAgent(Agent):
         booking_in_flight = (
             state.token_held and not state.token_confirmed
         ) or state.caller_asked_to_book
-        if booking_in_flight and not abandon_pending_booking:
+        # Vinay 2026-08-08: "call should never end before booking/rescheduling/
+        # cancelling appointments. It should do the part else they can hang up."
+        #
+        # The rule is about the WORK, not about booking specifically, so all
+        # three mutations count. Two independent signals, because each covers
+        # the other's blind spot: caller_asked_to_* is read from the caller's
+        # words and therefore inherits #502's Latin-script Telugu hole, while
+        # mutation_in_flight is set by the agent entering its own tool and does
+        # not care what language anyone is speaking. Intent stated but no tool
+        # yet run is caught by the first; a tool begun and never finished by the
+        # second.
+        mutation_in_flight = (
+            booking_in_flight
+            or state.caller_asked_to_reschedule
+            or state.caller_asked_to_cancel
+            or state.mutation_in_flight is not None
+        )
+        if mutation_in_flight and not abandon_pending_booking:
             raise ToolError(
-                "A booking is IN PROGRESS — the patient asked to book and no "
-                "booking has been confirmed yet. Do not end the call. Ask for "
-                "whatever is still missing and finish confirm_booking, or — "
-                "ONLY if the patient clearly said they no longer want the "
-                "booking — say goodbye and call end_call with "
-                "abandon_pending_booking=true."
+                "The patient asked you to book, move or cancel an appointment "
+                "and it is NOT done yet. Do not end the call — finish the job. "
+                "Ask for whatever is still missing and call the tool again. "
+                "ONLY if the patient clearly said they no longer want it, say "
+                "goodbye and call end_call with abandon_pending_booking=true. "
+                "If they simply stopped talking, wait — they can hang up "
+                "themselves."
             )
 
     @function_tool()
@@ -5272,10 +5308,14 @@ class VachanamAgent(Agent):
             # RULE 9: flags only, no utterance text — enough to tell a clean
             # wrap-up from a hangup that landed mid-booking.
             logger.info(
-                "call_ended_by_agent room=%s asked_to_book=%s held=%s "
-                "confirmed=%s any_booking=%s abandon=%s",
+                "call_ended_by_agent room=%s asked_to_book=%s asked_resched=%s "
+                "asked_cancel=%s in_flight=%s held=%s confirmed=%s "
+                "any_booking=%s abandon=%s",
                 self._room.name,
                 self._state.caller_asked_to_book,
+                self._state.caller_asked_to_reschedule,
+                self._state.caller_asked_to_cancel,
+                self._state.mutation_in_flight,
                 self._state.token_held,
                 self._state.token_confirmed,
                 self._state.any_booking_confirmed,

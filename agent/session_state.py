@@ -86,6 +86,20 @@ class SessionState:
     # and the second yes works. Exactly two questions, every time.
     caller_asked_to_reschedule: bool = False
     caller_asked_to_cancel: bool = False
+    # Which mutation the agent has STARTED and not yet finished: "book" |
+    # "reschedule" | "cancel", else None. Set on entry to the tool, cleared the
+    # moment the write succeeds and by a flat refusal.
+    #
+    # Vinay 2026-08-08: "call should never end before booking/rescheduling/
+    # cancelling appointments. It should do the part else they can hang up."
+    # The three caller_asked_to_* flags come from reading the caller's words,
+    # and that reading is exactly what fails in Latin-script Telugu (#502) —
+    # so a hangup guard resting only on them inherits the same blind spot. This
+    # flag reads the AGENT's own behaviour instead: it does not care what
+    # language anybody is speaking, only that a mutation was begun and never
+    # finished. The two are kept together on purpose, one catching intent
+    # stated before any tool ran, the other catching work already underway.
+    mutation_in_flight: str | None = None
     # Exact durable booking created most recently in THIS call. If the caller
     # immediately says the booking was accidental, cancellation is pinned to
     # this id instead of trusting an older/arbitrary id selected by the LLM.
