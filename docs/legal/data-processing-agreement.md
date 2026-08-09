@@ -78,15 +78,15 @@ Vachanam uses the following categories of sub-processor to deliver the service. 
 
 | Sub-processor (by role) | What they process | Data location | Purpose |
 |---|---|---|---|
-| Speech-recognition provider (primary) | Voice audio (real-time speech-to-text only) | United States | Convert patient speech to text during calls |
+| Speech-recognition provider (primary) | Voice audio (real-time speech-to-text only) | Japan | Convert patient speech to text during calls |
 | Speech-recognition provider (backup) | Voice audio (real-time speech-to-text only) | India | Backup conversion, used only when the primary is unavailable |
-| Voice-synthesis provider | The agent's response text, including the patient's spoken name, converted to voice | Global | Convert the agent's responses to natural speech during calls |
+| Voice-synthesis provider | The agent's response text, including the patient's spoken name, converted to voice | Japan | Convert the agent's responses to natural speech during calls |
 | Google (Calendar API) | Calendar events containing patient first name + last 4 digits of phone number | Global (Google Cloud) | Create appointment events on doctor's calendar (named — the Clinic connects its own Google Calendar) |
 | Google (OAuth) | Staff email address | Global (Google Cloud) | Authenticate clinic staff login |
-| AI language-model provider | Real-time conversation transcript | Global | Understand patient requests during calls; automated quality review (scoring) of transcripts — the stored output is non-identifying (a numeric score + issue tags, no patient data). Enterprise API terms prohibit training on submitted data |
+| AI language-model provider | Real-time conversation transcript | Mumbai, India (a global endpoint of the same provider is used only if the India region is unreachable) | Understand patient requests during calls; automated quality review (scoring) of transcripts — the stored output is non-identifying (a numeric score + issue tags, no patient data). Enterprise API terms prohibit training on submitted data |
 | Razorpay | Clinic billing amount, clinic owner email | India | Process Clinic subscription payments (RBI-authorised payment aggregator) |
 | Transactional email provider | Clinic staff / owner email address | Global (US) | One-time verification codes (email OTP) and service email |
-| Database hosting provider | All database records (patients, doctors, tokens, staff, audit log) | Singapore | Database hosting (AES-256 at rest) |
+| Database hosting provider | All database records (patients, doctors, tokens, staff, audit log) | Mumbai, India | Database hosting (AES-256 at rest) |
 | Cache provider | Temporary token counters (daily booking counts only) | Mumbai, India | Prevent double-booking via atomic token assignment |
 | Voice-call infrastructure provider | Audio routing metadata (no storage of call content) | Mumbai, India | Voice call infrastructure |
 | Voice compute host | Voice agent compute (processes calls in real time) | Mumbai, India | Host voice agent server |
@@ -246,4 +246,4 @@ By signing below, both parties agree to the terms of this Data Processing Agreem
 
 ---
 
-*This DPA is version 1.2, last updated 2026-08-03 (first published 2026-06-04). Updates to this DPA follow the same 30-day notice process as the Vachanam Privacy Policy and Terms of Service.*
+*This DPA is version 1.3, last updated 2026-08-09 (first published 2026-06-04). Updates to this DPA follow the same 30-day notice process as the Vachanam Privacy Policy and Terms of Service.*

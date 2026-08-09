@@ -81,7 +81,7 @@ PACKS: dict[str, LangPack] = {
         script="Telugu",
         mix="Tenglish",
         fillers="అమ్మ్…, మ్మ్…, ఆఁ…, అంటే…, చూడు…",
-        switch_affirm="[happily] అవునండి, నేను తెలుగులో మాట్లాడతాను.",
+        switch_affirm="[happily] అలాగే.",
         switch_prompt="చెప్పండి, మీకు ఏం సహాయం కావాలండి?",
         ask_phrase="తెలుగులో మాట్లాడతారా",
         register_body="""TENGLISH IS THE TARGET REGISTER. Modern urban Telugu blends daily English nouns and 
@@ -144,7 +144,7 @@ Speak numbers in Telugu words (పదకొండున్నర, రెండ�
         script="Devanagari",
         mix="Hinglish",
         fillers="अं…, अच्छा…, मतलब…, देखिए…",
-        switch_affirm="[happily] हाँ जी, मैं हिंदी में बात कर सकती हूँ.",
+        switch_affirm="[happily] ठीक है.",
         switch_prompt="बताइए, क्या काम था जी?",
         ask_phrase="हिंदी में बात कर सकते हो",
         register_body="""HINGLISH IS THE TARGET REGISTER. Conversational Hindi uses standard everyday 
@@ -207,7 +207,7 @@ Speak numbers in Hindi words (साढ़े ग्यारह, ढाई ब�
         script="Tamil",
         mix="Tanglish",
         fillers="ம்ம்…, அப்புறம்…, அதாவது…, பாத்தா…",
-        switch_affirm="[happily] ஆமாங்க, நான் தமிழ்ல பேசுவேன்.",
+        switch_affirm="[happily] சரி.",
         switch_prompt="சொல்லுங்க, என்ன வேணுங்க?",
         ask_phrase="தமிழ்ல பேசுறீங்களா",
         register_body="""TANGLISH IS THE TARGET REGISTER. Modern spoken Tamil blends day-to-day English 
@@ -271,7 +271,7 @@ Speak numbers in Tamil words (பதினொன்னரை, ரெண்டர
         script="Kannada",
         mix="Kanglish",
         fillers="ಹ್ಮ್…, ಅಂದ್ರೆ…, ಆಮೇಲೆ…, ನೋಡಿ…",
-        switch_affirm="[happily] ಹೌದ್ರೀ, ನಾನು ಕನ್ನಡದಲ್ಲಿ ಮಾತಾಡ್ತೀನಿ.",
+        switch_affirm="[happily] ಸರಿ.",
         switch_prompt="ಹೇಳಿ, ಏನ್ ಬೇಕಿತ್ತೂ?",
         ask_phrase="ಕನ್ನಡದಲ್ಲಿ ಮಾತಾಡ್ತೀರಾ",
         register_body="""KANGLISH IS THE TARGET REGISTER. Spoken modern Kannada mixes standard everyday English 
@@ -334,7 +334,7 @@ Speak numbers in Kannada words (ಹನ್ನೊಂದೂವರೆ, ಎರಡೂ�
         script="Devanagari",
         mix="Minglish",
         fillers="अं…, म्हणजे…, बघा…, तर…",
-        switch_affirm="[happily] हो ना, मी मराठीत बोलू शकते.",
+        switch_affirm="[happily] ठीक आहे.",
         switch_prompt="सांगा, काय हवं होतं?",
         ask_phrase="मराठीत बोलता का",
         register_body="""MINGLISH IS THE TARGET REGISTER. Daily spoken Marathi blends standard English words 
@@ -397,7 +397,7 @@ Speak numbers in Marathi words (साडेअकरा, अडीच). Phone n
         script="Latin",
         mix="plain spoken Indian English",
         fillers="um…, so…, hmm…, right…, like…",
-        switch_affirm="[happily] Yes, I can speak English.",
+        switch_affirm="[happily] Sure.",
         switch_prompt="Please tell me, how can I help you?",
         ask_phrase="can you speak English",
         register_body="""PLAIN SPOKEN INDIAN ENGLISH IS THE TARGET REGISTER. Speak like a polite, 
@@ -533,8 +533,15 @@ def _pending_examples(current: str) -> str:
 
 
 def _switch_lines(current: str) -> str:
+    """Ack, then the ANSWER — not a sentence about being able to speak.
+
+    Vinay 2026-08-09. switch_prompt survives as the fallback for a switch that
+    lands before anything has been answered (the caller's very first turn),
+    which is the only case where "how can I help" is still the right thing to
+    say."""
     return "\n    ".join(
-        f'{PACKS[c].name} → "{PACKS[c].switch_affirm} {PACKS[c].switch_prompt}"'
+        f'{PACKS[c].name} → "{PACKS[c].switch_affirm}" + your previous answer '
+        f'(nothing answered yet → "{PACKS[c].switch_prompt}")'
         for c in _codes_for(current)
     )
 
@@ -653,10 +660,14 @@ STRICT ISOLATION RULE:
 6. WHEN SWITCHING:
    - Execute tool `switch_language(code)` IMMEDIATELY. Supported codes: {_supported_map(c)}.
    - Immediately switch EVERY element: vocabulary, fillers, honorific particles, number words, and sign-offs.
-   - Reply in the new language starting with the proof sentence:
+   - Acknowledge in ONE word, then IMMEDIATELY say YOUR OWN PREVIOUS ANSWER again in the new
+     language — same facts, nothing added, no greeting, no introduction:
      {_switch_lines(c)}
    - Preserve workflow state: DO NOT re-ask captured facts (Name, Age, Doctor, Slot stay saved).
-   A switch reply that stays in the old language or a bare "Ok" is a failure.
+   NEVER say you can speak the language. They know; they just asked. They are waiting for the
+   answer to the question they ALREADY asked, in their language.
+   A switch reply that stays in the old language is a failure, and so is stopping at a bare "Ok"
+   with the answer never repeated.
 </language_lock_protocol>"""
 
 

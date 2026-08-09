@@ -3,9 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   addStaff,
-  changePlan,
-  createPaymentOrder,
-  createWhatsappAddonOrder,
   deleteAccount,
   fetchBranchSettings,
   fetchDoctors,
@@ -17,12 +14,9 @@ import {
   saveBranchFaq,
   setBranchVoice,
   testCalendar,
-  updateBranchSettings,
-  verifyPayment
+  updateBranchSettings
 } from "../api/client.js";
 
-const PLAN_LABELS = { lite: "Lite · ₹1,999/mo", solo: "Starter · ₹5,999/mo", clinic: "Clinic · ₹9,999/mo", multi: "Multi · ₹17,999/mo", wa: "WhatsApp · ₹1,499/mo" };
-const PLAN_PRICES = { lite: 1999, solo: 5999, clinic: 9999, multi: 17999, wa: 1499 };
 
 // WA MVP1 Task 8: read-only connection status chip (Branch.wa_status, mm36).
 // Linking is concierge-only (super_admin runs scripts/wa_link_branch.py) —
@@ -34,17 +28,6 @@ const WA_STATUS_LABEL = {
   error: { label: "Connection error", chip: "chip-danger" }
 };
 
-// Razorpay checkout script — loaded on demand, once.
-function loadRazorpay() {
-  return new Promise((resolve, reject) => {
-    if (window.Razorpay) return resolve();
-    const s = document.createElement("script");
-    s.src = "https://checkout.razorpay.com/v1/checkout.js";
-    s.onload = resolve;
-    s.onerror = () => reject(new Error("Could not load the payment window — check your connection"));
-    document.body.appendChild(s);
-  });
-}
 import WaConnectCard from "../components/WaConnectCard.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 
@@ -188,107 +171,9 @@ export default function Settings() {
   // Plan & billing — current plan + any scheduled change. Refetches every
   // minute so cycle-end / days-left stay live without a reload (#353).
   const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan, refetchInterval: 60_000 });
-  const planChange = useMutation({
-    mutationFn: (p) => changePlan(p),
-    onSuccess: (d) => {
-      qc.setQueryData(["plan"], d);
-      if (d.pending_plan)
-        toast.success(`Plan changes to ${d.pending_plan} on ${d.pending_plan_effective}`);
-      else toast.success("Scheduled change cancelled");
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change plan")
-  });
-
-  // Real payment: server-priced Razorpay order → checkout modal → server-side
-  // signature verify → webhook is the authoritative activation (this refetch
-  // just picks the new status up for the UI).
-  const [paying, setPaying] = useState(false);
-  const payNow = async () => {
-    const planKey = plan.data?.plan ?? "clinic";
-    setPaying(true);
-    try {
-      await loadRazorpay();
-      const order = await createPaymentOrder(planKey);
-      await new Promise((resolve, reject) => {
-        const rzp = new window.Razorpay({
-          key: order.key_id,
-          order_id: order.order_id,
-          amount: order.amount,
-          currency: order.currency,
-          name: "Vachanam",
-          description: `${PLAN_LABELS[planKey]} subscription`,
-          prefill: { email: user?.email ?? "" },
-          theme: { color: "#1b1b1a" },
-          modal: { ondismiss: () => reject(new Error("Payment window closed")) },
-          handler: async (resp) => {
-            try {
-              await verifyPayment({
-                razorpay_order_id: resp.razorpay_order_id,
-                razorpay_payment_id: resp.razorpay_payment_id,
-                razorpay_signature: resp.razorpay_signature
-              });
-              toast.success("Payment received — your plan is active. Welcome aboard!");
-              plan.refetch();
-              resolve();
-            } catch (e) {
-              reject(new Error(e?.response?.data?.detail ?? "Payment verification failed — if money was deducted it activates automatically in a minute"));
-            }
-          }
-        });
-        rzp.open();
-      });
-    } catch (e) {
-      if (e?.message !== "Payment window closed") toast.error(e?.message ?? "Payment failed");
-    } finally {
-      setPaying(false);
-    }
-  };
-
-  // WhatsApp add-on — same server-priced order → checkout → verify path as the
-  // subscription above. Deliberately NOT a second Razorpay subscription: this
-  // charges ₹1,499 once for the remainder of the cycle, and from the next
-  // renewal the amount rides on the plan invoice (Vinay: "from next month on
-  // entire billing should come together").
-  const [buyingWa, setBuyingWa] = useState(false);
-  const buyWhatsapp = async () => {
-    setBuyingWa(true);
-    try {
-      await loadRazorpay();
-      const order = await createWhatsappAddonOrder();
-      await new Promise((resolve, reject) => {
-        const rzp = new window.Razorpay({
-          key: order.key_id,
-          order_id: order.order_id,
-          amount: order.amount,
-          currency: order.currency,
-          name: "Vachanam",
-          description: "WhatsApp add-on",
-          prefill: { email: user?.email ?? "" },
-          theme: { color: "#1b1b1a" },
-          modal: { ondismiss: () => reject(new Error("Payment window closed")) },
-          handler: async (resp) => {
-            try {
-              await verifyPayment({
-                razorpay_order_id: resp.razorpay_order_id,
-                razorpay_payment_id: resp.razorpay_payment_id,
-                razorpay_signature: resp.razorpay_signature
-              });
-              toast.success("WhatsApp is on — patients can message your clinic number.");
-              plan.refetch();
-              resolve();
-            } catch (e) {
-              reject(new Error(e?.response?.data?.detail ?? "Payment verification failed — if money was deducted it activates automatically in a minute"));
-            }
-          }
-        });
-        rzp.open();
-      });
-    } catch (e) {
-      if (e?.message !== "Payment window closed") toast.error(e?.message ?? "Payment failed");
-    } finally {
-      setBuyingWa(false);
-    }
-  };
+  // The mutation and both Razorpay flows moved to
+  // components/PlanAndPayment.jsx, rendered on /billing. The query stays:
+  // the WhatsApp section reads whatsapp_included / whatsapp_addon off it.
 
   // Soniox voice catalog for the clinic's language (drives the picker).
   const voices = useQuery({
@@ -422,134 +307,10 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* Plan & billing + Clinic details — side by side */}
-      <div className="grid gap-6 lg:grid-cols-2">
-      <Section id="plan" title="Plan & billing"
-        sub="Your billing cycle starts the day you pay and runs 30 days. Plan switches take effect from your next cycle, so you never lose minutes you've already paid for.">
-        <div className="flex flex-wrap items-center gap-3">
-          <div>
-            <label className="label">Plan</label>
-            <select className="field min-w-[220px]" value={plan.data?.plan ?? "clinic"}
-              disabled={planChange.isPending}
-              onChange={(e) => planChange.mutate(e.target.value)}>
-              <option value="lite">{PLAN_LABELS.lite}</option>
-              <option value="solo">{PLAN_LABELS.solo}</option>
-              <option value="clinic">{PLAN_LABELS.clinic}</option>
-              <option value="multi">{PLAN_LABELS.multi}</option>
-            </select>
-          </div>
-          <span className={plan.data?.status === "active" ? "chip-token" : "chip-muted"}>
-            {plan.data?.status ?? "—"}
-          </span>
-          {(() => {
-            const p = plan.data;
-            if (!p) return null;
-            // Days left computed against NOW on every render; the 60s plan
-            // refetch keeps this live. Backend enforces the same 3-day
-            // window server-side, so the UI lock is honest, not decorative.
-            const daysLeft = p.cycle_end
-              ? Math.ceil((new Date(p.cycle_end) - Date.now()) / 86400000)
-              : null;
-            const payable =
-              p.status !== "active" || !p.cycle_end || daysLeft <= 3;
-            const fmt = (d) => new Date(d).toLocaleDateString("en-IN",
-              { day: "numeric", month: "short", year: "numeric" });
-            return (
-              <>
-                {p.last_payment_date && (
-                  <span className="font-ui text-sm text-slate">
-                    Last paid <strong className="text-ink">{fmt(p.last_payment_date)}</strong>
-                  </span>
-                )}
-                {p.cycle_end && p.status === "active" && (
-                  <span className="font-ui text-sm text-slate">
-                    Renews <strong className="text-ink">{fmt(p.cycle_end)}</strong>
-                    {daysLeft > 0 && (
-                      <> · <strong className="text-ink">{daysLeft}</strong> day{daysLeft === 1 ? "" : "s"} left</>
-                    )}
-                  </span>
-                )}
-                {payable ? (
-                  <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
-                    {paying ? "Opening payment…"
-                      : `${p.status !== "active" ? "Activate"
-                          : p.cycle_end ? "Renew" : "Pay"} — ₹${(p.next_base_rupees || PLAN_PRICES[p.plan] || 0).toLocaleString("en-IN")}${p.is_offer ? " (offer)" : ""}${p.status === "active" && p.cycle_end ? " + usage" : ""}`}
-                  </button>
-                ) : (
-                  <span className="chip-muted" title="Renewal opens 3 days before your cycle ends">
-                    Paid — renewal opens {fmt(new Date(new Date(p.cycle_end) - 3 * 86400000))}
-                  </span>
-                )}
-                {p.is_offer && (
-                  <span className="font-ui text-xs font-semibold text-amber-800">
-                    Offer price — first 3 months (regular ₹{(PLAN_PRICES[p.plan] ?? 0).toLocaleString("en-IN")}/mo)
-                  </span>
-                )}
-              </>
-            );
-          })()}
-        </div>
-        {plan.data?.status === "active" && !plan.data.cycle_end && (
-          <p className="mt-2 font-ui text-xs text-slate">
-            Your line is active without a paid cycle. Paying starts your 30-day billing cycle today.
-          </p>
-        )}
-        {plan.data && plan.data.status !== "active" && (
-          <p className="mt-2 font-ui text-xs text-slate">
-            UPI, card or netbanking via Razorpay. Your line activates the moment payment succeeds,
-            and your 30-day cycle starts today.
-          </p>
-        )}
-        {plan.data?.pending_plan && (
-          <InfoBox title="Scheduled change">
-            Switching to <strong>{plan.data.pending_plan}</strong> on{" "}
-            <strong>{plan.data.pending_plan_effective}</strong>. Pick your current plan to cancel.
-          </InfoBox>
-        )}
-        {/* #358: GSTIN field removed on Vinay's call ("complicates things") —
-            the /api/billing/gstin endpoint stays for TD-038. */}
-        {/* WhatsApp add-on. Four states, because selling a clinic something
-            their plan already includes is worse than not selling it at all. */}
-        {plan.data && (
-          <div className="mt-4 border-t border-hairline pt-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="font-ui text-sm font-medium text-ink">WhatsApp</p>
-                <p className="mt-1 font-ui text-xs text-slate">
-                  {plan.data.whatsapp_included
-                    ? "Included in your plan — patients can message your clinic number."
-                    : plan.data.whatsapp_addon
-                      ? "Active. From your next renewal it is billed together with your plan."
-                      : plan.data.whatsapp_included_pending
-                        ? `Included from ${plan.data.pending_plan_effective} when you move to ${plan.data.pending_plan} — no need to buy it.`
-                        : "Patients book, reschedule and ask questions over WhatsApp. ₹1,499/mo — charged now for this cycle, then billed with your plan."}
-                </p>
-              </div>
-              {plan.data.whatsapp_included || plan.data.whatsapp_addon ? (
-                <span className="chip whitespace-nowrap">on</span>
-              ) : plan.data.whatsapp_included_pending ? (
-                <span className="chip whitespace-nowrap">from {plan.data.pending_plan_effective}</span>
-              ) : (
-                <button className="btn-primary whitespace-nowrap px-4 py-2 text-sm"
-                  disabled={buyingWa || plan.data.status !== "active"}
-                  onClick={buyWhatsapp}>
-                  {buyingWa ? "Opening…" : "Add WhatsApp · ₹1,499"}
-                </button>
-              )}
-            </div>
-            {plan.data.status !== "active"
-              && !plan.data.whatsapp_included
-              && !plan.data.whatsapp_addon && (
-              <p className="mt-2 font-ui text-xs text-slate">
-                Activate your plan first — WhatsApp is billed alongside it.
-              </p>
-            )}
-          </div>
-        )}
-        <p className="mt-3 font-ui text-xs text-slate">
-          A detailed receipt (PDF attached) is emailed to you after every successful payment.
-        </p>
-      </Section>
+      {/* Plan & billing MOVED to /billing (Vinay 2026-08-09: "migrate entire
+          billing to billing page. all billings."). Settings keeps the `plan`
+          query only — the WhatsApp section below gates on it. Clinic details
+          is now full-width: it lost the card it used to sit beside. */}
 
       {/* 1 — Clinic details */}
       <Section id="details" title="1 · Clinic details" done={steps[0].done}
@@ -594,7 +355,6 @@ export default function Settings() {
           Save details
         </button>
       </Section>
-      </div>
 
       {/* Doctors + Google Calendar — side by side */}
       <div className="grid gap-6 lg:grid-cols-2">

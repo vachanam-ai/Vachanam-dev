@@ -120,7 +120,7 @@ History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07
 | Token locking | Redis atomic INCR (Upstash in prod) |
 | Calendar | Google Calendar API v3, service account |
 | WhatsApp | Meta Cloud API (MVP2) |
-| DB | Neon Postgres, SQLAlchemy 2.x async, Alembic |
+| DB | Supabase Postgres (`ap-south-1` Mumbai), SQLAlchemy 2.x async, Alembic. Neon PURGED 2026-07-31 — do not reintroduce. Pooler needs asyncpg `ssl="require"`, NOT `ssl=True` |
 | Backend | FastAPI + APScheduler |
 | Agent host | Fly.io Mumbai · API host: Render · Frontend: React+Vite PWA on Cloudflare Pages |
 | Payments | Razorpay · Monitoring: UptimeRobot · Logs: structlog JSON · Retry: tenacity |

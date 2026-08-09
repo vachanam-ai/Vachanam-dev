@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import PageHeader from "../components/PageHeader.jsx";
+import PlanAndPayment from "../components/PlanAndPayment.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { cancelSubscription, fetchBillingSummary } from "../api/client.js";
 
@@ -121,7 +122,7 @@ export default function Billing() {
         sub="Your plan, this month's usage, and every past cycle."
       >
         <Link to="/settings" className="btn-ghost">
-          Plan &amp; payment settings
+          Clinic settings
         </Link>
       </PageHeader>
 
@@ -159,9 +160,9 @@ export default function Billing() {
                   </>
                 )}
               </p>
-              <Link to="/settings" className="btn-primary mt-4 inline-flex">
+              <a href="#plan-payment" className="btn-primary mt-4 inline-flex">
                 Adjust plan
-              </Link>
+              </a>
             </section>
 
             {/* Usage */}
@@ -218,9 +219,16 @@ export default function Billing() {
             <p className="mt-3 font-ui text-xs text-slate">
               {d.autopay_enabled
                 ? "Charged automatically on your renewal date."
-                : "Paid manually each cycle from Settings."}
+                : "Paid manually each cycle — the button is below."}
             </p>
           </section>
+
+          {/* Plan & payment — moved here from Settings (Vinay 2026-08-09).
+              Anchored so "Adjust plan" above scrolls to it instead of leaving
+              the page. */}
+          <div id="plan-payment" className="scroll-mt-24">
+            <PlanAndPayment />
+          </div>
 
           {/* History */}
           <section data-reveal className="card p-6">

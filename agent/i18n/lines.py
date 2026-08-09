@@ -638,15 +638,31 @@ def get_reconnect(code: str | None) -> str:
 # Wording per Vinay 2026-07-03: the switched voice says ONLY "I can speak X.
 # How can I help you?" — nothing more (the LLM reply after the handoff is
 # suppressed mechanically; this line is the entire intro).
+# Vinay 2026-08-09: "instead of saying 'yes, i can speak in <language>', make
+# it as ok, and repeat previous response which you gave."
+#
+#     at what time doctor available -> he is available from 5 to 9 today
+#     -> can you speak telugu
+#     -> అలాగే, డాక్టర్ గారు ఐదు గంటల నుంచి తొమ్మిది గంటల దాకా ఉంటారు.
+#
+# A receptionist who is handed a language does not announce that she speaks it
+# and then wait to be asked the question again — she answers, in the new
+# language. So this is now the ACK ALONE. The restatement is generated right
+# after it by the switched-to agent, which already has the conversation and is
+# already anchored to the new language.
+#
+# Keep these SHORT. They are pre-synthesized per language at startup
+# (_prewarm_switch_ack_clips) so the switch plays instantly, and the whole
+# point is that the real answer follows immediately behind.
 SWITCH_ACK: dict[str, str] = {
-    "te": "నేను తెలుగులో మాట్లాడగలనండి. చెప్పండి, మీకు ఎలా సహాయం చేయగలను?",
-    "en": "I can speak English. How can I help you?",
-    "hi": "मैं हिंदी में बात कर सकती हूँ। बताइए, मैं आपकी क्या मदद करूँ?",
-    "ta": "நான் தமிழில் பேச முடியும். சொல்லுங்க, என்ன உதவி வேணும்?",
-    "kn": "ನಾನು ಕನ್ನಡದಲ್ಲಿ ಮಾತಾಡಬಲ್ಲೆ. ಹೇಳಿ, ಏನು ಸಹಾಯ ಬೇಕು?",
-    "ml": "എനിക്ക് മലയാളത്തിൽ സംസാരിക്കാം. പറയൂ, എന്ത് സഹായം വേണം?",
-    "mr": "मी मराठीत बोलू शकते. सांगा, काय मदत हवी?",
-    "bn": "আমি বাংলায় কথা বলতে পারি। বলুন, কী সাহায্য লাগবে?",
+    "te": "అలాగే.",
+    "en": "Sure.",
+    "hi": "ठीक है.",
+    "ta": "சரி.",
+    "kn": "ಸರಿ.",
+    "ml": "ശരി.",
+    "mr": "ठीक आहे.",
+    "bn": "ঠিক আছে।",
 }
 
 

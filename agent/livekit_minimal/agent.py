@@ -1290,6 +1290,22 @@ def _prewarm_soniox_tts(proc) -> None:
 _SWITCH_ACK_CLIPS: dict[str, list] = {}
 _switch_ack_clips_started = False
 
+# Spoken immediately after the switch ack. Vinay 2026-08-09: "instead of saying
+# 'yes, i can speak in <language>', make it as ok, and repeat previous response
+# which you gave." The caller asked a question, got an answer, then asked for
+# another language — they want THAT answer again, not to be asked what they
+# need. No language is named here on purpose: the switched-to agent carries the
+# new language in its own instructions and STT/TTS pipeline, so naming one
+# would be a second, weaker source of truth.
+_SWITCH_RESTATE = (
+    "The caller just asked you to speak this language and you have already "
+    "said a one-word yes. Now say your OWN PREVIOUS ANSWER again — the reply "
+    "you gave before they asked to change language — with exactly the same "
+    "facts, in this call's language. Do not greet, do not introduce yourself, "
+    "do not add anything new, and do not repeat their language request. If you "
+    "had not answered anything yet, ask how you can help, in one short line."
+)
+
 
 async def _prewarm_switch_ack_clips() -> None:
     """Synthesize + cache the switch-ack audio for every serviceable language in
@@ -2715,6 +2731,16 @@ class VachanamAgent(Agent):
                     await self.session.say(text, allow_interruptions=False)
             except Exception as e:  # noqa: BLE001 — ack is best-effort (RULE 8)
                 logger.warning("switch_ack_failed: %s", e)
+            # The ack is now only "అలాగే" — the ANSWER follows it (Vinay
+            # 2026-08-09). The switched-to agent was built with the carried
+            # chat context and is already anchored to the new language, so it
+            # can restate its own last answer without a translation hop.
+            # Best-effort: if this fails the caller simply asks again, which is
+            # exactly where the old behaviour left them anyway.
+            try:
+                self.session.generate_reply(instructions=_SWITCH_RESTATE)
+            except Exception as e:  # noqa: BLE001 — RULE 8
+                logger.warning("switch_restate_failed: %s", e)
 
     async def stt_node(self, audio, model_settings):
         """BACKCHANNEL FILTER (Vinay 2026-07-04): while the agent is SPEAKING,

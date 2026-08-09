@@ -1,7 +1,7 @@
 # Vachanam Privacy Policy
 
 **Effective date:** 2026-06-04
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-09
 
 This policy explains, in plain language, what personal data Vachanam collects, why we collect it, who sees it, how long we keep it, and what rights you have. If any part is unclear, email us at hello@vachanam.in and we will explain it in Telugu, Hindi, or English -- whichever you prefer.
 
@@ -154,14 +154,14 @@ We use carefully selected third-party services to operate Vachanam. Each process
 
 | Service (by role) | What it processes | Where data is processed |
 |---|---|---|
-| **Speech-recognition provider (primary)** | Converts your voice to text during your call. Audio is streamed in real time and not stored beyond the duration of the call. | United States |
+| **Speech-recognition provider (primary)** | Converts your voice to text during your call. Audio is streamed in real time and not stored beyond the duration of the call. | Japan |
 | **Speech-recognition provider (backup)** | Used only when the primary is unavailable. Same real-time streaming, no storage beyond the call. | India |
-| **Voice-synthesis provider** | Converts the AI agent's responses (which include your name) into natural speech during your call. Text is processed in real time and not stored after the call. | Global |
+| **Voice-synthesis provider** | Converts the AI agent's responses (which include your name) into natural speech during your call. Text is processed in real time and not stored after the call. | Japan |
 | **Google (Calendar + sign-in)** | Creates a calendar event for your doctor with your first name and last 4 digits of your phone number; handles staff login via Google accounts. (Named because your clinic connects its own Google Calendar.) | Global (Google Cloud) |
-| **AI language-model provider** | Processes the conversation during your call to understand your request and route you to the right doctor; also performs automated, non-identifying quality scoring of transcripts. Used via paid enterprise APIs whose terms prohibit training on submitted data. | Global |
+| **AI language-model provider** | Processes the conversation during your call to understand your request and route you to the right doctor; also performs automated, non-identifying quality scoring of transcripts. Used via paid enterprise APIs whose terms prohibit training on submitted data. | Mumbai, India (a global endpoint of the same provider is used only if the India region is unreachable) |
 | **Razorpay** | Processes clinic subscription payments (RBI-authorised payment aggregator). Sees billing amount and clinic owner email for invoicing. Does NOT see any patient data. | India |
 | **Transactional email provider** | Sends one-time verification codes and service emails to clinic staff. Sees only the staff/owner email address. Does NOT see any patient data. | Global (US) |
-| **Database hosting provider** | Hosts our database where appointment and user records are stored. All data encrypted at rest (AES-256). | Singapore |
+| **Database hosting provider** | Hosts our database where appointment and user records are stored. All data encrypted at rest (AES-256). | Mumbai, India |
 | **Cache provider** | Real-time token-number assignment (prevents double-booking). Stores only temporary counters that expire daily. | Mumbai, India |
 | **Voice-call infrastructure provider** | Connects your phone call to our AI agent. Handles audio routing only; does not store call content. | Mumbai, India |
 | **Voice compute host** | Runs the voice agent server during your call. | Mumbai, India |
@@ -304,7 +304,7 @@ This privacy policy is effective as of **2026-06-04**.
 - **DPDP Rules:** The Digital Personal Data Protection Rules were notified on 14 November 2025. The full compliance deadline is 13 May 2027. Vachanam is on track to meet this deadline. This policy will be updated as additional guidance is published by the Data Protection Board or the Ministry of Electronics and Information Technology.
 - **Data Fiduciary vs Data Processor:** Under DPDP Act 2023 Chapter II, the clinic is the Data Fiduciary (they decide why patient data is processed -- to manage appointments). Vachanam is the Data Processor (we process patient data on the clinic's documented instructions per our Data Processing Agreement). Both share responsibility for keeping your data safe.
 - **Significant Data Fiduciary (SDF):** The SDF threshold and data localization requirements are pending a separate notification from the central government. Vachanam monitors these developments and will comply when applicable. As of this policy's effective date, Vachanam does not meet the expected SDF threshold.
-- **Data residency:** Telephony, cache, and voice compute operate within India. Speech recognition (primary in the United States, backup in India), voice synthesis, and the AI language models operate globally. The database and backend API operate in Singapore. The DPDP Act 2023 permits cross-border transfer of personal data except to countries specifically restricted by the central government (none of our processors' countries are restricted as of this policy's date). We choose providers with the strongest India or near-India data residency available for each function, every processor role and its location is listed in Section 6 (named list available on request to privacy@vachanam.in), and each processor is bound by contractual data-protection terms (their enterprise terms of service and/or a data processing agreement) that restrict use of the data to providing the service to us.
+- **Data residency:** Telephony, cache, voice compute, the database, and the AI language model all operate within India (Mumbai). Speech recognition and voice synthesis operate in Japan, with an India-based speech-recognition backup. The backend API operates in Singapore. The DPDP Act 2023 permits cross-border transfer of personal data except to countries specifically restricted by the central government (none of our processors' countries are restricted as of this policy's date). We choose providers with the strongest India or near-India data residency available for each function, every processor role and its location is listed in Section 6 (named list available on request to privacy@vachanam.in), and each processor is bound by contractual data-protection terms (their enterprise terms of service and/or a data processing agreement) that restrict use of the data to providing the service to us.
 
 ---
 
