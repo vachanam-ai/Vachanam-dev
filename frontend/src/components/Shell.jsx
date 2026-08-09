@@ -251,6 +251,16 @@ export default function Shell() {
   const pageLabel = activeLink?.label ?? "Vachanam";
   const canWalkIn = links.some((l) => l.to === "/walk-in");
   const profileTo = role === "org_admin" ? "/settings" : roleHome(role);
+  // The top-bar action follows the page (Vinay 2026-08-09). "Add walk-in" on
+  // the templates screen sent the owner somewhere unrelated; ?new=1 opens the
+  // editor in place, so the URL itself is the action and no shared state is
+  // needed between the chrome and the page.
+  const onTemplates = location.pathname === "/whatsapp";
+  const topAction = onTemplates
+    ? { to: "/whatsapp?new=1", label: "New template" }
+    : canWalkIn
+      ? { to: "/walk-in", label: "Add walk-in" }
+      : null;
 
   useEffect(() => { setMenuOpen(false); }, [location.pathname]);
 
@@ -310,14 +320,14 @@ export default function Shell() {
           <header className="sticky top-0 z-20 hidden h-16 items-center gap-4 border-b border-hairline bg-surface/85 px-6 backdrop-blur-md lg:flex">
             <p className="min-w-0 truncate font-ui text-[15px] font-semibold text-ink">{pageLabel}</p>
             <div className="ml-auto flex items-center gap-2">
-              {canWalkIn && (
-                <Link to="/walk-in"
+              {topAction && (
+                <Link to={topAction.to} data-testid="top-action"
                   className="inline-flex items-center gap-2 rounded-full bg-accent px-4 py-2 font-ui text-sm font-semibold text-accent-ink transition-opacity hover:opacity-90">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                     strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                     <path d="M12 5v14M5 12h14" />
                   </svg>
-                  Add walk-in
+                  {topAction.label}
                 </Link>
               )}
               <Link to={profileTo}

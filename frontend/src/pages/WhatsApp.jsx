@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import PageHeader from "../components/PageHeader.jsx";
@@ -79,7 +79,13 @@ function TemplateRow({ branchId, t, onDeleted }) {
 export default function WhatsApp() {
   const { branchId } = useAuth();
   const qc = useQueryClient();
-  const [creating, setCreating] = useState(false);
+  const [params, setParams] = useSearchParams();
+  // ?new=1 is how the top-bar "New template" action opens the editor — the URL
+  // carries the intent, so the chrome and this page share no state. Stripped on
+  // close/submit so a refresh doesn't reopen an editor the owner dismissed.
+  const creating = params.get("new") === "1";
+  const setCreating = (open) =>
+    setParams(open ? { new: "1" } : {}, { replace: true });
 
   const { data: branch } = useQuery({
     queryKey: ["branch-settings", branchId],
@@ -109,7 +115,7 @@ export default function WhatsApp() {
     <div className="space-y-6">
       <PageHeader eyebrow="WhatsApp" title="Message templates"
         sub="Meta reviews every template before it can be sent to patients — usually minutes to a day.">
-        <button type="button" className="btn-primary" onClick={() => setCreating((c) => !c)}>
+        <button type="button" className="btn-primary" onClick={() => setCreating(!creating)}>
           {creating ? "Cancel" : "+ New template"}
         </button>
       </PageHeader>

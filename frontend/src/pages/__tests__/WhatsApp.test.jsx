@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 
 // WA MVP1 Task 10 — clinic-authored WhatsApp templates: a list + live phone
 // preview (option C). The preview is the whole point: a clinic writing raw
@@ -34,7 +35,13 @@ afterEach(() => {
 
 function renderWithQuery(ui) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+  // The page reads ?new=1 (the top-bar "New template" action opens the editor
+  // through the URL), so it needs a router even though it renders no <Link>.
+  return render(
+    <MemoryRouter initialEntries={["/whatsapp"]}>
+      <QueryClientProvider client={qc}>{ui}</QueryClientProvider>
+    </MemoryRouter>,
+  );
 }
 
 describe("TemplateEditor — live preview", () => {
