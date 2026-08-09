@@ -11,7 +11,7 @@
 # pin agents + EVERY plugin to the SAME release so a fresh build can't drift.
 # Bump the whole block together; test_requirements_no_livekit_skew guards it.
 livekit-agents==1.6.6
-livekit-api>=1.1.1
+livekit-api>=1.2.0
 # STT: Soniox stt-rt-v5 primary (Vinay 2026-07-10), Sarvam Saaras v3 fallback
 # when SONIOX_JP_API_KEY is unset — see _build_stt in agent.py.
 livekit-plugins-soniox==1.6.6
