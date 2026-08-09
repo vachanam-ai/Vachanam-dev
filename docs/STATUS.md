@@ -1,5 +1,71 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-08-09 — EVERY TURN WAS RUNNING UNCACHED. Live Fly v285.**
+> Vinay's benchmark call, read from Redis `lat:turns` (16 turns): **p50 2018 ms,
+> p95 2888 ms, max 3970 ms** — the conference's "3 seconds is unusable" is real
+> — and **`cache_hit=False` on every single turn**, on the branch's DEFAULT
+> language which the warmer had demonstrably built that boot. The prompt cache
+> has been non-functional in production, which is also the degraded state behind
+> the wrong dates (#491) and the newsreader Telugu (#511): one root cause under
+> three separately-reported symptoms. Cause: the live path and the warmer were
+> two call sites required to build a byte-identical string by discipline, and
+> they drifted twice — the date table (#491) and then the INPUTS. Now ONE
+> `compose_clinic_instructions`, with an AST test asserting
+> `build_grounded_prompt` has exactly one caller. English is pre-warmed per
+> clinic (a te→en switch used to land on a cache that did not exist). FIXLOG
+> #512.
+>
+> Also live: the agent no longer **hangs up on a question** asked during its
+> goodbye (#508 — the Fly log showed the question transcribed and discarded);
+> a repeated question no longer gets **two answers** (#509 — nothing cancelled
+> an in-flight reply; `interrupt()` existed in exactly one place in the whole
+> agent); barge-in stops in **0.6 s instead of 2.0 s** (#510 —
+> `false_interruption_timeout` was never set, so it ran on LiveKit's default);
+> **cancel works in Telugu** (#511 — the agent said "రద్దు", the caller mirrored
+> it, Soniox returned Latin "raddu", and the guard held native script only, so
+> the one word the agent taught the caller was the one word that could never
+> authorise a cancellation — visible as `cancel_booking` on turns 13/14/15/16 of
+> one call). Earlier the same day: clock times spoken not spelled (#503),
+> reschedule asks zero times (#502), the call finishes the job before hanging up
+> (#504), all billing moved to /billing (#505), language switch restates the
+> previous answer (#506), and the privacy policy + DPA had their **data
+> residency corrected** (#507 — they claimed the DB was in Singapore and STT in
+> the US; both wrong).
+>
+> **HOW TO BENCHMARK — do not chase Fly log captures.** Fly's buffer rotates in
+> minutes and a deploy flushes it; three capture attempts failed. `lat:turns` is
+> mirrored to Redis with a 7-day expiry and holds the full per-turn ladder. Read
+> that.
+>
+> **OPEN, needs one real call:** (1) whether the cache now HITS — compare the new
+> `prompt_inputs live` fingerprint against `prompt_inputs warm`; a mismatch names
+> the field. (2) The **4 s first reply** — `lat_setup` has never been captured on
+> Supabase; July's 4.22 s (2.0 s of it a tenant lookup) was Neon-era and may not
+> be true any more. (3) #509 touches the core turn loop and is proven by
+> construction, not on a call — if the agent starts clipping its own answers,
+> that is the change, and it reverts alone.
+>
+> **OPEN, decided but not built:** clinic data import — sealed-archive design
+> agreed (structured data into Patient/Token, clinical notes as a display-only
+> blob no agent tool can read, `next_reporting_date` seeding the follow-up loop;
+> clinic remains system of record). Spec not yet written. Needs a CLAUDE.md /
+> PILOT_AGREEMENT change since it narrows the "no EMR/EHR" rule.
+>
+> **OPEN, Vinay's call:** plan minute cap can still cut a booking mid-flow (warns
+> 10 s ahead — it is a billing limit); speech-to-speech sandbox (only path to
+> sub-500 ms, roughly doubles variable cost, Telugu quality unproven — Vinay
+> chose "latency first, reprice later"); second Fly machine (still ONE, a single
+> point of failure).
+>
+> **KNOWN, pinned not fixed:** `recording_active` never reaches the prompt —
+> `{recording}` is in the template and computed into it, yet the rendered output
+> is byte-identical either way, so the model is never told a notice was spoken
+> and half the warmer's cache creations are wasted. Test pins current behaviour.
+>
+> **STILL ON VINAY:** rotate the exposed Meta token; one inbound WhatsApp to the
+> clinic number to backfill `wa_waba_id` (nothing template-based sends until
+> then); `DELETE FROM call_logs WHERE provider_call_id LIKE 'BILLING-TEST-OVERAGE%'`.
+
 > **2026-08-04 — WHATSAPP READS THE CLINIC FAQ AGAIN; DOCTOR CAN PULL A PATIENT IN.**
 > **Live on Render (`2425ebb`):** the WhatsApp agent lost the FAQ when the
 > tool-based rewrite replaced `wa_chat`'s intent router — `wa_agent` had no FAQ
