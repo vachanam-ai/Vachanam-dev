@@ -22,7 +22,7 @@ livekit-plugins-smallestai==1.6.6
 # every other plugin — mixing plugin versions broke the worker before.
 livekit-plugins-cartesia==1.6.6
 livekit-plugins-sarvam==1.6.6
-livekit-plugins-google==1.6.6
+livekit-plugins-google==1.6.8
 livekit-plugins-silero==1.6.6
 livekit-plugins-noise-cancellation>=0.2.5
 # Semantic end-of-turn detection (latency: commit the turn on a complete
