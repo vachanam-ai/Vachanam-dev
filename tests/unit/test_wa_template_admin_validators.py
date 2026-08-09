@@ -48,7 +48,21 @@ def test_validate_body_accepts_sequential_with_examples():
     ) == [1, 2]
 
 
-def test_the_four_system_templates_are_frozen():
-    assert wa_template_admin.SYSTEM_TEMPLATES == {
-        "booking_confirm", "appt_reminder", "rating_ask", "leave_rebook",
+def test_all_required_and_legacy_system_templates_are_frozen():
+    required = {
+        item["name"]
+        for item in wa_template_admin.SYSTEM_TEMPLATE_DEFINITIONS
     }
+    legacy = {"booking_confirm", "appt_reminder", "rating_ask", "leave_rebook"}
+
+    assert required == {
+        "vachanam_booking_confirm",
+        "vachanam_booking_reschedule",
+        "vachanam_booking_cancel",
+        "vachanam_appt_reminder",
+        "vachanam_clinic_location",
+        "vachanam_feedback",
+        "vachanam_rating_ask",
+        "vachanam_leave_rebook",
+    }
+    assert wa_template_admin.SYSTEM_TEMPLATES == required | legacy

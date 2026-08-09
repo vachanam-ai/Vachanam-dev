@@ -152,7 +152,10 @@ async def test_accidental_reversal_is_pinned_to_exact_in_call_booking(monkeypatc
     result = await agent.cancel_booking(None, older_booking)
 
     assert result['success'] is True
-    do_cancel.assert_awaited_once_with(str(state.last_confirmed_token_id))
+    do_cancel.assert_awaited_once_with(
+        str(state.last_confirmed_token_id),
+        reason='patient_cancelled_or_rescheduled_on_call',
+    )
 
 
 def test_private_reasoning_and_markup_never_reach_tts():

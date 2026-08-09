@@ -11,6 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 const fetchWaTemplates = vi.fn();
 const createWaTemplate = vi.fn();
 const deleteWaTemplate = vi.fn();
+const installWaSystemTemplates = vi.fn();
 const fetchBranchSettings = vi.fn(() =>
   Promise.resolve({ name: "Venkateshwara Clinic", whatsapp_status: "connected" })
 );
@@ -19,6 +20,7 @@ vi.mock("../../api/client.js", () => ({
   fetchWaTemplates: (...args) => fetchWaTemplates(...args),
   createWaTemplate: (...args) => createWaTemplate(...args),
   deleteWaTemplate: (...args) => deleteWaTemplate(...args),
+  installWaSystemTemplates: (...args) => installWaSystemTemplates(...args),
   fetchBranchSettings: (...args) => fetchBranchSettings(...args),
 }));
 vi.mock("../../hooks/useAuth.jsx", () => ({
@@ -116,6 +118,23 @@ describe("TemplateEditor — live preview", () => {
 });
 
 describe("WhatsApp page — template list", () => {
+  it("lets the clinic install every required patient template", async () => {
+    fetchWaTemplates.mockResolvedValue([]);
+    installWaSystemTemplates.mockResolvedValue({
+      created: ["vachanam_booking_confirm"],
+      existing: [],
+      errors: [],
+    });
+    renderWithQuery(<WhatsApp />);
+
+    fireEvent.click(await screen.findByRole(
+      "button", { name: /install required templates/i },
+    ));
+    await waitFor(() =>
+      expect(installWaSystemTemplates).toHaveBeenCalledWith("b1")
+    );
+  });
+
   it("shows Meta's approval state on every template", async () => {
     fetchWaTemplates.mockResolvedValue([
       { name: "booking_confirm", category: "UTILITY", language: "en", status: "APPROVED" },

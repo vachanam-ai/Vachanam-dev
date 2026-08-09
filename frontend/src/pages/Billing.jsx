@@ -218,7 +218,7 @@ export default function Billing() {
             </div>
             <p className="mt-3 font-ui text-xs text-slate">
               {d.autopay_enabled
-                ? "Charged automatically on your renewal date."
+                ? "Plan and WhatsApp charges renew automatically. Extra voice minutes are invoiced separately."
                 : "Paid manually each cycle — the button is below."}
             </p>
           </section>
@@ -294,13 +294,21 @@ export default function Billing() {
                   <span className="font-medium">{day(d.cancellation_effective)}</span>. Until
                   then everything keeps working exactly as it does now.
                 </p>
-                <button
-                  className="btn-primary mt-4"
-                  disabled={cancelM.isPending}
-                  onClick={() => cancelM.mutate(false)}
-                >
-                  Keep my subscription
-                </button>
+                {!d.autopay_enabled && (
+                  <button
+                    className="btn-primary mt-4"
+                    disabled={cancelM.isPending}
+                    onClick={() => cancelM.mutate(false)}
+                  >
+                    Keep my subscription
+                  </button>
+                )}
+                {d.autopay_enabled && (
+                  <p className="mt-2 font-ui text-xs text-slate">
+                    Razorpay does not reactivate a scheduled cancellation. You can
+                    enable a new mandate after this subscription ends.
+                  </p>
+                )}
               </>
             ) : (
               <>

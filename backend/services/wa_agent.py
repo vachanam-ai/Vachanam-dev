@@ -363,6 +363,11 @@ _MUTATION_CLAIMS = (
     "i've changed", "have cancelled", "has been cancelled", "i've cancelled",
     "have canceled", "has been canceled", "will move", "will change it",
     "i'll move", "i'll change", "i'll book", "will book it",
+    "you're booked", "you are booked", "booked for",
+    # Romanized Hindi / Telugu (the prompt requires Latin output).
+    "book kar diya", "book ho gaya", "badal diya", "cancel kar diya",
+    "kar dungi", "kar dunga", "book chesanu", "book ayyindi",
+    "marchanu", "marchestanu", "cancel chesanu", "raddhu chesanu",
     # Telugu — booked / changed / cancelled
     "బుక్ చేయబడింది", "బుక్ చేశాను", "మార్చాను", "మార్చబడింది", "మారుస్తాను",
     "రద్దు చేయబడింది", "రద్దు చేశాను",
@@ -375,6 +380,27 @@ def _claims_a_mutation(reply: str) -> bool:
     """Does REPLY tell the patient a booking was (or is being) changed?"""
     low = (reply or "").lower()
     return any(marker in low for marker in _MUTATION_CLAIMS)
+
+
+def _unbacked_mutation_reply(patient_text: str) -> str:
+    """Truthful deterministic correction when no mutation tool succeeded."""
+    low = (patient_text or "").lower()
+    telugu_markers = ("naa", "mee", "cheyy", "ches", "march", "raddhu", "undi")
+    hindi_markers = ("mera", "meri", "aap", "kar do", "badal", "kijiye")
+    if any(word in low for word in telugu_markers):
+        return (
+            "Appointment inka marchaledu. E appointment ni e time ki "
+            "marchalo cheppandi."
+        )
+    if any(word in low for word in hindi_markers):
+        return (
+            "Appointment abhi change nahi hua hai. Kaunsa appointment aur "
+            "naya time batayiye."
+        )
+    return (
+        "I haven't changed the appointment yet. Tell me which appointment "
+        "and the new time."
+    )
 
 
 def _ampm(value: time_cls) -> str:
@@ -907,6 +933,7 @@ async def handle(
 
     reply = ""
     called: set[str] = set()
+    successful_mutations: set[str] = set()
 
     async def _run_rounds() -> str:
         """Model <-> tool loop. Returns the model's final text."""
@@ -935,6 +962,12 @@ async def handle(
                         )
                         result = {"error": "that lookup failed"}
                 called.add(call.name)
+                if (
+                    call.name in _MUTATION_TOOLS
+                    and isinstance(result, dict)
+                    and result.get("success") is True
+                ):
+                    successful_mutations.add(call.name)
                 logger.info(
                     "wa_agent_tool", tool=call.name, branch_id=str(branch.id),
                     phone_last4=(sender or "")[-4:],
@@ -963,21 +996,15 @@ async def handle(
         # either call the tool or say plainly that it has not moved yet. The
         # correction is a tool-result-shaped turn, so the model keeps writing
         # in the patient's language.
-        if _claims_a_mutation(reply) and not (called & _MUTATION_TOOLS):
-            # DETECTION ONLY, deliberately. A corrective re-prompt was tried
-            # here on 2026-08-07 and made things WORSE in two visible ways: the
-            # model apologised to the patient about its own previous message
-            # ("My apologies, I got ahead of myself") and, on the Hindi turn,
-            # asked the patient for the internal appointment ID. Leaking
-            # machinery to a patient is a worse failure than the claim itself,
-            # so the re-prompt was removed and this stays an OBSERVABILITY
-            # signal: grep wa_agent_unbacked_mutation_claim to see how often a
-            # reply promises a change no tool made. Fixing the underlying
-            # behaviour is still open (see docs/TECH_DEBT.md).
+        if _claims_a_mutation(reply) and not successful_mutations:
             logger.warning(
                 "wa_agent_unbacked_mutation_claim",
                 branch_id=str(branch.id), phone_last4=(sender or "")[-4:],
             )
+            # A second model pass previously leaked internal appointment IDs.
+            # This correction is code, not another prompt: no successful tool
+            # means the patient is never told a booking changed.
+            reply = _unbacked_mutation_reply(text)
     except Exception as e:  # noqa: BLE001 — RULE 8: never a dead end
         logger.warning(
             "wa_agent_failed", branch_id=str(branch.id),

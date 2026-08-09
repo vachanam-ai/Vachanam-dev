@@ -35,12 +35,16 @@ def test_missing_soniox_key_fails_configuration(monkeypatch):
         ag._build_session_tts("Priya", "te")
 
 
-def test_no_smallest_runtime_or_dependency_remains():
-    requirements = Path("agent/livekit_minimal/requirements.txt").read_text().lower()
+def test_no_smallest_tts_runtime_remains():
+    # Smallest is an explicitly selectable STT sandbox provider. The retired
+    # Smallest TTS path must stay absent without forbidding that independent STT
+    # experiment from the same agent module/requirements file.
+    session_tts = AGENT_SRC.split("def _build_session_tts", 1)[1].split(
+        "\ndef ", 1
+    )[0]
     backend_requirements = Path("backend/requirements.txt").read_text().lower()
-    assert "smallest" not in AGENT_SRC.lower()
+    assert "smallest" not in session_tts.lower()
     assert "smallest" not in GREETING_SRC.lower()
-    assert "livekit-plugins-smallestai" not in requirements
     assert "smallestai" not in backend_requirements
 
 

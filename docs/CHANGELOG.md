@@ -13,6 +13,52 @@ Format per session:
 
 ---
 
+## 2026-08-09 - Durable WhatsApp appointments and Razorpay autopay
+
+WhatsApp is now a first-class appointment channel instead of a best-effort
+side effect. Booking, reschedule, cancellation, reminders and follow-ups enter
+a branch-scoped outbox with stable event keys, immediate delivery, retry and
+operator alerts. A successful reschedule sends one reschedule confirmation,
+not a premature booking message followed by another message. The WhatsApp
+agent uses the same database booking core as voice and cannot tell a patient a
+mutation succeeded unless a corresponding tool actually committed it.
+
+Clinic owners can install all eight required Meta templates from the WhatsApp
+page while retaining the custom-template editor. Fixed plan prices now use
+Razorpay Subscriptions with signed, idempotent lifecycle webhooks; variable
+voice overage remains separately invoiced rather than being repeated in every
+future debit.
+
+Proof: 349 focused backend tests, 180 security tests (1 skipped), 29 frontend
+tests, 8 migration guards, then a post-fix 96-case billing gate; production
+build, Ruff and compile all green.
+Deployment and external Meta approval/live-provider smoke tests remain pending.
+Bank eMandates, which Razorpay cannot edit in place, are rejected before an
+add-on order is created so a clinic is never charged into an unsynchronizable
+subscription.
+
+---
+
+## 2026-08-09 - Existing main-flow correctness audit
+
+Vinay parked provider/latency changes and asked for the current main flow to be
+audited and fixed without touching the completed UI.
+
+Four correctness failures were fixed: mutation state leaked after normal tool
+failures and could trap the call; the voice wrapper incorrectly required Google
+Calendar for token doctors; cancellation reasons were lost through the public
+wrapper and stale-ID recursion, risking the wrong analytics and WhatsApp; and a
+failed follow-up commit left the SQLAlchemy session unrolled-back.
+
+No frontend or provider-selection change was made. Regression proof: 85
+database-backed appointment/concurrency tests passed with one time-dependent
+skip; 30 focused authorization, termination, and mutation lifecycle tests
+passed; Python compile and Ruff passed. Broad unit execution exposed one mock
+expectation updated for the new reason argument; the remaining nine errors are
+the repository's existing Windows/OneDrive pytest temp-directory ACL failures.
+
+---
+
 ## 2026-08-02 — WhatsApp hub + cross-channel design (brainstorming session)
 
 Designed the WhatsApp product surface with Vinay. Decisions: one **WhatsApp** nav

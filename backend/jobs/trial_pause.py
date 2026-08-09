@@ -156,7 +156,10 @@ async def run_billing_renewal(today: date | None = None) -> None:
             await db.execute(
                 select(Organization, latest.c.end)
                 .join(latest, latest.c.org_id == Organization.id)
-                .where(Organization.status == "active")
+                .where(
+                    Organization.status == "active",
+                    Organization.razorpay_subscription_id.is_(None),
+                )
             )
         ).all()
 

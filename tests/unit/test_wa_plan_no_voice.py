@@ -17,7 +17,7 @@ import pytest
 
 from backend.config import settings
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
-from backend.services import wa_service
+from backend.services import wa_service, wa_template_registry
 from backend.services.billing_math import call_blocked
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -97,6 +97,18 @@ def wa_capture(monkeypatch):
         return True
 
     monkeypatch.setattr(wa_service, "send_template", _fake)
+
+    async def _resolve(branch, purpose):
+        names = {
+            "booking_confirm": "booking_confirm",
+            "reminder": "appt_reminder",
+        }
+        params = {"booking_confirm": 5, "reminder": 4}
+        return {
+            "name": names[purpose], "language": "en", "params": params[purpose],
+        } if purpose in names else None
+
+    monkeypatch.setattr(wa_template_registry, "resolve", _resolve)
     return sent
 
 

@@ -1,5 +1,31 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-08-09 — WHATSAPP + AUTOPAY HARDENED, PENDING DEPLOYMENT.**
+> Call/WhatsApp bookings, reschedules, cancellations, reminders and follow-ups
+> now use a durable, deduplicated delivery outbox and clinic-owned template
+> registry. WhatsApp cannot report a successful appointment mutation without a
+> successful database tool result. Owners can install eight required templates
+> from the website. Fixed monthly pricing uses Razorpay recurring subscriptions
+> with signed/idempotent lifecycle webhooks; metered overage is truthfully kept
+> as a separate invoice. Proof: 349 focused backend, a final 96-case billing
+> gate, 180 security (1 skip), 29 frontend and 8 migration tests; frontend
+> build, Ruff and compile green.
+> Immutable Razorpay bank eMandates are blocked before add-on payment and
+> require a new mandate/inclusive plan; no post-payment billing drift is hidden.
+> Meta approval/live-provider smoke testing and deployment are still required.
+> FIXLOG #516.
+
+> **2026-08-09 — MAIN BOOKING FLOW AUDIT FIXED, PENDING DEPLOYMENT.**
+> Four backend defects were removed without changing the UI or the parked
+> provider sandbox: mutation tools now clear the write-in-progress latch on
+> every exit while retaining retryable caller intent; token doctors can book
+> when Google Calendar is absent while slot doctors still fail before a row is
+> written; cancellation reasons survive wrapper and stale-ID recursion; failed
+> follow-up commits roll back instead of poisoning the call's DB session.
+> Proof: 85 database-backed appointment/concurrency tests passed
+> (1 business-hours skip), plus 30 termination/mutation regressions and
+> lint/compile clean. FIXLOG #515.
+
 > **2026-08-09 — EVERY TURN WAS RUNNING UNCACHED. Live Fly v285.**
 > Vinay's benchmark call, read from Redis `lat:turns` (16 turns): **p50 2018 ms,
 > p95 2888 ms, max 3970 ms** — the conference's "3 seconds is unusable" is real

@@ -22,6 +22,7 @@ class Organization(Base):
     subscription_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     razorpay_customer_id: Mapped[str | None] = mapped_column(String(255))
     razorpay_subscription_id: Mapped[str | None] = mapped_column(String(255))
+    razorpay_subscription_status: Mapped[str | None] = mapped_column(String(30))
     trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(
         Enum("active", "trial", "paused", "cancelled", name="org_status"),
@@ -891,6 +892,25 @@ class BillingCycle(Base):
     organization: Mapped["Organization"] = relationship(back_populates="billing_cycles")
 
 
+class RazorpayPlanMap(Base):
+    """Reusable provider plan for one exact recurring monthly amount."""
+
+    __tablename__ = "razorpay_plan_maps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pricing_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    plan: Mapped[str] = mapped_column(String(20), nullable=False)
+    amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    razorpay_plan_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class WhatsAppSession(Base):
     __tablename__ = "whatsapp_sessions"
 
@@ -918,6 +938,55 @@ class WhatsAppSession(Base):
     )
 
     branch: Mapped["Branch"] = relationship(back_populates="whatsapp_sessions")
+
+
+class WhatsAppDelivery(Base):
+    """Durable, idempotent outbound patient notification.
+
+    Booking mutations are authoritative even when Meta is temporarily down.
+    The event key prevents a retry, webhook replay, or dual voice/chat path
+    from sending the same successful confirmation twice.
+    """
+
+    __tablename__ = "whatsapp_deliveries"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "event_key", name="uq_wa_delivery_branch_event"),
+        Index("ix_wa_deliveries_status_next", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    event_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(40), nullable=False)
+    recipient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    values_json: Mapped[list] = mapped_column(JSONB, nullable=False)
+    buttons_json: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="pending"
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class User(Base):

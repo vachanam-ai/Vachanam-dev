@@ -18,6 +18,7 @@ LiveKit + trunk IDs).
 from __future__ import annotations
 
 import asyncio
+import hashlib as hashlib_mod
 import hashlib
 import json
 import logging
@@ -29,6 +30,7 @@ import unicodedata
 import weakref
 from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
 from datetime import timezone as _tz
+from functools import wraps
 
 timezone_utc = _tz.utc
 from pathlib import Path
@@ -333,6 +335,27 @@ def _protect_mutation(context) -> None:
         context.disallow_interruptions()
     except Exception as e:  # noqa: BLE001 — protection must never block the write
         logger.warning("mutation_unprotected: %s", str(e)[:120])
+
+
+# Caller-intent flags can stay armed after retryable failures, but
+# mutation_in_flight only means that a write coroutine is executing now.
+# Restoring it on every exit prevents a normal tool failure from leaving the
+# call permanently marked in progress.
+def _tracks_mutation(kind: str):
+    def decorate(func):
+        @wraps(func)
+        async def tracked(self, *args, **kwargs):
+            previous = self._state.mutation_in_flight
+            self._state.mutation_in_flight = kind
+            try:
+                return await func(self, *args, **kwargs)
+            finally:
+                if self._state.mutation_in_flight == kind:
+                    self._state.mutation_in_flight = previous
+
+        return tracked
+
+    return decorate
 
 
 def _build_caller_context(rows, now_local) -> tuple[str | None, str]:
@@ -1195,6 +1218,22 @@ def _soniox_prewarm_matches(warm, voice_id: str, tts_lang: str) -> bool:
     )
 
 
+def _preemptive_tts_enabled() -> bool:
+    """Keep speculative synthesis away from Cartesia's pooled socket.
+
+    A tool call cancels the speculative speech stream.  The Cartesia plugin
+    treats that cancellation as a broken connection and removes the WebSocket
+    from its pool; the next real response then pays a new TLS/WS handshake.
+    Measured with the deployed model/voice: stable reuse versus 161-258 ms
+    reacquisition and 300-390 ms first audio after each cancellation.
+
+    Gemini remains preemptive for every provider.  Soniox keeps the previously
+    validated LLM+TTS overlap; only the Cartesia sandbox opts out of speculative
+    TTS so its one warm WebSocket survives tool turns.
+    """
+    return (settings.tts_provider or "soniox").lower() != "cartesia"
+
+
 def _build_cartesia_tts(tts_lang: str):
     """SANDBOX ONLY — Cartesia in place of Soniox (Vinay 2026-08-07).
 
@@ -1210,6 +1249,9 @@ def _build_cartesia_tts(tts_lang: str):
         model=settings.cartesia_model,
         language=tts_lang,
         sample_rate=settings.cartesia_sample_rate,
+        # Telugu timestamps are not consumed by this phone agent and the
+        # Cartesia plugin warns they are unavailable for stable Sonic models.
+        word_timestamps=False,
         # Same sentence tokenizer as Soniox so this compares the ENGINE, not
         # two different chunking strategies.
         tokenizer=_tokenize.blingfire.SentenceTokenizer(
@@ -1231,13 +1273,23 @@ def _build_cartesia_tts(tts_lang: str):
 def _build_session_tts(
     voice_id: str, tts_lang: str, prewarmed_soniox=None
 ) -> "soniox.TTS":
-    """The sole session TTS. A missing Soniox key is a configuration error."""
+    """Build the explicitly configured session TTS provider."""
     # Sandbox swap, checked before the Soniox key requirement so a Cartesia-only
     # deployment does not need a Soniox key at all.
     if (settings.tts_provider or "soniox").lower() == "cartesia":
         if not settings.cartesia_api_key:
             raise RuntimeError("TTS_PROVIDER=cartesia but CARTESIA_API_KEY is unset")
-        return _build_cartesia_tts(tts_lang)
+        primary = _build_cartesia_tts(tts_lang)
+        # Open the WebSocket during call setup/greeting cover. Direct probes on
+        # the configured key measured ~563ms cold versus ~143ms warm first audio.
+        try:
+            asyncio.get_running_loop()
+            primary.prewarm()
+        except RuntimeError:
+            pass
+        except Exception as exc:  # noqa: BLE001 - warmup never breaks the call
+            logger.debug("cartesia_tts_prewarm_failed: %s", exc)
+        return primary
     if not settings.soniox_jp_api_key:
         raise RuntimeError("SONIOX_JP_API_KEY is required: Soniox is the only TTS provider")
     primary = (
@@ -1317,7 +1369,12 @@ async def _prewarm_switch_ack_clips() -> None:
             text = sanitize_for_tts(get_switch_ack(lc) or "")
             if not text:
                 continue
-            tts = _build_soniox_tts(settings.soniox_tts_default_voice, get_lang(lc).tts_code)
+            # Use the selected deployment provider. Calling Soniox directly here
+            # made the Cartesia sandbox leak one class of utterances to Soniox.
+            tts = _build_session_tts(
+                settings.soniox_tts_default_voice,
+                get_lang(lc).tts_code,
+            )
             frames: list = []
             async with asyncio.timeout(15):
                 async for ev in tts.synthesize(text):
@@ -1442,6 +1499,27 @@ def _build_stt(
     endpointing/latency risk.
     """
     provider = settings.stt_provider
+    if provider == 'smallest':
+        if not settings.smallest_api_key:
+            raise RuntimeError(
+                'STT_PROVIDER=smallest but SMALLEST_API_KEY is unset'
+            )
+        # Lazy import keeps the production Soniox call-start path unchanged.
+        from livekit.plugins import smallestai
+
+        logger.info(
+            'stt_config provider=smallest model=%s lang=%s eou_timeout_ms=%d',
+            settings.smallest_model,
+            lang_cfg.code,
+            settings.smallest_eou_timeout_ms,
+        )
+        return smallestai.STT(
+            api_key=settings.smallest_api_key,
+            model=settings.smallest_model,
+            language=lang_cfg.code,
+            eou_timeout_ms=settings.smallest_eou_timeout_ms,
+            word_timestamps=True,
+        )
     use_soniox = provider != 'sarvam' and bool(settings.soniox_jp_api_key)
     if use_soniox:
         ctx = None
@@ -1537,7 +1615,7 @@ def _vertex_credentials() -> tuple[str, str] | None:
     return path, project
 
 
-def _build_fallback_llm() -> lk_llm.FallbackAdapter:
+def _build_fallback_llm() -> lk_llm.LLM:
     """Gemini-only. #404 (2026-07-18): primary = gemini-2.5-flash on Vertex
     asia-south1 (Mumbai — same region as this Fly worker). Measured at prod
     prompt size (~12k tok): Mumbai ttft 0.67-0.69s steady vs global
@@ -1546,11 +1624,26 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
     primary, quality-proven on this prompt family.
 
     Fallbacks stay on the global API key path (RULE 8: Vertex outage, missing
-    SA creds, or region trouble must never kill a call): 3.1-flash-lite then
-    2.5-flash, both exactly as before. thinking minimised everywhere (gemini-3
+    SA creds, or region trouble must never kill a call): 3.1-flash-lite, then
+    3.5-flash-lite and 2.5-flash. Thinking is minimised everywhere (gemini-3
     uses thinking_level — #397: "low" still THINKS on ~half the turns, bimodal
     ttft 1.2s/3.2s; 2.5-flash uses thinking_budget=0).
     """
+    if settings.llm_provider == 'livekit':
+        from livekit.agents import inference
+
+        logger.info(
+            'llm_config provider=livekit model=%s',
+            settings.livekit_inference_model,
+        )
+        return inference.LLM(
+            model=settings.livekit_inference_model,
+            extra_kwargs={
+                'temperature': 0.1,
+                'max_completion_tokens': 256,
+            },
+        )
+
     from google.genai import types as genai_types
 
     llms: list[lk_llm.LLM] = []
@@ -1572,6 +1665,11 @@ def _build_fallback_llm() -> lk_llm.FallbackAdapter:
         google.LLM(
             api_key=settings.gemini_api_key,
             model="gemini-3.1-flash-lite",
+            thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+        ),
+        google.LLM(
+            api_key=settings.gemini_api_key,
+            model="gemini-3.5-flash-lite",
             thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
         ),
         google.LLM(
@@ -1684,6 +1782,31 @@ def compose_clinic_instructions(
     )
 
 
+def _stash_prompt_fingerprint(side: str, lang: str, digest: str, fp: str) -> None:
+    """Mirror the fingerprint to Redis, because Fly's log buffer keeps losing it.
+
+    Three separate diagnoses have now been blocked by the buffer rotating — it
+    holds minutes, and a deploy flushes it outright. `lat:turns` already exists
+    for exactly this reason; this is the same pattern for the one line that says
+    WHY a cache missed. Best-effort and fire-and-forget: telemetry must never
+    touch the call (RULE 8)."""
+    async def _go() -> None:
+        try:
+            from backend.redis_client import get_redis
+
+            r = get_redis()
+            await r.rpush("lat:prompt_inputs", f"{side} lang={lang} digest={digest} {fp}")
+            await r.ltrim("lat:prompt_inputs", -200, -1)
+            await r.expire("lat:prompt_inputs", 7 * 86400)
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        asyncio.create_task(_go())
+    except RuntimeError:  # no running loop (warmer may run before one exists)
+        pass
+
+
 def _prompt_inputs_fingerprint(
     clinic_name: str | None, doctors, faq, plan: str | None, recording_active: bool
 ) -> str:
@@ -1752,6 +1875,9 @@ async def _create_prompt_cache(key, instructions: str, tools) -> bool:
     """Background: bake instructions + tool declarations into a CachedContent
     for FUTURE calls of this branch+lang today. Best-effort — failure only
     means calls keep the plain path."""
+    if settings.llm_provider != 'gemini':
+        _PROMPT_CACHE_PENDING.discard(key)
+        return False
     lock_redis = None
     lock_key = _prompt_cache_redis_key(key) + ":lock"
     lock_token = os.urandom(8).hex()
@@ -1820,6 +1946,8 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
     None when the cache isn't ready / doesn't byte-match (plain path). The
     global-API fallbacks are the same as _build_fallback_llm — they receive
     the full system prompt + tools per request as always."""
+    if settings.llm_provider != 'gemini':
+        return None
     entry = _PROMPT_CACHE.get(key)
     if entry is None or entry[1] != instructions:
         return None
@@ -1855,6 +1983,8 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
 async def _resolve_cached_primary_llm(
     key, instructions: str
 ) -> lk_llm.FallbackAdapter | None:
+    if settings.llm_provider != 'gemini':
+        return None
     cached = _cached_primary_llm(key, instructions)
     if cached is not None:
         return cached
@@ -3753,6 +3883,7 @@ class VachanamAgent(Agent):
         return result
 
     @function_tool()
+    @_tracks_mutation('book')
     async def confirm_booking(
         self,
         context: RunContext,
@@ -3862,9 +3993,6 @@ class VachanamAgent(Agent):
 
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB write + Google Calendar create
-        if self._calendar is None:
-            logger.error("confirm_booking_no_calendar_service")
-            return {"success": False, "error": "booking_system_unavailable"}
 
         # iter1 #11/#19: bound the untrusted, LLM-supplied free-text/numeric
         # fields at the tool boundary (mirror the walk-in desk Field limits).
@@ -3890,7 +4018,7 @@ class VachanamAgent(Agent):
         _guard_human_booking(self._state)
         # From here the booking is UNDERWAY — the call may not end until it
         # finishes or the caller calls it off (Vinay 2026-08-08).
-        self._state.mutation_in_flight = "book"
+        # mutation_in_flight = "book" is owned by @_tracks_mutation.
         phone, _ = _require_caller_phone(self._state)
 
         resolved = await self._resolve_doctor_id(doctor_id)
@@ -4003,7 +4131,7 @@ class VachanamAgent(Agent):
             # question. Cleared here rather than at authorization above so a
             # retry after a transient failure does not have to re-ask.
             self._state.caller_asked_to_book = False
-            self._state.mutation_in_flight = None   # booking finished
+            # mutation_in_flight = None is guaranteed by @_tracks_mutation.
             try:
                 self._state.last_confirmed_token_id = UUID(str(result['token_id']))
             except (KeyError, TypeError, ValueError):
@@ -4103,6 +4231,10 @@ class VachanamAgent(Agent):
             return True
         except Exception as e:
             logger.warning("followup_complete_mark_failed: %s", e)
+            try:
+                await self._db.rollback()
+            except Exception:
+                pass
             return False
 
     @function_tool()
@@ -4562,6 +4694,7 @@ class VachanamAgent(Agent):
         return new_agent
 
     @function_tool()
+    @_tracks_mutation('reschedule')
     async def reschedule_booking(
         self,
         context: RunContext,
@@ -4621,7 +4754,7 @@ class VachanamAgent(Agent):
             )
         self._state.pending_confirmation = None
         _guard_human_booking(self._state)
-        self._state.mutation_in_flight = "reschedule"
+        # mutation_in_flight = "reschedule" is owned by @_tracks_mutation.
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
         # "hello?" can't discard the completed reschedule (FIXLOG #361).
@@ -4818,6 +4951,7 @@ class VachanamAgent(Agent):
                 calendar_service=self._calendar,
                 meta_service=self._meta,
                 exclude_token_id=old_token.id,  # ignore the booking being replaced
+                notify_whatsapp=False,
             )
         except Exception as e:
             logger.error("reschedule_confirm_failed: %s", e)
@@ -4913,7 +5047,7 @@ class VachanamAgent(Agent):
         # Consent spent. A SECOND move on this call is a new decision and asks
         # its own question (mirrors confirm_booking).
         self._state.caller_asked_to_reschedule = False
-        self._state.mutation_in_flight = None   # reschedule finished
+        # mutation_in_flight = None is guaranteed by @_tracks_mutation.
         # Live call 2026-07-03 16:55Z: a reschedule that SUCCEEDED (DB showed the
         # moved booking) was announced as "unable to reschedule" — the model
         # misread the result. Log it (evidence for next time) and make success
@@ -4965,6 +5099,7 @@ class VachanamAgent(Agent):
         }
 
     @function_tool()
+    @_tracks_mutation('cancel')
     async def cancel_booking(
         self, context: RunContext, token_id: str, reason: str = "cancel"
     ) -> dict:
@@ -5030,7 +5165,7 @@ class VachanamAgent(Agent):
                     requested_id[-8:], token_id[-8:],
                 )
         _guard_human_booking(self._state)
-        self._state.mutation_in_flight = "cancel"
+        # mutation_in_flight = "cancel" is owned by @_tracks_mutation.
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
         # the old appointment, and left the patient with nothing.
@@ -5046,7 +5181,12 @@ class VachanamAgent(Agent):
         # pinned so barge-in can't discard the completed cancel (FIXLOG #361).
         _protect_mutation(context)
         _say_wait_filler(context)  # slow: DB + calendar delete
-        result = await self._do_cancel(token_id)
+        cancel_reason = (
+            'patient_cancelled_or_rescheduled_on_call'
+            if reason == 'cancel'
+            else reason
+        )
+        result = await self._do_cancel(token_id, reason=cancel_reason)
         if (
             result.get("success")
             and reason == "cancel"
@@ -5225,7 +5365,9 @@ class VachanamAgent(Agent):
                         "cancel_stale_token_recovered old=%s new=%s",
                         str(token.id), str(replacement.id),
                     )
-                    return await self._do_cancel(str(replacement.id))
+                    return await self._do_cancel(
+                        str(replacement.id), reason=reason
+                    )
                 return {
                     "success": False,
                     "error": "already_cancelled",
@@ -5334,7 +5476,7 @@ class VachanamAgent(Agent):
         )
         # Consent spent — cancelling a SECOND booking must be asked for again.
         self._state.caller_asked_to_cancel = False
-        self._state.mutation_in_flight = None   # cancellation finished
+        # mutation_in_flight = None is guaranteed by @_tracks_mutation.
 
         # Vinay 2026-08-04: "all confirmations from calls should reflect in
         # whatsapp". A cancellation agreed on the phone must leave the patient
@@ -5357,7 +5499,7 @@ class VachanamAgent(Agent):
                     patient_name=await self._patient_name_for(token),
                     clinic_name=await self._clinic_name(),
                     doctor_name=await self._doctor_name_for(token.doctor_id),
-                    on_date=on_date, at_time=at_time,
+                    on_date=on_date, at_time=at_time, token_id=str(token.id),
                 )
             except Exception as e:  # noqa: BLE001 — notification only
                 logger.warning("cancel_whatsapp_notify_failed: %s", e)
@@ -6729,10 +6871,16 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # LANGUAGE directive).
         extra_tail = ""
 
-        # One controller per call. Language handoffs share it, while concurrent
-        # clinic calls remain isolated. Zero remains the explicit opt-out.
+        # One controller per Soniox call. Language handoffs share it, while
+        # concurrent clinic calls remain isolated. Never run vendor-specific
+        # finalization against Pulse/Sarvam: the live Pulse canary kept logging
+        # empty five-second audio windows after it stopped emitting transcripts.
+        _uses_soniox_stt = (
+            settings.stt_provider not in ("smallest", "sarvam")
+            and bool(settings.soniox_jp_api_key)
+        )
         _soniox_finalizer = _SonioxFinalizeController(
-            settings.soniox_manual_finalize_delay_ms
+            settings.soniox_manual_finalize_delay_ms if _uses_soniox_stt else 0
         )
 
         def _compose_instructions(lc: str) -> str:
@@ -6747,15 +6895,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             the runtime block, because instructions are the prompt-cache key.
             """
             _faq = _decode_branch_faq(getattr(branch, "faq", None))
-            logger.info(
-                "prompt_inputs live lang=%s %s",
-                lc,
-                _prompt_inputs_fingerprint(
-                    branch_name, doctor_contexts, _faq,
-                    state.plan, _recording_active,
-                ),
+            _fp = _prompt_inputs_fingerprint(
+                branch_name, doctor_contexts, _faq, state.plan, _recording_active,
             )
-            return compose_clinic_instructions(
+            _built = compose_clinic_instructions(
                 clinic_name=branch_name,
                 doctors=doctor_contexts,
                 emergency_contact=emergency_contact,
@@ -6768,6 +6911,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 recording_active=_recording_active,
                 today=now_b.date(),
             )
+            _dg = hashlib_mod.sha256(_built.encode("utf-8")).hexdigest()[:12]
+            logger.info("prompt_inputs live lang=%s digest=%s %s", lc, _dg, _fp)
+            _stash_prompt_fingerprint("live", lc, _dg, _fp)
+            return _built
 
         def _compose_runtime_context() -> str:
             """Per-call/private suffix kept OUTSIDE shared CachedContent."""
@@ -7136,8 +7283,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "turn_detection": None,
                 "endpointing": {
                     "mode": "fixed",
-                    "min_delay": 0.05,
-                    "max_delay": 0.3,
+                    "min_delay": settings.voice_endpointing_min_delay_s,
+                    "max_delay": settings.voice_endpointing_max_delay_s,
                 },
                 # LiveKit normally starts only the LLM before turn confirmation.
                 # Starting Soniox TTS too overlaps the measured ~0.5s LLM TTFT
@@ -7146,7 +7293,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # quality is unchanged; only a cancelled synth may cost extra.
                 "preemptive_generation": {
                     "enabled": True,
-                    "preemptive_tts": True,
+                    "preemptive_tts": _preemptive_tts_enabled(),
                     "max_speech_duration": 10.0,
                     "max_retries": 2,
                 },
@@ -7357,7 +7504,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     duration=getattr(m, "duration", None),
                 )
             elif tn == "TTSMetrics":
-                logger.info("lat_tts ttfb=%.2fs", getattr(m, "ttfb", 0.0))
+                logger.info(
+                    "lat_tts ttfb=%.2fs acquire=%.2fs reused=%s cancelled=%s",
+                    getattr(m, "ttfb", 0.0),
+                    getattr(m, "acquire_time", 0.0),
+                    getattr(m, "connection_reused", False),
+                    getattr(m, "cancelled", False),
+                )
                 _turn_trace.mark_tts(
                     getattr(m, "speech_id", "") or "",
                     ttfb=getattr(m, "ttfb", 0.0),
@@ -8463,12 +8616,8 @@ async def _warm_all_clinic_prompt_caches() -> None:
             for recording_active in recording_variants:
                 _faq = _decode_branch_faq(row["faq"])
                 _docs = doctors_by_branch.get(branch_id, [])
-                logger.info(
-                    "prompt_inputs warm lang=%s %s",
-                    language,
-                    _prompt_inputs_fingerprint(
-                        clinic_name, _docs, _faq, row["plan"], recording_active
-                    ),
+                _fp = _prompt_inputs_fingerprint(
+                    clinic_name, _docs, _faq, row["plan"], recording_active
                 )
                 # SAME function as the live call. They were two call sites that
                 # had to agree by discipline, and they drifted twice.
@@ -8483,6 +8632,9 @@ async def _warm_all_clinic_prompt_caches() -> None:
                     recording_active=recording_active,
                     today=datetime_cls.now(ZoneInfo("Asia/Kolkata")).date(),
                 )
+                _dg = hashlib_mod.sha256(instructions.encode("utf-8")).hexdigest()[:12]
+                logger.info("prompt_inputs warm lang=%s digest=%s %s", language, _dg, _fp)
+                _stash_prompt_fingerprint("warm", language, _dg, _fp)
                 key = _prompt_cache_key(branch_id, language, instructions)
                 requested += 1
                 if await _create_prompt_cache(key, instructions, tool_schema):
@@ -8546,25 +8698,63 @@ def _prewarm(proc) -> None:
         except PackageNotFoundError:
             return "missing"
 
+    stt_provider = (settings.stt_provider or "auto").lower()
+    tts_provider = (settings.tts_provider or "soniox").lower()
+    stt_plugin = (
+        _pkg_version("livekit-plugins-smallestai")
+        if stt_provider == "smallest"
+        else _pkg_version("livekit-plugins-soniox")
+    )
+    stt_topology = (
+        f"smallest/{settings.smallest_model}-india"
+        if stt_provider == "smallest"
+        else stt_provider
+    )
+    tts_topology = (
+        f"cartesia/{settings.cartesia_model}"
+        if tts_provider == "cartesia"
+        else "soniox-jp"
+    )
+    if settings.llm_provider == "livekit":
+        llm_topology = f"livekit/{settings.livekit_inference_model}"
+    else:
+        has_vertex_creds = bool(
+            settings.google_sa_json_b64
+            or (
+                settings.google_application_credentials
+                and Path(settings.google_application_credentials).exists()
+            )
+        )
+        llm_topology = (
+            "vertex-asia-south1+global-fallback"
+            if has_vertex_creds
+            else "gemini-global(no-vertex-creds)"
+        )
+
     logger.info(
-        "voice_runtime livekit_agents=%s soniox_plugin=%s "
-        "endpoint_level=%d max_endpoint_ms=%d sensitivity=%s manual_finalize_ms=%d "
-        "vad_silence_ms=%d preemptive_tts=true turn_detection=%s "
-        "recording_test_mode=%s recording_scope=admin_only",
+        "voice_runtime livekit_agents=%s stt_provider=%s stt_plugin=%s "
+        "tts_provider=%s session_endpoint_min_ms=%d session_endpoint_max_ms=%d "
+        "vad_silence_ms=%d preemptive_tts=%s turn_detection=%s "
+        "recording_test_mode=%s recording_scope=admin_only idle_processes=%d",
         _pkg_version("livekit-agents"),
-        _pkg_version("livekit-plugins-soniox"),
-        settings.soniox_endpoint_latency_level,
-        settings.soniox_max_endpoint_delay_ms,
-        settings.soniox_endpoint_sensitivity,
-        settings.soniox_manual_finalize_delay_ms,
+        stt_provider,
+        stt_plugin,
+        tts_provider,
+        round(settings.voice_endpointing_min_delay_s * 1000),
+        round(settings.voice_endpointing_max_delay_s * 1000),
         round(VAD_TURN_DETECTION_S * 1000),
+        _preemptive_tts_enabled(),
         "vad_only_all_langs" if _TELUGU_STYLE_TURNS else "semantic_where_supported",
         settings.recording_allowed,
+        settings.voice_num_idle_processes,
     )
     logger.info(
         "voice_topology worker_region=%s media_expected=india-west "
-        "llm=vertex-asia-south1 stt=soniox-jp tts=soniox-jp",
+        "llm=%s stt=%s tts=%s",
         os.getenv("FLY_REGION", "local"),
+        llm_topology,
+        stt_topology,
+        tts_topology,
     )
     proc.userdata["vad"] = _load_vad()
     _prewarm_greeting_routes(proc)
@@ -8582,10 +8772,12 @@ def _prewarm(proc) -> None:
     except Exception as e:  # noqa: BLE001 — prewarm best-effort; entrypoint rebuilds
         logger.warning("prewarm_calendar_failed: %s", e)
 
-    # #8: warm the Soniox TTS WS/TLS connection once per worker so the cold
-    # connect (~450ms measured) is off the caller's first turn. Reused by
-    # _build_session_tts for calls on the default voice/language (the common case).
-    _prewarm_soniox_tts(proc)
+    # Soniox can be constructed synchronously here and reused. Cartesia opens
+    # its WebSocket from _build_session_tts where a running event loop exists.
+    if tts_provider == "soniox":
+        _prewarm_soniox_tts(proc)
+    else:
+        logger.info("cartesia_tts_prewarm_deferred_to_call_setup")
 
     # The instant greeting uses the same Soniox-only synthesis path.
 
@@ -8608,5 +8800,9 @@ if __name__ == "__main__":
             entrypoint_fnc=entrypoint,
             prewarm_fnc=_prewarm,
             agent_name=AGENT_NAME,
+            # Production keeps four ready processes for concurrent calls. The
+            # single-call latency sandbox uses one so a 2-CPU BOM VM does not
+            # initialize four model stacks concurrently and stall registration.
+            num_idle_processes=settings.voice_num_idle_processes,
         )
     )

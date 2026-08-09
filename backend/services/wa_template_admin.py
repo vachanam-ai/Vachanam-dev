@@ -13,14 +13,13 @@ to a real Meta rejection we would otherwise surface as an opaque Graph 400:
   - category defaults to UTILITY — Marketing costs more per message and is
     rejected harder by Meta's review.
 
-The four system templates (booking_confirm, appt_reminder, rating_ask,
-leave_rebook) are wired into the live send paths (wa_templates.py /
-scripts/wa_create_templates.py) — deleting one here would silently break
-every future booking confirmation, reminder, rating ask or leave notice, so
-delete_template refuses them outright (409) before ever calling Meta.
+The required system templates are wired into live booking, reschedule,
+cancellation, reminder and follow-up paths. Deleting one would silently break
+future patient notifications, so delete_template refuses them (409).
 """
 from __future__ import annotations
 
+import asyncio
 import re
 
 import httpx
@@ -33,8 +32,68 @@ logger = structlog.get_logger()
 _GRAPH = "https://graph.facebook.com/v21.0"
 
 # Wired into wa_templates.py send paths — never deletable from this admin UI.
+SYSTEM_TEMPLATE_DEFINITIONS = (
+    {
+        "name": "vachanam_booking_confirm", "body": (
+            "Hello {{1}}, your appointment at {{2}} with Dr {{3}} is confirmed "
+            "for {{4}} at {{5}}. Please come on time."
+        ),
+        "examples": ["Anjali", "Venkateshwara Clinic", "Srinivas", "12 August", "10:30 AM"],
+        "buttons": ["Reschedule", "Cancel"],
+    },
+    {
+        "name": "vachanam_booking_reschedule", "body": (
+            "Hello {{1}}, your appointment with Dr {{2}} is moved to {{3}} at "
+            "{{4}}. Please come on time."
+        ),
+        "examples": ["Anjali", "Srinivas", "12 August", "11:00 AM"],
+        "buttons": ["Reschedule", "Cancel"],
+    },
+    {
+        "name": "vachanam_booking_cancel", "body": (
+            "Hello {{1}}, your appointment with Dr {{2}} on {{3}} at {{4}} "
+            "has been cancelled."
+        ),
+        "examples": ["Anjali", "Srinivas", "12 August", "10:30 AM"],
+        "buttons": [],
+    },
+    {
+        "name": "vachanam_appt_reminder", "body": (
+            "Reminder for {{1}}: your appointment with Dr {{2}} is on {{3}} "
+            "at {{4}}. Please come on time."
+        ),
+        "examples": ["Anjali", "Srinivas", "12 August", "10:30 AM"],
+        "buttons": ["Reschedule", "Cancel"],
+    },
+    {
+        "name": "vachanam_clinic_location",
+        "body": "{{1}} is at {{2}}. Directions: {{3}}",
+        "examples": ["Venkateshwara Clinic", "Hyderabad", "https://maps.google.com/"],
+        "buttons": [],
+    },
+    {
+        "name": "vachanam_feedback",
+        "body": "Thank you for visiting us. Share your feedback here: {{1}}",
+        "examples": ["https://example.com/review"],
+        "buttons": [],
+    },
+    {
+        "name": "vachanam_rating_ask",
+        "body": "How was your visit to {{1}}? Tap a rating below.",
+        "examples": ["Venkateshwara Clinic"],
+        "buttons": ["1", "2", "3", "4", "5"],
+    },
+    {
+        "name": "vachanam_leave_rebook",
+        "body": "Dr {{1}} is unavailable on {{2}}. Tap below to reschedule.",
+        "examples": ["Srinivas", "12 August"],
+        "buttons": ["Reschedule"],
+    },
+)
+
 SYSTEM_TEMPLATES = frozenset({
     "booking_confirm", "appt_reminder", "rating_ask", "leave_rebook",
+    *(item["name"] for item in SYSTEM_TEMPLATE_DEFINITIONS),
 })
 
 _NAME_RE = re.compile(r"^[a-z0-9_]+$")
@@ -214,6 +273,39 @@ async def create_template(
         "wa_template_created", branch_id=str(branch.id), category=payload["category"],
     )
     return r.json()
+
+
+async def ensure_system_templates(branch) -> dict:
+    """Submit every missing required template for this clinic's Meta review."""
+    existing = {str(t.get("name") or "") for t in await list_templates(branch)}
+    missing = [s for s in SYSTEM_TEMPLATE_DEFINITIONS if s["name"] not in existing]
+
+    async def submit(spec: dict) -> tuple[str, str | None]:
+        try:
+            await create_template(
+                branch,
+                name=spec["name"],
+                category="UTILITY",
+                body=spec["body"],
+                examples=spec["examples"],
+                buttons=spec["buttons"],
+                language="en",
+            )
+            return spec["name"], None
+        except TemplateAdminError as exc:
+            return spec["name"], exc.detail
+
+    results = await asyncio.gather(*(submit(spec) for spec in missing))
+    created = [name for name, error in results if error is None]
+    errors = [
+        {"name": name, "detail": error}
+        for name, error in results if error is not None
+    ]
+    return {
+        "created": created,
+        "existing": sorted(existing & SYSTEM_TEMPLATES),
+        "errors": errors,
+    }
 
 
 async def delete_template(branch, name: str) -> None:

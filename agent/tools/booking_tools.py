@@ -1075,6 +1075,7 @@ async def confirm_booking(
     different_person: bool = False,
     exclude_token_id: UUID | None = None,  # reschedule: ignore the booking being replaced
     preferred_language: str | None = None,  # caller's mapped call language (agent.i18n code)
+    notify_whatsapp: bool = True,
 ) -> dict:
     """Persist the booking: write DB record, create Calendar event, send WhatsApp.
 
@@ -1128,6 +1129,18 @@ async def confirm_booking(
     doctor = result.scalar_one_or_none()
     if doctor is None:
         return {"success": False, "reason": "doctor_not_found"}
+    if doctor.booking_type != 'token' and calendar_service is None:
+        # Slot bookings promise a matching calendar event, so fail before a
+        # patient or Token row is created when Calendar is unavailable. Token
+        # doctors intentionally have no per-patient calendar event.
+        return {
+            'success': False,
+            'reason': 'booking_system_unavailable',
+            'instruction': (
+                'Appointment booking is temporarily unavailable. Do not claim '
+                'that anything was booked; offer to take a message for the clinic.'
+            ),
+        }
 
     # Shared config lock: confirmations for the same doctor remain concurrent,
     # while a doctor-level recurring/mode edit takes the exclusive counterpart.
@@ -1520,7 +1533,7 @@ async def confirm_booking(
         logger.error("audit_write_failed_booking_confirmed", error=str(_audit_err))
 
     # 4. WhatsApp (fire-and-forget — never fails booking)
-    if patient_phone:
+    if patient_phone and notify_whatsapp:
         try:
             await meta_service.send_booking_confirmation(
                 to=patient_phone,

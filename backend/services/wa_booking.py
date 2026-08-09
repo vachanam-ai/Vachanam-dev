@@ -451,6 +451,7 @@ async def confirm(
     calendar_service: Any = None,
     meta_service: Any = None,
     exclude_token_id: uuid.UUID | None = None,
+    notify_whatsapp: bool = True,
 ) -> BookingResult:
     """Book ``slot`` for ``phone`` — the ONLY place chat ever reserves a seat.
 
@@ -523,6 +524,7 @@ async def confirm(
             # as `already_booked` — the patient's own appointment blocking
             # their own move. This is exactly what that parameter is for.
             exclude_token_id=exclude_token_id,
+            notify_whatsapp=notify_whatsapp,
         )
     except Exception as exc:  # noqa: BLE001 — RULE 4: calendar write is part of the booking
         # Nothing half-written: undo the flushed-but-uncommitted Token insert
@@ -737,7 +739,7 @@ async def cancel(db: AsyncSession, branch: Branch, phone: str, token_id: str) ->
                 phone, branch_id=branch.id,
                 patient_name=await _patient_name(db, token),
                 clinic_name=branch.name, doctor_name=doctor or "the doctor",
-                on_date=on_date, at_time=at_time,
+                on_date=on_date, at_time=at_time, token_id=str(token.id),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("wa_cancel_notify_failed", error=str(e)[:150])
@@ -777,7 +779,8 @@ async def reschedule(
         confirm_kwargs.setdefault("patient_gender", old_patient.gender)
 
     result = await confirm(
-        db, branch, phone, slot, exclude_token_id=old.id, **confirm_kwargs
+        db, branch, phone, slot, exclude_token_id=old.id,
+        notify_whatsapp=False, **confirm_kwargs
     )
     if result.token is None:
         return result  # nothing taken, old booking untouched and still valid

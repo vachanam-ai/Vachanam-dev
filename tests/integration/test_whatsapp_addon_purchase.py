@@ -7,6 +7,9 @@ The security shape matters more than the happy path: the amount and the branch
 are both server-derived, so a tampered request can neither buy a cheaper add-on
 nor switch a paid feature on for somebody else's clinic (RULE 1).
 """
+import hashlib
+import hmac
+import json
 import uuid
 
 import httpx
@@ -14,6 +17,7 @@ import pytest
 import pytest_asyncio
 
 from backend.models.schema import Branch, Organization
+from backend.config import settings
 from tests.integration.test_clinic_overview_lists import _auth, _owner
 
 
@@ -98,6 +102,43 @@ async def test_buying_twice_is_refused(client, db):
 
 
 @pytest.mark.asyncio
+async def test_bank_mandate_addon_is_blocked_before_money_is_taken(
+    client, db, monkeypatch
+):
+    from backend.routers import payments
+
+    org, branch = await _clinic(db)
+    org.razorpay_subscription_id = "sub_bank_mandate"
+    org.razorpay_subscription_status = "active"
+    await db.commit()
+
+    class Subscription:
+        @staticmethod
+        def fetch(_subscription_id):
+            return {"payment_method": "emandate"}
+
+    class Order:
+        @staticmethod
+        def create(_payload):
+            raise AssertionError("no order may be created for an immutable mandate")
+
+    provider = type(
+        "Provider",
+        (),
+        {"subscription": Subscription(), "order": Order()},
+    )()
+    monkeypatch.setattr(payments, "_get_client", lambda: provider)
+
+    response = await client.post(
+        "/api/whatsapp-addon/order",
+        headers=_auth(_owner(str(org.id), str(branch.id))),
+    )
+
+    assert response.status_code == 409
+    assert "bank mandate cannot be changed" in response.text
+
+
+@pytest.mark.asyncio
 async def test_verify_enables_only_the_branch_named_by_the_server_set_order(db):
     """RULE 1: the branch comes from the ORDER's notes, never the client. A
     forged verify must not switch a paid feature on for another clinic."""
@@ -142,6 +183,42 @@ async def test_enabling_twice_is_a_no_op(db):
         )
     await db.refresh(br)
     assert br.whatsapp_addon is True
+
+
+@pytest.mark.asyncio
+async def test_signed_webhook_enables_addon_when_browser_never_verifies(
+    client, db, monkeypatch
+):
+    org, branch = await _clinic(db)
+    secret = "addon-webhook-secret"
+    monkeypatch.setattr(settings, "razorpay_webhook_secret", secret)
+    body = {
+        "event": "order.paid",
+        "payload": {
+            "order": {"entity": {"notes": {
+                "kind": "whatsapp_addon",
+                "org_id": str(org.id),
+                "branch_id": str(branch.id),
+            }}},
+            "payment": {"entity": {"id": "pay_addon_webhook_1"}},
+        },
+    }
+    raw = json.dumps(body).encode()
+    signature = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+
+    response = await client.post(
+        "/api/razorpay-webhook",
+        content=raw,
+        headers={
+            "X-Razorpay-Signature": signature,
+            "content-type": "application/json",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "addon_enabled"
+    await db.refresh(branch)
+    assert branch.whatsapp_addon is True
 
 
 @pytest.mark.asyncio

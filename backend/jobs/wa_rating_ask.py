@@ -4,11 +4,9 @@ Daily ~19:00 IST tick: every token marked ATTENDED today at a linked, gated
 branch whose patient hasn't been asked and hasn't rated → one rating_ask
 template (1-5 star quick replies; replies land in wa_actions.handle_rating).
 
-Ask-once: Redis key wa:rated:{token_id} (TTL 7d) marks "asked", set BEFORE
-the send — a duplicate nag is worse than a missed ask (mirror of the
-pre-#152 reminder logic, deliberately inverted: ratings are nice-to-have,
-reminders are not). RULE 1: per-branch scoped query. RULE 9: template carries
-the clinic name only.
+Ask-once is the durable WhatsApp outbox's unique rating:{token_id} event key.
+A provider outage is retried, while repeated job runs cannot nag the patient.
+RULE 1: per-branch scoped query. RULE 9: template carries the clinic name only.
 """
 from __future__ import annotations
 
@@ -17,12 +15,9 @@ from sqlalchemy import and_, select
 
 import backend.database as _db_module
 from backend.models.schema import Branch, Organization, Patient, Rating, Token
-from backend.services import wa_service, wa_templates
+from backend.services import wa_service
 
 logger = structlog.get_logger()
-
-_ASKED_TTL = 7 * 24 * 3600
-
 
 async def run_wa_rating_ask() -> None:
     async with _db_module.AsyncSessionLocal() as db:
@@ -59,22 +54,13 @@ async def run_wa_rating_ask() -> None:
             for token, patient in rows:
                 if not patient.phone:
                     continue
-                if await _already_asked(str(token.id)):
-                    continue
-                # NOT routed through wa_template_registry yet, deliberately.
-                # Vinay's own feedback template takes a review LINK as its only
-                # parameter, and nothing in the schema holds one — the registry
-                # would pad it to "-" and send a review request pointing
-                # nowhere. Needs Branch.review_link + a Settings field first;
-                # until then our own rating_ask template (clinic name + star
-                # quick replies) is the honest send.
-                template, lang, params, buttons = wa_templates.rating_ask(
-                    clinic=branch.name,
+                from backend.services.meta_service import MetaService
+
+                await MetaService().send_rating_request(
+                    patient.phone,
+                    branch_id=branch.id,
                     token_id=str(token.id),
-                    lang=wa_templates.template_lang(patient.preferred_language),
-                )
-                await wa_service.send_template(
-                    branch, patient.phone, template, lang, params, buttons, plan=plan
+                    clinic_name=branch.name,
                 )
 
 
@@ -86,16 +72,3 @@ async def _branch_today(branch):
         return datetime.now(ZoneInfo(branch.timezone or "Asia/Kolkata")).date()
     except Exception:  # noqa: BLE001
         return datetime.now().date()
-
-
-async def _already_asked(token_id: str) -> bool:
-    """SETNX ask-once marker; Redis trouble → treat as asked (skip) — a
-    missed rating ask beats a possible nag storm."""
-    try:
-        from backend.redis_client import get_redis
-
-        r = get_redis()
-        return not await r.set(f"wa:rated:{token_id}", "1", nx=True, ex=_ASKED_TTL)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("wa_rating_dedupe_unavailable", error=str(e)[:120])
-        return True

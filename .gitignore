@@ -62,4 +62,5 @@ agent/vobiz_minimal/recordings/
 dump.rdb
 
 # pytest tmp artifacts from the latency sandbox runs
+.pytest-*/
 .pytest-latency-sandbox-*/

@@ -9,7 +9,7 @@ from backend.config import settings
 from backend.models.schema import (
     Branch, Doctor, Organization, Patient, Rating, Token,
 )
-from backend.services import wa_service
+from backend.services import wa_service, wa_template_registry
 
 
 @pytest.fixture
@@ -23,6 +23,24 @@ def wa_capture(monkeypatch):
         return True
 
     monkeypatch.setattr(wa_service, "send_template", _fake)
+
+    async def _resolve(branch, purpose):
+        names = {
+            "booking_confirm": "booking_confirm",
+            "reminder": "appt_reminder",
+            "feedback": "rating_ask",
+            "rating": "rating_ask",
+            "leave_rebook": "leave_rebook",
+        }
+        params = {
+            "booking_confirm": 5, "reminder": 4, "feedback": 1,
+            "rating": 1, "leave_rebook": 2,
+        }
+        return {
+            "name": names[purpose], "language": "en", "params": params[purpose],
+        } if purpose in names else None
+
+    monkeypatch.setattr(wa_template_registry, "resolve", _resolve)
     return sent
 
 
@@ -71,15 +89,9 @@ async def test_wa_reminder_rides_along_and_failure_is_silent(db, wa_capture, mon
         raise RuntimeError("meta down")
 
     monkeypatch.setattr(wa_service, "send_template", _boom)
-    with pytest.raises(RuntimeError):
-        # helper propagates; the CALLER's try/except owns the guard — verify
-        # the call site wraps it (source contract):
-        await job._send_wa_reminder(db, b, tok, doc, pat)
-    import inspect
-
-    src = inspect.getsource(job.run_pre_appt_reminders)
-    assert "_send_wa_reminder" in src
-    assert "wa_reminder_failed" in src  # guarded call site
+    # Durable delivery owns the failure boundary: the reminder remains queued
+    # and the voice reminder path is never interrupted by Meta.
+    await job._send_wa_reminder(db, b, tok, doc, pat)
 
 
 @pytest.mark.asyncio
@@ -95,7 +107,7 @@ async def test_wa_reminder_skips_solo_and_unlinked(db, wa_capture):
 # ── rating batch ─────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_rating_batch_asks_once_and_skips_rated(db, wa_capture, monkeypatch):
+async def test_rating_batch_asks_once_and_skips_rated(db, wa_capture):
     import backend.jobs.wa_rating_ask as job
 
     b, doc, pat, tok = await _clinic(db)
@@ -104,21 +116,11 @@ async def test_rating_batch_asks_once_and_skips_rated(db, wa_capture, monkeypatc
     db.add(Rating(branch_id=b2.id, token_id=tok2.id, patient_id=tok2.patient_id, score=5))
     await db.commit()
 
-    asked = set()
-
-    async def _once(token_id):
-        if token_id in asked:
-            return True
-        asked.add(token_id)
-        return False
-
-    monkeypatch.setattr(job, "_already_asked", _once)
-
     await job.run_wa_rating_ask()
     first = [s for s in wa_capture if s["template"] == "rating_ask"]
     assert len(first) == 1  # only the unrated attended token
 
-    await job.run_wa_rating_ask()  # second run: ask-once marker holds
+    await job.run_wa_rating_ask()  # second run: durable event key holds
     second = [s for s in wa_capture if s["template"] == "rating_ask"]
     assert len(second) == 1
 

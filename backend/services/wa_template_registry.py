@@ -53,21 +53,27 @@ _APPROVED = "APPROVED"
 # rescheduling belongs to THAT purpose, whatever else it also says.
 PURPOSES: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     "booking_confirm": (
-        "booking_confirm",
+        "vachanam_booking_confirm",
         ("booking_confirm", "appointment_confirm", "confirm", "booking"),
         ("cancel", "reschedul", "resched", "remind", "feedback", "rating", "review"),
     ),
     "reschedule": (
-        "booking_reschedule", ("reschedul", "resched", "moved", "changed"), ("cancel",),
+        "vachanam_booking_reschedule", ("reschedul", "resched", "moved", "changed"), ("cancel",),
     ),
-    "cancel": ("booking_cancel", ("cancel",), ()),
+    "cancel": ("vachanam_booking_cancel", ("cancel",), ()),
     "location": (
-        "clinic_location", ("location", "address", "direction", "map", "reach"), (),
+        "vachanam_clinic_location", ("location", "address", "direction", "map", "reach"), (),
     ),
     "feedback": (
-        "rating_ask", ("feedback", "rating", "review", "experience"), ("cancel",),
+        "vachanam_feedback", ("feedback", "review", "experience"), ("cancel", "rating"),
     ),
-    "reminder": ("appt_reminder", ("remind",), ("cancel", "reschedul")),
+    "reminder": ("vachanam_appt_reminder", ("remind",), ("cancel", "reschedul")),
+    "rating": (
+        "vachanam_rating_ask", ("rating", "rate", "star"), ("feedback", "review"),
+    ),
+    "leave_rebook": (
+        "vachanam_leave_rebook", ("leave_rebook", "unavailable", "rebook"), ("rating",),
+    ),
 }
 
 _CACHE_TTL = 3600  # an hour: templates change when a clinic edits them, rarely

@@ -20,6 +20,7 @@ vi.mock("../../api/client.js", () => ({
   fetchWaSignupConfig: () => Promise.resolve({ configured: false }),
   createWaTemplate: vi.fn(),
   deleteWaTemplate: vi.fn(),
+  installWaSystemTemplates: vi.fn(),
   connectWa: vi.fn(),
   connectWaManual: vi.fn(),
   disconnectWa: vi.fn(),

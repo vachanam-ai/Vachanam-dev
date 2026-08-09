@@ -42,7 +42,7 @@ def test_llm_side_latency_work_stays():
     assert SRC.count('thinking_level="minimal"') >= 2  # #397, turn + routing
     assert 'thinking_level="low"' not in SRC
     assert "async def _prewarm_llm" not in SRC
-    assert '"preemptive_tts": True' in SRC
+    assert '"preemptive_tts": _preemptive_tts_enabled()' in SRC
     assert '"max_retries": 2' in SRC
     assert "await asyncio.gather(" in SRC               # #390 setup concurrency
 
@@ -100,11 +100,13 @@ def test_vertex_mumbai_primary_404(tmp_path, monkeypatch):
     assert opts[0].vertexai is True
     assert opts[0].project == "vachanam-498912"
     assert opts[0].location == "asia-south1"
-    # fallbacks: exactly the pre-#404 global chain
+    # global fallbacks: live-proven implicit-cache primary, then safety pair
     assert opts[1].model == "gemini-3.1-flash-lite"
     assert opts[1].vertexai is False
-    assert opts[2].model == "gemini-2.5-flash"
+    assert opts[2].model == "gemini-3.5-flash-lite"
     assert opts[2].vertexai is False
+    assert opts[3].model == "gemini-2.5-flash"
+    assert opts[3].vertexai is False
 
 
 def test_soniox_region_configurable_406():
@@ -137,5 +139,9 @@ def test_vertex_missing_creds_falls_back_404(tmp_path, monkeypatch):
 
     adapter = ag._build_fallback_llm()
     opts = [llm._opts for llm in adapter._llm_instances]
-    assert [o.model for o in opts] == ["gemini-3.1-flash-lite", "gemini-2.5-flash"]
+    assert [o.model for o in opts] == [
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
+    ]
     assert all(o.vertexai is False for o in opts)

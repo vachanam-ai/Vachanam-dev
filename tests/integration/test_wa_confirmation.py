@@ -7,7 +7,7 @@ from datetime import date, time
 import pytest
 
 from backend.models.schema import Branch, Organization
-from backend.services import wa_service
+from backend.services import wa_service, wa_template_registry
 from backend.services.meta_service import MetaService
 
 
@@ -45,6 +45,17 @@ def wa_capture(monkeypatch):
         return True
 
     monkeypatch.setattr(wa_service, "send_template", _fake_send)
+
+    async def _resolve(branch, purpose):
+        if purpose != "booking_confirm":
+            return None
+        return {
+            "name": "vachanam_booking_confirm",
+            "language": "en",
+            "params": 5,
+        }
+
+    monkeypatch.setattr(wa_template_registry, "resolve", _resolve)
     # meta_service imports wa_service as a module — same object, patch sticks.
     return sent
 
@@ -64,10 +75,10 @@ async def test_confirmation_sends_template(db, wa_capture):
     )
     assert len(wa_capture) == 1
     s = wa_capture[0]
-    assert s["template"] == "booking_confirm" and s["lang"] == "en"
-    assert s["params"][0] == "WaBranch" and s["params"][1] == "Dr S"
-    assert "15 July" in s["params"][2] and "6:00 PM" in s["params"][2]
-    assert "maps.google.com" in s["params"][3]
+    assert s["template"] == "vachanam_booking_confirm" and s["lang"] == "en"
+    assert s["params"] == [
+        "Ravi", "WaBranch", "Dr S", "15 July", "6:00 PM",
+    ]
     assert s["buttons"][0]["id"] == f"rs:{tid}"
     assert s["buttons"][1]["id"] == f"cx:{tid}"
 

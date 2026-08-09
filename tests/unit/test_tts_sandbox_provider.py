@@ -69,6 +69,34 @@ def test_the_sandbox_selection_is_logged():
     assert "tts_provider_cartesia" in inspect.getsource(a._build_cartesia_tts)
 
 
+def test_cartesia_is_prewarmed_off_the_first_reply_path():
+    import agent.livekit_minimal.agent as a
+
+    src = inspect.getsource(a._build_session_tts)
+    cartesia_branch = src.split('== "cartesia"', 1)[1].split(
+        "SONIOX_JP_API_KEY is required", 1
+    )[0]
+    assert "primary.prewarm()" in cartesia_branch
+
+
+def test_cartesia_keeps_its_warm_socket_by_skipping_speculative_tts(monkeypatch):
+    """Tool calls cancel speculative speech; the plugin then discards its
+    pooled WebSocket and the real answer pays a fresh connection handshake."""
+    import agent.livekit_minimal.agent as a
+
+    monkeypatch.setattr(a.settings, "tts_provider", "cartesia")
+    assert a._preemptive_tts_enabled() is False
+    monkeypatch.setattr(a.settings, "tts_provider", "soniox")
+    assert a._preemptive_tts_enabled() is True
+
+
+def test_cartesia_connection_reuse_is_visible_in_runtime_metrics():
+    import agent.livekit_minimal.agent as a
+
+    src = inspect.getsource(a._on_metrics) if hasattr(a, "_on_metrics") else inspect.getsource(a)
+    assert "acquire=%.2fs reused=%s cancelled=%s" in src
+
+
 def test_the_sandbox_registers_under_its_own_agent_name():
     """Two workers sharing a LiveKit agent name are BOTH eligible for the same
     call, so a sandbox using the production name would answer real patients."""

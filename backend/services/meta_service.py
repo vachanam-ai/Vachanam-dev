@@ -46,6 +46,8 @@ _ORDER: dict[str, tuple[str, ...]] = {
     "feedback": ("review_link",),
     "location": ("clinic", "address", "maps"),
     "reminder": ("patient", "doctor", "on_date", "at_time"),
+    "rating": ("clinic",),
+    "leave_rebook": ("doctor", "on_date"),
 }
 
 
@@ -87,6 +89,7 @@ async def send_purpose(
     if branch_id is None or not to:
         logger.info("wa_skipped_unconfigured", reason="no_branch_or_recipient")
         return False
+
     try:
         from backend.services import wa_template_registry
 
@@ -120,6 +123,26 @@ async def send_purpose(
         return False
 
 
+async def _queue_or_send(
+    branch_id, to: str, purpose: str, values: list[str], *,
+    event_key: str | None = None, buttons: list[dict] | None = None,
+) -> bool:
+    try:
+        if event_key:
+            from backend.services.wa_delivery import enqueue
+
+            return await enqueue(
+                branch_id, to, purpose, values,
+                event_key=event_key, buttons=buttons,
+            )
+        return await send_purpose(branch_id, to, purpose, values, buttons)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wa_delivery_enqueue_failed", purpose=purpose, error=str(exc)[:200]
+        )
+        return False
+
+
 class MetaService:
     """WhatsApp notification sender (real — Cloud API via wa_service)."""
 
@@ -131,21 +154,23 @@ class MetaService:
         """Told the patient their appointment moved. Sent from BOTH channels:
         a reschedule agreed on the phone must land in WhatsApp too (Vinay
         2026-08-04: "all confirmations from calls should reflect in whatsapp")."""
-        await send_purpose(
+        await _queue_or_send(
             branch_id, to, "reschedule",
             _values("reschedule", patient=patient_name, clinic=clinic_name,
                     doctor=doctor_name, on_date=on_date or when, at_time=at_time),
+            event_key=(f"reschedule:{token_id}" if token_id else None),
         )
 
     async def send_cancellation_confirmation(
         self, to: str, *, branch_id=None, clinic_name: str = "",
         doctor_name: str = "", when: str = "", patient_name: str = "",
-        on_date: str = "", at_time: str = "",
+        on_date: str = "", at_time: str = "", token_id: str = "",
     ) -> None:
-        await send_purpose(
+        await _queue_or_send(
             branch_id, to, "cancel",
             _values("cancel", patient=patient_name, clinic=clinic_name,
                     doctor=doctor_name, on_date=on_date or when, at_time=at_time),
+            event_key=(f"cancel:{token_id}" if token_id else None),
         )
 
     async def send_feedback_request(
@@ -153,10 +178,62 @@ class MetaService:
         doctor_name: str = "", token_id: str = "", review_link: str = "",
         patient_name: str = "",
     ) -> None:
-        await send_purpose(
+        await _queue_or_send(
             branch_id, to, "feedback",
             _values("feedback", patient=patient_name, clinic=clinic_name,
                     doctor=doctor_name, review_link=review_link),
+            event_key=(f"feedback:{token_id}" if token_id else None),
+        )
+
+    async def send_appointment_reminder(
+        self, to: str, *, branch_id=None, token_id: str = "",
+        reminder_kind: str = "30m", patient_name: str = "",
+        doctor_name: str = "", on_date: str = "", at_time: str = "",
+    ) -> None:
+        buttons = [
+            {"id": f"rs:{token_id}", "title": "Reschedule"},
+            {"id": f"cx:{token_id}", "title": "Cancel"},
+        ] if token_id else []
+        await _queue_or_send(
+            branch_id, to, "reminder",
+            _values(
+                "reminder", patient=patient_name, doctor=doctor_name,
+                on_date=on_date, at_time=at_time,
+            ),
+            event_key=(
+                f"reminder:{reminder_kind}:{token_id}" if token_id else None
+            ),
+            buttons=buttons,
+        )
+
+    async def send_rating_request(
+        self, to: str, *, branch_id=None, token_id: str = "",
+        clinic_name: str = "",
+    ) -> None:
+        buttons = [
+            {"id": f"rate:{token_id}:{score}", "title": f"{score} ⭐"}
+            for score in (1, 2, 3, 4, 5)
+        ] if token_id else []
+        await _queue_or_send(
+            branch_id, to, "rating",
+            _values("rating", clinic=clinic_name),
+            event_key=(f"rating:{token_id}" if token_id else None),
+            buttons=buttons,
+        )
+
+    async def send_leave_rebook(
+        self, to: str, *, branch_id=None, token_id: str = "",
+        doctor_name: str = "", on_date: str = "",
+    ) -> None:
+        buttons = (
+            [{"id": f"rs:{token_id}", "title": "Reschedule"}]
+            if token_id else []
+        )
+        await _queue_or_send(
+            branch_id, to, "leave_rebook",
+            _values("leave_rebook", doctor=doctor_name, on_date=on_date),
+            event_key=(f"leave-rebook:{token_id}" if token_id else None),
+            buttons=buttons,
         )
 
     async def send_booking_confirmation(
@@ -196,7 +273,7 @@ class MetaService:
             branch, plan = row
             if not wa_service.wa_enabled(branch, plan):
                 return
-            template, lang, params, buttons = wa_templates.booking_confirm(
+            _template, _lang, _params, buttons = wa_templates.booking_confirm(
                 clinic=clinic_name,
                 doctor=doctor_name,
                 booking_date=booking_date,
@@ -206,33 +283,20 @@ class MetaService:
                 token_id=token_id or "",
                 lang=wa_templates.template_lang(patient_lang),
             )
-            # Prefer whatever the clinic actually registered and got approved;
-            # `booking_confirm` above is only right for a clinic that happens
-            # to use our name, and Meta rejects an unknown one outright.
-            from backend.services import wa_template_registry
-
-            spec = await wa_template_registry.resolve(branch, "booking_confirm")
-            if spec is not None:
-                template, lang = spec["name"], spec["language"]
-                # Rebuild positionally for the clinic's own template rather
-                # than reusing wa_templates' [clinic, doctor, when, maps]:
-                # their {{1}} is the PATIENT's name, so the old order greeted
-                # the patient by the clinic's name.
-                params = wa_template_registry.fit_params(
-                    _values(
-                        "booking_confirm",
-                        patient=patient_name, clinic=clinic_name,
-                        doctor=doctor_name,
-                        on_date=booking_date.strftime("%d %B"),
-                        at_time=(
-                            appointment_time.strftime("%I:%M %p").lstrip("0")
-                            if appointment_time else f"token {token_number}"
-                        ),
+            await _queue_or_send(
+                branch_id, to, "booking_confirm",
+                _values(
+                    "booking_confirm",
+                    patient=patient_name, clinic=clinic_name,
+                    doctor=doctor_name,
+                    on_date=booking_date.strftime("%d %B"),
+                    at_time=(
+                        appointment_time.strftime("%I:%M %p").lstrip("0")
+                        if appointment_time else f"token {token_number}"
                     ),
-                    spec["params"],
-                )
-            await wa_service.send_template(
-                branch, to, template, lang, params, buttons, plan=plan
+                ),
+                event_key=(f"booking:{token_id}" if token_id else None),
+                buttons=buttons,
             )
         except Exception as e:  # noqa: BLE001 — RULE 4: never surfaces to booking
             logger.warning("wa_confirmation_failed", error=str(e)[:200])

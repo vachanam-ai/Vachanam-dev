@@ -21,7 +21,10 @@ def test_t1_streaming_stt_preemptive_generation_done():
     """#1: the LLM fires on the STT partial (preemptive), not after commit."""
     assert '"preemptive_generation": {' in SRC
     assert '"enabled": True' in SRC
-    assert '"preemptive_tts": True' in SRC
+    # Runtime policy disables speculative TTS only for Cartesia, whose plugin
+    # cannot safely accept the preemptive stream. Soniox production remains on.
+    assert '"preemptive_tts": _preemptive_tts_enabled()' in SRC
+    assert '!= "cartesia"' in SRC
 
 
 def test_t2_partial_llm_tokens_stream_to_tts_done():

@@ -18,6 +18,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.pytest-*/
 .ruff_cache/
 .venv/
 venv/

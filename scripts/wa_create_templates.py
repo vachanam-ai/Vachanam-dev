@@ -1,16 +1,15 @@
-"""Create Vachanam's four WhatsApp templates on a WABA.
+"""Create Vachanam's required WhatsApp templates on a WABA.
 
 Every clinic owns its own WhatsApp Business Account (spec
 2026-08-02-whatsapp-tech-provider-design.md), and templates live PER WABA —
 they do not carry across accounts. So this runs once per clinic at onboarding,
 and once for our own pilot number.
 
-Doing it by hand in WhatsApp Manager is a four-times-per-clinic chance to get a
+Doing it by hand in WhatsApp Manager is a per-clinic chance to get a
 name, a language code or a button count subtly wrong — and every one of those
 mistakes surfaces later as an opaque "template does not exist" or parameter
-mismatch at send time, usually to a real patient. The definitions below are
-generated FROM the same shape backend/services/wa_templates.py sends, so the
-two cannot drift silently.
+mismatch at send time, usually to a real patient. Definitions are imported
+from the website's template installer, so the CLI and UI cannot drift.
 
 Usage:
     python scripts/wa_create_templates.py <WABA_ID>
@@ -31,6 +30,12 @@ from pathlib import Path
 
 import httpx
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.services.wa_template_admin import SYSTEM_TEMPLATE_DEFINITIONS
+
 GRAPH = "https://graph.facebook.com/v21.0"
 
 # Language MUST match what wa_templates.template_lang() sends. English only —
@@ -39,80 +44,30 @@ GRAPH = "https://graph.facebook.com/v21.0"
 LANG = "en"
 
 
-def _quick_reply(*titles: str) -> dict:
+def _payload(spec: dict) -> dict:
+    body = {
+        "type": "BODY",
+        "text": spec["body"],
+        "example": {"body_text": [spec["examples"]]},
+    }
+    components = [body]
+    if spec["buttons"]:
+        components.append({
+            "type": "BUTTONS",
+            "buttons": [
+                {"type": "QUICK_REPLY", "text": title}
+                for title in spec["buttons"]
+            ],
+        })
     return {
-        "type": "BUTTONS",
-        "buttons": [{"type": "QUICK_REPLY", "text": t} for t in titles],
+        "name": spec["name"],
+        "category": "UTILITY",
+        "language": LANG,
+        "components": components,
     }
 
 
-# Body placeholder counts and button counts are load-bearing: Meta validates
-# both at send time. Keep in lockstep with backend/services/wa_templates.py.
-TEMPLATES: list[dict] = [
-    {
-        "name": "booking_confirm",  # {{1}} clinic {{2}} doctor {{3}} when {{4}} location
-        "category": "UTILITY",
-        "language": LANG,
-        "components": [
-            {
-                "type": "BODY",
-                "text": (
-                    "Namaste! Your appointment at {{1}} with Dr {{2}} is confirmed "
-                    "for {{3}}.\nLocation: {{4}}"
-                ),
-                "example": {"body_text": [[
-                    "Venkateshwara Clinic", "Srinivas",
-                    "tomorrow 10:30 AM", "https://maps.google.com/?q=clinic",
-                ]]},
-            },
-            _quick_reply("Reschedule", "Cancel"),
-        ],
-    },
-    {
-        "name": "appt_reminder",  # {{1}} doctor {{2}} time-or-token
-        "category": "UTILITY",
-        "language": LANG,
-        "components": [
-            {
-                "type": "BODY",
-                "text": "Reminder: your appointment with Dr {{1}} is today at {{2}}.",
-                "example": {"body_text": [["Srinivas", "10:30 AM"]]},
-            },
-            _quick_reply("Reschedule", "Cancel"),
-        ],
-    },
-    {
-        "name": "rating_ask",  # {{1}} clinic
-        "category": "UTILITY",
-        "language": LANG,
-        "components": [
-            {
-                "type": "BODY",
-                "text": "How was your visit to {{1}} today? Tap a rating below.",
-                "example": {"body_text": [["Venkateshwara Clinic"]]},
-            },
-            # Five buttons, in this order — wa_templates.rating_ask maps the
-            # tapped index to a 1-5 score.
-            _quick_reply("1", "2", "3", "4", "5"),
-        ],
-    },
-    {
-        "name": "leave_rebook",  # {{1}} doctor {{2}} date
-        "category": "UTILITY",
-        "language": LANG,
-        "components": [
-            {
-                "type": "BODY",
-                "text": (
-                    "Dr {{1}} is unavailable on {{2}}. Tap below and we will "
-                    "rebook your appointment."
-                ),
-                "example": {"body_text": [["Srinivas", "12 August"]]},
-            },
-            _quick_reply("Reschedule"),
-        ],
-    },
-]
+TEMPLATES = [_payload(spec) for spec in SYSTEM_TEMPLATE_DEFINITIONS]
 
 
 def _token() -> str:

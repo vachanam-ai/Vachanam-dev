@@ -764,6 +764,47 @@ def test_empty_stays_empty_so_the_fallback_fires():
     assert wa_agent._whole_sentences(None) == ""
 
 
+@pytest.mark.parametrize("reply", [
+    "You're booked for tomorrow at 11 am.",
+    "Aapka appointment 11 baje book kar diya.",
+    "Mee appointment 11 ki marchestanu.",
+])
+def test_completed_mutation_claims_are_detected_across_languages(reply):
+    assert wa_agent._claims_a_mutation(reply)
+
+
+@pytest.mark.asyncio
+async def test_model_cannot_claim_a_booking_change_without_the_tool(db, monkeypatch):
+    _org, br = await _clinic(db)
+
+    class _Resp:
+        function_calls = []
+        text = "Aapka appointment 11 baje badal diya."
+
+    async def fake_model(system, contents, tools):
+        return _Resp()
+
+    monkeypatch.setattr(wa_agent, "_call_model", fake_model)
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+    sent = []
+
+    async def fake_send(branch, to, text, plan=None):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(wa_service, "send_text", fake_send)
+    await wa_agent.handle(
+        db, br, "clinic", CALLER,
+        "mera appointment 11 baje kar do",
+    )
+
+    assert sent == [
+        "Appointment abhi change nahi hua hai. Kaunsa appointment aur "
+        "naya time batayiye."
+    ]
+    assert "badal diya" not in sent[0].lower()
+
+
 # ── a promised callback must be a real one ───────────────────────────────────
 
 @pytest.mark.parametrize("reply", [

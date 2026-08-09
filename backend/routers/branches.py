@@ -1202,6 +1202,34 @@ async def create_whatsapp_template(
     return result
 
 
+@router.post("/{branch_id}/whatsapp/templates/system")
+@audit("branch.wa_system_templates_installed", resource_type="branch")
+async def install_whatsapp_system_templates(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Idempotently install the patient-event templates on this clinic WABA."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    from backend.services import wa_template_admin, wa_template_registry
+
+    try:
+        result = await wa_template_admin.ensure_system_templates(branch)
+    except wa_template_admin.TemplateAdminError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    await wa_template_registry.invalidate(branch.id)
+    request.state.audit_resource_id = branch_id
+    return result
+
+
 @router.delete("/{branch_id}/whatsapp/templates/{name}")
 @audit("branch.wa_template_deleted", resource_type="branch")
 async def delete_whatsapp_template(
@@ -1211,7 +1239,7 @@ async def delete_whatsapp_template(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """org_admin only. The four system templates are wired into live send
+    """org_admin only. Required system templates are wired into live send
     paths and can never be deleted here (409) — see wa_template_admin."""
     await assert_branch_access(current_user, branch_id, db)
     _require_org_admin(current_user)
@@ -1439,6 +1467,28 @@ async def get_whatsapp_connection(
     }
 
 
+async def _auto_install_wa_system_templates(branch) -> dict:
+    """Best-effort onboarding step; the explicit website button can retry."""
+    try:
+        from backend.services import wa_template_admin, wa_template_registry
+
+        result = await wa_template_admin.ensure_system_templates(branch)
+        await wa_template_registry.invalidate(branch.id)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "wa_system_template_install_failed",
+            branch_id=str(branch.id), error=str(exc)[:160],
+        )
+        return {
+            "created": [], "existing": [],
+            "errors": [{
+                "name": "system",
+                "detail": "Retry from the WhatsApp templates page.",
+            }],
+        }
+
+
 @router.post("/{branch_id}/whatsapp/connect", status_code=201)
 @audit("branch.wa_connected", resource_type="branch")
 async def connect_whatsapp(
@@ -1514,6 +1564,7 @@ async def connect_whatsapp(
     request.state.audit_branch_id = branch_id
     request.state.audit_metadata = {"waba_id": body.waba_id, "status": branch.wa_status}
 
+    result["templates"] = await _auto_install_wa_system_templates(branch)
     logger.info(
         "wa_branch_connected", branch_id=branch_id, waba_id=body.waba_id,
         status=branch.wa_status, phone_registered=result.get("registered"),
@@ -1525,6 +1576,7 @@ async def connect_whatsapp(
         "wa_verified_name": branch.wa_verified_name,
         "wa_connected_at": branch.wa_connected_at.isoformat() if branch.wa_connected_at else None,
         "phone_registered": result.get("registered"),
+        "templates": result.get("templates"),
     }
 
 
@@ -1605,6 +1657,7 @@ async def connect_whatsapp_manual(
     request.state.audit_branch_id = branch_id
     request.state.audit_metadata = {"waba_id": body.waba_id, "status": branch.wa_status}
 
+    result["templates"] = await _auto_install_wa_system_templates(branch)
     logger.info(
         "wa_branch_connected_manual", branch_id=branch_id, waba_id=body.waba_id,
         status=branch.wa_status, phone_registered=result.get("registered"),
@@ -1616,6 +1669,7 @@ async def connect_whatsapp_manual(
         "wa_verified_name": branch.wa_verified_name,
         "wa_connected_at": branch.wa_connected_at.isoformat() if branch.wa_connected_at else None,
         "phone_registered": result.get("registered"),
+        "templates": result.get("templates"),
     }
 
 

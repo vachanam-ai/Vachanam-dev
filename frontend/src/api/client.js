@@ -87,8 +87,12 @@ export const changePlan = (plan) =>
   api.post("/api/plan-change", { plan }).then((r) => r.data);
 export const createPaymentOrder = (plan) =>
   api.post("/api/create-order", { plan }).then((r) => r.data);
+export const createAutopaySubscription = (plan) =>
+  api.post("/api/create-subscription", { plan }).then((r) => r.data);
 export const verifyPayment = (payload) =>
   api.post("/api/verify-payment", payload).then((r) => r.data);
+export const verifyAutopaySubscription = (payload) =>
+  api.post("/api/verify-subscription", payload).then((r) => r.data);
 export const saveGstin = (gstin) =>
   api.post("/api/billing/gstin", { gstin }).then((r) => r.data);
 
@@ -201,6 +205,8 @@ export const fetchWaTemplates = (branchId) =>
   api.get(`/branches/${branchId}/whatsapp/templates`).then((r) => r.data);
 export const createWaTemplate = (branchId, payload) =>
   api.post(`/branches/${branchId}/whatsapp/templates`, payload).then((r) => r.data);
+export const installWaSystemTemplates = (branchId) =>
+  api.post(`/branches/${branchId}/whatsapp/templates/system`).then((r) => r.data);
 export const deleteWaTemplate = (branchId, name) =>
   api.delete(`/branches/${branchId}/whatsapp/templates/${encodeURIComponent(name)}`).then((r) => r.data);
 // ── WhatsApp Embedded Signup — clinic connects its OWN WABA in one click ──

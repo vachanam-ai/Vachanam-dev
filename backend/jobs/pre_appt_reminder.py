@@ -183,10 +183,6 @@ async def run_pre_appt_reminders() -> None:
     from backend.config import settings as _settings
     from backend.jobs import wake_gate
 
-    if not _settings.voice_plane_configured:
-        logger.warning("pre_appt_reminder_skipped_no_voice_plane")  # M15
-        return
-
     # #299: nothing is due yet — answer from Redis and leave Postgres asleep.
     # Fail-open: an unknown/absent key or any Redis trouble runs the DB pass.
     if not await wake_gate.should_run_scheduled("reminders"):
@@ -269,9 +265,18 @@ async def run_pre_appt_reminders() -> None:
                 # (dispatch ok but the commit below fails) is acceptable — the
                 # call itself re-confirms with the patient — and far better than a
                 # silently dropped reminder.
+                await _send_wa_reminder(
+                    db, branch, token, doctor, patient, reminder_kind="30m"
+                )
                 plan = plan_by_branch_id.get(branch.id)
-                if _plan_has_voice(plan):
+                if _plan_has_voice(plan) and _settings.voice_plane_configured:
                     ok = await _dispatch_reminder_call(branch, token, doctor, patient)
+                elif _plan_has_voice(plan):
+                    ok = False
+                    logger.warning(
+                        "reminder_call_skipped_no_voice_plane",
+                        branch_id=str(branch.id), token_id=str(token.id),
+                    )
                 else:
                     # WA MVP1 Task 7: `settings.voice_plane_configured` describes
                     # OUR platform, not this clinic's plan — without this branch
@@ -293,10 +298,6 @@ async def run_pre_appt_reminders() -> None:
                     # (spec 2026-07-13 — not replacing it yet). Independent
                     # guard: a WhatsApp hiccup never touches the voice path
                     # (RULE 4/8); no-ops unless branch linked + plan gated.
-                    try:
-                        await _send_wa_reminder(db, branch, token, doctor, patient)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("wa_reminder_failed", error=str(e)[:150])
 
         # The day-before pass. Deliberately a SECOND loop rather than a widened
         # window on the first: the two reminders have different eligibility
@@ -342,14 +343,19 @@ async def run_pre_appt_reminders() -> None:
                     await db.commit()
                     continue
 
+                await _send_wa_reminder(
+                    db, branch, token, doctor, patient, reminder_kind="24h"
+                )
                 plan = plan_by_branch_id.get(branch.id)
-                if _plan_has_voice(plan):
+                if _plan_has_voice(plan) and _settings.voice_plane_configured:
                     # Same flip-AFTER-dispatch discipline as the 30-minute pass:
                     # a failed dispatch must retry on the next tick, not be
                     # silently swallowed by an eagerly-set flag.
                     ok = await _dispatch_reminder_call(branch, token, doctor, patient)
-                else:
+                elif not _plan_has_voice(plan):
                     ok = True
+                else:
+                    ok = False
                 if ok:
                     token.reminder_24h_sent = True
                     await db.commit()
@@ -360,29 +366,26 @@ async def run_pre_appt_reminders() -> None:
         await wake_gate.set_next_at("reminders", await _next_due_epoch(db, branches))
 
 
-async def _send_wa_reminder(db, branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> None:
-    """WhatsApp appt_reminder template next to the voice reminder (WA T8)."""
-    from sqlalchemy import select as _select
+async def _send_wa_reminder(
+    db, branch: Branch, token: Token, doctor: Doctor, patient: Patient,
+    *, reminder_kind: str = "30m",
+) -> None:
+    """Queue the written reminder independently from the outbound call."""
+    from backend.services.meta_service import MetaService
 
-    from backend.models.schema import Organization
-    from backend.services import wa_service, wa_templates
-
-    plan = (
-        await db.execute(
-            _select(Organization.plan).where(Organization.id == branch.org_id)
-        )
-    ).scalar_one_or_none()
-    if not wa_service.wa_enabled(branch, plan):
-        return
-    template, lang, params, buttons = wa_templates.appt_reminder(
-        doctor=doctor.name,
-        appointment_time=token.appointment_time,
-        token_number=token.token_number,
-        token_id=str(token.id),
-        lang=wa_templates.template_lang(patient.preferred_language),
+    when = (
+        token.appointment_time.strftime("%I:%M %p").lstrip("0")
+        if token.appointment_time else f"token {token.token_number}"
     )
-    await wa_service.send_template(
-        branch, patient.phone, template, lang, params, buttons, plan=plan
+    await MetaService().send_appointment_reminder(
+        patient.phone,
+        branch_id=branch.id,
+        token_id=str(token.id),
+        reminder_kind=reminder_kind,
+        patient_name=patient.name,
+        doctor_name=doctor.name,
+        on_date=token.date.strftime("%d %B"),
+        at_time=when,
     )
 
 

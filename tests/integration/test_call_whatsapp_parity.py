@@ -148,7 +148,7 @@ async def test_rescheduling_never_also_says_cancelled(db, redis, sends):
     )
     result = await wa_booking.reschedule(
         db, br, CALLER, appt, slot,
-        calendar_service=StubCalendar(), meta_service=StubMeta(),
+        calendar_service=StubCalendar(), meta_service=meta_service.MetaService(),
     )
     assert result.token is not None
 

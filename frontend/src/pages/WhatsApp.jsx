@@ -9,6 +9,7 @@ import {
   deleteWaTemplate,
   fetchBranchSettings,
   fetchWaTemplates,
+  installWaSystemTemplates,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 
@@ -18,6 +19,10 @@ import { useAuth } from "../hooks/useAuth.jsx";
 // on the left, a live phone preview on the right.
 const SYSTEM_TEMPLATES = new Set([
   "booking_confirm", "appt_reminder", "rating_ask", "leave_rebook",
+  "vachanam_booking_confirm", "vachanam_booking_reschedule",
+  "vachanam_booking_cancel", "vachanam_appt_reminder",
+  "vachanam_clinic_location", "vachanam_feedback",
+  "vachanam_rating_ask", "vachanam_leave_rebook",
 ]);
 
 const STATUS_CHIP = {
@@ -109,15 +114,44 @@ export default function WhatsApp() {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not submit this template"),
   });
 
+  const installSystem = useMutation({
+    mutationFn: () => installWaSystemTemplates(branchId),
+    onSuccess: (result) => {
+      qc.invalidateQueries({ queryKey: ["wa-templates", branchId] });
+      const failed = result?.errors?.length ?? 0;
+      if (failed) {
+        toast.error(
+          failed + " required template" + (failed === 1 ? "" : "s") + " need retry.",
+        );
+      } else if (result?.created?.length) {
+        toast.success("Required patient templates submitted to Meta for review.");
+      } else {
+        toast.success("All required patient templates are already installed.");
+      }
+    },
+    onError: (e) => toast.error(
+      e?.response?.data?.detail ?? "Could not install required templates",
+    ),
+  });
+
   const notConnected = branch && branch.whatsapp_status !== "connected";
 
   return (
     <div className="space-y-6">
       <PageHeader eyebrow="WhatsApp" title="Message templates"
         sub="Meta reviews every template before it can be sent to patients — usually minutes to a day.">
-        <button type="button" className="btn-primary" onClick={() => setCreating(!creating)}>
-          {creating ? "Cancel" : "+ New template"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {!notConnected && (
+            <button type="button" className="btn-secondary"
+              disabled={installSystem.isPending}
+              onClick={() => installSystem.mutate()}>
+              {installSystem.isPending ? "Installing..." : "Install required templates"}
+            </button>
+          )}
+          <button type="button" className="btn-primary" onClick={() => setCreating(!creating)}>
+            {creating ? "Cancel" : "+ New template"}
+          </button>
+        </div>
       </PageHeader>
 
       {/* Connection first: a template the clinic can't submit is a dead end,
@@ -148,7 +182,7 @@ export default function WhatsApp() {
           )}
           {!isLoading && !error && templates.length === 0 && (
             <p className="p-5 font-ui text-sm text-slate">
-              No templates yet — the four booking templates appear here once your
+              No templates yet — the required patient templates appear here once your
               WhatsApp account is connected.
             </p>
           )}

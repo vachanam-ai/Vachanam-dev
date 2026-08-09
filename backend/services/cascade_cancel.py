@@ -297,7 +297,7 @@ async def _send_wa_leave_pings(
     if not token_snapshots:
         return
     from backend.models.schema import Branch, Doctor, Organization, Patient
-    from backend.services import wa_service, wa_templates
+    from backend.services import wa_service
 
     row = (
         await db.execute(
@@ -322,12 +322,12 @@ async def _send_wa_leave_pings(
         ).scalar_one_or_none()
         if patient is None or not patient.phone:
             continue
-        template, lang, params, buttons = wa_templates.leave_rebook(
-            doctor=doctor.name if doctor else "the doctor",
-            on_date=snap["date"],
+        from backend.services.meta_service import MetaService
+
+        await MetaService().send_leave_rebook(
+            patient.phone,
+            branch_id=branch.id,
+            doctor_name=doctor.name if doctor else "the doctor",
+            on_date=snap["date"].strftime("%d %B"),
             token_id=str(snap["id"]),
-            lang=wa_templates.template_lang(patient.preferred_language),
-        )
-        await wa_service.send_template(
-            branch, patient.phone, template, lang, params, buttons, plan=plan
         )

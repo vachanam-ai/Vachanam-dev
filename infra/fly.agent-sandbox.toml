@@ -1,4 +1,4 @@
-# TTS SANDBOX — Cartesia instead of Soniox (Vinay 2026-08-07).
+# VOICE LATENCY SANDBOX — Soniox STT + Cartesia TTS (Vinay 2026-08-09).
 #
 # A SEPARATE Fly app running the SAME code as production with two env vars
 # flipped. Nothing here can affect the live line:
@@ -9,7 +9,7 @@
 #                             would make both workers eligible for the same
 #                             call, which is how a "sandbox" ends up answering
 #                             real patients.
-#   * TTS_PROVIDER=cartesia -> the only behavioural difference under test
+#   * explicit provider env -> Soniox/Cartesia only inside this worker
 #
 # Deploy:  flyctl deploy --config infra/fly.agent-sandbox.toml --remote-only
 # Secrets: flyctl secrets set -a vachanam-agent-sandbox CARTESIA_API_KEY=... \
@@ -18,19 +18,25 @@
 # Routing a real number to it is a DELIBERATE, reversible step — see
 # docs/runbooks/tts-cartesia-sandbox.md. It is not done by deploying this.
 app = "vachanam-agent-sandbox"
-# Mumbai had NO CAPACITY for a 4x/4GB machine on 2026-08-07 (twice), so the
-# sandbox sits in Singapore. This costs ~40-60ms of extra network latency
-# versus prod, so compare VOICE QUALITY here, not response times — for
-# latency, read prod's own lat_* metrics instead.
-primary_region = "sin"
+# Co-located in Mumbai with LiveKit India West and Vertex asia-south1.
+primary_region = "bom"
 
 [build]
   dockerfile = "Dockerfile.agent"
 
 [env]
-  APP_ENV = "production"     # same code path as prod; only TTS differs
+  APP_ENV = "production"     # same code path; provider switches are explicit
   LOG_LEVEL = "info"
+  # Pulse Telugu live canary failed silent after nine turns while still
+  # consuming audio. Keep the proven Soniox recognizer; isolate Cartesia TTS.
+  STT_PROVIDER = "soniox"
   TTS_PROVIDER = "cartesia"
+  CARTESIA_MODEL = "sonic-3-2026-01-12"
+  # Native Telugu receptionist voice: Ramya - Graceful Host.
+  CARTESIA_VOICE = "cf061d8b-a752-4865-81a2-57570a6e0565"
+  VOICE_ENDPOINTING_MIN_DELAY_S = "0"
+  VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"
+  VOICE_NUM_IDLE_PROCESSES = "1"
   LIVEKIT_AGENT_NAME = "vachanam-sandbox"
   # The sandbox must never send patients real messages or drive the follow-up
   # loop — it exists to be listened to.
@@ -39,9 +45,9 @@ primary_region = "sin"
 [deploy]
   strategy = "immediate"     # a sandbox has no availability promise to keep
 
-# Same shape as prod so latency comparisons mean something: the job process
-# loads the same models and needs the same headroom (2x/2GB crash-looped).
+# The earlier 2x/2GB sandbox crash was memory pressure, not CPU starvation.
+# Keep 4GB headroom; use 2 shared CPUs because Fly BOM has no 4x capacity.
 [[vm]]
   cpu_kind = "shared"
-  cpus = 4
+  cpus = 2
   memory_mb = 4096

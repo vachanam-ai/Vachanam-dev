@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     # #406: Japan measured 4ms from Fly bom vs 230ms to the US endpoint.
     soniox_jp_stt_ws_url: str = "wss://stt-rt.jp.soniox.com/transcribe-websocket"
     sarvam_api_key: str = ""      # optional Sarvam Saaras v3 STT fallback
+    smallest_api_key: str = ""    # Pulse STT sandbox; production remains Soniox
+    smallest_model: str = "pulse"
+    smallest_eou_timeout_ms: int = 100
     # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
     # conservative production canary; 0 restores Soniox's default behavior.
     # Tune one control at a time on real Telugu calls (0..3).
@@ -30,6 +33,11 @@ class Settings(BaseSettings):
     stt_provider: str = 'auto'
     openai_api_key: str
     gemini_api_key: str
+    llm_provider: str = "gemini"
+    livekit_inference_model: str = "google/gemma-4-31b-it"
+    voice_endpointing_min_delay_s: float = 0.05
+    voice_endpointing_max_delay_s: float = 0.30
+    voice_num_idle_processes: int = 4
 
     # TTS — Soniox tts-rt is the sole provider. The Japan key serves STT + TTS.
     # Legacy branch voice IDs safely resolve to soniox_tts_default_voice.
@@ -43,7 +51,7 @@ class Settings(BaseSettings):
     # explicitly sets TTS_PROVIDER=cartesia (the sandbox Fly app does).
     tts_provider: str = "soniox"
     cartesia_api_key: str = ""
-    cartesia_model: str = "sonic-2"
+    cartesia_model: str = "sonic-3-2026-01-12"
     cartesia_voice: str = ""          # Cartesia voice id; blank = plugin default
     cartesia_sample_rate: int = 24000
     soniox_tts_sample_rate: int = 24000
@@ -272,9 +280,40 @@ class Settings(BaseSettings):
     @classmethod
     def _valid_stt_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        if normalized not in {'auto', 'soniox', 'sarvam'}:
-            raise ValueError('must be auto, soniox, or sarvam')
+        if normalized == 'pulse':
+            normalized = 'smallest'
+        if normalized not in {'auto', 'soniox', 'sarvam', 'smallest'}:
+            raise ValueError('must be auto, soniox, sarvam, or smallest')
         return normalized
+
+    @field_validator('smallest_eou_timeout_ms')
+    @classmethod
+    def _valid_smallest_eou_timeout(cls, value: int) -> int:
+        if not 100 <= value <= 10000:
+            raise ValueError('must be between 100 and 10000 milliseconds')
+        return value
+
+    @field_validator('llm_provider')
+    @classmethod
+    def _valid_llm_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {'gemini', 'livekit'}:
+            raise ValueError('must be gemini or livekit')
+        return normalized
+
+    @field_validator('voice_endpointing_min_delay_s', 'voice_endpointing_max_delay_s')
+    @classmethod
+    def _valid_voice_endpointing_delay(cls, value: float) -> float:
+        if not 0 <= value <= 3:
+            raise ValueError('must be between 0 and 3 seconds')
+        return value
+
+    @field_validator('voice_num_idle_processes')
+    @classmethod
+    def _valid_voice_idle_processes(cls, value: int) -> int:
+        if not 1 <= value <= 16:
+            raise ValueError('must be between 1 and 16')
+        return value
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

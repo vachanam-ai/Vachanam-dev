@@ -14,13 +14,15 @@ def test_local_vad_boundary_is_at_most_60ms_with_quality_guard_retained():
     assert "settings.soniox_manual_finalize_delay_ms" in SRC
     assert "if not still_silent()" in SRC
     assert "voice_topology worker_region=%s" in SRC
-    assert "llm=vertex-asia-south1 stt=soniox-jp tts=soniox-jp" in SRC
+    assert "vertex-asia-south1+global-fallback" in SRC
+    assert "llm=%s stt=%s tts=%s" in SRC
 
 
 def test_llm_and_tts_run_preemptively_together():
     assert '"preemptive_generation": {' in SRC
     assert '"enabled": True' in SRC
-    assert '"preemptive_tts": True' in SRC
+    assert '"preemptive_tts": _preemptive_tts_enabled()' in SRC
+    assert ag._preemptive_tts_enabled() is True
     assert '"max_retries": 2' in SRC
 
 

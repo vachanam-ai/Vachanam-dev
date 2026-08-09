@@ -80,7 +80,7 @@ async def test_token_booking_succeeds_without_calendar(clinic, db, redis):
         patient_phone="+919666443401", complaint="fever", booking_date=day,
         token_number=a["token_number"], followup_consent=False, patient_age=30,
         appointment_time=None, source="voice", db=db,
-        calendar_service=_RaisingCal(), meta_service=_Meta(),
+        calendar_service=None, meta_service=_Meta(),
     )
     assert res["success"], res
     tok = (

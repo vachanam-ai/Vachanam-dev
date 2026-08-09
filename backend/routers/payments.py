@@ -10,6 +10,7 @@ Key secret never leaves the server. Frontend receives only razorpay_key_id (publ
 import hashlib
 import hmac
 import re
+import asyncio
 import uuid as _uuid
 from datetime import date, datetime, timezone
 
@@ -99,6 +100,220 @@ class CreateOrderResponse(BaseModel):
     amount: int
     currency: str
     key_id: str
+
+
+class CreateSubscriptionResponse(BaseModel):
+    subscription_id: str
+    amount: int
+    currency: str = "INR"
+    key_id: str
+
+
+class VerifySubscriptionRequest(BaseModel):
+    razorpay_subscription_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+class VerifySubscriptionResponse(BaseModel):
+    verified: bool
+    payment_id: str
+    subscription_id: str
+
+
+def _autopay_enabled(org: Organization) -> bool:
+    return bool(
+        org.razorpay_subscription_id
+        and getattr(org, "razorpay_subscription_status", None)
+        in {"authenticated", "active", "pending"}
+    )
+
+
+async def _recurring_plan(
+    db: AsyncSession, client, *, plan: str, amount_paise: int
+) -> str:
+    """Find or create the immutable Razorpay monthly plan for this exact price."""
+    from backend.models.schema import RazorpayPlanMap
+
+    pricing_key = f"{plan}:{amount_paise}:monthly:v1"
+    # Two clinics can select the same price at the same instant. Serialize by
+    # pricing key before the provider call, otherwise both create immutable
+    # Razorpay plans and one then loses the unique DB insert race.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"razorpay-plan:{pricing_key}"},
+    )
+    row = (
+        await db.execute(
+            select(RazorpayPlanMap).where(
+                RazorpayPlanMap.pricing_key == pricing_key
+            )
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        return row.razorpay_plan_id
+
+    provider = await asyncio.to_thread(
+        client.plan.create,
+        {
+            "period": "monthly",
+            "interval": 1,
+            "item": {
+                "name": f"Vachanam {plan.title()}",
+                "amount": amount_paise,
+                "currency": "INR",
+                "description": "Vachanam clinic subscription",
+            },
+            "notes": {"pricing_key": pricing_key, "app_plan": plan},
+        },
+    )
+    db.add(
+        RazorpayPlanMap(
+            pricing_key=pricing_key,
+            plan=plan,
+            amount_paise=amount_paise,
+            razorpay_plan_id=provider["id"],
+        )
+    )
+    await db.commit()
+    return provider["id"]
+
+
+@router.post(
+    "/create-subscription",
+    response_model=CreateSubscriptionResponse,
+    dependencies=[Depends(create_order_limit)],
+)
+async def create_autopay_subscription(
+    req: CreateOrderRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CreateSubscriptionResponse:
+    """Create a real recurring mandate, not a one-time order labelled renewal."""
+    if current_user.role != "org_admin" or not current_user.org_id:
+        raise HTTPException(status_code=403, detail="Only a clinic owner can enable autopay")
+    plan = req.plan.strip().lower()
+    if plan not in PLANS:
+        raise HTTPException(status_code=422, detail="Unknown plan")
+
+    org = await _load_my_org(current_user, db)
+    if _autopay_enabled(org):
+        raise HTTPException(status_code=409, detail="Autopay is already enabled")
+
+    wa_addon = await _org_wa_addon(db, org.id)
+    breakdown = subscription_order_breakdown(
+        plan, 0, 0,
+        subscription_started_at=org.subscription_started_at,
+        whatsapp_addon=wa_addon,
+    )
+    client = _get_client()
+    if org.razorpay_subscription_id:
+        try:
+            existing = await asyncio.to_thread(
+                client.subscription.fetch, org.razorpay_subscription_id
+            )
+            existing_status = existing.get("status") or "created"
+            existing_notes = existing.get("notes") or {}
+            if (
+                existing_status == "created"
+                and existing_notes.get("plan") == plan
+            ):
+                return CreateSubscriptionResponse(
+                    subscription_id=org.razorpay_subscription_id,
+                    amount=breakdown["amount_paise"],
+                    key_id=settings.razorpay_key_id,
+                )
+            if existing_status in {"cancelled", "completed", "expired"}:
+                org.razorpay_subscription_id = None
+                org.razorpay_subscription_status = existing_status
+                await db.commit()
+        except Exception as exc:
+            logger.warning(
+                "razorpay_existing_subscription_fetch_failed",
+                error=str(exc)[:160],
+            )
+    provider_plan_id = await _recurring_plan(
+        db, client, plan=plan, amount_paise=breakdown["amount_paise"]
+    )
+    payload = {
+        "plan_id": provider_plan_id,
+        "total_count": 120,
+        "quantity": 1,
+        "customer_notify": True,
+        "notes": {
+            "org_id": str(org.id),
+            "plan": plan,
+            "amount_paise": str(breakdown["amount_paise"]),
+        },
+        "notify_info": {
+            "notify_email": org.owner_email,
+            "notify_phone": org.owner_phone,
+        },
+    }
+    last = await _latest_cycle(db, org.id)
+    if last is not None and last.cycle_end > date.today():
+        payload["start_at"] = int(
+            datetime(
+                last.cycle_end.year, last.cycle_end.month, last.cycle_end.day,
+                tzinfo=timezone.utc,
+            ).timestamp()
+        )
+    try:
+        subscription = await asyncio.to_thread(client.subscription.create, payload)
+    except razorpay.errors.BadRequestError as exc:
+        logger.error("razorpay_subscription_rejected", error=str(exc)[:200])
+        raise HTTPException(status_code=400, detail="Autopay mandate was rejected")
+    except Exception as exc:
+        logger.error("razorpay_subscription_create_failed", error=str(exc)[:200])
+        raise HTTPException(status_code=502, detail="Could not create autopay mandate")
+
+    org.razorpay_subscription_id = subscription["id"]
+    org.razorpay_subscription_status = subscription.get("status") or "created"
+    await db.commit()
+    return CreateSubscriptionResponse(
+        subscription_id=subscription["id"],
+        amount=breakdown["amount_paise"],
+        key_id=settings.razorpay_key_id,
+    )
+
+
+@router.post(
+    "/verify-subscription",
+    response_model=VerifySubscriptionResponse,
+    dependencies=[Depends(verify_payment_limit)],
+)
+async def verify_autopay_subscription(
+    req: VerifySubscriptionRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> VerifySubscriptionResponse:
+    """Verify Checkout's payment|subscription HMAC and bind it to this org."""
+    org = await _load_my_org(current_user, db)
+    if org.razorpay_subscription_id != req.razorpay_subscription_id:
+        raise HTTPException(status_code=403, detail="Subscription does not belong to this clinic")
+    expected = hmac.new(
+        settings.razorpay_key_secret.encode(),
+        f"{req.razorpay_payment_id}|{req.razorpay_subscription_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, req.razorpay_signature):
+        raise HTTPException(status_code=400, detail="Invalid subscription signature")
+
+    client = _get_client()
+    subscription = await asyncio.to_thread(
+        client.subscription.fetch, req.razorpay_subscription_id
+    )
+    notes = subscription.get("notes") or {}
+    if str(notes.get("org_id")) != str(org.id):
+        raise HTTPException(status_code=403, detail="Subscription attribution failed")
+    org.razorpay_subscription_status = subscription.get("status") or "authenticated"
+    org.razorpay_customer_id = subscription.get("customer_id") or org.razorpay_customer_id
+    await db.commit()
+    return VerifySubscriptionResponse(
+        verified=True,
+        payment_id=req.razorpay_payment_id,
+        subscription_id=req.razorpay_subscription_id,
+    )
 
 
 class VerifyPaymentRequest(BaseModel):
@@ -246,6 +461,8 @@ class PlanInfo(BaseModel):
     whatsapp_included_pending: bool = False
     # End-of-cycle cancellation: the date service stops, or None.
     cancellation_effective: str | None = None
+    autopay_enabled: bool = False
+    autopay_status: str | None = None
 
 
 class PlanChangeRequest(BaseModel):
@@ -342,6 +559,8 @@ def _plan_info(org: Organization, last_cycle=None, wa_addon: bool = False) -> "P
 
     _base, _is_offer = effective_price(org.plan, org.subscription_started_at)
     return PlanInfo(
+        autopay_enabled=_autopay_enabled(org),
+        autopay_status=getattr(org, "razorpay_subscription_status", None),
         next_base_rupees=_base,
         is_offer=_is_offer,
         # Three distinct states, because offering to SELL a clinic something
@@ -354,6 +573,10 @@ def _plan_info(org: Organization, last_cycle=None, wa_addon: bool = False) -> "P
         pending_plan=org.pending_plan,
         pending_plan_effective=(
             org.pending_plan_effective.isoformat() if org.pending_plan_effective else None
+        ),
+        cancellation_effective=(
+            org.cancellation_effective.isoformat()
+            if org.cancellation_effective else None
         ),
         cycle_end=last_cycle.cycle_end.isoformat() if last_cycle else None,
         # The cycle row is created the moment the webhook confirms payment —
@@ -489,10 +712,7 @@ async def billing_summary(
         gst_amount=gst,
         total_next=int(round(subtotal + gst)),
         is_offer=bool(is_offer),
-        # Autopay is designed but not built (spec 2026-08-07). The field exists
-        # so the page can render the real state the day it ships, instead of
-        # the UI having to guess.
-        autopay_enabled=False,
+        autopay_enabled=_autopay_enabled(org),
         cancellation_effective=(
             org.cancellation_effective.isoformat()
             if org.cancellation_effective else None
@@ -515,37 +735,29 @@ async def billing_summary(
     )
 
 
-async def _enable_whatsapp_addon(db: "AsyncSession", notes: dict, payment_id: str) -> None:
-    """Switch WhatsApp on for the branch the ORDER named.
-
-    The branch id comes from the server-set order notes, never the client, so a
-    forged verify call cannot enable a paid feature on another clinic's branch
-    (RULE 1). Idempotent: Razorpay redelivers, and a second verify of the same
-    order must be a no-op rather than a second charge's worth of state.
-    """
-    from backend.models.schema import Branch
+async def _enable_whatsapp_addon(
+    db: "AsyncSession", notes: dict, payment_id: str
+) -> str:
+    """Enable the paid branch and keep an existing mandate recurring."""
+    from backend.models.schema import AddonPurchase, Branch
+    from backend.services.billing_math import whatsapp_addon_order_breakdown
 
     branch_id = (notes or {}).get("branch_id")
     org_id = (notes or {}).get("org_id")
     if not branch_id or not org_id:
         logger.error("wa_addon_notes_incomplete", payment_id=payment_id)
-        return
+        return "invalid_notes"
     branch = (
         await db.execute(
             select(Branch).where(
                 Branch.id == _uuid.UUID(str(branch_id)),
-                Branch.org_id == _uuid.UUID(str(org_id)),  # belt AND braces
+                Branch.org_id == _uuid.UUID(str(org_id)),
             )
         )
     ).scalar_one_or_none()
     if branch is None:
         logger.error("wa_addon_branch_missing", payment_id=payment_id)
-        return
-    # The LEDGER row is written even when the flag is already on: the flag is
-    # idempotent state, the row is money. Uniqueness on razorpay_payment_id is
-    # what stops a webhook replay booking the same payment twice — not the flag.
-    from backend.models.schema import AddonPurchase
-    from backend.services.billing_math import whatsapp_addon_order_breakdown
+        return "branch_missing"
 
     bd = whatsapp_addon_order_breakdown()
     already = (
@@ -555,28 +767,68 @@ async def _enable_whatsapp_addon(db: "AsyncSession", notes: dict, payment_id: st
             )
         )
     ).scalar_one_or_none()
+    if branch.whatsapp_addon:
+        if already is None:
+            db.add(AddonPurchase(
+                org_id=branch.org_id,
+                branch_id=branch.id,
+                kind="whatsapp_addon",
+                amount=int(bd["base"]),
+                gst=int(round(bd["gst"])),
+                razorpay_payment_id=payment_id,
+            ))
+        await db.commit()
+        logger.info("wa_addon_already_on", branch_id=str(branch.id))
+        return "already_enabled"
+
+    # Update the next recurring debit before exposing the feature. If Razorpay
+    # rejects the update, no local entitlement is committed and its signed
+    # webhook can retry safely.
+    org = await db.get(Organization, branch.org_id)
+    if org is not None and _autopay_enabled(org):
+        recurring = subscription_order_breakdown(
+            org.plan,
+            0,
+            0,
+            subscription_started_at=org.subscription_started_at,
+            whatsapp_addon=True,
+        )
+        client = _get_client()
+        provider_plan_id = await _recurring_plan(
+            db,
+            client,
+            plan=org.plan,
+            amount_paise=recurring["amount_paise"],
+        )
+        await asyncio.to_thread(
+            client.subscription.edit,
+            org.razorpay_subscription_id,
+            {
+                "plan_id": provider_plan_id,
+                "schedule_change_at": "cycle_end",
+                "customer_notify": True,
+            },
+        )
+
     if already is None:
         db.add(AddonPurchase(
-            org_id=branch.org_id, branch_id=branch.id, kind="whatsapp_addon",
-            amount=int(bd["base"]), gst=int(round(bd["gst"])),
+            org_id=branch.org_id,
+            branch_id=branch.id,
+            kind="whatsapp_addon",
+            amount=int(bd["base"]),
+            gst=int(round(bd["gst"])),
             razorpay_payment_id=payment_id,
         ))
-
-    if branch.whatsapp_addon:
-        logger.info("wa_addon_already_on", branch_id=str(branch.id))
-        await db.commit()  # the ledger row above still has to land
-        return
     branch.whatsapp_addon = True
     await db.commit()
-    # The agent/API caches the roster and plan gates; drop it so the very next
-    # inbound message is answered instead of dropped as wa_skipped_plan.
     try:
         from backend.services.clinic_cache import invalidate
 
         await invalidate(branch.id)
-    except Exception as e:  # noqa: BLE001 — cache is an accelerator (RULE 8)
+    except Exception as e:  # noqa: BLE001 - cache is an accelerator
         logger.warning("wa_addon_cache_invalidate_failed", error=str(e)[:120])
     logger.info("wa_addon_enabled", branch_id=str(branch.id), payment_id=payment_id)
+    return "addon_enabled"
 
 
 async def _org_wa_addon(db: "AsyncSession", org_id) -> bool:
@@ -659,6 +911,32 @@ async def create_whatsapp_addon_order(
         )
     branch = unbought[0]
 
+    # Razorpay does not permit in-place amount/plan changes for bank eMandates.
+    # Refuse before taking the one-off add-on payment; otherwise the clinic
+    # could pay successfully and only then learn its recurring mandate cannot
+    # include the add-on.
+    if _autopay_enabled(org):
+        try:
+            subscription = await asyncio.to_thread(
+                _get_client().subscription.fetch,
+                org.razorpay_subscription_id,
+            )
+        except Exception as exc:
+            logger.error("wa_addon_mandate_preflight_failed", error=str(exc)[:180])
+            raise HTTPException(
+                status_code=502,
+                detail="Could not confirm the current autopay mandate",
+            ) from exc
+        payment_method = str(subscription.get("payment_method") or "").lower()
+        if payment_method in {"emandate", "nach"}:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This bank mandate cannot be changed. Choose a plan that "
+                    "includes WhatsApp and create a new autopay mandate."
+                ),
+            )
+
     bd = whatsapp_addon_order_breakdown()
     client = _get_client()
     try:
@@ -715,12 +993,57 @@ async def change_plan(
         raise HTTPException(status_code=422, detail="plan must be lite, solo, clinic or multi")
 
     org = await _load_my_org(current_user, db)
+    cycle_end = await _latest_cycle_end(db, org.id)
+
+    # Keep provider and application state in one transaction boundary: if
+    # Razorpay rejects a scheduled plan update, do not let our database claim
+    # a different plan will take effect.
+    if org.razorpay_subscription_id:
+        try:
+            client = _get_client()
+            if plan == org.plan:
+                if org.pending_plan:
+                    await asyncio.to_thread(
+                        client.subscription.cancel_scheduled_changes,
+                        org.razorpay_subscription_id,
+                    )
+            else:
+                # A Razorpay plan is the repeating FIXED charge. Current-cycle
+                # overage must never be baked into every future month.
+                breakdown = subscription_order_breakdown(
+                    plan, 0, 0,
+                    subscription_started_at=org.subscription_started_at,
+                    whatsapp_addon=await _org_wa_addon(db, org.id),
+                )
+                provider_plan_id = await _recurring_plan(
+                    db, client, plan=plan,
+                    amount_paise=breakdown["amount_paise"],
+                )
+                await asyncio.to_thread(
+                    client.subscription.edit,
+                    org.razorpay_subscription_id,
+                    {
+                        "plan_id": provider_plan_id,
+                        "schedule_change_at": (
+                            "cycle_end"
+                            if cycle_end and cycle_end > date.today()
+                            else "now"
+                        ),
+                        "customer_notify": True,
+                    },
+                )
+        except Exception as exc:
+            logger.error("autopay_plan_change_failed", error=str(exc)[:180])
+            raise HTTPException(
+                status_code=502,
+                detail="Razorpay could not schedule this autopay plan change",
+            )
+
     if plan == org.plan:
         # No-op / cancel a previously scheduled change.
         org.pending_plan = None
         org.pending_plan_effective = None
     else:
-        cycle_end = await _latest_cycle_end(db, org.id)
         if cycle_end and cycle_end > date.today():
             org.pending_plan = plan
             org.pending_plan_effective = cycle_end
@@ -775,6 +1098,18 @@ async def cancel_subscription(
     org = await _load_my_org(current_user, db)
 
     if not req.cancel:
+        if org.razorpay_subscription_id and org.cancellation_effective:
+            # Razorpay's cancel_scheduled_changes endpoint cancels a PLAN
+            # UPDATE, not a subscription cancellation. Razorpay explicitly
+            # does not reactivate a cancelled subscription, so pretending an
+            # undo succeeded would allow the clinic to lapse unexpectedly.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Razorpay has already scheduled this autopay cancellation. "
+                    "After it ends, enable autopay again to continue."
+                ),
+            )
         org.cancellation_effective = None
         await db.commit()
         await db.refresh(org)
@@ -782,6 +1117,20 @@ async def cancel_subscription(
         return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
 
     cycle_end = await _latest_cycle_end(db, org.id)
+    if org.razorpay_subscription_id:
+        try:
+            client = _get_client()
+            await asyncio.to_thread(
+                client.subscription.cancel,
+                org.razorpay_subscription_id,
+                {"cancel_at_cycle_end": bool(cycle_end and cycle_end > date.today())},
+            )
+        except Exception as exc:
+            logger.error("autopay_cancel_failed", error=str(exc)[:160])
+            raise HTTPException(
+                status_code=502,
+                detail="Razorpay could not schedule the cancellation",
+            )
     if cycle_end and cycle_end > date.today():
         org.cancellation_effective = cycle_end
     else:
@@ -953,7 +1302,8 @@ async def verify_payment(
 
 
 async def activate_subscription(
-    db: AsyncSession, org_id_raw, plan: str | None, payment_id: str
+    db: AsyncSession, org_id_raw, plan: str | None, payment_id: str,
+    *, billed_usage: bool = True,
 ) -> str:
     """Idempotently mark an org active and record a paid BillingCycle (TD-019).
 
@@ -1025,6 +1375,11 @@ async def activate_subscription(
             last.minutes_used = int(round(used_closing))
             last.overage_minutes = over_min
             last.overage_amount = int(round(over_min * last_plan.overage_per_min))
+            # The recurring plan charge contains fixed plan/add-on pricing.
+            # Preserve extra usage as outstanding instead of falsely marking
+            # it paid by a debit that did not include it.
+            if not billed_usage and over_min:
+                last.status = "invoiced"
     db.add(
         BillingCycle(
             org_id=org.id,
@@ -1052,7 +1407,9 @@ async def activate_subscription(
         from backend.services.invoice_email import send_payment_invoice
 
         bd = subscription_order_breakdown(
-            chosen_plan, used_closing, int(getattr(org, "minutes_adjustment", 0) or 0),
+            chosen_plan,
+            used_closing if billed_usage else 0,
+            int(getattr(org, "minutes_adjustment", 0) or 0),
             subscription_started_at=org.subscription_started_at,
             # The receipt must show the SAME numbers the order charged.
             whatsapp_addon=await _org_wa_addon(db, org.id),
@@ -1106,6 +1463,67 @@ async def razorpay_webhook(
     payload = body.get("payload", {}) or {}
     order_ent = (payload.get("order") or {}).get("entity", {}) or {}
     payment_ent = (payload.get("payment") or {}).get("entity", {}) or {}
+    subscription_ent = (payload.get("subscription") or {}).get("entity", {}) or {}
+
+    if event.startswith("subscription."):
+        sub_id = subscription_ent.get("id")
+        sub_notes = subscription_ent.get("notes") or {}
+        org_id = _extract_org_id(sub_notes)
+        if not sub_id or org_id is None:
+            logger.warning("razorpay_subscription_webhook_unattributed", wh_event=event)
+            return {"status": "ignored", "event": event}
+        org = (
+            await db.execute(select(Organization).where(Organization.id == org_id))
+        ).scalar_one_or_none()
+        if org is None:
+            return {"status": "org_not_found"}
+        if org.razorpay_subscription_id not in {None, sub_id}:
+            logger.error(
+                "razorpay_subscription_id_conflict",
+                org_id=str(org.id), incoming=sub_id,
+            )
+            return {"status": "subscription_conflict"}
+
+        state = event.removeprefix("subscription.")
+        org.razorpay_subscription_id = sub_id
+        org.razorpay_subscription_status = (
+            subscription_ent.get("status") or state
+        )
+        org.razorpay_customer_id = (
+            subscription_ent.get("customer_id") or org.razorpay_customer_id
+        )
+        if state == "halted":
+            org.status = "paused"
+        elif state in {"cancelled", "completed", "expired"}:
+            org.status = "cancelled"
+            org.cancellation_effective = None
+
+        payment_id = payment_ent.get("id")
+        if state == "charged" and payment_id:
+            charged_plan = sub_notes.get("plan")
+            if (
+                org.pending_plan in PLANS
+                and org.pending_plan_effective
+                and org.pending_plan_effective <= date.today()
+            ):
+                charged_plan = org.pending_plan
+            result = await activate_subscription(
+                db, org.id, charged_plan, payment_id,
+                billed_usage=False,
+            )
+            if result == "activated" and charged_plan == org.pending_plan:
+                org.pending_plan = None
+                org.pending_plan_effective = None
+                await db.commit()
+        else:
+            await db.commit()
+            result = state
+        logger.info(
+            "razorpay_subscription_webhook_processed",
+            wh_event=event, result=result, org_id=str(org.id),
+        )
+        return {"status": result}
+
     notes = order_ent.get("notes") or payment_ent.get("notes") or {}
     payment_id = payment_ent.get("id") or order_ent.get("id")
 
@@ -1114,8 +1532,13 @@ async def razorpay_webhook(
         logger.info("razorpay_webhook_ignored", wh_event=event)
         return {"status": "ignored", "event": event}
 
-    status = await activate_subscription(
-        db, notes.get("org_id"), notes.get("plan"), payment_id
-    )
+    if notes.get("kind") == "whatsapp_addon":
+        # Checkout may succeed after the browser closes. The signed webhook is
+        # therefore an authoritative add-on activation path, not a plan cycle.
+        status = await _enable_whatsapp_addon(db, notes, payment_id)
+    else:
+        status = await activate_subscription(
+            db, notes.get("org_id"), notes.get("plan"), payment_id
+        )
     logger.info("razorpay_webhook_processed", wh_event=event, result=status)
     return {"status": status}

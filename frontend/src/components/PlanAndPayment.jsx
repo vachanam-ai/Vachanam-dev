@@ -3,10 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   changePlan,
-  createPaymentOrder,
+  createAutopaySubscription,
   createWhatsappAddonOrder,
   fetchPlan,
   verifyPayment,
+  verifyAutopaySubscription,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 
@@ -114,16 +115,47 @@ export default function PlanAndPayment() {
     });
   };
 
+  const subscriptionCheckout = async (subscription, description, done) => {
+    await new Promise((resolve, reject) => {
+      const rzp = new window.Razorpay({
+        key: subscription.key_id,
+        subscription_id: subscription.subscription_id,
+        name: "Vachanam",
+        description,
+        prefill: { email: user?.email ?? "" },
+        theme: { color: "#1b1b1a" },
+        modal: { ondismiss: () => reject(new Error("Payment window closed")) },
+        handler: async (resp) => {
+          try {
+            await verifyAutopaySubscription({
+              razorpay_subscription_id: resp.razorpay_subscription_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature,
+            });
+            toast.success(done);
+            refresh();
+            resolve();
+          } catch (e) {
+            reject(new Error(
+              e?.response?.data?.detail ?? "Autopay verification failed",
+            ));
+          }
+        },
+      });
+      rzp.open();
+    });
+  };
+
   const [paying, setPaying] = useState(false);
   const payNow = async () => {
     const planKey = plan.data?.plan ?? "clinic";
     setPaying(true);
     try {
       await loadRazorpay();
-      await checkout(
-        await createPaymentOrder(planKey),
-        `${PLAN_LABELS[planKey]} subscription`,
-        "Payment received — your plan is active. Welcome aboard!",
+      await subscriptionCheckout(
+        await createAutopaySubscription(planKey),
+        PLAN_LABELS[planKey] + " autopay",
+        "Autopay enabled. Razorpay will renew your plan automatically.",
       );
     } catch (e) {
       if (e?.message !== "Payment window closed") toast.error(e?.message ?? "Payment failed");
@@ -132,10 +164,8 @@ export default function PlanAndPayment() {
     }
   };
 
-  // Deliberately NOT a second Razorpay subscription: this charges ₹1,499 once
-  // for the remainder of the cycle, and from the next renewal the amount rides
-  // on the plan invoice (Vinay: "from next month on entire billing should come
-  // together").
+  // The add-on is charged once for this cycle. Its fixed monthly price is
+  // included when a plan mandate is created or updated.
   const [buyingWa, setBuyingWa] = useState(false);
   const buyWhatsapp = async () => {
     setBuyingWa(true);
@@ -160,8 +190,6 @@ export default function PlanAndPayment() {
   const daysLeft = p?.cycle_end
     ? Math.ceil((new Date(p.cycle_end) - Date.now()) / 86400000)
     : null;
-  const payable = p && (p.status !== "active" || !p.cycle_end || daysLeft <= 3);
-
   return (
     <section data-reveal className="card p-6">
       <p className="eyebrow">Plan &amp; payment</p>
@@ -199,16 +227,15 @@ export default function PlanAndPayment() {
             )}
           </span>
         )}
-        {p && (payable ? (
+        {p && !p.autopay_enabled && (
           <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
             {paying ? "Opening payment…"
-              : `${p.status !== "active" ? "Activate" : p.cycle_end ? "Renew" : "Pay"} — ₹${(p.next_base_rupees || PLAN_PRICES[p.plan] || 0).toLocaleString("en-IN")}${p.is_offer ? " (offer)" : ""}${p.status === "active" && p.cycle_end ? " + usage" : ""}`}
+              : "Enable autopay — ₹" + (p.next_base_rupees || PLAN_PRICES[p.plan] || 0).toLocaleString("en-IN") + "/month"}
           </button>
-        ) : (
-          <span className="chip-muted" title="Renewal opens 3 days before your cycle ends">
-            Paid — renewal opens {fmt(new Date(new Date(p.cycle_end) - 3 * 86400000))}
-          </span>
-        ))}
+        )}
+        {p?.autopay_enabled && (
+          <span className="chip-token">Autopay on</span>
+        )}
         {p?.is_offer && (
           <span className="font-ui text-xs font-semibold text-amber-800">
             Offer price — first 3 months (regular ₹{(PLAN_PRICES[p.plan] ?? 0).toLocaleString("en-IN")}/mo)
@@ -223,8 +250,8 @@ export default function PlanAndPayment() {
       )}
       {p && p.status !== "active" && (
         <p className="mt-2 font-ui text-xs text-slate">
-          UPI, card or netbanking via Razorpay. Your line activates the moment payment
-          succeeds, and your 30-day cycle starts today.
+          Authorise recurring payment securely in Razorpay. Your line activates
+          after the first successful charge.
         </p>
       )}
       {p?.pending_plan && (
@@ -274,7 +301,9 @@ export default function PlanAndPayment() {
       )}
 
       <p className="mt-3 font-ui text-xs text-slate">
-        A detailed receipt (PDF attached) is emailed to you after every successful payment.
+        A detailed receipt is emailed after every successful payment. Extra voice
+        minutes are invoiced separately because the recurring mandate covers fixed
+        plan and WhatsApp charges.
       </p>
     </section>
   );

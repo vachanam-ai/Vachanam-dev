@@ -123,6 +123,7 @@ async def lifespan(app: FastAPI):
         from backend.jobs.next_visit_followup_caller import run_next_visit_followups
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
         from backend.jobs.trial_pause import run_pending_plan_changes, run_trial_pause
+        from backend.services.wa_delivery import run_wa_delivery_queue
 
         scheduler = AsyncIOScheduler()
         # #299: calendar_writer / pre_appt_reminders / cascade_rebook keep their
@@ -142,6 +143,10 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(
             run_pre_appt_reminders, IntervalTrigger(seconds=60),
             id="pre_appt_reminder", replace_existing=True,
+        )
+        scheduler.add_job(
+            run_wa_delivery_queue, IntervalTrigger(seconds=60),
+            id="wa_delivery_queue", replace_existing=True,
         )
         scheduler.add_job(
             run_cascade_rebook_calls, IntervalTrigger(seconds=60),

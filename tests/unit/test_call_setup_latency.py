@@ -50,7 +50,7 @@ def test_dummy_llm_prewarm_removed_at_session_build():
     assert "async def _prewarm_llm" not in SRC
     assert "asyncio.create_task(_prewarm_llm())" not in SRC
     assert "explicit prompt caching provide useful warmth" in SRC
-    assert '"preemptive_tts": True' in SRC
+    assert '"preemptive_tts": _preemptive_tts_enabled()' in SRC
 
 
 def test_build_breakdown_instrumented():

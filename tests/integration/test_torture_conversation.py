@@ -129,9 +129,14 @@ async def test_cancel_after_reschedule_with_stale_id(clinic, db, redis):
     assert r["success"], r
     state.token_confirmed = True
 
-    cancel = await agent._do_cancel(booked["token_id"])  # STALE original id
+    cancel = await agent._do_cancel(
+        booked["token_id"], reason='reschedule_compensation'
+    )  # STALE original id
     assert cancel["success"], cancel
     assert await _confirmed(db, doc, branch, day) == []  # nothing left booked
+    replacement_id = state.booking_replacements[booked["token_id"]]
+    replacement = await db.get(Token, uuid.UUID(replacement_id))
+    assert replacement.cancellation_reason == 'reschedule_compensation'
 
 
 # ── B3: "cancel it" repeated twice ──────────────────────────────────────────
