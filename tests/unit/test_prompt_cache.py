@@ -77,7 +77,10 @@ def test_exact_variant_and_agent_ride_source_guard():
     compose = src.split("def _compose_instructions", 1)[1].split(
         "def _compose_runtime_context", 1
     )[0]
-    assert 'build_grounded_prompt(' in compose
+    # 2026-08-09: both sides delegate to compose_clinic_instructions so the
+    # digest cannot drift again (it did, twice — #491 and the 08-09 call's
+    # 16 uncached turns). build_grounded_prompt now lives inside it.
+    assert 'compose_clinic_instructions(' in compose
     assert 'build_system_prompt(' not in compose
     assert "caller_prompt_extra" not in compose
     assert "date_context" not in compose
@@ -141,7 +144,7 @@ def test_proactive_warmer_covers_active_clinics_and_saved_languages():
     assert "_create_prompt_cache" in src
     assert "warm_greeting_cache" in src
     assert "tts_voice" in src
-    assert 'build_grounded_prompt(' in src
+    assert 'compose_clinic_instructions(' in src
     assert 'build_system_prompt(' not in src
 
 

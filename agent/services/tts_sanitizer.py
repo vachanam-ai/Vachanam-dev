@@ -259,6 +259,46 @@ def spoken_english_numbers(text: str) -> str:
     return text.replace("डॉक्टर", "डाक्टर")
 
 
+# ── Formal/literary Telugu → the words patients actually say ────────────────
+# Vinay 2026-08-09: "speaking raddu instead of cancel... saying sanketika
+# samasya instead of technical issue."
+#
+# Nobody books an appointment in literary Telugu. A receptionist says
+# "క్యాన్సిల్" and "టెక్నికల్ ఇష్యూ"; "రద్దు" and "సాంకేతిక సమస్య" are
+# newsreader Telugu and land as stiff and bureaucratic on a phone call.
+#
+# The grounded prompt has ASKED for this since it was written — there is a
+# correction example spelling out exactly the రద్దు case — and the model still
+# emits the formal form, most often when it is running degraded (an uncached
+# prompt after a language switch, for instance). A prompt is a request; this is
+# the guarantee, at the same chokepoint that already enforces script on
+# WhatsApp and speaks clock times.
+#
+# Output-side only, and that is what makes a fixed list defensible here: we are
+# not trying to recognise the infinite ways a caller might speak, only to stop
+# ourselves emitting a short, known set of words. Input-side phrase lists are
+# what keep failing (#492, #502, #511).
+#
+# ALSO closes a loop the agent created for itself: saying "రద్దు" taught the
+# caller to say "raddu", which the cancellation guard then did not recognise.
+_SPOKEN_SWAPS = (
+    ("రద్దు చేయబడింది", "క్యాన్సిల్ చేసేశాను"),
+    ("రద్దు చేయడం", "క్యాన్సిల్ చేయడం"),
+    ("రద్దు", "క్యాన్సిల్"),
+    ("సాంకేతిక సమస్య", "టెక్నికల్ ఇష్యూ"),
+    ("సాంకేతిక", "టెక్నికల్"),
+    ("ధృవీకరించ", "కన్ఫర్మ్ చేయ"),
+    ("నిర్ధారించ", "కన్ఫర్మ్ చేయ"),
+)
+
+
+def spoken_clinic_words(text: str) -> str:
+    """Swap literary Telugu for the loanwords a real receptionist uses."""
+    for formal, spoken in _SPOKEN_SWAPS:
+        text = text.replace(formal, spoken)
+    return text
+
+
 def spoken_clock_times(text: str) -> str:
     """Clock times → spoken words, in EVERY language.
 
@@ -319,6 +359,7 @@ def sanitize_for_tts(text: str) -> str:
     # Before the phone pass: times are 1-2 digit groups and phone runs are
     # 10-15, so they cannot collide — but a time left as digits here would be
     # the last chance to catch it.
+    text = spoken_clinic_words(text)
     text = spoken_clock_times(text)
     text = spoken_phone_digits(text)
     text = re.sub(r'  +', ' ', text)

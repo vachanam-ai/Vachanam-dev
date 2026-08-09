@@ -40,24 +40,33 @@ def _warmer_src() -> str:
     return inspect.getsource(agent_mod._warm_all_clinic_prompt_caches)
 
 
-def test_the_warmer_includes_the_date_table():
-    assert "build_date_table" in _warmer_src(), (
-        "the warmer builds instructions without the date table, so its digest "
-        "can never match a live call's — every call runs uncached"
+# SUPERSEDED 2026-08-09 by test_prompt_cache_one_composer_aug09. Keeping the
+# two sides "byte for byte identical" by inspecting each call site was the
+# discipline that failed TWICE — once on the date table (#491) and again on the
+# inputs, which cost 16 uncached turns on Vinay's benchmark call. Both sides now
+# delegate to compose_clinic_instructions, so the pieces live in ONE place and
+# the assertions move with them.
+
+def test_the_warmer_delegates_to_the_shared_composer():
+    assert "compose_clinic_instructions" in _warmer_src(), (
+        "the warmer builds instructions itself again — that is how the digest "
+        "drifted twice, and every call then runs uncached"
     )
 
 
-def test_the_live_path_includes_the_date_table():
-    assert "build_date_table" in _live_src()
+def test_the_live_path_delegates_to_the_shared_composer():
+    assert "compose_clinic_instructions" in _live_src()
 
 
-def test_both_compositions_use_the_same_pieces():
-    """Any piece present in one and absent from the other changes the digest
-    and silently disables the cache."""
-    live, warm = _live_src(), _warmer_src()
+def test_the_shared_composer_holds_every_piece():
+    """Any piece missing changes the digest and silently disables the cache."""
+    import inspect
+
+    from agent.livekit_minimal.agent import compose_clinic_instructions
+
+    src = inspect.getsource(compose_clinic_instructions)
     for piece in ("build_grounded_prompt", "build_date_table", "brevity"):
-        assert piece in live, f"live composition lost {piece}"
-        assert piece in warm, f"warmer composition lost {piece}"
+        assert piece in src, f"the composer lost {piece}"
 
 
 def test_the_cache_key_is_a_digest_of_the_instructions():

@@ -66,16 +66,26 @@ def test_todays_row_cannot_be_mistaken_for_another_row():
 def test_the_live_instructions_builder_appends_the_date_table():
     """`_compose_instructions` is what becomes the model's instructions. If the
     table is not added THERE, the date exists only in the seeded first history
-    message — the first thing trimmed on a long call."""
+    message — the first thing trimmed on a long call.
+
+    2026-08-09: the live path now delegates to `compose_clinic_instructions`
+    (one composer, so the warmer and the call cannot drift apart again — that
+    drift cost 16 uncached turns on Vinay's benchmark call). The property is
+    unchanged and still asserted; it just lives one level down now, so this
+    checks BOTH that the live site supplies the day and that the composer uses
+    it."""
     from agent.livekit_minimal import agent as agent_mod
+    from agent.livekit_minimal.agent import compose_clinic_instructions
 
     src = inspect.getsource(agent_mod.entrypoint)
     compose = src.split("def _compose_instructions")[1].split("def _compose_runtime_context")[0]
-    assert "build_date_table" in compose, (
-        "the live prompt has no date table; the model will guess today's date "
-        "as soon as the seeded history block is trimmed"
+    assert "today=" in compose, (
+        "the live prompt no longer passes a calendar day; the model will guess "
+        "today's date as soon as the seeded history block is trimmed"
     )
-
+    assert "build_date_table" in inspect.getsource(compose_clinic_instructions), (
+        "the shared composer dropped the date table — every caller loses it"
+    )
 
 def test_the_runtime_block_does_not_duplicate_the_table():
     """It sits outside the cache, so a second copy is paid for on every turn."""

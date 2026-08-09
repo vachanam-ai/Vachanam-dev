@@ -1635,6 +1635,76 @@ def _cached_content_tool_dicts(tools) -> list[dict]:
     return _flatten_cached_content_tools(configured)
 
 
+def compose_clinic_instructions(
+    *,
+    clinic_name: str | None,
+    doctors,
+    emergency_contact: str | None,
+    plan: str | None,
+    language: str,
+    clinic_address: str | None,
+    faq,
+    recording_active: bool,
+    today,
+) -> str:
+    """THE clinic-wide prompt. One function, because two were never going to
+    stay identical.
+
+    The prompt cache key is a sha256 of this string, so the live call and the
+    background warmer must produce it byte for byte or the warmed entry is
+    unreachable — the warming is wasted AND every turn runs uncached.
+
+    They were two separate call sites, and they drifted twice: once when the
+    date table moved into the instructions (#491, fixed 08-08) and again on
+    inputs, which is what Vinay's 08-09 call exposed — 16 turns, `cache_hit`
+    False on every single one, on the branch's DEFAULT language which the
+    warmer definitely warmed. Uncached is also the degraded state behind the
+    wrong dates and the newsreader Telugu, so this is a quality bug wearing a
+    latency bug's clothes.
+
+    Normalisation lives HERE so both callers get it: the warmer read
+    `name_spoken` stripped while the live path could pass an unstripped name or
+    a freshly transliterated one, and the warmer decoded the FAQ while the live
+    path passed whatever the ORM handed back. Equal clinics now produce equal
+    strings regardless of which side is asking.
+    """
+    return (
+        build_grounded_prompt(
+            clinic_name=(clinic_name or "").strip(),
+            doctors=doctors or [],
+            emergency_contact=(emergency_contact or "").strip(),
+            plan=(plan or "clinic"),
+            language=language,
+            clinic_address=(clinic_address or None),
+            faq=faq,
+            recording_active=bool(recording_active),
+        )
+        + build_date_table(today)
+        + get_lines(language).brevity
+    )
+
+
+def _prompt_inputs_fingerprint(
+    clinic_name: str | None, doctors, faq, plan: str | None, recording_active: bool
+) -> str:
+    """Short, PII-free fingerprint of what went INTO the prompt.
+
+    Logged on both sides so a cache miss names the field that differs instead
+    of costing another live call to guess. Lengths and counts only — never the
+    clinic's text (RULE 9)."""
+    import hashlib
+
+    faq_repr = "" if faq is None else str(faq)
+    return (
+        f"name{len((clinic_name or '').strip())}"
+        f":doc{len(doctors or [])}"
+        f":faq{len(faq_repr)}"
+        f":plan{(plan or 'clinic')}"
+        f":rec{int(bool(recording_active))}"
+        f":h{hashlib.sha256(faq_repr.encode('utf-8')).hexdigest()[:6]}"
+    )
+
+
 def _prompt_cache_key(
     branch_id, lang_code: str, instructions: str = ""
 ) -> tuple[str, str, str, str]:
@@ -2096,8 +2166,48 @@ def _caller_authorized_cancellation(text: str) -> bool:
     )):
         return False
     low = _normalised_utterance(text)
+    # Vinay 2026-08-09: "speaking raddu instead of cancel. unable to cancel
+    # bookings." A VICIOUS CIRCLE, and one this codebase built for itself: the
+    # agent says "రద్దు", the caller mirrors it back, and Soniox returns that
+    # mirror in LATIN letters — "raddu cheyandi" — which matched NOTHING here.
+    # _CANCEL_AUTH_TERMS held native script only, so the request was never
+    # recognised as a request, the guard re-asked, and cancellation was
+    # impossible for anyone who used the word the agent had just taught them.
+    #
+    # This is #502 exactly, in the sibling I consciously left alone two days
+    # ago: reschedule's phrase list was replaced because Latin-script Telugu
+    # matched none of it, and I recorded "cancel is destructive, keeps its
+    # gate" without checking that its gate had the identical hole.
+    #
+    # Widening REQUEST detection does not weaken the safety property. The
+    # destructive step is still gated on a positive _caller_affirmed — this
+    # only decides whether the agent understood what was ASKED. Failing to
+    # recognise the ask never protected anyone; it just trapped them.
+    # A BARE romanised word is not enough, for two reasons my own negative
+    # tests caught before this shipped:
+    #   "my name is Radhu"  — Radhu/Raddu is a real name; a bare match would
+    #                         read an introduction as a cancellation request
+    #   "raddu cheyoddu"    — romanised NEGATION ("don't cancel"); the veto
+    #                         above only knew native script and English
+    # So the word must carry a cancelling action or an object it acts on, and
+    # the romanised negatives get their own veto. Getting this wrong destroys
+    # a real appointment, which is why cancel keeps a positive confirmation
+    # afterwards regardless.
+    _ROMAN_CANCEL = r'(?:radd?[ua]|radh?u|kya?ansil|kaansil|kainsal|ra[tth]{2,3}u)'
+    if re.search(rf'\b{_ROMAN_CANCEL}\b[^.?!]{{0,15}}?'
+                 r'\b(?:cheyodd?u|cheyavadd?u|vadd?u|mat|nahi|beda|vendam)\b', raw):
+        return False
+    romanised_cancel = re.search(
+        rf'\b{_ROMAN_CANCEL}\b[^.?!]{{0,25}}?'
+        r'\b(?:chey\w*|pann\w*|kar\w*|maad\w*|appointment|booking|slot|token|it)\b',
+        raw,
+    ) is not None or re.search(
+        r'\b(?:appointment|booking|slot|token)\b[^.?!]{0,25}?'
+        rf'\b{_ROMAN_CANCEL}\b',
+        raw,
+    ) is not None
     english_action = re.search(r'\bcancel\b', raw) is not None
-    return english_action or any(
+    return english_action or romanised_cancel or any(
         _normalised_utterance(term) in low for term in _CANCEL_AUTH_TERMS
     )
 
@@ -6636,19 +6746,27 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             11 August. Only the calendar day is here — the wall clock stays in
             the runtime block, because instructions are the prompt-cache key.
             """
-            return (
-                build_grounded_prompt(
-                    clinic_name=branch_name,
-                    doctors=doctor_contexts,
-                    emergency_contact=emergency_contact,
-                    plan=state.plan or "clinic",
-                    language=lc,
-                    clinic_address=getattr(branch, "address", None),
-                    faq=getattr(branch, "faq", None),
-                    recording_active=_recording_active,
-                )
-                + build_date_table(now_b.date())
-                + get_lines(lc).brevity
+            _faq = _decode_branch_faq(getattr(branch, "faq", None))
+            logger.info(
+                "prompt_inputs live lang=%s %s",
+                lc,
+                _prompt_inputs_fingerprint(
+                    branch_name, doctor_contexts, _faq,
+                    state.plan, _recording_active,
+                ),
+            )
+            return compose_clinic_instructions(
+                clinic_name=branch_name,
+                doctors=doctor_contexts,
+                emergency_contact=emergency_contact,
+                plan=state.plan,
+                language=lc,
+                clinic_address=getattr(branch, "address", None),
+                # The warmer decodes; the live path used to pass the ORM value
+                # straight through. Same decode both sides or the strings differ.
+                faq=_faq,
+                recording_active=_recording_active,
+                today=now_b.date(),
             )
 
         def _compose_runtime_context() -> str:
@@ -8271,6 +8389,23 @@ async def _warm_all_clinic_prompt_caches() -> None:
         if code in serviceable:
             languages_by_branch.setdefault(row["branch_id"], set()).add(code)
 
+    # ENGLISH IS ALWAYS WARMED. Vinay's 08-09 call, turn 9: he asked the agent
+    # to switch to English and the very next turn logged `cache_hit=False`
+    # alongside a fresh `prompt_cache_created key=(…,'en',…)`. The switch itself
+    # is fast (`lat_switch total=0.08s`) — what costs is landing on a prompt
+    # cache that does not exist yet, which inflated that turn's TTFT to 772ms
+    # against a warm ~400-500ms.
+    #
+    # The warmer only knew each branch's default plus languages some patient had
+    # already saved, so the FIRST caller ever to ask for English at a clinic
+    # always paid for it — and running uncached is the same degraded state that
+    # produced the wrong-date and formal-Telugu answers. English is the one
+    # language every clinic's callers reach for regardless of the default, so it
+    # is warmed unconditionally. Two entries per clinic, not eight: the other
+    # six stay demand-warmed because nobody asks for them cold.
+    for row in branches:
+        languages_by_branch.setdefault(row["id"], set()).add("en")
+
     # First-audio cache has priority over the larger Vertex prompt warm. A new
     # deployment may accept a call while this background loop is still running.
     greeting_requested = 0
@@ -8326,29 +8461,27 @@ async def _warm_all_clinic_prompt_caches() -> None:
         recording_variants = (False, True) if settings.recording_allowed else (False,)
         for language in sorted(languages):
             for recording_active in recording_variants:
-                instructions = (
-                    build_grounded_prompt(
-                        clinic_name=clinic_name,
-                        doctors=doctors_by_branch.get(branch_id, []),
-                        emergency_contact=row["emergency_contact"] or "",
-                        plan=row["plan"] or "clinic",
-                        language=language,
-                        clinic_address=row["address"],
-                        faq=_decode_branch_faq(row["faq"]),
-                        recording_active=recording_active,
-                    )
-                    # MUST match _compose_instructions byte for byte. The cache
-                    # key is a digest of this string, so a warmer that composes
-                    # it even slightly differently mints an entry no call can
-                    # ever hit — the warming is wasted AND every call runs
-                    # uncached (prompt_cached_tokens: 0 in prod, 2026-08-07).
-                    # This drifted the moment the date table moved into the
-                    # instructions (#491) and only this call site was updated.
-                    # Asia/Kolkata to match _prompt_cache_key's own date.
-                    + build_date_table(
-                        datetime_cls.now(ZoneInfo("Asia/Kolkata")).date()
-                    )
-                    + get_lines(language).brevity
+                _faq = _decode_branch_faq(row["faq"])
+                _docs = doctors_by_branch.get(branch_id, [])
+                logger.info(
+                    "prompt_inputs warm lang=%s %s",
+                    language,
+                    _prompt_inputs_fingerprint(
+                        clinic_name, _docs, _faq, row["plan"], recording_active
+                    ),
+                )
+                # SAME function as the live call. They were two call sites that
+                # had to agree by discipline, and they drifted twice.
+                instructions = compose_clinic_instructions(
+                    clinic_name=clinic_name,
+                    doctors=_docs,
+                    emergency_contact=row["emergency_contact"],
+                    plan=row["plan"],
+                    language=language,
+                    clinic_address=row["address"],
+                    faq=_faq,
+                    recording_active=recording_active,
+                    today=datetime_cls.now(ZoneInfo("Asia/Kolkata")).date(),
                 )
                 key = _prompt_cache_key(branch_id, language, instructions)
                 requested += 1
