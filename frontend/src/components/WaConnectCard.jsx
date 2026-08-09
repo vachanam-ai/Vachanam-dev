@@ -55,6 +55,36 @@ function ManualConnect({ branchId, onConnected }) {
     numeric(form.waba_id) && numeric(form.phone_number_id)
     && form.access_token.trim().length >= 20;
 
+  // A silently disabled button is a dead end — Vinay pasted the display phone
+  // number into the ID field (Meta shows "+1 555 665 9281" in large type with
+  // the ID in small text under it) and had nothing to tell him why.
+  function problem(field, value) {
+    const v = value.trim();
+    if (!v) return null;
+    if (field === "access_token") {
+      return v.length < 20 ? "That looks too short to be an access token." : null;
+    }
+    if (numeric(v)) return null;
+    if (/^[+\d][\d\s()+-]*$/.test(v)) {
+      return field === "phone_number_id"
+        ? "That's the phone number, not its ID. The ID is the long number in small text just below it on Meta's page."
+        : "That's a phone number. The WABA ID is a long number with no +, spaces or brackets.";
+    }
+    return "Digits only — copy the ID exactly as Meta shows it.";
+  }
+
+  const fields = [
+    {
+      key: "waba_id", label: "WhatsApp Business Account ID",
+      testid: "wa-manual-waba", hint: "e.g. 284721432257112",
+    },
+    {
+      key: "phone_number_id", label: "Phone number ID",
+      testid: "wa-manual-phone",
+      hint: "The ID under the number — not +91… or +1…",
+    },
+  ];
+
   if (!open) {
     return (
       <button type="button" data-testid="wa-manual-toggle"
@@ -72,17 +102,20 @@ function ManualConnect({ branchId, onConnected }) {
         From Meta's <strong className="text-ink">WhatsApp → API Setup</strong> page.
         The token is stored encrypted and is never shown again.
       </p>
-      <label className="block font-ui text-xs font-medium text-ink">
-        WhatsApp Business Account ID
-        <input className="input mt-1" inputMode="numeric" autoComplete="off"
-          data-testid="wa-manual-waba" value={form.waba_id} onChange={set("waba_id")} />
-      </label>
-      <label className="block font-ui text-xs font-medium text-ink">
-        Phone number ID
-        <input className="input mt-1" inputMode="numeric" autoComplete="off"
-          data-testid="wa-manual-phone" value={form.phone_number_id}
-          onChange={set("phone_number_id")} />
-      </label>
+      {fields.map((f) => {
+        const err = problem(f.key, form[f.key]);
+        return (
+          <label key={f.key} className="block font-ui text-xs font-medium text-ink">
+            {f.label}
+            <input className="input mt-1" inputMode="numeric" autoComplete="off"
+              data-testid={f.testid} value={form[f.key]} onChange={set(f.key)} />
+            <span data-testid={`${f.testid}-note`}
+              className={`mt-1 block text-xs font-normal ${err ? "text-danger" : "text-slate"}`}>
+              {err ?? f.hint}
+            </span>
+          </label>
+        );
+      })}
       <label className="block font-ui text-xs font-medium text-ink">
         Access token
         {/* type=password so a token never sits in plain view during a screen
@@ -90,6 +123,12 @@ function ManualConnect({ branchId, onConnected }) {
         <input className="input mt-1" type="password" autoComplete="off"
           data-testid="wa-manual-token" value={form.access_token}
           onChange={set("access_token")} />
+        {problem("access_token", form.access_token) && (
+          <span data-testid="wa-manual-token-note"
+            className="mt-1 block text-xs font-normal text-danger">
+            {problem("access_token", form.access_token)}
+          </span>
+        )}
       </label>
       <div className="flex items-center gap-3">
         <button type="submit" className="btn-primary" data-testid="wa-manual-submit"

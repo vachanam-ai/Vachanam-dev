@@ -94,6 +94,29 @@ describe("WaConnectCard — manual connect", () => {
     expect(f.submit).toBeEnabled();
   });
 
+  it("names the mistake when the phone NUMBER is pasted into the ID field", async () => {
+    // What actually happened: Meta shows "+1 555 665 9281" in large type with
+    // the ID in small text under it. A silently disabled button told him
+    // nothing.
+    const f = await openForm();
+    fireEvent.change(f.phone, { target: { value: "+1 (555) 665-9281" } });
+    expect(screen.getByTestId("wa-manual-phone-note").textContent)
+      .toMatch(/phone number, not its ID/i);
+    expect(f.submit).toBeDisabled();
+
+    fireEvent.change(f.phone, { target: { value: "555000222" } });
+    expect(screen.getByTestId("wa-manual-phone-note").textContent)
+      .not.toMatch(/not its ID/i);
+  });
+
+  it("shows a hint, not an error, on an untouched field", async () => {
+    const f = await openForm();
+    expect(screen.getByTestId("wa-manual-waba-note").className).not.toMatch(/danger/);
+    expect(screen.queryByTestId("wa-manual-token-note")).toBeNull();
+    fireEvent.change(f.token, { target: { value: "short" } });
+    expect(screen.getByTestId("wa-manual-token-note").textContent).toMatch(/too short/i);
+  });
+
   it("never renders the token in readable text", async () => {
     const f = await openForm();
     fill(f, VALID);
