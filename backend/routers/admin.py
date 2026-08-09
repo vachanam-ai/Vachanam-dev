@@ -1087,6 +1087,14 @@ async def admin_resilience_chaos_clear(
 
 class WaLinkBody(BaseModel):
     wa_phone_number_id: str | None = None
+    # The WABA that owns the number above. Templates live on the WABA, not the
+    # number, so wa_template_admin refuses to submit anything without it —
+    # linking only the phone_number_id gives a branch that can SEND but never
+    # create a template. Embedded Signup sets this itself (wa_connect); this
+    # field is the concierge/bridge path for a branch onboarded by hand.
+    # None = leave unchanged (an ordinary re-link must not wipe it);
+    # "" = clear. Same convention as whatsapp_addon below.
+    wa_waba_id: str | None = None
     # Rs1,499 add-on (spec 2026-08-02 pricing §1): lets a Lite/Starter branch
     # use WhatsApp without upgrading to Clinic. None = leave unchanged, so an
     # ordinary re-link never silently grants or revokes a paid feature.
@@ -1118,6 +1126,12 @@ async def set_branch_wa_number(
             status_code=422,
             detail="wa_phone_number_id must be the numeric Meta phone number ID",
         )
+    waba = None if body.wa_waba_id is None else (body.wa_waba_id.strip() or None)
+    if waba and (len(waba) > 32 or not waba.isdigit()):
+        raise HTTPException(
+            status_code=422,
+            detail="wa_waba_id must be the numeric Meta WhatsApp Business Account ID",
+        )
     async with AsyncSessionLocal() as db:
         branch = (
             await db.execute(select(Branch).where(Branch.id == bid))
@@ -1130,6 +1144,14 @@ async def set_branch_wa_number(
         # Embedded Signup sets it directly. Clearing the link must not leave
         # a stale "connected" chip.
         branch.wa_status = "connected" if value else "none"
+        if body.wa_waba_id is not None:
+            branch.wa_waba_id = waba
+        elif value is None:
+            # Unlinking the number without naming a WABA: clear it too.
+            # wa_waba_id is UNIQUE, so a stale one left on a disconnected
+            # branch would block the clinic that actually owns it from ever
+            # linking (409 on a branch nobody thinks is connected).
+            branch.wa_waba_id = None
         if body.whatsapp_addon is not None:
             branch.whatsapp_addon = bool(body.whatsapp_addon)
         try:
@@ -1138,15 +1160,19 @@ async def set_branch_wa_number(
             await db.rollback()
             raise HTTPException(
                 status_code=409,
-                detail="This phone_number_id is already linked to another branch",
+                detail=(
+                    "This phone_number_id or WABA ID is already linked to "
+                    "another branch"
+                ),
             )
     logger.info(
         "wa_branch_linked", branch_id=branch_id, linked=bool(value),
-        addon=body.whatsapp_addon,
+        waba_linked=bool(branch.wa_waba_id), addon=body.whatsapp_addon,
     )
     return {
         "branch_id": branch_id,
         "wa_phone_number_id": value,
+        "wa_waba_id": branch.wa_waba_id,
         "wa_status": branch.wa_status,
         "whatsapp_addon": branch.whatsapp_addon,
     }

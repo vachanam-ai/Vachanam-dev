@@ -102,6 +102,82 @@ async def test_admin_links_and_conflicts(client, db):
 
 
 @pytest.mark.asyncio
+async def test_admin_links_waba_id_so_templates_can_be_created(client, db, monkeypatch):
+    """Without wa_waba_id a branch can SEND but wa_template_admin refuses every
+    submission (NotConnected) — the concierge path has to set both."""
+    _, b1 = await _clinic(db)
+    _, b2 = await _clinic(db)
+    admin = _admin_jwt()
+
+    r = await client.patch(
+        f"/admin/branches/{b1.id}/whatsapp", headers=_auth(admin),
+        json={"wa_phone_number_id": "111111111111", "wa_waba_id": "222222222222"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["wa_waba_id"] == "222222222222"
+
+    # wa_template_admin can now resolve a WABA + token for this branch.
+    # Bridge mode: no per-branch wa_token_enc, so token_for falls back to the
+    # platform token — which is what the concierge/test-number path uses.
+    from backend.services import wa_template_admin
+
+    monkeypatch.setattr(settings, "meta_access_token", "EAA-test-token")
+    await db.refresh(b1)
+    waba, _token = wa_template_admin._waba_and_token(b1)
+    assert waba == "222222222222"
+
+    # unique — the same WABA on another branch is a clean 409, not a silent steal
+    r2 = await client.patch(
+        f"/admin/branches/{b2.id}/whatsapp", headers=_auth(admin),
+        json={"wa_phone_number_id": "333333333333", "wa_waba_id": "222222222222"},
+    )
+    assert r2.status_code == 409
+
+    # non-numeric rejected before any DB write
+    r3 = await client.patch(
+        f"/admin/branches/{b2.id}/whatsapp", headers=_auth(admin),
+        json={"wa_waba_id": "not-an-id"},
+    )
+    assert r3.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_relinking_number_alone_keeps_the_waba(client, db):
+    """Omitting wa_waba_id means 'unchanged' — a re-link of the phone number
+    must not silently break template creation."""
+    _, b = await _clinic(db)
+    admin = _admin_jwt()
+    await client.patch(
+        f"/admin/branches/{b.id}/whatsapp", headers=_auth(admin),
+        json={"wa_phone_number_id": "444444444444", "wa_waba_id": "555555555555"},
+    )
+    r = await client.patch(
+        f"/admin/branches/{b.id}/whatsapp", headers=_auth(admin),
+        json={"wa_phone_number_id": "666666666666"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["wa_waba_id"] == "555555555555"
+
+
+@pytest.mark.asyncio
+async def test_unlinking_the_number_clears_the_waba(client, db):
+    """wa_waba_id is UNIQUE: a stale one on a disconnected branch would 409 the
+    clinic that actually owns it."""
+    _, b = await _clinic(db)
+    admin = _admin_jwt()
+    await client.patch(
+        f"/admin/branches/{b.id}/whatsapp", headers=_auth(admin),
+        json={"wa_phone_number_id": "777777777777", "wa_waba_id": "888888888888"},
+    )
+    r = await client.patch(
+        f"/admin/branches/{b.id}/whatsapp", headers=_auth(admin),
+        json={"wa_phone_number_id": None},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["wa_waba_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_owner_cannot_use_admin_link_endpoint(client, db):
     org, b = await _clinic(db)
     owner = _owner_jwt(str(org.id), str(b.id))
