@@ -158,8 +158,6 @@ async def connect_branch(
     (register, verified-name lookup) never raises — it degrades quietly and
     is reported back in the result dict.
     """
-    from datetime import datetime, timezone
-
     try:
         token = await _exchange_code(code)
     except (httpx.HTTPStatusError, httpx.TransportError) as e:
@@ -171,6 +169,42 @@ async def connect_branch(
             502, "Could not connect to WhatsApp — please try again."
         ) from e
 
+    return await _finish_connect(
+        branch, token=token, waba_id=waba_id, phone_number_id=phone_number_id,
+    )
+
+
+async def connect_branch_manual(
+    branch, *, token: str, waba_id: str, phone_number_id: str
+) -> dict:
+    """Same connect, without Embedded Signup: the owner pastes the three
+    values from Meta's own API Setup screen.
+
+    Exists because Embedded Signup cannot run until the Meta app is published
+    Live, and because a clinic on a partner-managed WABA may never see that
+    popup at all. Everything after the token is identical — the subscribe is
+    just as mandatory here, so a number linked this way is a real connection
+    and not a half-configured branch that silently drops inbound messages.
+
+    RULE 1: the token is REQUIRED and is stored per branch. It deliberately
+    does NOT fall back to `settings.meta_access_token` — that fallback is
+    bridge mode, reachable only by super_admin, and letting a clinic owner
+    self-serve into it would let any clinic type Vachanam's own WABA id and
+    send from the platform account.
+    """
+    return await _finish_connect(
+        branch, token=token, waba_id=waba_id, phone_number_id=phone_number_id,
+    )
+
+
+async def _finish_connect(
+    branch, *, token: str, waba_id: str, phone_number_id: str
+) -> dict:
+    """Everything a connect does once a usable token exists. Shared so the
+    Embedded Signup and manual paths cannot drift into behaving differently —
+    in particular so neither can skip the mandatory subscribe."""
+    from datetime import datetime, timezone
+
     try:
         await _subscribe_app(waba_id, token)
     except (httpx.HTTPStatusError, httpx.TransportError) as e:
@@ -181,7 +215,7 @@ async def connect_branch(
         raise WaConnectError(
             502,
             "Connected to WhatsApp but could not subscribe to message "
-            "delivery — please try again.",
+            "delivery — please check the ID and token and try again.",
         ) from e
 
     registered = await _register_phone(phone_number_id, token)

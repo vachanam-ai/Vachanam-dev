@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   connectWa,
+  connectWaManual,
   disconnectWa,
   fetchWaConnection,
   fetchWaSignupConfig,
@@ -24,6 +26,83 @@ const ERRORS = {
   sdk_blocked:
     "Your browser blocked Meta's sign-up script — usually an ad blocker or a strict network. Disable it for this page and try again.",
 };
+
+// Fallback path. Embedded Signup can't run until our Meta app is published
+// Live, and a clinic on a partner-managed WABA may never see that popup — so
+// the card also accepts the three values Meta's own API Setup screen shows.
+// Collapsed by default: the popup is the path almost every clinic should take.
+function ManualConnect({ branchId, onConnected }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    waba_id: "", phone_number_id: "", access_token: "",
+  });
+
+  const connect = useMutation({
+    mutationFn: () => connectWaManual(branchId, form),
+    onSuccess: () => {
+      setForm({ waba_id: "", phone_number_id: "", access_token: "" });
+      setOpen(false);
+      onConnected();
+      toast.success("WhatsApp connected.");
+    },
+    onError: (e) =>
+      toast.error(e?.response?.data?.detail ?? "Could not connect with those details."),
+  });
+
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const numeric = (v) => /^\d+$/.test(v.trim());
+  const ready =
+    numeric(form.waba_id) && numeric(form.phone_number_id)
+    && form.access_token.trim().length >= 20;
+
+  if (!open) {
+    return (
+      <button type="button" data-testid="wa-manual-toggle"
+        className="font-ui text-xs font-medium text-slate underline-offset-2 hover:underline"
+        onClick={() => setOpen(true)}>
+        Enter the details manually instead
+      </button>
+    );
+  }
+
+  return (
+    <form data-testid="wa-manual-form" className="space-y-3 border-t border-hairline pt-4"
+      onSubmit={(e) => { e.preventDefault(); connect.mutate(); }}>
+      <p className="font-ui text-xs text-slate">
+        From Meta's <strong className="text-ink">WhatsApp → API Setup</strong> page.
+        The token is stored encrypted and is never shown again.
+      </p>
+      <label className="block font-ui text-xs font-medium text-ink">
+        WhatsApp Business Account ID
+        <input className="input mt-1" inputMode="numeric" autoComplete="off"
+          data-testid="wa-manual-waba" value={form.waba_id} onChange={set("waba_id")} />
+      </label>
+      <label className="block font-ui text-xs font-medium text-ink">
+        Phone number ID
+        <input className="input mt-1" inputMode="numeric" autoComplete="off"
+          data-testid="wa-manual-phone" value={form.phone_number_id}
+          onChange={set("phone_number_id")} />
+      </label>
+      <label className="block font-ui text-xs font-medium text-ink">
+        Access token
+        {/* type=password so a token never sits in plain view during a screen
+            share or a support call — the one place it exists in the browser. */}
+        <input className="input mt-1" type="password" autoComplete="off"
+          data-testid="wa-manual-token" value={form.access_token}
+          onChange={set("access_token")} />
+      </label>
+      <div className="flex items-center gap-3">
+        <button type="submit" className="btn-primary" data-testid="wa-manual-submit"
+          disabled={!ready || connect.isPending}>
+          {connect.isPending ? "Connecting…" : "Connect"}
+        </button>
+        <button type="button" className="btn-ghost" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
 
 export default function WaConnectCard({ branchId }) {
   const qc = useQueryClient();
@@ -115,6 +194,10 @@ export default function WaConnectCard({ branchId }) {
       {!configured && (
         <p className="font-ui text-xs text-danger">{ERRORS.not_configured}</p>
       )}
+      <ManualConnect branchId={branchId} onConnected={() => {
+        qc.invalidateQueries({ queryKey: ["wa-connection", branchId] });
+        qc.invalidateQueries({ queryKey: ["wa-templates", branchId] });
+      }} />
     </div>
   );
 }

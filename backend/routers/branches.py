@@ -1262,6 +1262,34 @@ class WaConnectBody(BaseModel):
         return value
 
 
+class WaConnectManualBody(BaseModel):
+    """The three values Meta's own API Setup screen shows, typed in by the
+    owner. `access_token` is REQUIRED, not optional: without it the branch
+    would fall back to the platform token (bridge mode), which would let any
+    clinic owner type Vachanam's WABA id and send from the platform account
+    (RULE 1). Bridge mode stays super_admin-only, on the admin route."""
+
+    waba_id: str = Field(..., min_length=1, max_length=32)
+    phone_number_id: str = Field(..., min_length=1, max_length=32)
+    access_token: str = Field(..., min_length=20, max_length=4000)
+
+    @field_validator("waba_id", "phone_number_id")
+    @classmethod
+    def _numeric_meta_id(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not value.isdigit():
+            raise ValueError("Must be a numeric Meta id")
+        return value
+
+    @field_validator("access_token")
+    @classmethod
+    def _stripped_token(cls, value: str) -> str:
+        # Copy-paste from Meta's dashboard drags whitespace and the odd
+        # newline along; a token with a trailing \n fails Graph auth with an
+        # error the owner cannot possibly diagnose.
+        return (value or "").strip()
+
+
 # ── WhatsApp chats — read-only view of what the bot said to patients ────────
 # Vinay 2026-08-02: "we also need whatsapp pages to choose template, track
 # chats etc". Templates are above; this is the tracking half.
@@ -1488,6 +1516,97 @@ async def connect_whatsapp(
 
     logger.info(
         "wa_branch_connected", branch_id=branch_id, waba_id=body.waba_id,
+        status=branch.wa_status, phone_registered=result.get("registered"),
+    )
+    return {
+        "branch_id": branch_id,
+        "wa_status": branch.wa_status,
+        "wa_waba_id": branch.wa_waba_id,
+        "wa_verified_name": branch.wa_verified_name,
+        "wa_connected_at": branch.wa_connected_at.isoformat() if branch.wa_connected_at else None,
+        "phone_registered": result.get("registered"),
+    }
+
+
+@router.post("/{branch_id}/whatsapp/connect/manual", status_code=201)
+@audit("branch.wa_connected_manual", resource_type="branch")
+async def connect_whatsapp_manual(
+    branch_id: str,
+    body: WaConnectManualBody,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Connect by pasting the IDs from Meta's API Setup screen instead of
+    walking through Embedded Signup. org_admin only, same as the popup route.
+
+    Why it exists: Embedded Signup cannot run until our Meta app is published
+    Live, and a clinic on a partner-managed WABA may never get that popup at
+    all. Without this the clinic page had no way to link a number, and the
+    only path was a super_admin curl.
+
+    RULE 1: wa_waba_id is UNIQUE — the clash is checked before any Graph call
+    and again at commit, exactly as in the Embedded Signup route.
+    RULE 9: `access_token` is never logged, not even truncated; it is
+    Fernet-encrypted onto the branch by wa_connect and only branch_id /
+    waba_id / status appear in any log line or audit row.
+    """
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+
+    clash = (
+        await db.execute(
+            select(Branch).where(
+                Branch.wa_waba_id == body.waba_id, Branch.id != branch.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if clash is not None:
+        logger.warning(
+            "wa_waba_already_linked", branch_id=branch_id, waba_id=body.waba_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="This WhatsApp Business Account is already connected to another clinic.",
+        )
+
+    from backend.services import wa_connect
+
+    try:
+        result = await wa_connect.connect_branch_manual(
+            branch, token=body.access_token, waba_id=body.waba_id,
+            phone_number_id=body.phone_number_id,
+        )
+    except wa_connect.WaConnectError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+    from sqlalchemy.exc import IntegrityError
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        logger.warning(
+            "wa_waba_already_linked", branch_id=branch_id, waba_id=body.waba_id,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="This WhatsApp Business Account is already connected to another clinic.",
+        )
+
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    request.state.audit_metadata = {"waba_id": body.waba_id, "status": branch.wa_status}
+
+    logger.info(
+        "wa_branch_connected_manual", branch_id=branch_id, waba_id=body.waba_id,
         status=branch.wa_status, phone_registered=result.get("registered"),
     )
     return {

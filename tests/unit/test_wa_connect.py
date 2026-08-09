@@ -128,6 +128,47 @@ async def test_connect_branch_subscribes_with_the_bearer_token(monkeypatch):
     assert subscribe_calls[0][2]["Authorization"] == "Bearer BUSINESS_TOKEN"
 
 
+@pytest.mark.asyncio
+async def test_manual_connect_uses_the_pasted_token_and_never_exchanges(monkeypatch):
+    """The manual path has no authorization code. It must reach the SAME
+    subscribe/register/name steps with the owner's own token, and must never
+    touch the oauth exchange."""
+    branch = FakeBranch()
+    client = _wire(monkeypatch, waba_id="WABA9", phone_number_id="PHONE9")
+
+    result = await wa_connect.connect_branch_manual(
+        branch, token="OWNER_TOKEN", waba_id="WABA9", phone_number_id="PHONE9",
+    )
+
+    assert not [c for c in client.calls if "oauth/access_token" in c[1]]
+    subscribe_calls = [c for c in client.calls if "subscribed_apps" in c[1]]
+    assert len(subscribe_calls) == 1
+    assert subscribe_calls[0][2]["Authorization"] == "Bearer OWNER_TOKEN"
+    assert branch.wa_status == "connected"
+    assert decrypt_secret(branch.wa_token_enc) == "OWNER_TOKEN"
+    assert result["verified_name"] == "Sunrise Dental"
+
+
+@pytest.mark.asyncio
+async def test_manual_connect_subscribe_failure_leaves_branch_untouched(monkeypatch):
+    """The subscribe is load-bearing on BOTH paths — the shared _finish_connect
+    is what stops the manual route from quietly skipping it and producing a
+    branch that never receives a webhook."""
+    branch = FakeBranch()
+    _wire(monkeypatch, waba_id="WABA10", phone_number_id="PHONE10",
+          subscribe=_resp(403, {"error": {"message": "nope"}}))
+
+    with pytest.raises(wa_connect.WaConnectError) as e:
+        await wa_connect.connect_branch_manual(
+            branch, token="OWNER_TOKEN", waba_id="WABA10", phone_number_id="PHONE10",
+        )
+
+    assert e.value.status_code == 502
+    assert "OWNER_TOKEN" not in e.value.detail
+    assert branch.wa_waba_id is None
+    assert branch.wa_status != "connected"
+
+
 # ── mandatory step: subscribe failure aborts the whole connect ──────────────
 
 

@@ -126,6 +126,170 @@ async def test_org_admin_connects_own_branch(db, client, fake_connect):
     assert decrypt_secret(branch.wa_token_enc) == "FAKE_BUSINESS_TOKEN"
 
 
+# ── manual connect (Embedded Signup unavailable) ─────────────────────────────
+
+
+@pytest.fixture
+def fake_manual_connect(monkeypatch):
+    """Same contract as fake_connect, for connect_branch_manual: takes a token
+    instead of a code and stores THAT token, so a test can prove the owner's
+    own credential is what ends up on the branch."""
+    calls = []
+
+    async def _fake(branch, *, token, waba_id, phone_number_id):
+        calls.append(
+            {"token": token, "waba_id": waba_id, "phone_number_id": phone_number_id}
+        )
+        branch.wa_waba_id = waba_id
+        branch.wa_phone_number_id = phone_number_id
+        branch.wa_token_enc = encrypt_secret(token)
+        branch.wa_verified_name = "Manual Clinic"
+        branch.wa_status = "connected"
+        branch.wa_connected_at = datetime.now(timezone.utc)
+        return {"registered": False, "verified_name": "Manual Clinic"}
+
+    monkeypatch.setattr(wa_connect, "connect_branch_manual", _fake)
+    return calls
+
+
+_MANUAL_BODY = {
+    "waba_id": "555000111",
+    "phone_number_id": "555000222",
+    "access_token": "EAAG" + "x" * 40,
+}
+
+
+@pytest.mark.asyncio
+async def test_owner_connects_by_pasting_the_ids(db, client, fake_manual_connect):
+    org, branch = await _clinic(db)
+    owner = _jwt(role="org_admin", org_id=str(org.id))
+
+    r = await client.post(
+        f"/branches/{branch.id}/whatsapp/connect/manual",
+        headers=_auth(owner), json=_MANUAL_BODY,
+    )
+
+    assert r.status_code == 201, r.text
+    assert r.json()["wa_status"] == "connected"
+    assert r.json()["wa_waba_id"] == "555000111"
+    assert "access_token" not in r.json() and "wa_token_enc" not in r.json()
+
+    await db.refresh(branch)
+    # The OWNER's token is stored — never the platform token (RULE 1: bridge
+    # mode is super_admin-only and must not be reachable from the clinic page).
+    assert decrypt_secret(branch.wa_token_enc) == _MANUAL_BODY["access_token"]
+    assert branch.wa_waba_id == "555000111"
+
+
+@pytest.mark.asyncio
+async def test_manual_connect_requires_a_token(db, client, fake_manual_connect):
+    """Without a token the branch would fall back to settings.meta_access_token
+    — letting any clinic type Vachanam's WABA id and send from the platform
+    account. The field is required, so this can never reach the service."""
+    org, branch = await _clinic(db)
+    owner = _jwt(role="org_admin", org_id=str(org.id))
+
+    for bad in ({k: v for k, v in _MANUAL_BODY.items() if k != "access_token"},
+                {**_MANUAL_BODY, "access_token": ""},
+                {**_MANUAL_BODY, "access_token": "short"}):
+        r = await client.post(
+            f"/branches/{branch.id}/whatsapp/connect/manual",
+            headers=_auth(owner), json=bad,
+        )
+        assert r.status_code == 422, r.text
+    assert fake_manual_connect == []
+
+
+@pytest.mark.asyncio
+async def test_manual_connect_strips_pasted_whitespace(db, client, fake_manual_connect):
+    """A token copied from Meta's dashboard drags a trailing newline along and
+    then fails Graph auth with an error no clinic owner can diagnose."""
+    org, branch = await _clinic(db)
+    owner = _jwt(role="org_admin", org_id=str(org.id))
+
+    await client.post(
+        f"/branches/{branch.id}/whatsapp/connect/manual", headers=_auth(owner),
+        json={**_MANUAL_BODY, "access_token": f"  {_MANUAL_BODY['access_token']}\n",
+              "waba_id": " 555000111 "},
+    )
+    assert fake_manual_connect[0]["token"] == _MANUAL_BODY["access_token"]
+    assert fake_manual_connect[0]["waba_id"] == "555000111"
+
+
+@pytest.mark.asyncio
+async def test_manual_connect_is_owner_only(db, client, fake_manual_connect):
+    org, branch = await _clinic(db)
+
+    receptionist = _jwt(role="receptionist", org_id=str(org.id),
+                        branch_ids=[str(branch.id)])
+    r = await client.post(
+        f"/branches/{branch.id}/whatsapp/connect/manual",
+        headers=_auth(receptionist), json=_MANUAL_BODY,
+    )
+    assert r.status_code == 403
+
+    admin = _jwt(role="super_admin", is_admin=True)
+    r2 = await client.post(
+        f"/branches/{branch.id}/whatsapp/connect/manual",
+        headers=_auth(admin), json=_MANUAL_BODY,
+    )
+    assert r2.status_code == 403
+    assert fake_manual_connect == []
+
+
+@pytest.mark.asyncio
+async def test_manual_connect_cannot_claim_another_clinics_waba(
+    db, client, fake_manual_connect,
+):
+    """RULE 1: pasting IDs is unauthenticated input — the uniqueness guard is
+    what stops a clinic typing a WABA it does not own."""
+    org1, b1 = await _clinic(db, wa_waba_id="555000111")
+    org2, b2 = await _clinic(db)
+    owner2 = _jwt(role="org_admin", org_id=str(org2.id))
+
+    r = await client.post(
+        f"/branches/{b2.id}/whatsapp/connect/manual",
+        headers=_auth(owner2), json=_MANUAL_BODY,
+    )
+    assert r.status_code == 409
+    # Checked BEFORE any Graph call — no wasted round-trip, no partial state.
+    assert fake_manual_connect == []
+    await db.refresh(b2)
+    assert b2.wa_waba_id is None
+
+
+@pytest.mark.asyncio
+async def test_manual_connect_rejects_non_numeric_ids(db, client, fake_manual_connect):
+    org, branch = await _clinic(db)
+    owner = _jwt(role="org_admin", org_id=str(org.id))
+    r = await client.post(
+        f"/branches/{branch.id}/whatsapp/connect/manual", headers=_auth(owner),
+        json={**_MANUAL_BODY, "phone_number_id": "not-an-id"},
+    )
+    assert r.status_code == 422
+    assert fake_manual_connect == []
+
+
+@pytest.mark.asyncio
+async def test_manual_connect_subscribe_failure_is_surfaced(db, client, monkeypatch):
+    """The subscribe is mandatory on this path too — a branch that looks
+    connected but never receives a webhook is worse than an honest failure."""
+    org, branch = await _clinic(db)
+    owner = _jwt(role="org_admin", org_id=str(org.id))
+
+    async def _boom(branch, *, token, waba_id, phone_number_id):
+        raise wa_connect.WaConnectError(502, "could not subscribe")
+
+    monkeypatch.setattr(wa_connect, "connect_branch_manual", _boom)
+    r = await client.post(
+        f"/branches/{branch.id}/whatsapp/connect/manual",
+        headers=_auth(owner), json=_MANUAL_BODY,
+    )
+    assert r.status_code == 502
+    await db.refresh(branch)
+    assert branch.wa_waba_id is None
+
+
 @pytest.mark.asyncio
 async def test_get_status_never_returns_the_token(db, client, fake_connect):
     org, branch = await _clinic(db)
