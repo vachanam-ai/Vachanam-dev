@@ -279,38 +279,61 @@ jitter the caller also hears, so a stopwatch in the caller's hand reads higher.
 
 ### Turn latency, real Telugu calls, 2026-08-09
 
-| | Call A (16 turns) | Call B (21 turns) |
+| | Production A | Production B | **Cartesia sandbox** |
+|---|---|---|---|
+| Turns | 16 | 21 | 10 |
+| p50 | 2,018 ms | 1,713 ms | **1,392 ms** |
+| p95 | 2,888 ms | 2,222 ms | **1,556 ms** |
+| max | 3,970 ms | 2,222 ms | **1,556 ms** |
+| best turn | — | — | **521 ms** |
+| Prompt cache | miss every turn | hit | hit every turn |
+
+All server-side: last recognised word → response audio queued. They exclude the
+carrier legs the caller also hears.
+
+### Where the time goes, and what the sandbox changed
+
+| Stage | Production (Soniox TTS) | Sandbox (Cartesia `sonic-3`) |
 |---|---|---|
-| p50 | 2,018 ms | **1,713 ms** |
-| p95 | 2,888 ms | **2,222 ms** |
-| max | 3,970 ms | **2,222 ms** |
-| Prompt cache | miss on every turn | hit on all Telugu turns |
+| Speech recognition finalise | 375–455 ms | 383–456 ms |
+| Language model, first token (cached) | 420–580 ms | 410–473 ms |
+| **Speech synthesis, first audio** | **~510 ms** | **89–105 ms** |
+| Barge-in stop | 600 ms (was 2,000 ms until fixed) | same |
 
-### Where the time goes
+**Swapping the speech synthesiser removed roughly 420 ms from every single
+turn.** Our measured 89–105 ms matches Cartesia's published figure for this
+model and beats the independent Coval benchmark's 188 ms p50 — plausible
+because our worker is in Mumbai on a warmed persistent connection and we
+synthesise short first sentences deliberately.
 
-| Stage | Measured |
-|---|---|
-| Speech recognition finalise | 400–700 ms typical (2,400 ms worst observed, on a mid-sentence pause) |
-| Language model, first token | 420–930 ms (cached prompt) |
-| Speech synthesis, first audio | 480–700 ms |
-| Barge-in stop | 600 ms (was 2,000 ms until fixed) |
+The sandbox is a separate Fly app running identical code with two environment
+variables flipped, on a distinct LiveKit agent name so it can never be
+dispatched a real patient's call by accident.
 
 ### The honest reading
 
-Conference feedback was that ~3 seconds makes the product unusable, and Call A
-confirms that complaint was real. Call B, after the prompt-cache fix, removes
-the long tail — nothing over 2.3 s.
+Conference feedback was that ~3 seconds makes the product unusable, and
+Production A confirms it. The prompt-cache fix removed the tail; the Cartesia
+swap moved the median. Nothing in the sandbox call crossed 1.6 s.
 
-It is still not where it needs to be. **A human receptionist answers in roughly
-0.3 s.** This is a cascaded pipeline — speech → text → model → text → speech —
-and every stage adds latency that tuning cannot remove. **The realistic floor
-for this architecture is 800–1,000 ms.** Reaching the ~500 ms that feels
-genuinely human requires a speech-to-speech model: a different architecture,
-roughly double the variable cost, and unproven Telugu quality. That evaluation
-is scoped and not yet run.
+It is still not where it needs to be — **a human receptionist answers in
+roughly 0.3 s** — and one honest correction matters here: *this document
+previously stated that sub-second requires a speech-to-speech architecture.
+That is no longer true.* With synthesis at ~90 ms, the dominant remaining cost
+is speech-recognition finalisation. Sub-second on the existing cascaded stack
+is now plausible, at Cartesia's price rather than at roughly double the
+variable cost. Speech-to-speech moves from "the only path" to "one option, and
+the expensive one."
+
+A known ~230 ms is still on the table: in the sandbox call, synthesis
+first-audio was 89–105 ms on the first four turns and 317–353 ms afterwards —
+something stops reusing the warm connection mid-call. Fixing it lands p50 near
+1,150–1,250 ms.
 
 We publish these numbers rather than a marketing figure because latency is the
-central technical risk and any serious investor will test it by calling.
+central technical risk and any serious investor will test it by calling. Full
+competitive analysis, including where we are **behind**, is in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 ### Correctness benchmarks
 
@@ -353,11 +376,29 @@ being quoted in writing.*
 | **Clinic management software** | Halemind, Docon, many regional players | Digitise records, billing, inventory | They do not answer the phone. Complementary — and our refusal to be an EMR is what keeps that true. |
 | **Generic AI voice platforms** | Bland, Vapi, Retell | Sell a voice-agent toolkit | A clinic cannot buy a toolkit and be done. It needs Indian telephony, Indian-language speech that survives a noisy line, the token/queue model, split-shift doctor schedules, leave cascades, calendar, and DPDP posture. That assembly is the product; the voice model is a component. |
 
+### On latency, measured against them
+
+The one credible third-party study (Openbenchmarks, 2026, 2,078 turns over real
+phone calls, ear-side) found medians of 1,296–1,740 ms across Telnyx,
+ElevenLabs, Bland, Vapi and Retell, with p95 tails 1.24×–1.48× the median.
+
+Our sandbox measured **1,392 ms p50 server-side with a p95 of 1.07× the
+median** — no turn crossed the 2-second threshold at which callers start
+talking over the agent.
+
+**We are not claiming to be faster.** Server-side figures run ~490 ms below
+ear-side; corrected, we sit behind those platforms on the median. The claim we
+can defend is **consistency** — measured on one call, in a language none of
+them handle, on turns that include real database lookups and bookings rather
+than a scripted script. Full working, including the sample-size caveat and
+where we lose, is in [BENCHMARKS.md](BENCHMARKS.md).
+
 ### Rules when pitching against them
 
 1. Never claim ISO or SOC certification for Vachanam itself — say *"runs entirely on SOC 2 / ISO-certified infrastructure."*
 2. Never disparage the incumbent. *"Different job, different data footprint"* wins the room.
-3. Every claim must trace to a public document URL or a code-enforced behaviour. If a doctor's IT person asks, we show the mechanism.
+3. Never compare our server-side latency to someone's ear-side latency. It is a 490 ms lie and a technical investor will catch it.
+4. Every claim must trace to a public document URL or a code-enforced behaviour. If a doctor's IT person asks, we show the mechanism.
 
 ---
 
@@ -664,7 +705,7 @@ The numbers to demand at the next update, in priority order:
 
 | Risk | Reality | What reduces it |
 |---|---|---|
-| **Latency** | p50 1.7 s against a human's ~0.3 s. Conference feedback already flagged it. | Cache and turn-taking fixes shipped. Sub-second needs a speech-to-speech architecture — scoped, not built, roughly doubles variable cost. |
+| **Latency** | Production p50 1.7 s, sandbox p50 1.39 s, against a human's ~0.3 s. Corrected to ear-side we are behind the best generic platforms (§7, BENCHMARKS.md). | Cartesia swap took ~420 ms off every turn and is ready to promote. A further ~230 ms is a known connection-reuse bug. Sub-second now looks reachable on the existing stack without paying for speech-to-speech. |
 | **No commercial proof** | Zero clinics. The revenue thesis is untested. | First pilot. Cheap to run; the product instruments its own hypothesis. |
 | **Single point of failure** | The voice agent runs on **one machine** in Mumbai. If it dies, every clinic's phone line dies. | A second machine is a small change and an accepted debt at zero clinics. Must be fixed before the first paying customer. |
 | **Meta dependency** | WhatsApp is built but gated on Meta's App Review, which we do not control. | Voice is the core product and needs no Meta approval. WhatsApp is upside. |
