@@ -2792,6 +2792,28 @@ class VachanamAgent(Agent):
         utterance = self._message_text(new_message).strip()
         self._state.last_user_utterance = utterance
 
+        # ONE ANSWER PER QUESTION. Vinay 2026-08-09: "when i repeat question,
+        # before it replied. it is repeating answer 2 times."
+        #
+        # A committed turn arriving while the PREVIOUS reply is still being
+        # generated used to leave both replies queued: LiveKit's interruption
+        # machinery guards the agent while it is SPEAKING, and the backchannel
+        # filter in stt_node only suppresses while agent_state == "speaking" —
+        # so a repeat during "thinking" is neither interrupted nor filtered,
+        # and the caller hears the same answer twice.
+        #
+        # Reaching here means the turn already survived the backchannel filter
+        # and was committed, so it is real speech and it supersedes whatever is
+        # in flight. Cancelling now (not force) lets the in-flight generation
+        # unwind and keeps the chat context consistent.
+        try:
+            sess = self.session
+            if getattr(sess, "agent_state", None) in ("thinking", "speaking"):
+                sess.interrupt()
+                logger.info("superseded_pending_reply state=%s", sess.agent_state)
+        except Exception as e:  # noqa: BLE001 — RULE 8: never drop a real turn
+            logger.warning("supersede_pending_reply_failed: %s", e)
+
         # Remember consent instead of re-deriving it every turn. "book me an
         # appointment tomorrow at 10" is authorization for the booking that
         # follows, and answering "vinay, 28" two turns later does not withdraw
@@ -5308,7 +5330,17 @@ class VachanamAgent(Agent):
         abandon_pending_booking=true ONLY when a started booking is being
         dropped because the patient clearly declined to finish it."""
         self._check_end_allowed(self._state, abandon_pending_booking)
-        # The model sometimes calls this as a BARE tool call with no text in the
+        import time as _end_clock
+
+        # Everything after this point is abortable. Vinay 2026-08-09, live call:
+        # asked "anything else?", he answered, the model called end_call, and
+        # while the goodbye played he asked about the clinic's specialities. Fly
+        # logs show the question WAS transcribed and then discarded —
+        # "skipping on_user_turn_completed, speech scheduling is paused" — and
+        # the room was deleted 1.5s later. Hanging up on a question is the worst
+        # thing this agent can do, and "anything else?" is precisely the moment
+        # a caller starts talking.
+        _end_started = _end_clock.monotonic()
         # turn (prod 2026-08-07 19:46 UTC: completion_tokens=9, then the room
         # was deleted 1.1s later). wait_for_playout then has nothing to wait
         # for, so the caller hears silence and the line simply dies — which is
@@ -5327,6 +5359,30 @@ class VachanamAgent(Agent):
             await context.wait_for_playout()
         except Exception:
             pass
+        # ABORT if the caller spoke at any point since this call began — during
+        # the goodbye, or while it was still being synthesized. Two signals: the
+        # VAD state change recorded on the shared state, and the live user_state
+        # for someone still mid-sentence right now. The tool returns instead of
+        # raising, so the model simply gets its answer back and carries on.
+        _spoke_during_goodbye = self._state.last_user_speech_at > _end_started
+        _speaking_now = False
+        try:
+            _speaking_now = getattr(sess, "user_state", None) == "speaking"
+        except Exception:  # noqa: BLE001
+            pass
+        if _spoke_during_goodbye or _speaking_now:
+            logger.info(
+                "end_call_aborted_caller_spoke room=%s during_goodbye=%s now=%s",
+                self._room.name, _spoke_during_goodbye, _speaking_now,
+            )
+            return {
+                "success": False,
+                "aborted": True,
+                "instruction": (
+                    "DO NOT end the call — the caller started speaking. Listen "
+                    "to what they said and answer it normally."
+                ),
+            }
         try:
             lkapi = api.LiveKitAPI()
             await lkapi.room.delete_room(api.DeleteRoomRequest(room=self._room.name))
@@ -6980,6 +7036,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     "min_duration": 0.4,
                     "min_words": 2,
                     "resume_false_interruption": True,
+                    # Vinay 2026-08-09: "when i am speaking when it talks the
+                    # time it takes to go silent is high (1-2sec)."
+                    #
+                    # This knob was never set, so it ran on LiveKit's 2.0s
+                    # default — the window it waits for a SECOND word before
+                    # deciding the interruption was real. VAD pauses the audio
+                    # immediately, but for up to two seconds the agent can still
+                    # decide it was a false alarm and RESUME, which is what a
+                    # caller hears as "it took ages to stop".
+                    #
+                    # 0.6s keeps #403 intact (a lone "హలో?" still cannot commit
+                    # an interruption) while cutting the worst case by ~1.4s.
+                    # Safe because Soniox interims land in ~0.1-0.3s per the
+                    # #403 note below, so two words comfortably arrive inside
+                    # 0.6s; the old 2.0s was ~3x longer than the signal needs.
+                    "false_interruption_timeout": 0.6,
                 },
             },
             # With the semantic turn detector backstopping, the silence timers can
@@ -7752,6 +7824,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 _sil["last_user"] = _perf.monotonic()
                 _sil["prompts"] = 0
                 state.closing = False
+                # Also on the shared state, so end_call can see that the caller
+                # talked over its goodbye and abort the hangup (Vinay 08-09).
+                state.last_user_speech_at = _perf.monotonic()
 
         async def _silence_watchdog() -> None:
             try:

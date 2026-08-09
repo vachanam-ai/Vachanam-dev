@@ -100,6 +100,20 @@ class SessionState:
     # finished. The two are kept together on purpose, one catching intent
     # stated before any tool ran, the other catching work already underway.
     mutation_in_flight: str | None = None
+    # `time.monotonic()` of the last moment the CALLER started speaking. 0.0 =
+    # they have not spoken yet.
+    #
+    # Vinay 2026-08-09, live call: he was asked "anything else?", answered, the
+    # model called end_call, and while the goodbye was playing he asked about
+    # the clinic's specialities. The question was transcribed and then dropped
+    # ("skipping on_user_turn_completed, speech scheduling is paused") and the
+    # line went down. end_call had already committed.
+    #
+    # This is the timestamp end_call compares against so it can ABORT a hangup
+    # the caller talked over. It is set from the session's own VAD state change,
+    # which keeps working after LiveKit stops scheduling new speech — the turn
+    # pipeline is what pauses, not the audio.
+    last_user_speech_at: float = 0.0
     # Exact durable booking created most recently in THIS call. If the caller
     # immediately says the booking was accidental, cancellation is pinned to
     # this id instead of trusting an older/arbitrary id selected by the LLM.
