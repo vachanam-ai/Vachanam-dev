@@ -128,6 +128,81 @@ answers. Paste these, edited only if something below stops being true.
 The "no health information" sentence is load-bearing for a medical-category
 business. It is also true of our templates — keep it that way.
 
+## 3b. The three submission sections
+
+The submission page gates on Allowed usage, Data handling, and Reviewer
+instructions. Every answer below is checked against what
+`https://vachanam-backend.onrender.com/privacy` and `/data-handling` already
+publish. Meta compares the two. Do not improve the wording in one place only.
+
+### Allowed usage
+
+A certification, not an essay: read each permission's allowed-usage statement
+and tick it. For the two WhatsApp permissions the statements forbid using
+Platform Data for advertising or ad targeting, selling or licensing it,
+building profiles for anything other than the integration, and sharing it with
+data brokers. None of that describes us, so certify truthfully.
+
+The one to read slowly is the clause about using data only to provide the
+integration the user expects. Ours is appointment booking for the clinic the
+patient messaged — that is the whole of it.
+
+### Data handling
+
+| Their question | Our answer |
+|---|---|
+| Which Platform Data does the app access? | The patient's WhatsApp phone number, their WhatsApp profile name, and the content of messages they send to the clinic. |
+| Do you store it? | Yes, minimally. Last 10 messages of the thread plus any in-progress booking in `whatsapp_sessions`, clinic-scoped. The WhatsApp message ID (identifier only, never text) cached 24h for delivery de-duplication. An unanswered patient question with name and number in `clinic_questions` so a human can reply. |
+| How long? | Sessions: 30 days without a new message, or until the patient record is erased, whichever comes first. Message IDs: 24 hours. Questions: until the patient record is erased. Patient records: erased after 2 years of inactivity or on request. |
+| Where? | Supabase Postgres in `ap-south-1` (Mumbai, India). AES-256 at rest, TLS in transit, SOC 2–audited infrastructure. |
+| Do you transfer it to third parties? | No sale, no licensing, no data brokers, no advertising use. Infrastructure sub-processors only (hosting, database, cache), each listed in our published privacy policy, each contractually bound. |
+| Purpose | To book, reschedule, cancel and remind patients about appointments at the clinic they messaged. Nothing else. |
+| Access controls | Every row carries the clinic's `branch_id` and every query is scoped to it. Cross-clinic access attempts are covered by automated tests that run on every change. Vachanam's own platform administrator is locked out of clinic patient-data routes by role checks. |
+| Deletion | `https://vachanam-backend.onrender.com/data-deletion` |
+
+If Meta triggers a Data Protection Assessment, it is the same content at
+greater length — answer from `/data-handling`, which is the authoritative
+version, and never invent a control we do not have.
+
+### Reviewer instructions
+
+Paste this, with the real credentials filled in:
+
+> Vachanam is an appointment-booking platform for clinics in India. Clinics
+> connect their own WhatsApp Business Account and we manage message templates
+> and send appointment messages on their behalf.
+>
+> Sign in at https://vachanam.in/login
+> Email: <throwaway owner email>
+> Password: <password>
+>
+> To review `whatsapp_business_management` (template management):
+> 1. Sign in. In the left sidebar, click **WhatsApp**.
+> 2. The card at the top shows the connected WhatsApp Business Account —
+>    verified name, WABA ID and phone number ID.
+> 3. Click **+ New template** in the top bar.
+> 4. Enter a name, leave the category as UTILITY, type a message body using
+>    {{1}} as a placeholder, supply an example value, and add a button.
+> 5. Click Submit. The template is created on the connected WABA via the
+>    Graph API and appears in the list with status "pending", which is the
+>    review status read back from Meta.
+> 6. The same template is visible in WhatsApp Manager under Message
+>    templates for that WABA.
+>
+> To review `whatsapp_business_messaging` (sending):
+> 1. From the same account, open **Conversations** in the left sidebar.
+> 2. Appointment messages sent to a patient appear in the patient's thread.
+> 3. A send is triggered whenever a booking is confirmed, rescheduled or
+>    cancelled, and by the appointment reminder job. Each send uses an
+>    approved UTILITY template on the clinic's own WABA.
+>
+> We send no marketing messages. Template content is appointment logistics
+> only — patient first name, doctor, date, time, clinic name and token
+> number. No health information is ever sent.
+
+Attach Video A to the management permission and Video B to the messaging
+permission, not both to one.
+
 ## 4. Test credentials for the reviewer
 
 App Review requires a working login. Create a throwaway clinic-owner account
