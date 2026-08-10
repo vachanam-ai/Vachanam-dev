@@ -52,8 +52,10 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'primary_region = "bom"' in cfg
     assert 'LIVEKIT_AGENT_NAME = "vachanam-sandbox"' in cfg
     assert 'STT_PROVIDER = "soniox"' in cfg
-    assert 'TTS_PROVIDER = "soniox"' in cfg
-    assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in cfg
+    assert 'TTS_PROVIDER = "cartesia"' in cfg
+    assert 'LLM_PROVIDER = "livekit"' in cfg
+    assert 'LIVEKIT_INFERENCE_MODEL = "google/gemma-4-31b-it"' in cfg
+    assert 'CARTESIA_MIN_SENTENCE_LEN = "4"' in cfg
     assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in cfg
     assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"' in cfg
     assert 'SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"' in cfg
@@ -87,6 +89,7 @@ def test_cartesia_sandbox_builds_every_supported_language(monkeypatch, code):
 
     monkeypatch.setattr(ag.settings, "cartesia_api_key", "test-key")
     monkeypatch.setattr(ag.settings, "cartesia_voice", "")
+    monkeypatch.setattr(ag.settings, "cartesia_min_sentence_len", 4)
     tts = ag._build_cartesia_tts(code)
     assert tts._opts.language == code
 

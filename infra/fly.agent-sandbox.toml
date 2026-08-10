@@ -28,13 +28,13 @@ primary_region = "bom"
   APP_ENV = "production"     # same code path; provider switches are explicit
   LOG_LEVEL = "info"
   # Pulse Telugu live canary failed silent after nine turns while still
-  # consuming audio. Soniox is the proven recognizer and voice for this canary.
+  # consuming audio. Soniox is the proven recognizer for this canary.
   STT_PROVIDER = "soniox"
-  TTS_PROVIDER = "soniox"
-  # Local persistent-WS benchmark (6 warm samples): 16 kHz p50 453ms versus
-  # 24 kHz p50 490ms. PSTN delivers 8 kHz audio, so 16 kHz preserves the
-  # available phone-band quality without paying for unused samples.
-  SONIOX_TTS_SAMPLE_RATE = "16000"
+  TTS_PROVIDER = "cartesia"
+  LLM_PROVIDER = "livekit"
+  LIVEKIT_INFERENCE_MODEL = "google/gemma-4-31b-it"
+  CARTESIA_MIN_SENTENCE_LEN = "4"
+  CARTESIA_SAMPLE_RATE = "24000"
   VOICE_ENDPOINTING_MIN_DELAY_S = "0"
   VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"
   SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"

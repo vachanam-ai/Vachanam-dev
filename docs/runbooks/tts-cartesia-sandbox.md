@@ -6,16 +6,20 @@ without disturbing existing things."*
 
 ## What it is
 
-The **same agent code** as production with two environment variables flipped:
+The **same agent code** as production with explicit sandbox-only providers:
 
 | | production | sandbox |
 |---|---|---|
 | Fly app | `vachanam-agent` | `vachanam-agent-sandbox` |
+| `STT_PROVIDER` | `soniox` | `soniox` |
+| `LLM_PROVIDER` | `gemini` | `livekit` |
+| LLM | cached Gemini 2.5 Flash | LiveKit Gemma 4 31B |
+| Fly region | Mumbai | Mumbai |
 | `TTS_PROVIDER` | unset (→ soniox) | `cartesia` |
 | `LIVEKIT_AGENT_NAME` | unset (→ `vachanam-agent`) | `vachanam-sandbox` |
 
-Everything else — STT, LLM, prompts, booking, the database — is identical, so
-what you hear differs **only** because of the voice engine.
+Prompts, booking tools, and the database are shared. The sandbox intentionally
+changes LLM and TTS while its app, worker name, and DID dispatch isolate it.
 
 ## Why the separate agent name matters
 
@@ -62,12 +66,16 @@ reversible. The clinic's DID dispatch rule names an agent; switching it sends
 python scripts/route_venkateshwara_tts_sandbox.py status
 
 python scripts/route_venkateshwara_tts_sandbox.py apply venkateshwara
+
+# Investor demo DID
+python scripts/route_venkateshwara_tts_sandbox.py apply skincare
 ```
 
 **Do it when the clinic is closed**, make your test calls, then put it back:
 
 ```bash
 python scripts/route_venkateshwara_tts_sandbox.py revert venkateshwara
+python scripts/route_venkateshwara_tts_sandbox.py revert skincare
 python scripts/route_venkateshwara_tts_sandbox.py status
 ```
 
@@ -93,8 +101,8 @@ Cartesia and Soniox differ most where our calls actually live:
 - Book, reschedule, then cancel from the same caller number; verify every
   success against the database/transcript, never only by what the model says
 
-Both engines use the **same** sentence tokenizer (`min_sentence_len=8`), so you
-are comparing engines, not two chunking strategies.
+The investor sandbox uses `CARTESIA_MIN_SENTENCE_LEN=4` so short acknowledgments
+reach TTS earlier. Production Soniox remains at `min_sentence_len=8`.
 
 ## Turning it off
 

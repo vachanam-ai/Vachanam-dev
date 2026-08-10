@@ -51,15 +51,14 @@ def test_a_missing_cartesia_key_fails_loudly():
     assert "CARTESIA_API_KEY is unset" in src
 
 
-def test_both_engines_use_the_same_tokenizer():
-    """Otherwise the sandbox would compare two chunking strategies, not two
-    voice engines."""
+def test_cartesia_has_a_sandbox_only_short_first_chunk():
+    """Cartesia starts short acknowledgements without changing Soniox."""
     import agent.livekit_minimal.agent as a
 
-    for fn in (a._build_soniox_tts, a._build_cartesia_tts):
-        src = inspect.getsource(fn)
-        assert "min_sentence_len=8" in src
-        assert "stream_context_len=4" in src
+    assert "min_sentence_len=8" in inspect.getsource(a._build_soniox_tts)
+    cartesia_src = inspect.getsource(a._build_cartesia_tts)
+    assert "settings.cartesia_min_sentence_len" in cartesia_src
+    assert "stream_context_len=4" in cartesia_src
 
 
 def test_the_sandbox_selection_is_logged():
@@ -115,8 +114,8 @@ def test_the_sandbox_fly_config_cannot_collide_with_production():
     assert 'app = "vachanam-agent-sandbox"' in cfg
     assert 'app = "vachanam-agent"' in prod
     assert 'LIVEKIT_AGENT_NAME = "vachanam-sandbox"' in cfg
-    assert 'TTS_PROVIDER = "soniox"' in cfg
-    assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in cfg
+    assert 'TTS_PROVIDER = "cartesia"' in cfg
+    assert 'CARTESIA_MIN_SENTENCE_LEN = "4"' in cfg
     # Production now carries the proven Soniox/16 kHz profile, never Cartesia
     # or the sandbox worker identity.
     assert 'TTS_PROVIDER = "soniox"' in prod

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     cartesia_model: str = "sonic-3-2026-01-12"
     cartesia_voice: str = ""          # Cartesia voice id; blank = plugin default
     cartesia_sample_rate: int = 24000
+    cartesia_min_sentence_len: int = 4
     soniox_tts_sample_rate: int = 24000
 
     # #5 tool prefetch (2026-07-24): on a high-confidence booking turn, run the
@@ -315,6 +316,13 @@ class Settings(BaseSettings):
     def _valid_voice_idle_processes(cls, value: int) -> int:
         if not 1 <= value <= 16:
             raise ValueError('must be between 1 and 16')
+        return value
+
+    @field_validator('cartesia_min_sentence_len')
+    @classmethod
+    def _valid_cartesia_min_sentence_len(cls, value: int) -> int:
+        if not 1 <= value <= 24:
+            raise ValueError('must be between 1 and 24')
         return value
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}

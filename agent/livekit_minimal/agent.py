@@ -1287,7 +1287,9 @@ def _build_cartesia_tts(tts_lang: str):
         # Same sentence tokenizer as Soniox so this compares the ENGINE, not
         # two different chunking strategies.
         tokenizer=_tokenize.blingfire.SentenceTokenizer(
-            min_sentence_len=8, stream_context_len=4, retain_format=True,
+            min_sentence_len=settings.cartesia_min_sentence_len,
+            stream_context_len=4,
+            retain_format=True,
         ),
     )
     if settings.cartesia_voice:
