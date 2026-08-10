@@ -10,6 +10,11 @@ class SessionState:
     # Branch and doctor resolved at call start
     branch_id: UUID | None = None
     doctor_id: UUID | None = None
+    # Latest doctor the CALLER named explicitly. This outranks a stale UUID the
+    # model may carry from an earlier doctor in the same conversation. It is
+    # cleared only when the caller gives a new complaint for deterministic
+    # routing, never by an LLM-authored tool argument.
+    caller_named_doctor_id: UUID | None = None
     patient_name: str | None = None
     patient_phone: str | None = None
     complaint: str | None = None

@@ -261,6 +261,7 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/unit/__init__.py` | placeholder | Package marker. |
 | `tests/unit/test_tts_sanitizer.py` | tested (11/11) | TTS sanitization rules. |
 | `tests/unit/test_booking_confirmation_wording.py` | tested | Booking/reschedule confirmations require the punctuality message; cancellation excludes it. |
+| `tests/unit/test_live_call_aug10_regressions.py` | tested (14/14) | Dr. Lakshmi selection, one-word listening, reminder truth, language-safe filler audio, prompt-cache order, and Telugu clock-word regressions from the 2026-08-10 live call. |
 | `tests/unit/test_doctor_multi_session_schedule.py` | tested | Multi-session validation, sorting, overlap rejection, weekday validation, and slot-boundary coverage. |
 | `tests/unit/test_migration_chain.py` | tested | Prevents the Phase 4.5 full-schema duplication, requires CI's real base-to-head upgrade, and requires missing ZAP reports to fail. |
 | `tests/unit/test_bot_pipeline_builder.py`, `test_bot_tools_and_fallback.py`, `test_bot_tts_sanitizer.py`, `test_pipecat_imports.py` | tested | Pipecat bot pipeline, tool registration, LLM fallback, sanitizer wiring. (Replaced LiveKit-era test_emergency/test_silence_handler/test_audio_quality — modules deleted with the Pipecat rewrite.) |

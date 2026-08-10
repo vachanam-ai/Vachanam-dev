@@ -74,9 +74,10 @@ def test_soniox_context_biasing_400():
 
 def test_hello_immune_barge_in_403():
     """#403: a lone "hello"/backchannel must never CUT the agent — interruption
-    commits only on >=2 transcribed words; a false (one-word) barge-in resumes
-    the same sentence. VAD still pauses instantly, so real barge-in stays fast."""
-    assert '"min_words": 2' in SRC
+    is filtered by stt_node, while meaningful one-word corrections can cut in.
+    A filtered barge-in resumes the same sentence."""
+    assert '"min_words": 1' in SRC
+    assert "suppress_backchannel(text, speaking)" in SRC
     assert '"resume_false_interruption": True' in SRC
     assert "min_interruption_words=0" not in SRC
 

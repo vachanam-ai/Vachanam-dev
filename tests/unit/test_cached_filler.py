@@ -59,7 +59,11 @@ class _Ctx:
 
 
 async def test_cache_filler_clips_populates_userdata(monkeypatch):
-    ud = {"fillers": ["ఒక్క నిమిషం", "okay అండి"], "filler_clips": []}
+    ud = {
+        "language": "te",
+        "fillers": ["ఒక్క నిమిషం", "okay అండి"],
+        "filler_clips": [],
+    }
     sess = _FakeSession(ud)
 
     async def _fake_synth(texts, voice_id, lang_code):
@@ -76,7 +80,7 @@ async def test_cache_filler_clips_populates_userdata(monkeypatch):
 
 async def test_soniox_filler_cache_preserves_long_pause(monkeypatch):
     line = "ఒక్క నిమిషం అండి... చూస్తున్నాను. [long pause]"
-    ud = {"wait_fillers": [line], "wait_clips": []}
+    ud = {"language": "te", "wait_fillers": [line], "wait_clips": []}
     sess = _FakeSession(ud)
     captured = []
 
@@ -94,7 +98,14 @@ async def test_soniox_filler_cache_preserves_long_pause(monkeypatch):
 
 def test_say_lookup_filler_uses_cached_audio_when_present():
     pcm, sr, ch = ag._wav_to_pcm(_make_wav())
-    ud = {"fillers": ["x"], "filler_clips": [{"text": "okay అండి", "pcm": pcm, "sr": sr, "ch": ch}]}
+    ud = {
+        "language": "te",
+        "fillers": ["x"],
+        "filler_clips_language": "te",
+        "filler_clips": [
+            {"text": "okay అండి", "pcm": pcm, "sr": sr, "ch": ch}
+        ],
+    }
     sess = _FakeSession(ud)
     ag._say_lookup_filler(_Ctx(sess))
     assert len(sess.said) == 1

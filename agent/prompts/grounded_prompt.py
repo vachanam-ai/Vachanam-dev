@@ -601,7 +601,16 @@ def _schedule_label(d: DoctorContext) -> str:
 
 def _doctor_rows(doctors: list[DoctorContext]) -> str:
     rows = []
-    for d in doctors:
+    # Prompt caching is byte-exact. The warmer and live query may return the
+    # same branch roster in different PostgreSQL row order, which previously
+    # minted different prompt digests and made every live turn a cache miss.
+    for d in sorted(
+        doctors,
+        key=lambda item: (
+            str(getattr(item, "id", "")),
+            (getattr(item, "name", "") or "").casefold(),
+        ),
+    ):
         mode = (
             "WALK-IN QUEUE, tokens NOT times"
             if d.booking_type == "token"
@@ -826,6 +835,10 @@ never a whole sitting block that is partly booked or already past.
 DOCTOR ROSTER IS IN SCOPE: list only doctors and specialties in <doctors>. A roster
 entry does NOT prove current availability. If no date was given, ask for the date;
 never say available or unavailable before check_availability completes for that date.
+THE CALLER'S LATEST EXPLICIT DOCTOR NAME OVERRIDES every earlier/default doctor.
+Never navigate back to a previous doctor after the caller names a different one.
+REMINDER TIMING is answered deterministically by runtime scheduler policy. Never
+invent, agree with, or repeat a caller-suggested reminder offset such as six hours.
 CHECK EXISTING HOLDINGS: Run find_my_bookings before initiating a new booking. 
 Existing booking found → state it ("{p.already_have}"), then ask "{p.for_whom}".
 </facts_and_grounding>

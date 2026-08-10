@@ -162,6 +162,16 @@ def _english_number_words() -> dict[str, str]:
 
 NUMBER_WORDS_TO_ENGLISH: dict[str, str] = _english_number_words()
 
+ENGLISH_NUMBER_WORDS_TO_TELUGU: dict[str, str] = {
+    _cardinal(n): telugu_number(n)
+    for n in range(1, 60)
+    if telugu_number(n) and not telugu_number(n).isdigit()
+}
+ENGLISH_NUMBER_WORDS_TO_TELUGU.update({
+    "a.m.": "ఏ ఎం",
+    "p.m.": "పీ ఎం",
+})
+
 
 def speech_map(lang_code: str | None) -> dict[str, str]:
     """Deterministic TTS-boundary substitutions for a call in LANG_CODE.
@@ -171,6 +181,12 @@ def speech_map(lang_code: str | None) -> dict[str, str]:
     not the fix.
     """
     mapping = dict(WEEKDAYS_TO_ENGLISH)
-    if (lang_code or "").lower().startswith("en"):
+    code = (lang_code or "").lower()
+    if code.startswith("en"):
         mapping.update(NUMBER_WORDS_TO_ENGLISH)
+    elif code.startswith("te"):
+        # Live Telugu call 2026-08-10: Gemini said "nine" and "twelve P.M."
+        # inside an otherwise Telugu sentence. Normalize number/time tokens at
+        # the audio boundary so prompt drift cannot make the voice code-switch.
+        mapping.update(ENGLISH_NUMBER_WORDS_TO_TELUGU)
     return mapping

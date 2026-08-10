@@ -13,6 +13,27 @@ Format per session:
 
 ---
 
+## 2026-08-10 - Live-call doctor, listening, language and reminder grounding
+
+Fixed the production call in which an explicit request for Dr. Lakshmi retained
+stale Dr. Srinivas state, a Telugu call replayed a Hindi wait clip, short caller
+corrections could not interrupt, the current-doctor answer repeated, English
+clock words leaked into Telugu, and the agent invented a six-hour reminder.
+
+Explicit cross-script doctor names now pin the authoritative branch doctor above
+all model tool arguments. Meaningful one-word corrections can interrupt while
+the existing STT backchannel filter continues to suppress hello/hmm/okay.
+Asynchronous filler banks carry and verify their language at installation and
+playout. Reminder questions bypass the model and derive the answer from the
+confirmed token, doctor setting, and the real 24-hour/30-minute scheduler
+policy. Doctor rows are rendered in stable order so live and prewarmed prompt
+digests match; common language-handoff caches are loaded before the first turn.
+
+Proof: 180 focused voice, prompt-cache, language, booking/reschedule wording,
+reminder and filler regressions passed; repository Ruff, compile and diff checks
+passed. The broader database integration command exceeded its local execution
+bound without a result and is not counted as passing. No frontend file changed.
+
 ## 2026-08-10 - Proven Soniox latency profile promoted to production
 
 Compared durable Redis traces from the production Mumbai worker and the

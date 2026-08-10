@@ -87,7 +87,11 @@ from backend.services.clinic_cache import (  # noqa: E402
     load_doctors,
 )
 from backend.services.doctor_schedule import doctors_on_shift_at  # noqa: E402
-from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
+from agent.i18n.transliterate import (  # noqa: E402
+    consonant_skeleton,
+    spoken_name,
+    spoken_text,
+)
 from agent.livekit_minimal.confirm_speech import (  # noqa: E402
     build_clinic_question_ack,
     build_confirm_text,
@@ -144,7 +148,7 @@ from agent.tools.booking_tools import (  # noqa: E402
 )
 from backend.config import settings  # noqa: E402
 from backend.database import AsyncSessionLocal, get_loop_engine  # noqa: E402
-from backend.models.schema import Branch, Doctor  # noqa: E402
+from backend.models.schema import Branch, Doctor, Token  # noqa: E402
 from backend.models.schema import Patient as _PatientModel  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
@@ -245,8 +249,14 @@ async def cache_filler_clips(
         cached = _FILLER_CLIP_CACHE.get(cache_id)
         if cached is not None:
             ud = getattr(session, "userdata", None)
-            if isinstance(ud, dict):
+            if isinstance(ud, dict) and ud.get("language") == lang_code:
                 ud[key] = cached
+                ud[f"{key}_language"] = lang_code
+            elif isinstance(ud, dict):
+                logger.info(
+                    "filler_clips_stale_discarded built=%s active=%s key=%s",
+                    lang_code, ud.get("language"), key,
+                )
             logger.info("filler_clips_process_hit=%d key=%s", len(cached), key)
             return
         wavs = await synth_wavs(clip_texts, voice_id, lang_code)
@@ -256,8 +266,14 @@ async def cache_filler_clips(
             clips.append({"text": text, "pcm": pcm, "sr": sr, "ch": ch})
         _FILLER_CLIP_CACHE[cache_id] = clips
         ud = getattr(session, "userdata", None)
-        if isinstance(ud, dict):
+        if isinstance(ud, dict) and ud.get("language") == lang_code:
             ud[key] = clips
+            ud[f"{key}_language"] = lang_code
+        elif isinstance(ud, dict):
+            logger.info(
+                "filler_clips_stale_discarded built=%s active=%s key=%s",
+                lang_code, ud.get("language"), key,
+            )
         logger.info("filler_clips_cached=%d key=%s", len(clips), key)
     except Exception as e:  # noqa: BLE001 — a filler must never affect booking
         logger.warning("filler_cache_failed: %s", str(e)[:120])
@@ -269,7 +285,15 @@ def _play_cached_filler(sess, key: str = "filler_clips", texts_key: str = "fille
     Never in chat history; failure is invisible."""
     ud = getattr(sess, "userdata", None)
     ud = ud if isinstance(ud, dict) else {}
-    clips = ud.get(key) or []
+    # Audio has no language metadata of its own. Never replay a bank installed
+    # for an earlier handoff language, even if a future async race reintroduces
+    # stale clips.
+    clip_language = ud.get(f"{key}_language")
+    clips = (
+        ud.get(key) or []
+        if clip_language and clip_language == ud.get("language")
+        else []
+    )
     if clips:
         clip = random.choice(clips)
         sess.say(
@@ -2677,7 +2701,8 @@ def _is_current_doctor_availability_question(text: str) -> bool:
 
 
 _INCOMPLETE_EXACT = frozenset({
-    'what is', 'what is?', 'doctor', 'tomorrow', 'can you',
+    'what is', 'what is?', 'doctor', 'dr', 'dr.', 'tomorrow', 'can you',
+    'డా', 'డా.',
     'ఏంటి', 'ఏంటి?', 'డాక్టర్', 'రేపు', 'మీరు', 'నేను', 'నాకు',
     'అసలు మీ', 'అసలు మీరు',
     'क्या है', 'क्या है?', 'डॉक्टर', 'कल', 'क्या आप',
@@ -2699,6 +2724,85 @@ def _is_incomplete_fragment(text: str) -> bool:
     # conservative so a complete long sentence with expressive punctuation is
     # never intercepted.
     return clean.endswith(('...', '…')) and len(normalized.split()) <= 5
+
+
+def _explicit_roster_doctor_id(
+    text: str, doctors: list[DoctorContext]
+) -> UUID | None:
+    """Resolve one doctor the caller explicitly named, across Indic scripts.
+
+    This is an identity rule, not a semantic routing guess. A unique full-name
+    skeleton wins; zero or multiple names leave state untouched.
+    """
+    spoken = consonant_skeleton(text)
+    if not spoken:
+        return None
+    matches: list[UUID] = []
+    for doctor in doctors or []:
+        name = re.sub(
+            r"^\s*(?:dr\.?|doctor)\s+", "",
+            str(getattr(doctor, "name", "") or ""),
+            flags=re.IGNORECASE,
+        )
+        fingerprint = consonant_skeleton(name)
+        if len(fingerprint) < 3 or fingerprint not in spoken:
+            continue
+        try:
+            matches.append(UUID(str(getattr(doctor, "id", ""))))
+        except (TypeError, ValueError):
+            continue
+    unique = list(dict.fromkeys(matches))
+    return unique[0] if len(unique) == 1 else None
+
+
+_REMINDER_TERMS = (
+    "reminder", "remainder", "remind me",
+    "రిమైండర్", "రిమైండరు", "గుర్తు చేస్త",
+    "रिमाइंडर", "याद दिल",
+    "ரிமைண்டர்", "நினைவூட்ட",
+    "ರಿಮೈಂಡರ್", "ನೆನಪಿಸ",
+    "स्मरण", "आठवण",
+    "রিমাইন্ডার", "মনে কর",
+    "റിമൈൻഡർ", "ഓർമ്മിപ്പ",
+)
+
+
+def _is_reminder_policy_question(text: str) -> bool:
+    clean = " ".join((text or "").casefold().split())
+    return bool(clean) and any(term in clean for term in _REMINDER_TERMS)
+
+
+def _reminder_policy_text(language: str, policy: str) -> str:
+    """Speak the scheduler's real policy; never mirror a caller-suggested time."""
+    lines = {
+        "disabled": {
+            "te": "ఈ డాక్టర్‌కి ఆటోమేటిక్ రిమైండర్ కాల్స్ ఆన్‌లో లేవండి. కాబట్టి రిమైండర్ వస్తుందని నేను చెప్పలేను.",
+            "hi": "इस डॉक्टर के लिए ऑटोमैटिक रिमाइंडर कॉल चालू नहीं है जी, इसलिए मैं रिमाइंडर आने का वादा नहीं कर सकती.",
+            "en": "Automatic reminder calls are not enabled for this doctor, so I cannot promise a reminder.",
+        },
+        "close_only": {
+            "te": "ఆరు గంటల ముందు కాదండి. ఈ అపాయింట్‌మెంట్ ఇరవై నాలుగు గంటల లోపే బుక్ అయింది, కాబట్టి సుమారు ముప్పై నిమిషాల ముందు రిమైండర్ షెడ్యూల్ అవుతుంది.",
+            "hi": "छह घंटे पहले नहीं जी. यह अपॉइंटमेंट चौबीस घंटे के अंदर बुक हुआ है, इसलिए रिमाइंडर लगभग तीस मिनट पहले निर्धारित है.",
+            "en": "Not six hours before. This appointment was booked less than twenty-four hours ahead, so its reminder is scheduled for about thirty minutes before.",
+        },
+        "none_close": {
+            "te": "ఆరు గంటల ముందు కాదండి. అపాయింట్‌మెంట్ గంటలోపే బుక్ అయితే ఆటోమేటిక్ రిమైండర్ కాల్ ఉండదు.",
+            "hi": "छह घंटे पहले नहीं जी. अपॉइंटमेंट एक घंटे के अंदर बुक हुआ हो तो ऑटोमैटिक रिमाइंडर कॉल नहीं किया जाता.",
+            "en": "Not six hours before. An appointment booked within one hour of its time does not get an automatic reminder call.",
+        },
+        "day_and_close": {
+            "te": "ఆరు గంటల ముందు కాదండి. కనీసం ఇరవై నాలుగు గంటల ముందే బుక్ చేసిన అపాయింట్‌మెంట్‌కి సుమారు ఒక రోజు ముందు, అలాగే సుమారు ముప్పై నిమిషాల ముందు రిమైండర్లు షెడ్యూల్ అవుతాయి.",
+            "hi": "छह घंटे पहले नहीं जी. कम से कम चौबीस घंटे पहले बुक किए अपॉइंटमेंट के रिमाइंडर लगभग एक दिन पहले और लगभग तीस मिनट पहले निर्धारित होते हैं.",
+            "en": "Not six hours before. An appointment booked at least twenty-four hours ahead has reminders scheduled about one day before and about thirty minutes before.",
+        },
+        "generic": {
+            "te": "ఆరు గంటల ముందు అనేది మా రిమైండర్ విధానం కాదండి. రిమైండర్లు ఆన్‌లో ఉంటే, బుకింగ్ సమయాన్ని బట్టి సుమారు ఒక రోజు ముందు మరియు ముప్పై నిమిషాల ముందు షెడ్యూల్ అవుతాయి.",
+            "hi": "छह घंटे पहले हमारी रिमाइंडर नीति नहीं है जी. रिमाइंडर चालू हों तो बुकिंग के समय के अनुसार लगभग एक दिन और तीस मिनट पहले निर्धारित होते हैं.",
+            "en": "Six hours before is not our reminder policy. Where reminders are enabled, they are scheduled about one day and thirty minutes before, depending on when the appointment was booked.",
+        },
+    }
+    selected = lines.get(policy, lines["generic"])
+    return selected.get(language, selected["en"])
 
 
 def _cancel_deferred_clarification(state: SessionState, reason: str) -> None:
@@ -3055,6 +3159,71 @@ class VachanamAgent(Agent):
                 'en': 'I cannot access the live schedule right now. Rather than guess, I can connect you to the clinic staff.',
             }.get(language, 'I cannot access the live schedule right now. Rather than guess, I can connect you to the clinic staff.')
 
+    async def _reminder_policy_speech(self, language: str) -> str:
+        """Answer from the actual scheduler inputs, never from model memory."""
+        try:
+            from datetime import timezone
+            from zoneinfo import ZoneInfo
+
+            token = None
+            doctor = None
+            if self._state.last_confirmed_token_id is not None:
+                row = (
+                    await self._db.execute(
+                        select(Token, Doctor)
+                        .join(Doctor, Doctor.id == Token.doctor_id)
+                        .where(
+                            and_(
+                                Token.id == self._state.last_confirmed_token_id,
+                                Token.branch_id == self._state.branch_id,
+                            )
+                        )
+                    )
+                ).first()
+                if row:
+                    token, doctor = row
+            if doctor is None and self._state.doctor_id is not None:
+                doctor = (
+                    await self._db.execute(
+                        select(Doctor).where(
+                            and_(
+                                Doctor.id == self._state.doctor_id,
+                                Doctor.branch_id == self._state.branch_id,
+                                Doctor.status == "active",
+                            )
+                        )
+                    )
+                ).scalar_one_or_none()
+
+            if doctor is not None and (
+                doctor.booking_type != "appointment"
+                or not doctor.pre_appointment_reminder
+            ):
+                return _reminder_policy_text(language, "disabled")
+            if token is None or token.appointment_time is None or token.created_at is None:
+                return _reminder_policy_text(language, "generic")
+
+            tz = ZoneInfo(self._timezone_name)
+            appointment = datetime_cls.combine(
+                token.date, token.appointment_time, tzinfo=tz
+            )
+            created = token.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            lead_seconds = (
+                appointment - created.astimezone(tz)
+            ).total_seconds()
+            if lead_seconds <= 60 * 60:
+                policy = "none_close"
+            elif lead_seconds >= 24 * 60 * 60:
+                policy = "day_and_close"
+            else:
+                policy = "close_only"
+            return _reminder_policy_text(language, policy)
+        except Exception as exc:  # noqa: BLE001 — fail closed, never invent timing
+            logger.error("reminder_policy_lookup_failed: %s", str(exc)[:160])
+            return _reminder_policy_text(language, "generic")
+
     def set_pronunciations(self, mapping: dict) -> None:
         """Install the clinic+language pronunciation map (see
         agent/services/pronunciation.py). Safe to call with {} — the
@@ -3182,10 +3351,10 @@ class VachanamAgent(Agent):
         """BACKCHANNEL FILTER (Vinay 2026-07-04): while the agent is SPEAKING,
         drop transcript events that are pure listening noises ("hmm", "okay",
         "acha", "ఆ", "हाँ"...) so the LLM never treats a backchannel as a real
-        user turn. (#403: interruption now commits only on >=2 transcribed
-        words with false-interruption resume — a lone hello/backchannel never
-        cuts the agent; this transcript filter additionally keeps such noises
-        out of the conversation history / content path.) When the agent is
+        user turn. (#403: a lone hello/backchannel is removed HERE before the
+        one-word interruption gate, then false-interruption resume restores the
+        audio; meaningful one-word corrections such as a doctor name still
+        cut in.) When the agent is
         silent the same word is a real short turn and passes through.
         Multi-word content ("okay cancel it", "no no wait") always passes."""
         async for ev in Agent.default.stt_node(self, audio, model_settings):
@@ -3290,8 +3459,24 @@ class VachanamAgent(Agent):
         # language the caller is actually speaking now. Unique native scripts
         # are deterministic; correct the full pipeline before any model reply.
         detected_language = _dominant_native_language(utterance)
+        explicit_doctor_id = _explicit_roster_doctor_id(
+            utterance, self._doctor_contexts
+        )
+        if explicit_doctor_id is not None:
+            # The caller's latest explicit name is authoritative. This happens
+            # before Gemini and before any tool argument can preserve an older
+            # doctor from the conversation.
+            self._state.doctor_id = explicit_doctor_id
+            self._state.caller_named_doctor_id = explicit_doctor_id
+            self._cancel_prefetch()
+            logger.info(
+                "caller_named_doctor_selected doctor=%s session=%s",
+                str(explicit_doctor_id)[-8:],
+                _privacy_safe_session_id(self._state.session_id),
+            )
         incomplete_fragment = _is_incomplete_fragment(utterance)
         control_token_request = _is_control_token_request(utterance)
+        reminder_policy_question = _is_reminder_policy_question(utterance)
         current_doctors_question = _is_current_doctor_availability_question(utterance)
         roster_question = _is_doctor_roster_question(utterance)
         specialty_query = _specialty_roster_query(
@@ -3300,6 +3485,11 @@ class VachanamAgent(Agent):
         legal_threat = _is_legal_threat(utterance)
         hostile_or_frustrated = _is_hostile_or_frustrated(utterance)
         response_language = detected_language or self._lang_code
+        reminder_policy_speech = (
+            await self._reminder_policy_speech(response_language)
+            if reminder_policy_question
+            else None
+        )
         current_doctors_speech = (
             await self._current_doctors_speech(response_language)
             if current_doctors_question
@@ -3308,10 +3498,33 @@ class VachanamAgent(Agent):
         clarification_attempt = getattr(self._state, 'clarification_attempts', 0)
         if not incomplete_fragment:
             self._state.clarification_attempts = 0
+
+        # Preemptive generation may already have a hidden speculative reply
+        # before a turn commits. A deterministic answer supersedes it; cancel
+        # that handle even when agent_state still reports "listening", otherwise
+        # both the speculative and grounded answer can be queued.
+        if any((
+            incomplete_fragment,
+            control_token_request,
+            reminder_policy_question,
+            current_doctors_question,
+            specialty_query is not None,
+            roster_question,
+            legal_threat,
+            hostile_or_frustrated,
+        )):
+            try:
+                self.session.interrupt()
+                logger.info("speculative_reply_cancelled deterministic_turn=True")
+            except Exception:
+                pass
+
         if detected_language and detected_language != self._lang_code:
             deterministic_speech = None
             if control_token_request:
                 deterministic_speech = _control_token_refusal(detected_language)
+            elif reminder_policy_question:
+                deterministic_speech = reminder_policy_speech
             elif incomplete_fragment:
                 deterministic_speech = _incomplete_clarification(
                     detected_language, clarification_attempt
@@ -3353,6 +3566,14 @@ class VachanamAgent(Agent):
         if control_token_request:
             await self.session.say(
                 _control_token_refusal(self._lang_code),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        if reminder_policy_question:
+            self._state.quality_intent = "reminder_policy"
+            await self.session.say(
+                sanitize_for_tts(reminder_policy_speech),
                 allow_interruptions=True,
             )
             raise StopResponse()
@@ -3761,6 +3982,11 @@ class VachanamAgent(Agent):
         """Never trust the LLM to echo a UUID. Accept a real UUID, else match a
         doctor name within this branch, else fall back to the doctor selected by
         route_to_doctor. Raises ToolError (LLM-visible) instead of crashing."""
+        # A doctor the caller named explicitly outranks every LLM-authored UUID
+        # or name. This prevents a stale Srinivas tool argument from overriding
+        # the caller's later "Doctor Lakshmi".
+        if self._state.caller_named_doctor_id is not None:
+            return self._state.caller_named_doctor_id
         if doctor_id:
             try:
                 return UUID(doctor_id)
@@ -3853,11 +4079,32 @@ class VachanamAgent(Agent):
         Call once the patient has described their problem. Pass the complaint
         exactly as spoken."""
         self._state.quality_intent = 'doctor_routing'
+        if self._state.caller_named_doctor_id is not None:
+            selected = next(
+                (
+                    doctor
+                    for doctor in self._doctor_contexts
+                    if str(getattr(doctor, "id", ""))
+                    == str(self._state.caller_named_doctor_id)
+                ),
+                None,
+            )
+            if selected is not None:
+                # The model must not reinterpret an explicit doctor name as a
+                # complaint and route the caller back to an older/default doctor.
+                self._state.doctor_id = self._state.caller_named_doctor_id
+                return {
+                    "doctor_id": str(self._state.caller_named_doctor_id),
+                    "doctor_name": selected.name,
+                    "specialization": selected.specialization,
+                    "confidence": "explicit_caller_choice",
+                }
         _say_lookup_filler(context)  # cover the routing-LLM/DB beat (no dead air)
         # A new complaint invalidates the previous route before any await. This
         # prevents a throat query from inheriting a skin doctor if routing is
         # ambiguous, slow, or returns candidates/out-of-scope.
         self._state.doctor_id = None
+        self._state.caller_named_doctor_id = None
         self._state.complaint = complaint
         # #5: consume the parallel prefetch if it matches this complaint, else
         # route fresh on the live session.
@@ -5267,6 +5514,7 @@ class VachanamAgent(Agent):
                 ),
             }
         new_id = confirmed["token_id"]
+        self._state.last_confirmed_token_id = UUID(str(new_id))
         for stale_id, current_id in list(self._state.booking_replacements.items()):
             if current_id == str(old_token.id):
                 self._state.booking_replacements[stale_id] = new_id
@@ -7365,6 +7613,39 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
         instructions = _compose_instructions(lang_code)
 
+        # A saved Hindi preference can be corrected to the branch's Telugu
+        # default on the first native-script turn. The handoff factory is sync,
+        # so it cannot await Redis at that moment. Pull the two common handoff
+        # caches into this worker now, while greeting audio/session setup cover
+        # the tiny Redis reads.
+        _handoff_cache_specs = []
+        for _preload_lang in {
+            (getattr(branch, "language", None) or DEFAULT_LANG).lower(),
+            "en",
+        } - {lang_code}:
+            if _preload_lang not in supported_codes():
+                continue
+            _preload_instructions = _compose_instructions(_preload_lang)
+            _preload_key = _prompt_cache_key(
+                branch.id, _preload_lang, _preload_instructions
+            )
+            _handoff_cache_specs.append(
+                (_preload_key, _preload_instructions, _preload_lang)
+            )
+        if _handoff_cache_specs:
+            _handoff_hits = await asyncio.gather(
+                *(
+                    _load_shared_prompt_cache(key, prompt)
+                    for key, prompt, _ in _handoff_cache_specs
+                ),
+                return_exceptions=True,
+            )
+            logger.info(
+                "handoff_prompt_caches_loaded hits=%d requested=%d",
+                sum(hit is True for hit in _handoff_hits),
+                len(_handoff_cache_specs),
+            )
+
         # Reuse the prewarmed CalendarService (Google client build is the slow
         # part of pre-session setup); rebuild only if prewarm missed it.
         calendar_service: CalendarService | None = ctx.proc.userdata.get("calendar")
@@ -7648,8 +7929,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     "max_retries": 2,
                 },
                 "interruption": {
-                    "min_duration": 0.4,
-                    "min_words": 2,
+                    # A correction is often ONE word: "Lakshmi", "twelve",
+                    # "tomorrow". Requiring two words made the agent audibly
+                    # ignore it and finish the wrong answer. Pure hmm/okay/hello
+                    # turns are already removed in stt_node before this gate.
+                    "min_duration": 0.25,
+                    "min_words": 1,
                     "resume_false_interruption": True,
                     # Vinay 2026-08-09: "when i am speaking when it talks the
                     # time it takes to go silent is high (1-2sec)."
@@ -7661,11 +7946,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     # decide it was a false alarm and RESUME, which is what a
                     # caller hears as "it took ages to stop".
                     #
-                    # 0.45s keeps #403 intact (a lone "హలో?" still cannot commit
-                    # an interruption) while cutting the worst case by ~1.4s.
-                    # Safe because Soniox interims land in ~0.1-0.3s per the
-                    # #403 note below, so two words comfortably arrive inside
-                    # 0.45s; the old 2.0s was ~4x longer than the signal needs.
+                    # 0.45s keeps #403 intact because stt_node drops a lone
+                    # "హలో?"/backchannel before this gate, while cutting the
+                    # old worst case by ~1.4s. Soniox interims land in
+                    # ~0.1-0.3s, comfortably inside this window.
                     "false_interruption_timeout": 0.45,
                 },
             },
@@ -7687,8 +7971,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # "ఊ", "సరే", "mm"). With LiveKit's defaults a single such sound
             # truncates the agent's turn AND the LLM moves on, so a half-said
             # confirmation (token, doctor, time) is lost. Two guards:
-            #  - min_interruption_words=2 + min_interruption_duration=0.6: a lone
-            #    backchannel word/short sound no longer counts as an interruption.
+            #  - the STT backchannel filter removes a lone listening noise before
+            #    the one-word interruption gate; names/times still interrupt.
             #  - resume_false_interruption=True: if the "interruption" turns out
             #    to be nothing real (no transcript within the timeout), the agent
             #    RESUMES the very sentence it was cut off on instead of skipping

@@ -14,13 +14,11 @@ as a second turn, and both replies play. `interrupt()` appeared exactly once in
 the whole agent before this (inside `switch_language`); nothing cancelled a
 pending reply.
 
-SLOW STOP. `false_interruption_timeout` was never set, so it ran on LiveKit's
-2.0s default — the window the session waits for a SECOND word before deciding
-an interruption was real. VAD pauses the audio at once, but for up to two
-seconds the agent can still call it a false alarm and RESUME. That resume is
-what a caller hears as "it took ages to stop". Kept #403's `min_words=2` (a
-lone "హలో?" must never cut a confirmation short) and shortened the window
-instead.
+SLOW STOP. The false-interruption timeout was never set, so it ran on LiveKit's
+2.0s default. VAD pauses the audio at once, but for up to two seconds the agent
+can still call it a false alarm and RESUME. The timeout is now short, and the
+STT backchannel filter protects hello/hmm while a one-word name or time can
+interrupt.
 """
 import asyncio
 import inspect
@@ -86,11 +84,11 @@ def test_the_false_interruption_window_is_shortened():
     )
 
 
-def test_403_is_not_reopened():
-    """min_words=2 is what stops a lone "హలో?" or "haan" cutting the agent off
-    mid-confirmation. Shortening the window must not have traded that away."""
+def test_meaningful_one_word_correction_interrupts():
+    """Names and times are often one-word corrections; the STT backchannel
+    filter, not a two-word minimum, protects hello/haan/hmm."""
     block = ENTRY.split('"interruption": {')[1].split("}")[0]
-    assert '"min_words": 2' in block
+    assert '"min_words": 1' in block
     assert '"resume_false_interruption": True' in block
 
 
@@ -103,8 +101,8 @@ def test_the_window_leaves_room_for_the_transcript():
 
 
 @pytest.mark.parametrize("knob,expected", [
-    ("min_duration", "0.4"),
-    ("min_words", "2"),
+    ("min_duration", "0.25"),
+    ("min_words", "1"),
 ])
 def test_the_other_interruption_knobs_are_untouched(knob, expected):
     """One control at a time — #399's lesson was that combined aggressive knobs
