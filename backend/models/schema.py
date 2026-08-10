@@ -1029,6 +1029,47 @@ class User(Base):
     organization: Mapped["Organization | None"] = relationship(back_populates="users")
 
 
+class BranchVoice(Base):
+    """A branch-owned Soniox clone; provider inventory is never tenant-visible."""
+
+    __tablename__ = "branch_voices"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "name", name="uq_branch_voice_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_voice_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    provider_name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    model: Mapped[str] = mapped_column(String(50), nullable=False, default="tts-rt-v1")
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="uploading", server_default="uploading"
+    )
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(512))
+    # Pseudonymous consent actor. Deliberately no FK: deleting a user account
+    # must not be blocked, while the immutable consent provenance remains.
+    consent_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    consent_text: Mapped[str] = mapped_column(String(255), nullable=False)
+    consent_recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AuditLog(Base):
     """Append-only security audit trail. No FKs by design — rows survive user/branch deletion.
 

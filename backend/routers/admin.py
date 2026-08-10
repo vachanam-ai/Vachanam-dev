@@ -1132,19 +1132,27 @@ async def set_branch_wa_number(
             status_code=422,
             detail="wa_waba_id must be the numeric Meta WhatsApp Business Account ID",
         )
+    lifecycle_result = None
     async with AsyncSessionLocal() as db:
         branch = (
             await db.execute(select(Branch).where(Branch.id == bid))
         ).scalar_one_or_none()
         if branch is None:
             raise HTTPException(status_code=404, detail="Branch not found")
-        branch.wa_phone_number_id = value
+        if value is None:
+            from backend.services.wa_lifecycle import disconnect_branch
+
+            lifecycle_result = await disconnect_branch(db, branch, status="none")
+        else:
+            branch.wa_phone_number_id = value
         # Keep Branch.wa_status (mm36, surfaced read-only in Settings — WA
         # MVP1 Task 8) in step with the concierge link until Task 9's
         # Embedded Signup sets it directly. Clearing the link must not leave
         # a stale "connected" chip.
         branch.wa_status = "connected" if value else "none"
-        if body.wa_waba_id is not None:
+        if value is not None:
+            branch.wa_connected_at = branch.wa_connected_at or datetime.now(timezone.utc)
+        if value is not None and body.wa_waba_id is not None:
             branch.wa_waba_id = waba
         elif value is None:
             # Unlinking the number without naming a WABA: clear it too.
@@ -1165,6 +1173,10 @@ async def set_branch_wa_number(
                     "another branch"
                 ),
             )
+    if lifecycle_result is not None:
+        from backend.services.wa_lifecycle import invalidate_connection_caches
+
+        await invalidate_connection_caches(bid)
     logger.info(
         "wa_branch_linked", branch_id=branch_id, linked=bool(value),
         waba_linked=bool(branch.wa_waba_id), addon=body.whatsapp_addon,
@@ -1175,4 +1187,10 @@ async def set_branch_wa_number(
         "wa_waba_id": branch.wa_waba_id,
         "wa_status": branch.wa_status,
         "whatsapp_addon": branch.whatsapp_addon,
+        "conversations_deleted": (
+            lifecycle_result.conversations_deleted if lifecycle_result else 0
+        ),
+        "deliveries_cancelled": (
+            lifecycle_result.deliveries_cancelled if lifecycle_result else 0
+        ),
     }

@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     # Legacy branch voice IDs safely resolve to soniox_tts_default_voice.
     soniox_tts_model: str = "tts-rt-v1"  # per Soniox RT-TTS docs; sandbox-validated
     soniox_jp_tts_ws_url: str = "wss://tts-rt.jp.soniox.com/tts-websocket"
+    soniox_jp_api_url: str = "https://api.jp.soniox.com/v1"
+    soniox_jp_tts_http_url: str = "https://tts-rt.jp.soniox.com/tts"
     soniox_tts_default_voice: str = "Priya"
 
     # ── TTS sandbox (Vinay 2026-08-07) ────────────────────────────────────

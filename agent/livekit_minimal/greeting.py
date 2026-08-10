@@ -19,6 +19,7 @@ import asyncio
 import io
 import time as time_mod
 import wave
+import uuid
 from datetime import date as date_cls
 from datetime import time as time_cls
 
@@ -33,14 +34,24 @@ from backend.config import settings
 logger = structlog.get_logger()
 
 # ── Soniox voice seam (single source — agent.py imports these) ─────────────
-# The 4 Indian-accent voices in the tts-rt-v1 catalog (Priya/Meera female,
-# Arjun/Rohan male); every Soniox voice speaks all 60+ languages incl Telugu.
-# No cloning: any legacy non-Soniox voice id resolves to the default catalog voice.
-SONIOX_TTS_VOICES = {"Priya", "Meera", "Arjun", "Rohan"}
+# Current Soniox tts-rt-v1 catalog. A UUID is a project-scoped cloned voice;
+# ownership/readiness is enforced by the branch API before it reaches this row.
+SONIOX_TTS_VOICES = {
+    "Maya", "Daniel", "Noah", "Nina", "Emma", "Jack", "Adrian", "Claire",
+    "Grace", "Owen", "Mina", "Kenji", "Rafael", "Mateo", "Lucia", "Sofia",
+    "Oliver", "Arthur", "Isla", "Victoria", "Cooper", "Mason", "Ruby", "Elise",
+    "Arjun", "Rohan", "Priya", "Meera",
+}
 
 
 def resolve_soniox_voice(voice_id: str) -> str:
-    return voice_id if voice_id in SONIOX_TTS_VOICES else settings.soniox_tts_default_voice
+    if voice_id in SONIOX_TTS_VOICES:
+        return voice_id
+    try:
+        uuid.UUID(str(voice_id))
+        return str(voice_id)
+    except (ValueError, TypeError, AttributeError):
+        return settings.soniox_tts_default_voice
 
 
 def greeting_voice_key(voice_id: str) -> str:

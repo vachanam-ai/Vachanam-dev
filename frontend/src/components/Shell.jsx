@@ -5,6 +5,7 @@ import {
   Bell, CalendarDots, CalendarX, CaretDown, ChartLineUp, ChatCircleDots,
   CreditCard, FirstAidKit, GearSix, List, ListBullets, Plus, Pulse,
   SignOut, SquaresFour, Stethoscope, UserPlus, UsersThree, WhatsappLogo,
+  Waveform,
 } from "@phosphor-icons/react";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { fetchBranchSettings, fetchDoctors, fetchPlan, fetchStaff } from "../api/client.js";
@@ -22,7 +23,8 @@ const NAV = {
     ["/dashboard", "Overview", SquaresFour], ["/queue", "Live queue", ListBullets],
     ["/walk-in", "Add walk-in", UserPlus], ["/treatments", "Treatments", FirstAidKit],
     ["/patients", "Patients", UsersThree], ["/availability", "Doctor leave", CalendarX],
-    ["/my-schedule", "Doctors", CalendarDots], ["/whatsapp", "WhatsApp", WhatsappLogo],
+    ["/my-schedule", "Doctors", CalendarDots], ["/voices", "Voices", Waveform],
+    ["/whatsapp", "WhatsApp", WhatsappLogo],
     ["/whatsapp/chats", "Conversations", ChatCircleDots], ["/billing", "Plan & billing", CreditCard],
     ["/settings", "Clinic settings", GearSix], ["/tickets", "Support", Bell],
   ],

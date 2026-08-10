@@ -128,6 +128,7 @@ async def _seed_in_window(db, plan: str, linked: bool = True):
         whatsapp_number=f"+9199{str(uuid.uuid4().int)[:8]}", timezone="Asia/Kolkata",
         status="active",
         wa_phone_number_id=str(uuid.uuid4().int)[:12] if linked else None,
+        wa_status="connected" if linked else "disconnected",
     )
     db.add(br)
     await db.flush()
@@ -268,6 +269,7 @@ async def _wa_clinic(db):
         org_id=org.id, name="WaWalkinBranch",
         whatsapp_number=f"+9188{str(uuid.uuid4().int)[:8]}", status="active",
         wa_phone_number_id=str(uuid.uuid4().int)[:12],
+        wa_status="connected",
     )
     db.add(branch)
     await db.commit()

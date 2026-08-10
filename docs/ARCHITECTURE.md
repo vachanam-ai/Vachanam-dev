@@ -1,5 +1,9 @@
 # Vachanam — End-to-End Architecture
 
+> Operational correctness and state-machine rules are canonical in
+> [`DETERMINISTIC_EXECUTION_ARCHITECTURE.md`](DETERMINISTIC_EXECUTION_ARCHITECTURE.md).
+> Prompts may improve conversation quality but may not override those rules.
+
 **Last verified against the running system:** 2026-08-09 (Fly v282, master `7455071`)
 
 Every region, vendor and cadence below was read out of the deployed

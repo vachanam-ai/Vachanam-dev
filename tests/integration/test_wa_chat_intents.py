@@ -52,6 +52,7 @@ async def branch(db):
         org_id=org.id, name="WaChat Branch", clinic_phone="",
         whatsapp_number=f"+9155{str(uuid.uuid4().int)[:8]}", status="active",
         wa_phone_number_id=str(uuid.uuid4().int)[:12],
+        wa_status="connected",
         faq=[{"q": "What are your fees?", "a": "Consultation is 500 rupees."}],
     )
     db.add(b)

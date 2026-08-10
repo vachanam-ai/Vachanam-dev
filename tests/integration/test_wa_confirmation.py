@@ -23,6 +23,7 @@ async def _org_branch(db, plan="clinic", linked=True):
         org_id=org.id, name="WaBranch", address="12 MG Road, Hyd",
         whatsapp_number=f"+9166{str(uuid.uuid4().int)[:8]}", status="active",
         wa_phone_number_id=str(uuid.uuid4().int)[:12] if linked else None,
+        wa_status="connected" if linked else "disconnected",
     )
     db.add(b)
     await db.commit()

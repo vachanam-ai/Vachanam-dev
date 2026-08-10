@@ -96,3 +96,8 @@ def test_settings_voice_catalog_is_soniox_only():
 
 def test_soniox_tts_uses_japan_endpoint():
     assert ag.settings.soniox_jp_tts_ws_url == "wss://tts-rt.jp.soniox.com/tts-websocket"
+
+
+def test_soniox_clone_uuid_reaches_tts_unchanged():
+    clone_id = "21b9c8e2-1c3a-4d5e-9f8a-123456789abc"
+    assert ag._resolve_soniox_voice(clone_id) == clone_id

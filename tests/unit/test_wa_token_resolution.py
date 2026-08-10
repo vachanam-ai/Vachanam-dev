@@ -21,6 +21,7 @@ def FakeBranch(wa_token_enc=None, id=None, wa_phone_number_id="333444555"):
     return SimpleNamespace(
         id=id or uuid.uuid4(), wa_token_enc=wa_token_enc,
         wa_phone_number_id=wa_phone_number_id,
+        wa_status="connected" if wa_phone_number_id else "disconnected",
     )
 
 
@@ -36,6 +37,7 @@ async def make_branch(db, *, wa_phone_number_id, wa_token_enc=None):
         org_id=org.id, name="TokBranch", clinic_phone="+914012340000",
         whatsapp_number=f"+9155{str(uuid.uuid4().int)[:8]}", status="active",
         wa_phone_number_id=wa_phone_number_id, wa_token_enc=wa_token_enc,
+        wa_status="connected" if wa_phone_number_id else "disconnected",
     )
     db.add(b)
     await db.commit()

@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 import backend.database as _db_module
 from backend.models.schema import Branch, Organization, WhatsAppDelivery
 from backend.services import wa_service
+from backend.services.wa_lifecycle import is_connected
 
 logger = structlog.get_logger()
 
@@ -28,6 +29,34 @@ async def _connected(branch_id) -> bool:
             )
         ).first()
     return bool(row and wa_service.wa_enabled(row[0], row[1]))
+
+
+async def _cancel_if_disconnected(db, task: WhatsAppDelivery, *, lock: bool) -> bool:
+    """Make disconnect terminal for work that has not reached the provider.
+
+    The locked form serializes a failed provider attempt with disconnect. If
+    the retry decision wins first, disconnect subsequently cancels the pending
+    row; if disconnect wins first, this transaction observes it and never
+    schedules a retry.
+    """
+    statement = select(Branch).where(Branch.id == task.branch_id)
+    if lock:
+        statement = statement.with_for_update()
+    branch = (await db.execute(statement)).scalar_one_or_none()
+    if branch is not None and is_connected(branch):
+        return False
+
+    task.status = "cancelled"
+    task.next_attempt_at = datetime.now(timezone.utc)
+    task.last_error = "branch disconnected before delivery completed"
+    await db.commit()
+    logger.info(
+        "wa_delivery_cancelled_disconnected",
+        branch_id=str(task.branch_id),
+        purpose=task.purpose,
+        event_key=task.event_key,
+    )
+    return True
 
 
 async def enqueue(
@@ -117,10 +146,16 @@ async def deliver(task_id) -> bool:
             return False
         if task.status == "sent":
             return True
-        if task.status in {"in_progress", "failed_permanent"}:
+        if task.status in {"in_progress", "failed_permanent", "cancelled"}:
             return False
         task.status = "in_progress"
         await db.commit()
+
+        # Disconnect is a hard lifecycle boundary. A row may have been
+        # claimed just before the owner disconnected, so re-check after claim
+        # and before handing any patient data to Meta.
+        if await _cancel_if_disconnected(db, task, lock=False):
+            return False
 
         ok = await send_purpose(
             task.branch_id,
@@ -141,6 +176,12 @@ async def deliver(task_id) -> bool:
                 event_key=task.event_key,
             )
             return True
+
+        # The provider call can overlap a disconnect. Lock the branch while
+        # deciding whether a retry is legal; this prevents failed work from
+        # being resurrected after the clinic disconnects and reconnects.
+        if await _cancel_if_disconnected(db, task, lock=True):
+            return False
 
         task.attempts += 1
         task.last_error = "provider send returned false"

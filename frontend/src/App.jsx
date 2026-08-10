@@ -23,6 +23,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard.jsx"));
 const DoctorSchedule = lazy(() => import("./pages/DoctorSchedule.jsx"));
 const WhatsApp = lazy(() => import("./pages/WhatsApp.jsx"));
 const WhatsAppChats = lazy(() => import("./pages/WhatsAppChats.jsx"));
+const Voices = lazy(() => import("./pages/Voices.jsx"));
 const Admin = lazy(() => import("./pages/Admin.jsx"));
 const Monitoring = lazy(() => import("./pages/Monitoring.jsx"));
 const TvDisplay = lazy(() => import("./pages/TvDisplay.jsx"));
@@ -146,6 +147,14 @@ export default function App() {
           element={
             <Protected roles={["org_admin"]}>
               <Billing />
+            </Protected>
+          }
+        />
+        <Route
+          path="/voices"
+          element={
+            <Protected roles={["org_admin"]}>
+              <Voices />
             </Protected>
           }
         />

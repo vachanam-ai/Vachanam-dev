@@ -13,6 +13,7 @@ def _branch(linked=True):
     return SimpleNamespace(
         id=uuid.uuid4(),
         wa_phone_number_id="111222333" if linked else None,
+        wa_status="connected" if linked else "disconnected",
     )
 
 
@@ -49,6 +50,9 @@ def test_gate_requires_creds_link_and_plan(monkeypatch):
     assert wa_service.wa_enabled(_branch(), "multi") is True
     assert wa_service.wa_enabled(_branch(), "solo") is False  # plan gate
     assert wa_service.wa_enabled(_branch(linked=False), "clinic") is False
+    inconsistent = _branch()
+    inconsistent.wa_status = "disconnected"
+    assert wa_service.wa_enabled(inconsistent, "clinic") is False
     monkeypatch.setattr(settings, "meta_access_token", "", raising=False)
     assert wa_service.wa_enabled(_branch(), "clinic") is False  # no creds
 

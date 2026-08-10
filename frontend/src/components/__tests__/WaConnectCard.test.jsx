@@ -30,15 +30,16 @@ import WaConnectCard from "../WaConnectCard.jsx";
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
-function renderCard() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+function renderCard(qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  render(
     <QueryClientProvider client={qc}>
       <WaConnectCard branchId="b1" />
     </QueryClientProvider>,
   );
+  return qc;
 }
 
 const VALID = {
@@ -146,5 +147,30 @@ describe("WaConnectCard — manual connect", () => {
     renderCard();
     await screen.findByTestId("wa-connected");
     expect(screen.queryByTestId("wa-manual-toggle")).toBeNull();
+  });
+
+  it("erases cached patient chats synchronously when disconnected", async () => {
+    fetchWaConnection.mockResolvedValueOnce({
+      connected: true, wa_verified_name: "Sunrise Dental",
+    });
+    disconnectWa.mockResolvedValueOnce({
+      connected: false, wa_status: "disconnected", conversations_deleted: 2,
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    qc.setQueryData(["wa-chats", "b1"], [{ last_text: "private chat" }]);
+    qc.setQueryData(["wa-chat", "b1", "+919812345678"], {
+      turns: [{ text: "private chat" }],
+    });
+
+    renderCard(qc);
+    fireEvent.click(await screen.findByRole("button", { name: /^disconnect$/i }));
+    await waitFor(() => expect(disconnectWa).toHaveBeenCalledWith("b1"));
+
+    expect(qc.getQueryData(["wa-chats", "b1"])).toBeUndefined();
+    expect(qc.getQueryData(["wa-chat", "b1", "+919812345678"])).toBeUndefined();
+    expect(qc.getQueryData(["wa-connection", "b1"])).toMatchObject({
+      connected: false, wa_status: "disconnected",
+    });
   });
 });

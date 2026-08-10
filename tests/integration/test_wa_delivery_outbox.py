@@ -9,6 +9,7 @@ from backend.models.schema import (
     Branch, Organization, WhatsAppDelivery,
 )
 from backend.services import meta_service, wa_delivery, wa_service
+from backend.services.wa_lifecycle import disconnect_branch
 
 pytestmark = pytest.mark.asyncio
 
@@ -30,6 +31,7 @@ async def _branch(db):
         timezone="Asia/Kolkata",
         status="active",
         wa_phone_number_id="wa-phone-id",
+        wa_status="connected",
     )
     db.add(branch)
     await db.commit()
@@ -125,4 +127,41 @@ async def test_concurrent_enqueue_claims_event_once(db, monkeypatch):
     second = asyncio.create_task(wa_delivery.enqueue(**kwargs))
     await asyncio.gather(first, second)
 
+    assert sends == 1
+
+
+async def test_disconnect_during_failed_send_cancels_instead_of_retrying(
+    db, monkeypatch
+):
+    branch = await _branch(db)
+    sends = 0
+
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+
+    async def disconnect_then_fail(*args, **kwargs):
+        nonlocal sends
+        sends += 1
+        async with wa_delivery._db_module.AsyncSessionLocal() as other_db:
+            current = await other_db.get(Branch, branch.id)
+            await disconnect_branch(other_db, current)
+            await other_db.commit()
+        return False
+
+    monkeypatch.setattr(meta_service, "send_purpose", disconnect_then_fail)
+    assert await wa_delivery.enqueue(
+        branch.id,
+        "+919876500004",
+        "booking_confirm",
+        ["Anjali", "Clinic", "Srinivas", "12 August", "10:30 AM"],
+        event_key="booking:disconnect-race",
+    ) is False
+
+    db.expire_all()
+    task = (await db.execute(select(WhatsAppDelivery))).scalar_one()
+    assert sends == 1
+    assert task.status == "cancelled"
+    assert task.attempts == 0
+
+    # Even if a stale worker sees this row later, a cancelled task is terminal.
+    assert await wa_delivery.deliver(task.id) is False
     assert sends == 1

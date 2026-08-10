@@ -63,6 +63,7 @@ async def _setup(db, plan="clinic"):
         org_id=org.id, name="WBranch", clinic_phone="+914012345678",
         whatsapp_number=f"+9155{str(uuid.uuid4().int)[:8]}", status="active",
         wa_phone_number_id=str(uuid.uuid4().int)[:12],
+        wa_status="connected",
     )
     db.add(b)
     await db.flush()

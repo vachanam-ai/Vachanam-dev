@@ -193,6 +193,21 @@ export const getBranchVoices = (branchId, language) =>
   api
     .get(`/branches/${branchId}/voices`, { params: language ? { language } : {} })
     .then((r) => r.data);
+export const fetchVoiceClones = (branchId) =>
+  api.get(`/branches/${branchId}/voice-clones`).then((r) => r.data);
+export const createVoiceClone = (branchId, formData) =>
+  api.post(`/branches/${branchId}/voice-clones`, formData, {
+    timeout: 45000,
+  }).then((r) => r.data);
+export const activateVoiceClone = (branchId, cloneId) =>
+  api.post(`/branches/${branchId}/voice-clones/${cloneId}/activate`).then((r) => r.data);
+export const previewVoiceClone = (branchId, cloneId) =>
+  api.post(`/branches/${branchId}/voice-clones/${cloneId}/preview`, null, {
+    responseType: "blob",
+    timeout: 45000,
+  }).then((r) => r.data);
+export const deleteVoiceClone = (branchId, cloneId) =>
+  api.delete(`/branches/${branchId}/voice-clones/${cloneId}`).then((r) => r.data);
 export const getBranchFaq = (branchId) =>
   api.get(`/branches/${branchId}/faq`).then((r) => r.data);
 export const saveBranchFaq = (branchId, faq) =>

@@ -389,6 +389,7 @@ from backend.routers import analytics as analytics_router
 from backend.routers import auth as auth_router
 from backend.routers import availability as availability_router
 from backend.routers import branches as branches_router
+from backend.routers import voices as voices_router
 from backend.routers import doctors as doctors_router
 from backend.routers import legal as legal_router
 from backend.routers import patients as patients_router
@@ -405,6 +406,7 @@ app.include_router(admin_router.router, prefix="/admin", tags=["admin"])
 app.include_router(doctors_router.router, prefix="/doctors", tags=["doctors"])
 app.include_router(availability_router.router, prefix="/availability", tags=["availability"])
 app.include_router(branches_router.router, prefix="/branches", tags=["branches"])
+app.include_router(voices_router.router, prefix="/branches", tags=["voices"])
 # Legal pages — public, no auth, no prefix (routes are /privacy /terms /dpa)
 app.include_router(legal_router.router, tags=["legal"])
 app.include_router(analytics_router.router, tags=["analytics"])

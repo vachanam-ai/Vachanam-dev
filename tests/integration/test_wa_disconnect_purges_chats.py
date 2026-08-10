@@ -20,7 +20,12 @@ import pytest_asyncio
 from sqlalchemy import select
 
 from backend.config import settings
-from backend.models.schema import Branch, Organization, WhatsAppSession
+from backend.models.schema import (
+    Branch,
+    Organization,
+    WhatsAppDelivery,
+    WhatsAppSession,
+)
 
 pytestmark = pytest.mark.asyncio
 _ALGO = "HS256"
@@ -160,4 +165,54 @@ async def test_credentials_and_conversations_clear_together(client, db):
     assert fresh.wa_phone_number_id is None
     assert fresh.wa_verified_name is None
     assert fresh.wa_status == "disconnected"
+    assert fresh.wa_connected_at is None
     assert await _count(db, branch.id) == 0
+
+
+async def test_disconnected_branch_never_serves_or_reveals_stale_rows(client, db):
+    """The read boundary is fail-closed even if a stale row is restored from
+    backup or written by an old process after the lifecycle purge."""
+    org, branch = await _clinic(db)
+    owner = _owner_jwt(str(org.id), str(branch.id))
+
+    r = await client.delete(f"/branches/{branch.id}/whatsapp/connect", headers=_auth(owner))
+    assert r.status_code == 200, r.text
+
+    # Simulate data drift after the purge. Its existence must not be observable
+    # through either the list or direct-thread endpoint while disconnected.
+    await _session(db, branch.id, "+919812345678")
+    listed = await client.get(
+        f"/branches/{branch.id}/whatsapp/chats", headers=_auth(owner)
+    )
+    direct = await client.get(
+        f"/branches/{branch.id}/whatsapp/chats/+919812345678",
+        headers=_auth(owner),
+    )
+    assert listed.status_code == 200
+    assert listed.json() == []
+    assert direct.status_code == 404
+
+
+async def test_disconnect_cancels_unsent_delivery_so_reconnect_cannot_send_it(client, db):
+    org, branch = await _clinic(db)
+    db.add(WhatsAppDelivery(
+        branch_id=branch.id,
+        event_key=f"booking:{uuid.uuid4()}",
+        purpose="booking_confirm",
+        recipient_phone="+919812345678",
+        values_json=["patient", "doctor"],
+        buttons_json=[],
+        status="pending",
+    ))
+    await db.commit()
+    owner = _owner_jwt(str(org.id), str(branch.id))
+
+    r = await client.delete(f"/branches/{branch.id}/whatsapp/connect", headers=_auth(owner))
+    assert r.status_code == 200, r.text
+    assert r.json()["deliveries_cancelled"] == 1
+
+    delivery = (await db.execute(
+        select(WhatsAppDelivery).where(WhatsAppDelivery.branch_id == branch.id)
+    )).scalar_one()
+    assert delivery.status == "cancelled"
+    assert delivery.last_error == "branch disconnected before delivery"

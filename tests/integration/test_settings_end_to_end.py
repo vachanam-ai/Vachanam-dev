@@ -194,7 +194,8 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
     assert vs.status_code == 200, vs.text
     ids = [v["voice_id"] for v in vs.json()["voices"]]
-    assert ids == ["Priya", "Meera", "Arjun", "Rohan"]
+    assert {"Priya", "Meera", "Arjun", "Rohan", "Maya", "Daniel"} <= set(ids)
+    assert len(ids) == len(set(ids)) == 28
 
     # ── 2. The agent's inbound DID->branch resolution finds THIS branch only ──
     did_norm = normalize_did(DID)
@@ -258,7 +259,7 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     assert "Walkin Wanda" in q.text  # the booking is visible to reception
 
 
-async def test_plan_settings_no_cloning_and_all_languages(client, db):
+async def test_legacy_clone_routes_stay_gone_and_all_languages_remain(client, db):
     """Voice cloning REMOVED entirely 2026-07-24 (Vinay): the settings payload no
     longer carries voice_cloning_allowed, the clone endpoints are GONE (404), and
     every plan still sees all languages (2026-07-12; Odia removed 2026-07-24)."""

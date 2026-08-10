@@ -25,7 +25,8 @@ from backend.services.billing_math import (
 
 def _branch(addon: bool = False):
     return SimpleNamespace(
-        id="b1", wa_phone_number_id="111", wa_token_enc=None, whatsapp_addon=addon
+        id="b1", wa_phone_number_id="111", wa_token_enc=None,
+        wa_status="connected", whatsapp_addon=addon,
     )
 
 
@@ -80,7 +81,9 @@ def test_a_branch_without_the_attribute_is_treated_as_no_addon(monkeypatch):
     from backend.services import wa_service
 
     monkeypatch.setattr(wa_service.settings, "meta_access_token", "tok", raising=False)
-    bare = SimpleNamespace(id="b1", wa_phone_number_id="111", wa_token_enc=None)
+    bare = SimpleNamespace(
+        id="b1", wa_phone_number_id="111", wa_token_enc=None, wa_status="connected",
+    )
     assert wa_service.wa_enabled(bare, "solo") is False
 
 

@@ -34,6 +34,7 @@ async def _clinic(db):
         org_id=org.id, name="Ans Clinic", status="active",
         whatsapp_number=f"+9199{str(uuid.uuid4().int)[:8]}",
         wa_phone_number_id="pnid-ans",
+        wa_status="connected",
     )
     db.add(br)
     await db.commit()

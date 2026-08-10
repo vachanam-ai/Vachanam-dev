@@ -30,6 +30,7 @@ from tenacity import (
 from backend.config import settings
 from backend.services.billing_math import whatsapp_enabled
 from backend.services.crypto import decrypt_secret
+from backend.services.wa_lifecycle import is_connected
 
 logger = structlog.get_logger()
 
@@ -69,14 +70,15 @@ def wa_enabled(branch, plan: str | None) -> bool:
     platform token may legitimately be unset. Gating on it would report every
     clinic-owned branch as disabled.
     """
-    if not token_for(branch):
-        logger.debug("wa_skipped_unconfigured", reason="no_access_token")
-        return False
-    if not getattr(branch, "wa_phone_number_id", None):
+    if not is_connected(branch):
         logger.debug(
-            "wa_skipped_unconfigured", reason="branch_not_linked",
+            "wa_skipped_unconfigured",
+            reason="branch_disconnected",
             branch_id=str(getattr(branch, "id", None)),
         )
+        return False
+    if not token_for(branch):
+        logger.debug("wa_skipped_unconfigured", reason="no_access_token")
         return False
     # The ₹1,499 add-on lets Lite/Starter buy WhatsApp without upgrading to
     # Clinic. getattr defaults to False so a branch object loaded before the

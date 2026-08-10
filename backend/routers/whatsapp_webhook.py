@@ -123,6 +123,7 @@ async def _learn_waba_id(db: AsyncSession, waba_id, changes: list) -> None:
             update(Branch)
             .where(
                 Branch.wa_phone_number_id.in_(pnids),
+                Branch.wa_status == "connected",
                 Branch.wa_waba_id.is_(None),  # never overwrite a known id
             )
             .values(wa_waba_id=str(waba_id))
@@ -162,7 +163,10 @@ async def _handle_value(db: AsyncSession, value: dict) -> None:
         await db.execute(
             select(Branch, Organization.plan)
             .join(Organization, Organization.id == Branch.org_id)
-            .where(Branch.wa_phone_number_id == str(phone_number_id or ""))
+            .where(
+                Branch.wa_phone_number_id == str(phone_number_id or ""),
+                Branch.wa_status == "connected",
+            )
         )
     ).first()
     if row is None:

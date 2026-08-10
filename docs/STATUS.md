@@ -1,5 +1,23 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-08-10 - SONIOX CLONED-VOICE STUDIO BUILT, NOT DEPLOYED.**
+> Added an owner-only Voices page with microphone recording, audio upload,
+> consent capture, asynchronous status polling, generated preview, activation,
+> and deletion. Provider-wide Soniox inventory is mapped through a new
+> branch-owned table, so a clinic cannot see, preview, select, or delete another
+> clinic's clone. Live TTS now accepts validated cloned-voice UUIDs. Uses Japan
+> voice-management and TTS endpoints. Migration `ww46_branch_voice_clones` is
+> deployment-gated. FIXLOG #522.
+
+> **2026-08-10 - WHATSAPP DISCONNECT REVOCATION HARDENED, NOT DEPLOYED.**
+> Disconnect now has one canonical backend lifecycle across clinic-owner and
+> platform-admin paths: credentials revoked, working chats deleted, unsent
+> deliveries cancelled, and caches invalidated. Chat APIs and the React page
+> independently fail closed unless the branch is currently connected, so
+> stale database or browser rows cannot expose old conversations. The broader
+> operational contract is now documented in
+> `docs/DETERMINISTIC_EXECUTION_ARCHITECTURE.md`. FIXLOG #521.
+
 > **2026-08-09 — WHATSAPP + AUTOPAY HARDENED, PENDING DEPLOYMENT.**
 > Call/WhatsApp bookings, reschedules, cancellations, reminders and follow-ups
 > now use a durable, deduplicated delivery outbox and clinic-owned template

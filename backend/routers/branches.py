@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -17,19 +17,29 @@ from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import queue_today_limit
-from backend.models.schema import Branch
+from backend.models.schema import Branch, BranchVoice
 from backend.services.audit_service import audit
+from backend.services.wa_lifecycle import is_connected as whatsapp_is_connected
 
 logger = structlog.get_logger()
 router = APIRouter()
 
 # Soniox is the sole TTS provider. A clinic's chosen catalog voice lives in
 # branches.tts_voice; legacy values resolve to the configured Soniox default.
-SONIOX_VOICES = (
-    {"voice_id": "Priya", "display_name": "Priya", "gender": "female"},
-    {"voice_id": "Meera", "display_name": "Meera", "gender": "female"},
-    {"voice_id": "Arjun", "display_name": "Arjun", "gender": "male"},
-    {"voice_id": "Rohan", "display_name": "Rohan", "gender": "male"},
+SONIOX_VOICES = tuple(
+    {"voice_id": name, "display_name": name, "gender": gender, "kind": "catalog"}
+    for name, gender in (
+        ("Maya", "female"), ("Daniel", "male"), ("Noah", "male"),
+        ("Nina", "female"), ("Emma", "female"), ("Jack", "male"),
+        ("Adrian", "male"), ("Claire", "female"), ("Grace", "female"),
+        ("Owen", "male"), ("Mina", "female"), ("Kenji", "male"),
+        ("Rafael", "male"), ("Mateo", "male"), ("Lucia", "female"),
+        ("Sofia", "female"), ("Oliver", "male"), ("Arthur", "male"),
+        ("Isla", "female"), ("Victoria", "female"), ("Cooper", "male"),
+        ("Mason", "male"), ("Ruby", "female"), ("Elise", "female"),
+        ("Arjun", "male"), ("Rohan", "male"), ("Priya", "female"),
+        ("Meera", "female"),
+    )
 )
 SONIOX_VOICE_IDS = {voice["voice_id"] for voice in SONIOX_VOICES}
 
@@ -111,7 +121,7 @@ def _masked_whatsapp_number(branch: Branch) -> str | None:
     once WhatsApp is actually connected. `Branch.whatsapp_number` holds a
     `pending-<uuid>` placeholder until a real number is linked — never mask
     that as if it were a phone number."""
-    if getattr(branch, "wa_status", None) != "connected":
+    if not whatsapp_is_connected(branch):
         return None
     digits = "".join(c for c in (getattr(branch, "whatsapp_number", None) or "") if c.isdigit())
     return f"…{digits[-4:]}" if len(digits) >= 4 else None
@@ -239,11 +249,6 @@ async def update_branch_voice(
     await assert_branch_access(current_user, branch_id, db)
     if current_user.role not in ("org_admin",):
         raise HTTPException(status_code=403, detail="Only the clinic owner can change the voice")
-    if body.tts_voice is not None and body.tts_voice not in SONIOX_VOICE_IDS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Voice must be one of {sorted(SONIOX_VOICE_IDS)}",
-        )
     if body.language is not None and body.language not in ALLOWED_LANGUAGES:
         raise HTTPException(status_code=422, detail=f"Language must be one of {ALLOWED_LANGUAGES}")
     if body.tts_voice is None and body.language is None:
@@ -253,6 +258,19 @@ async def update_branch_voice(
     branch = result.scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
+
+    if body.tts_voice is not None and body.tts_voice not in SONIOX_VOICE_IDS:
+        owned_clone = (
+            await db.execute(
+                select(BranchVoice.id).where(
+                    BranchVoice.branch_id == uuid.UUID(branch_id),
+                    BranchVoice.provider_voice_id == body.tts_voice,
+                    BranchVoice.status == "ready",
+                )
+            )
+        ).scalar_one_or_none()
+        if owned_clone is None:
+            raise HTTPException(status_code=422, detail="Voice is not ready or does not belong to this clinic")
 
     if body.language is not None:
         _assert_plan_language(await _org_plan(db, branch), body.language)
@@ -293,14 +311,34 @@ async def list_branch_voices(
         raise HTTPException(status_code=404, detail="Branch not found")
     lang = (language or getattr(branch, "language", None) or "te").lower()
 
+    clones = (
+        await db.execute(
+            select(BranchVoice).where(
+                BranchVoice.branch_id == uuid.UUID(branch_id),
+                BranchVoice.status == "ready",
+                BranchVoice.provider_voice_id.is_not(None),
+            )
+        )
+    ).scalars().all()
+    clone_voices = [
+        {
+            "voice_id": voice.provider_voice_id,
+            "display_name": voice.name,
+            "gender": None,
+            "kind": "clone",
+            "languages": [lang],
+        }
+        for voice in clones
+    ]
+    clone_ids = {voice["voice_id"] for voice in clone_voices}
     current = getattr(branch, "tts_voice", None)
-    if current not in SONIOX_VOICE_IDS:
+    if current not in SONIOX_VOICE_IDS and current not in clone_ids:
         from backend.config import settings as _settings
         current = _settings.soniox_tts_default_voice
     return {
         "language": lang,
         "current": current,
-        "voices": [{**voice, "languages": [lang]} for voice in SONIOX_VOICES],
+        "voices": [{**voice, "languages": [lang]} for voice in SONIOX_VOICES] + clone_voices,
     }
 
 
@@ -1353,7 +1391,12 @@ async def list_whatsapp_chats(
     rows = (
         await db.execute(
             select(WhatsAppSession)
-            .where(WhatsAppSession.branch_id == uuid.UUID(branch_id))  # RULE 1
+            .join(Branch, Branch.id == WhatsAppSession.branch_id)
+            .where(
+                WhatsAppSession.branch_id == uuid.UUID(branch_id),  # RULE 1
+                Branch.wa_status == 'connected',
+                Branch.wa_phone_number_id.is_not(None),
+            )
             .order_by(WhatsAppSession.updated_at.desc().nullslast())
             .limit(max(1, min(int(limit or _CHAT_PAGE_SIZE), 200)))
         )
@@ -1393,9 +1436,13 @@ async def get_whatsapp_chat(
 
     row = (
         await db.execute(
-            select(WhatsAppSession).where(
+            select(WhatsAppSession)
+            .join(Branch, Branch.id == WhatsAppSession.branch_id)
+            .where(
                 WhatsAppSession.branch_id == uuid.UUID(branch_id),  # RULE 1
                 WhatsAppSession.patient_phone == phone,
+                Branch.wa_status == 'connected',
+                Branch.wa_phone_number_id.is_not(None),
             )
         )
     ).scalars().first()
@@ -1458,7 +1505,7 @@ async def get_whatsapp_connection(
     connected_at = getattr(branch, "wa_connected_at", None)
     return {
         "branch_id": branch_id,
-        "connected": bool(getattr(branch, "wa_waba_id", None)),
+        "connected": whatsapp_is_connected(branch),
         "wa_status": getattr(branch, "wa_status", None) or "none",
         "wa_waba_id": getattr(branch, "wa_waba_id", None),
         "wa_verified_name": getattr(branch, "wa_verified_name", None),
@@ -1711,35 +1758,40 @@ async def disconnect_whatsapp(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    from backend.models.schema import WhatsAppSession
+    from backend.services.wa_lifecycle import (
+        disconnect_branch,
+        invalidate_connection_caches,
+    )
 
-    branch.wa_waba_id = None
-    branch.wa_token_enc = None
-    branch.wa_verified_name = None
-    branch.wa_phone_number_id = None
-    branch.wa_status = "disconnected"
-    purged = (
-        await db.execute(
-            delete(WhatsAppSession).where(
-                WhatsAppSession.branch_id == uuid.UUID(branch_id)  # RULE 1
-            )
-        )
-    ).rowcount
+    result = await disconnect_branch(db, branch)
     await db.commit()
+    await invalidate_connection_caches(branch.id)
 
     request.state.audit_resource_id = branch_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
     # RULE 9: a count, never a phone number or any message text.
-    request.state.audit_metadata = {"sessions_purged": int(purged or 0)}
+    request.state.audit_metadata = {
+        "sessions_purged": result.conversations_deleted,
+        "deliveries_cancelled": result.deliveries_cancelled,
+    }
 
     logger.info(
-        "wa_branch_disconnected", branch_id=branch_id, sessions_purged=int(purged or 0)
+        "wa_branch_disconnected",
+        branch_id=branch_id,
+        sessions_purged=result.conversations_deleted,
+        deliveries_cancelled=result.deliveries_cancelled,
     )
     return {
         "branch_id": branch_id,
+        "connected": False,
         "wa_status": branch.wa_status,
-        "conversations_deleted": int(purged or 0),
+        "wa_waba_id": None,
+        "wa_verified_name": None,
+        "wa_phone_number_id": None,
+        "wa_connected_at": None,
+        "conversations_deleted": result.conversations_deleted,
+        "deliveries_cancelled": result.deliveries_cancelled,
     }
 
 

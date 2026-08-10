@@ -42,6 +42,7 @@ async def _clinic(db, *, plan="clinic"):
         timezone="Asia/Kolkata",
         whatsapp_number=f"+9199{str(uuid.uuid4().int)[:8]}",
         wa_phone_number_id="pnid-docinfo",
+        wa_status="connected",
     )
     db.add(br)
     await db.commit()

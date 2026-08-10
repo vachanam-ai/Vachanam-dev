@@ -171,6 +171,7 @@ export default function WaConnectCard({ branchId }) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["wa-connection", branchId] });
       qc.invalidateQueries({ queryKey: ["wa-templates", branchId] });
+      qc.invalidateQueries({ queryKey: ["branch-settings", branchId] });
       toast.success("WhatsApp connected — your clinic number is live.");
     },
     onError: (e) =>
@@ -179,8 +180,20 @@ export default function WaConnectCard({ branchId }) {
 
   const remove = useMutation({
     mutationFn: () => disconnectWa(branchId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["wa-connection", branchId] });
+    onSuccess: (result) => {
+      // Remove patient text synchronously. Invalidating alone leaves the old
+      // successful query mounted until its refetch finishes.
+      qc.cancelQueries({ queryKey: ["wa-chats", branchId] });
+      qc.cancelQueries({ queryKey: ["wa-chat", branchId] });
+      qc.removeQueries({ queryKey: ["wa-chats", branchId] });
+      qc.removeQueries({ queryKey: ["wa-chat", branchId] });
+      qc.setQueryData(["wa-connection", branchId], (previous) => ({
+        ...previous,
+        ...result,
+        connected: false,
+      }));
+      qc.invalidateQueries({ queryKey: ["branch-settings", branchId] });
+      qc.invalidateQueries({ queryKey: ["wa-templates", branchId] });
       toast.success("WhatsApp disconnected.");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not disconnect."),

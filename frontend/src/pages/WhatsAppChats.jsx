@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import PageHeader from "../components/PageHeader.jsx";
-import { fetchWaChat, fetchWaChats } from "../api/client.js";
+import { fetchWaChat, fetchWaChats, fetchWaConnection } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 
 // Thread list on the left, transcript on the right — the shape everyone
@@ -42,10 +42,28 @@ export default function WhatsAppChats() {
   const { branchId } = useAuth();
   const [selected, setSelected] = useState(null);
 
+  const connection = useQuery({
+    queryKey: ["wa-connection", branchId],
+    queryFn: () => fetchWaConnection(branchId),
+    enabled: Boolean(branchId),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: "always",
+  });
+  // Fail closed. Until the server positively confirms this branch's number
+  // is connected, no patient conversation text is mounted from browser cache.
+  const connected = (
+    connection.isFetchedAfterMount && connection.data?.connected === true
+  );
+
+  useEffect(() => {
+    if (!connected) setSelected(null);
+  }, [connected]);
+
   const { data: chats = [], isLoading, error } = useQuery({
     queryKey: ["wa-chats", branchId],
     queryFn: () => fetchWaChats(branchId),
-    enabled: Boolean(branchId),
+    enabled: Boolean(branchId && connected),
     // Patients message while the page is open; a stale list looks broken.
     refetchInterval: 30000,
   });
@@ -53,7 +71,7 @@ export default function WhatsAppChats() {
   const { data: thread } = useQuery({
     queryKey: ["wa-chat", branchId, selected],
     queryFn: () => fetchWaChat(branchId, selected),
-    enabled: Boolean(branchId && selected),
+    enabled: Boolean(branchId && connected && selected),
     refetchInterval: 15000,
   });
 
@@ -62,6 +80,26 @@ export default function WhatsAppChats() {
       <PageHeader eyebrow="WhatsApp" title="Chats"
         sub="What patients asked your AI assistant on WhatsApp, and how it replied. Read-only — reply from your own WhatsApp app if you need to step in." />
 
+      {connection.isLoading && (
+        <div className="card p-5 font-ui text-sm text-slate" role="status">
+          Checking WhatsApp connection...
+        </div>
+      )}
+
+      {!connection.isLoading && (connection.error || !connected) && (
+        <div className="card p-5" data-testid="wa-chats-disconnected">
+          <p className="font-ui text-sm font-semibold text-ink">
+            WhatsApp is disconnected
+          </p>
+          <p className="mt-1 font-ui text-sm text-slate">
+            Connect this clinic's WhatsApp number to receive new messages and
+            view its conversations. Cached chats are never shown while the
+            connection is off.
+          </p>
+        </div>
+      )}
+
+      {connected && (
       <div className="grid gap-6 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         {/* Left — thread list */}
         <div className="card divide-y divide-hairline overflow-hidden">
@@ -127,6 +165,7 @@ export default function WhatsAppChats() {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }
