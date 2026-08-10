@@ -1673,8 +1673,8 @@ def _build_fallback_llm() -> lk_llm.LLM:
         return inference.LLM(
             model=settings.livekit_inference_model,
             extra_kwargs={
-                'temperature': 0.1,
-                'max_completion_tokens': 256,
+                'max_completion_tokens': 192,
+                'reasoning_effort': 'low',
             },
         )
 

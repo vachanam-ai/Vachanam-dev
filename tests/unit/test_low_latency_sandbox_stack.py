@@ -54,7 +54,8 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'STT_PROVIDER = "soniox"' in cfg
     assert 'TTS_PROVIDER = "cartesia"' in cfg
     assert 'LLM_PROVIDER = "livekit"' in cfg
-    assert 'LIVEKIT_INFERENCE_MODEL = "google/gemma-4-31b-it"' in cfg
+    assert 'LIVEKIT_INFERENCE_MODEL = "google/gemini-3.5-flash-lite"' in cfg
+    assert 'CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"' in cfg
     assert 'CARTESIA_MIN_SENTENCE_LEN = "4"' in cfg
     assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in cfg
     assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"' in cfg
