@@ -53,8 +53,9 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'LIVEKIT_AGENT_NAME = "vachanam-sandbox"' in cfg
     assert 'STT_PROVIDER = "soniox"' in cfg
     assert 'TTS_PROVIDER = "cartesia"' in cfg
-    assert 'LLM_PROVIDER = "livekit"' in cfg
-    assert 'LIVEKIT_INFERENCE_MODEL = "google/gemini-3.5-flash-lite"' in cfg
+    assert 'LLM_PROVIDER = "gemini"' in cfg
+    assert "gemini-3.5-flash-lite" not in cfg
+    assert "LIVEKIT_INFERENCE_MODEL" not in cfg
     assert 'CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"' in cfg
     assert 'CARTESIA_MIN_SENTENCE_LEN = "4"' in cfg
     assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in cfg
@@ -64,7 +65,7 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'VOICE_TOOL_PREFETCH = "true"' in cfg
     assert 'VOICE_DETERMINISTIC_CONFIRM = "true"' in cfg
     assert 'MAX_CALL_DURATION_SECONDS = "600"' in cfg
-    assert 'RECORDING_ENABLED = "true"' in cfg
+    assert 'RECORDING_ENABLED = "false"' in cfg
     assert 'TRANSCRIPT_CAPTURE_ENABLED = "true"' in cfg
     # The tested Soniox profile is now shared with production, but the sandbox
     # identity and test-only recording/transcript controls remain isolated.
@@ -111,6 +112,24 @@ def test_provider_aware_prewarm_and_switch_clips():
     switch_clip_src = inspect.getsource(ag._prewarm_switch_ack_clips)
     assert "_build_session_tts(" in switch_clip_src
     assert "_build_soniox_tts(" not in switch_clip_src
+
+
+def test_cartesia_does_not_warm_every_switch_voice_during_first_call():
+    import inspect
+
+    from agent.livekit_minimal import agent as ag
+
+    entrypoint = inspect.getsource(ag.entrypoint)
+    assert '(settings.tts_provider or "soniox").lower() != "cartesia"' in entrypoint
+
+
+def test_tool_filler_synthesis_starts_after_session_and_greeting():
+    src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
+    start = src.index("await _start_task", src.index("async def _cache_tool_fillers"))
+    fillers = src.index(
+        "_filler_cache_task = asyncio.create_task(_cache_tool_fillers())", start
+    )
+    assert start < fillers
 
 
 def test_livekit_llm_provider_can_be_selected_without_gemini_cache(monkeypatch):

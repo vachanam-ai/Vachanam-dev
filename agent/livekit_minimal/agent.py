@@ -6465,7 +6465,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # #464: warm the switch-ack clips once per worker (background) so a later
     # language switch replays them instead of a ~2.3s live cold-connect synth.
     global _switch_ack_clips_started
-    if not _switch_ack_clips_started:
+    # Cartesia produces a one-word switch acknowledgement in ~100ms on the
+    # call's existing socket.  Pre-rendering every language at the start of the
+    # first call opened six extra WebSockets, leaked connections, and competed
+    # with the greeting for roughly four seconds.  Soniox still benefits from
+    # the preclips because its cold switch synthesis was measured at ~2.3s.
+    if (
+        not _switch_ack_clips_started
+        and (settings.tts_provider or "soniox").lower() != "cartesia"
+    ):
         _switch_ack_clips_started = True
         asyncio.create_task(_prewarm_switch_ack_clips())
 
@@ -8542,7 +8550,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 key="wait_clips",
             )
 
-        _filler_cache_task = asyncio.create_task(_cache_tool_fillers())
+        # Do not open background synthesis streams while the greeting is trying
+        # to reach the handset.  The caller cannot invoke a lookup tool until
+        # after that greeting anyway, so start this cache only once both the
+        # welcome and AgentSession are ready.
+        _filler_cache_task = None
         if _welcome_task is not None:
             # MIC GATE (#289, live 2026-07-08): the raw greeting clip is
             # uninterruptible, but session.start() often finishes WHILE the clip
@@ -8568,6 +8580,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     logger.warning("mic_gate_enable_failed: %s", _mg)
         _t_pre_start_await = _perf.monotonic()
         await _start_task
+        _filler_cache_task = asyncio.create_task(_cache_tool_fillers())
         logger.info(
             "lat_session_connect total_answer_to_ready=%.2fs wait_after_clip=%.2fs",
             _perf.monotonic() - _t_answer,

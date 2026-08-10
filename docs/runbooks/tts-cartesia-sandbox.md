@@ -12,8 +12,8 @@ The **same agent code** as production with explicit sandbox-only providers:
 |---|---|---|
 | Fly app | `vachanam-agent` | `vachanam-agent-sandbox` |
 | `STT_PROVIDER` | `soniox` | `soniox` |
-| `LLM_PROVIDER` | `gemini` | `livekit` |
-| LLM | cached Gemini 2.5 Flash | LiveKit Gemini 3.5 Flash-Lite |
+| `LLM_PROVIDER` | `gemini` | `gemini` |
+| LLM | cached Gemini 2.5 Flash | cached Gemini 2.5 Flash |
 | Fly region | Mumbai | Mumbai |
 | `TTS_PROVIDER` | unset (→ soniox) | `cartesia` |
 | `LIVEKIT_AGENT_NAME` | unset (→ `vachanam-agent`) | `vachanam-sandbox` |

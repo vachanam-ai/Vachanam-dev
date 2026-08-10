@@ -31,8 +31,7 @@ primary_region = "bom"
   # consuming audio. Soniox is the proven recognizer for this canary.
   STT_PROVIDER = "soniox"
   TTS_PROVIDER = "cartesia"
-  LLM_PROVIDER = "livekit"
-  LIVEKIT_INFERENCE_MODEL = "google/gemini-3.5-flash-lite"
+  LLM_PROVIDER = "gemini"
   CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"
   CARTESIA_MIN_SENTENCE_LEN = "4"
   CARTESIA_SAMPLE_RATE = "24000"
@@ -44,7 +43,10 @@ primary_region = "bom"
   VOICE_TOOL_PREFETCH = "true"
   VOICE_DETERMINISTIC_CONFIRM = "true"
   MAX_CALL_DURATION_SECONDS = "600"
-  RECORDING_ENABLED = "true"
+  # Vobiz records investor test calls.  Do not also run LiveKit's admin-only
+  # recorder: its mandatory notice serializes ahead of the normal intro and
+  # added several seconds to the measured opening path.
+  RECORDING_ENABLED = "false"
   TRANSCRIPT_CAPTURE_ENABLED = "true"
   TRANSCRIPT_RETENTION_DAYS = "30"
   # The sandbox must never send patients real messages or drive the follow-up
