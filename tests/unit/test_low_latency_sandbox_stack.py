@@ -114,13 +114,27 @@ def test_provider_aware_prewarm_and_switch_clips():
     assert "_build_soniox_tts(" not in switch_clip_src
 
 
-def test_cartesia_does_not_warm_every_switch_voice_during_first_call():
+def test_call_start_never_prewarms_all_language_acknowledgements():
     import inspect
 
     from agent.livekit_minimal import agent as ag
 
     entrypoint = inspect.getsource(ag.entrypoint)
-    assert '(settings.tts_provider or "soniox").lower() != "cartesia"' in entrypoint
+    assert "asyncio.create_task(_prewarm_switch_ack_clips())" not in entrypoint
+    assert "A real switch still pre-synthesizes its one-word ack" in entrypoint
+
+
+def test_fixed_fillers_use_shared_redis_audio_cache():
+    src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
+    cache_fn = src.split("async def cache_filler_clips", 1)[1].split(
+        "def _play_cached_filler", 1
+    )[0]
+    assert "_filler_shared_cache_key(" in cache_fn
+    assert "await _greeting_cache_get(shared_key)" in cache_fn
+    assert "await _greeting_cache_set(shared_key, wavs)" in cache_fn
+    warmer = src.split("async def _warm_all_clinic_prompt_caches", 1)[1]
+    assert '("filler_clips", get_lines(language).fillers)' in warmer
+    assert '("wait_clips", get_wait_fillers(language))' in warmer
 
 
 def test_tool_filler_synthesis_starts_after_session_and_greeting():

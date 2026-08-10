@@ -159,9 +159,12 @@ def test_turn_detector_follows_active_handoff_language():
     assert 'overrides["turn_detection"]' in init
     ep = inspect.getsource(ag.entrypoint)
     assert '"turn_detection": None' in ep
-def test_switch_ack_preclip_wired():
-    """#464: the switch ack is pre-synthesized once per worker (default voice) and
-    replayed on switch, instead of a ~2.3s live cold-connect synth every switch."""
+def test_switch_ack_is_synthesized_only_for_an_actual_switch():
+    """A normal call must not synthesize every language acknowledgement.
+
+    The requested language still gets its one-word acknowledgement synthesized
+    before handoff, with the live-say fallback retained on provider failure.
+    """
     import inspect
 
     import agent.livekit_minimal.agent as ag
@@ -174,7 +177,9 @@ def test_switch_ack_preclip_wired():
     # the live pre-synth is now gated on the cache miss
     assert '_switch_ack_frames", None) is None' in sw
     ep = inspect.getsource(ag.entrypoint)
-    assert "_prewarm_switch_ack_clips()" in ep and "_switch_ack_clips_started" in ep
+    assert "_prewarm_switch_ack_clips()" not in ep
+    assert "async for ev in _new_tts.synthesize(_ack_text)" in sw
+    assert "switch_ack_presynth_failed" in sw
 
 
 def test_switch_drift_guard_trims_long_history():

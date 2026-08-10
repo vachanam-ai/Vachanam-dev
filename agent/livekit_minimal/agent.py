@@ -110,7 +110,9 @@ from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
 from agent.services.telugu_dates import telugu_date  # noqa: E402
 from agent.livekit_minimal.greeting import (  # noqa: E402
+    _greeting_cache_get,
     _greeting_cache_key,
+    _greeting_cache_set,
     inbound_greeting_texts,
     normalize_pcm,
     outbound_greeting_texts,
@@ -204,6 +206,25 @@ _FILLER_CLIP_CACHE: dict[
 ] = {}
 
 
+def _filler_shared_cache_key(
+    voice_id: str, lang_code: str, key: str, texts
+) -> str:
+    """Cross-job cache key for fixed filler audio.
+
+    LiveKit job processes are single-call. A process-local cache therefore
+    disappears when that call ends and is not a call-to-call cache at all.
+    Redis is already the authoritative shared audio cache for greetings; fixed
+    filler lines use the same provider/voice/language/text isolation.
+    """
+    clip_texts = list(texts)
+    return _greeting_cache_key(
+        f"fillers:{key}",
+        lang_code,
+        _greeting_voice_key(voice_id),
+        clip_texts,
+    )
+
+
 def _wav_to_pcm(wav: bytes) -> tuple[bytes, int, int]:
     """Decode a WAV clip to (normalized PCM bytes, sample_rate, channels)."""
     import io
@@ -259,7 +280,16 @@ async def cache_filler_clips(
                 )
             logger.info("filler_clips_process_hit=%d key=%s", len(cached), key)
             return
-        wavs = await synth_wavs(clip_texts, voice_id, lang_code)
+        shared_key = _filler_shared_cache_key(
+            voice_id, lang_code, key, clip_texts
+        )
+        wavs = await _greeting_cache_get(shared_key)
+        if wavs is None:
+            wavs = await synth_wavs(clip_texts, voice_id, lang_code)
+            await _greeting_cache_set(shared_key, wavs)
+            logger.info("filler_clips_shared_miss key=%s", key)
+        else:
+            logger.info("filler_clips_shared_hit=%d key=%s", len(wavs), key)
         clips = []
         for text, wav in zip(clip_texts, wavs):
             pcm, sr, ch = _wav_to_pcm(wav)
@@ -6462,20 +6492,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         asyncio.create_task(_outbound_greet_prep()) if outbound_number else None
     )
 
-    # #464: warm the switch-ack clips once per worker (background) so a later
-    # language switch replays them instead of a ~2.3s live cold-connect synth.
-    global _switch_ack_clips_started
-    # Cartesia produces a one-word switch acknowledgement in ~100ms on the
-    # call's existing socket.  Pre-rendering every language at the start of the
-    # first call opened six extra WebSockets, leaked connections, and competed
-    # with the greeting for roughly four seconds.  Soniox still benefits from
-    # the preclips because its cold switch synthesis was measured at ~2.3s.
-    if (
-        not _switch_ack_clips_started
-        and (settings.tts_provider or "soniox").lower() != "cartesia"
-    ):
-        _switch_ack_clips_started = True
-        asyncio.create_task(_prewarm_switch_ack_clips())
+    # Do not pre-synthesize every language acknowledgement here. LiveKit job
+    # processes serve one call and then exit, so the old "once per worker"
+    # cache rebuilt six unused clips on EVERY call and competed with the first
+    # real TTS response. A real switch still pre-synthesizes its one-word ack in
+    # switch_language on the already-open target-language connection.
 
     import time as _perf
 
@@ -9277,6 +9298,28 @@ async def _warm_all_clinic_prompt_caches() -> None:
                 greeting_ready += int(
                     await warm_greeting_cache(
                         notice_key, [notice], voice, language
+                    )
+                )
+
+            # Fixed lookup/wait fillers are used by every job process but job
+            # memory is single-call. Warm them into the same Redis audio cache
+            # as greetings, so call setup performs a cache read rather than two
+            # live Soniox syntheses competing with the patient's first reply.
+            for filler_key, filler_texts in (
+                ("filler_clips", get_lines(language).fillers),
+                ("wait_clips", get_wait_fillers(language)),
+            ):
+                filler_texts = list(filler_texts)
+                filler_cache_key = _filler_shared_cache_key(
+                    voice, language, filler_key, filler_texts
+                )
+                greeting_requested += 1
+                greeting_ready += int(
+                    await warm_greeting_cache(
+                        filler_cache_key,
+                        filler_texts,
+                        voice,
+                        language,
                     )
                 )
     logger.info(

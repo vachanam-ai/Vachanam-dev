@@ -78,6 +78,29 @@ async def test_cache_filler_clips_populates_userdata(monkeypatch):
     assert all(c["pcm"] and c["sr"] and c["ch"] for c in clips)
 
 
+async def test_shared_filler_cache_hit_never_calls_live_tts(monkeypatch):
+    ud = {
+        "language": "te",
+        "fillers": ["okay అండి"],
+        "filler_clips": [],
+    }
+    sess = _FakeSession(ud)
+    ag._FILLER_CLIP_CACHE.clear()
+
+    async def _shared_hit(_key):
+        return [_make_wav()]
+
+    async def _live_tts_must_not_run(*_args, **_kwargs):
+        raise AssertionError("a Redis audio hit must not synthesize during a call")
+
+    monkeypatch.setattr(ag, "_greeting_cache_get", _shared_hit)
+    monkeypatch.setattr(ag, "synth_wavs", _live_tts_must_not_run)
+    await ag.cache_filler_clips(sess, ud["fillers"], "voice", "te")
+
+    assert len(ud["filler_clips"]) == 1
+    assert ud["filler_clips_language"] == "te"
+
+
 async def test_soniox_filler_cache_preserves_long_pause(monkeypatch):
     line = "ఒక్క నిమిషం అండి... చూస్తున్నాను. [long pause]"
     ud = {"language": "te", "wait_fillers": [line], "wait_clips": []}
