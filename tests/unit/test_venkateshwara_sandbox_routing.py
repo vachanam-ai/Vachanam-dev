@@ -85,6 +85,19 @@ def test_transient_empty_fly_response_is_retried(monkeypatch):
     assert len(calls) == 2
 
 
+def test_application_log_level_is_not_passed_to_flyctl(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+
+    def fake_run(*args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout=json.dumps([{"state": "started"}]))
+
+    monkeypatch.setattr(route.subprocess, "run", fake_run)
+    route._assert_sandbox_machine_started()
+    assert "LOG_LEVEL" not in seen["env"]
+
+
 def test_three_empty_fly_responses_still_fail_closed(monkeypatch):
     calls = []
 

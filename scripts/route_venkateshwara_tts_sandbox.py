@@ -51,12 +51,17 @@ def _assert_sandbox_machine_started() -> None:
     """Fail closed before moving a DID to a workerless sandbox."""
     machines = None
     last_error: Exception | None = None
+    fly_env = os.environ.copy()
+    # flyctl also consumes the application's generic LOG_LEVEL. A local
+    # LOG_LEVEL=debug makes it prefix ANSI diagnostics to --json stdout.
+    fly_env.pop("LOG_LEVEL", None)
     for _ in range(3):
         try:
             result = subprocess.run(
                 ["flyctl", "machine", "list", "-a", SANDBOX_APP, "--json"],
                 check=True,
                 capture_output=True,
+                env=fly_env,
                 text=True,
                 timeout=30,
             )
