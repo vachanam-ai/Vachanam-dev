@@ -59,7 +59,7 @@ Some clinics let patients message them on WhatsApp instead of calling. Here is e
 
 | Stored | Where | Kept for |
 |---|---|---|
-| The last 10 messages of your thread with the clinic, plus any booking you are part-way through | `whatsapp_sessions` table, clinic-scoped | 30 days with no new messages, or until your patient record is erased — whichever is first |
+| The last 10 messages of your thread with the clinic, plus any booking you are part-way through | `whatsapp_sessions` table, clinic-scoped | 30 days with no new messages, until your patient record is erased, or the moment the clinic disconnects WhatsApp — whichever comes first |
 | The message's WhatsApp-issued ID (the identifier only, never the text) | Cache | 24 hours — so a message WhatsApp delivers twice does not get two replies |
 | A question the clinic has not published an answer to, with your name and number | `clinic_questions` table, clinic-scoped | Until your patient record is erased — a person answers it and replies to you |
 
@@ -99,7 +99,7 @@ Our production logs follow a strict PII discipline:
 | Treatment visit notes + follow-up Q&A summary (optional feature; clinic-scoped) | Until patient-record erasure | Deleted / text cleared with the patient record |
 | A question you asked + the clinic's answer, with your name and number | Until patient-record erasure | Your name and number are cleared. If the clinic chose to publish the question and answer in its FAQ, that pair holds no personal data and remains |
 | A message you asked us to pass to the clinic (text + number) | 90 days, or patient-record erasure — whichever is first | Deleted outright, text and number together |
-| WhatsApp conversation state (last 10 messages + any in-progress booking) | 30 days idle, or patient-record erasure — whichever is first | Deleted by the same daily job, or immediately on patient erasure |
+| WhatsApp conversation state (last 10 messages + any in-progress booking) | 30 days idle, patient-record erasure, or the clinic disconnecting WhatsApp — whichever is first | Deleted by the same daily job, immediately on patient erasure, or immediately on disconnect |
 | WhatsApp message ID (identifier only) | 24 hours | Expires automatically |
 | Temporary token counters (cache) | Same calendar day | Expire automatically |
 | Voice audio | Never stored | — |

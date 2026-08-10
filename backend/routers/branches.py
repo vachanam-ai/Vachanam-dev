@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -1681,11 +1681,27 @@ async def disconnect_whatsapp(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Clear this clinic's stored WhatsApp credentials. org_admin only.
+    """Clear this clinic's stored WhatsApp credentials AND its stored
+    conversations. org_admin only.
+
     Clears wa_phone_number_id too (not just the token) so wa_service.wa_enabled
     fails closed immediately rather than reporting a stale linked-but-tokenless
     state. Does not call Meta to revoke the subscription — the clinic can
-    reconnect later through the same flow."""
+    reconnect later through the same flow.
+
+    The WhatsApp sessions go with the credentials. Those rows exist only to let
+    the assistant follow a patient across several messages on a channel this
+    clinic no longer runs; once the number is disconnected there is no purpose
+    left to hold them under, and leaving them meant the Conversations page kept
+    serving patient message text after the clinic had switched WhatsApp off.
+    Deletion is per-branch (RULE 1) and happens in the same transaction as the
+    credential clear, so we can never end up disconnected-but-still-storing.
+
+    Scoped to whatsapp_sessions deliberately. ClinicQuestion and PatientMessage
+    carry a callback promise to a patient and record no channel, so most of
+    them are voice-originated — deleting those here would silently destroy work
+    the clinic still owes someone.
+    """
     await assert_branch_access(current_user, branch_id, db)
     _require_org_admin(current_user)
 
@@ -1695,19 +1711,36 @@ async def disconnect_whatsapp(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
+    from backend.models.schema import WhatsAppSession
+
     branch.wa_waba_id = None
     branch.wa_token_enc = None
     branch.wa_verified_name = None
     branch.wa_phone_number_id = None
     branch.wa_status = "disconnected"
+    purged = (
+        await db.execute(
+            delete(WhatsAppSession).where(
+                WhatsAppSession.branch_id == uuid.UUID(branch_id)  # RULE 1
+            )
+        )
+    ).rowcount
     await db.commit()
 
     request.state.audit_resource_id = branch_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
+    # RULE 9: a count, never a phone number or any message text.
+    request.state.audit_metadata = {"sessions_purged": int(purged or 0)}
 
-    logger.info("wa_branch_disconnected", branch_id=branch_id)
-    return {"branch_id": branch_id, "wa_status": branch.wa_status}
+    logger.info(
+        "wa_branch_disconnected", branch_id=branch_id, sessions_purged=int(purged or 0)
+    )
+    return {
+        "branch_id": branch_id,
+        "wa_status": branch.wa_status,
+        "conversations_deleted": int(purged or 0),
+    }
 
 
 @router.get(
