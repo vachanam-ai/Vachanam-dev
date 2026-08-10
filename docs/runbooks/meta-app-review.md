@@ -106,14 +106,50 @@ answers. Paste these, edited only if something below stops being true.
 
 **`whatsapp_business_management`**
 
-> Vachanam is an appointment-booking platform for clinics in India. Each clinic
-> connects its own WhatsApp Business Account through Embedded Signup. We use
-> this permission solely to manage message templates on the connecting clinic's
-> own WABA: creating the appointment-confirmation, reschedule, cancellation and
-> reminder templates that clinic sends to its own patients, listing their
-> approval status in our dashboard, and deleting templates the clinic no longer
-> wants. We never read or modify templates on any WABA other than the one the
-> clinic explicitly connected.
+Scope it to the Graph calls we actually make. There are five, and no more:
+`/oauth/access_token`, `/{waba_id}/subscribed_apps`,
+`/{phone_number_id}/register`, `GET /{phone_number_id}` (verified name), and
+`/{waba_id}/message_templates` (list, create, delete).
+
+> Each clinic connects its own WhatsApp Business Account through Embedded
+> Signup and remains the owner of that account. We act as a Technology
+> Provider. We read and manage assets only on the WABA a clinic has explicitly
+> connected, using that clinic's own credential, and never on any other
+> business's assets.
+>
+> We use this permission for exactly four operations, all scoped to the
+> connected WABA:
+>
+> 1. Message template management — create the appointment templates the clinic
+>    sends its own patients (booking confirmation, reschedule, cancellation,
+>    reminder), list them with their Meta review status, and delete templates
+>    the clinic no longer wants.
+> 2. Webhook subscription — at connect time we subscribe our app to the
+>    clinic's WABA so message and template status events reach us. Without this
+>    no inbound patient message or template approval ever arrives.
+> 3. Phone number registration — we register the clinic's connected number for
+>    Cloud API use so it can send and receive through the platform.
+> 4. Reading the number's verified display name, so our dashboard shows the
+>    clinic which WhatsApp identity it is connected as.
+>
+> We do not manage QR codes. We do not upload or retrieve media. We do not read
+> message history through this permission — inbound patient messages reach us
+> only via the webhook subscription in point 2.
+>
+> Regarding data: we do process patient personal data, as a Data Processor
+> under India's Digital Personal Data Protection Act 2023, with the clinic as
+> Data Fiduciary. We store the patient's first name, phone number, and a short
+> working-memory window of the last ten messages, retained for 30 days of
+> inactivity. Every record is scoped to the clinic that owns it.
+
+**Never claim we collect no personal data.** Meta's draft assistant proposed
+exactly that sentence. It is false, and `/privacy` and `/data-handling` — both
+linked from the submission — say so in detail. An inaccurate data disclosure is
+a worse outcome than any permission denial. Stating the DPDP processor
+relationship plainly also reads stronger than a denial a reviewer can falsify
+in one click.
+
+**Never claim QR codes or media.** Neither exists in the codebase.
 
 **`whatsapp_business_messaging`**
 
