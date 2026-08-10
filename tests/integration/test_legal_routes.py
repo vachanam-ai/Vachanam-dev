@@ -322,10 +322,11 @@ async def test_terms_pricing_matches_billing_math():
     truth) so a future repricing fails CI until the terms are updated."""
     from pathlib import Path
 
-    from backend.services.billing_math import PLANS, TRIAL_MINUTES
+    from backend.services.billing_math import PLANS, SELLABLE_PLANS, TRIAL_MINUTES
 
     text = Path("docs/legal/terms-of-service.md").read_text(encoding="utf-8")
-    for plan in PLANS.values():
+    for key in SELLABLE_PLANS:
+        plan = PLANS[key]
         assert f"{plan.base_rupees:,}" in text, (
             f"terms missing current price for {plan.display_name}: "
             f"INR {plan.base_rupees:,}")
@@ -337,7 +338,7 @@ async def test_terms_pricing_matches_billing_math():
             # rather than advertise "0 minutes", which reads like a defect.
             assert "no voice minutes" in text.lower(), (
                 f"terms must state that {plan.display_name} includes no voice")
-    assert "INR 5 per minute" in text        # overage, all plans
+    assert "INR 6 per minute" in text        # overage, all voice plans
     assert f"{TRIAL_MINUTES} minutes" in text  # trial size
     assert "18% GST" in text
     # Dead old-model figures must never reappear. (Plain "1,999" is now the

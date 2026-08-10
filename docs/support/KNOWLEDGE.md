@@ -23,7 +23,7 @@ including lunch hours, evenings, and holidays.
 
 1. Patient dials the clinic's number (a dedicated business number Vachanam
    provisions, or the clinic's existing number forwarded to it).
-2. The AI answers within about a second, in the clinic's chosen voice, greets
+2. The AI answers in the clinic's chosen catalog voice, greets
    returning patients by name, and speaks the clinic's name.
 3. The patient says what they need in natural speech — no keypad menus.
 4. The AI matches the health need to the right doctor (never gives medical
@@ -53,24 +53,24 @@ switch language and the agent continues in the new language.
 
 | Plan | Price | Included calling | Doctors | Languages | Extras |
 |---|---|---|---|---|---|
-| Lite | ₹1,999/month | 150 minutes (≈55 calls) | up to 3 | all 7 | treatment follow-up calls; AI calls capped at 10 minutes |
-| Starter | ₹5,999/month | 700 minutes (≈250 calls) | up to 3 | all 7 | treatment follow-up calls; AI calls capped at 10 minutes |
-| Clinic (most popular) | ₹9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 7 | treatment follow-up calls |
-| Multi | ₹17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 7 | WhatsApp confirmations + reminders |
+| Basic | ₹5,999/month | 400 minutes (≈140 calls) | up to 3 | all 7 | treatment follow-up calls |
+| Growth (most popular) | ₹10,999/month | 1,500 minutes (≈540 calls) | up to 10 | all 7 | WhatsApp, reminders and follow-up calls |
+| Scale | ₹21,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 7 | 2 branches, WhatsApp and follow-up calls |
+| WhatsApp only | ₹1,499/month | no voice minutes | up to 3 | chat | WhatsApp booking and patient service |
 
-- Overage on every plan: ₹5 per minute beyond included minutes, billed with
+- Overage on every voice plan: ₹6 per minute beyond included minutes, billed with
   the next invoice.
-- Extra phone number: ₹1,999/month. Extra branch: ₹7,999/month (a branch is a
+- Extra phone number: ₹2,499/month. Extra branch: ₹6,999/month (a branch is a
   fully separate clinic setup — own number, doctors, staff; data never mixes).
 - Included minutes reset monthly and do not carry over.
 - GST is currently waived, so invoices do not add a GST charge.
 
 ## Free trial
 
-14 days, no card required, 300 included minutes (≈100 calls). When the trial
+14 days, no card required, 30 included minutes (about 10 calls). When the trial
 ends or the minutes run out, calls pause until a plan is activated. Around day
 12 the owner receives a payment link. Trial clinics get the full feature set
-of the Clinic plan to evaluate.
+of the Growth plan to evaluate.
 
 ## Getting started (onboarding)
 
@@ -83,15 +83,14 @@ of the Clinic plan to evaluate.
    this includes standard telecom KYC which can take up to a day).
 4. Connect the doctor's Google Calendar in Settings (optional but
    recommended).
-5. Optionally record a 5–15 second voice sample per language in Settings so
-   the AI speaks in the clinic's own voice (Clinic and Multi plans).
+5. Choose a supported catalog voice in Settings.
 6. Test-call the number; go live.
 
 ## Doctors
 
 - Each doctor has working days, start/end hours, specialization, a booking
   style (token queue or time slots), and a daily token limit (default 50).
-- Doctor caps by plan: Lite 1, Starter 3, Clinic 5, Multi unlimited. Adding a doctor
+- Doctor caps by plan: Basic 3, Growth 10, Scale unlimited. Adding a doctor
   beyond the cap prompts an upgrade.
 - Doctor leave: mark leave dates in the app under Doctor leave. Vachanam then
   automatically CALLS the affected booked patients and rebooks them onto
@@ -118,7 +117,7 @@ of the Clinic plan to evaluate.
 - Patient personal data is NEVER shared across clinics. Each clinic sees only
   its own patients.
 
-## Treatments and follow-up calls (Clinic and Multi plans)
+## Treatments and follow-up calls
 
 - After a visit, the doctor or reception can record a visit note: what was
   done, what is next, and the next reporting date.
@@ -156,9 +155,9 @@ of the Clinic plan to evaluate.
 
 - Payments are processed by Razorpay (RBI-authorised): UPI, credit/debit
   cards, net banking. Vachanam never stores card details.
-- Activate or change a plan from Settings → Plan & billing. Upgrades take
-  effect immediately; the price difference is adjusted on the next invoice.
-- Overage minutes (₹5/min) appear on the next month's invoice.
+- Activate or change a plan from Plan & billing. A scheduled change protects
+  the already-paid cycle and takes effect at the next renewal.
+- Overage minutes (₹6/min) appear on the next invoice.
 - Refunds and cancellation terms are published at the website's Refunds page;
   subscription can be cancelled anytime and stays active till the period ends.
 
@@ -237,7 +236,7 @@ and the signable Data Processing Agreement at vachanam.in/dpa.
 - "Didn't get the signup code": check spam; codes expire in 10 minutes;
   request a new one.
 - "Minutes ran out": calls pause on trial; on paid plans calls continue at
-  ₹5/min overage. Upgrade any time from Settings.
+  ₹6/min overage. Upgrade any time from Plan & billing.
 - "AI spoke the wrong language": each caller's language preference is
   remembered; the caller can say, in their language, "speak in Hindi" (etc.)
   and the agent switches if the plan includes that language.

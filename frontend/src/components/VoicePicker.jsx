@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Pause, Play } from "@phosphor-icons/react";
 
-// Landing-page showcase: the SAME AI agent greeting, spoken in each supported
-// language. Static samples live in /public/voices/lang/<code>.wav.
 export const LANGUAGES = [
   { code: "te", native: "తెలుగు", english: "Telugu" },
   { code: "hi", native: "हिन्दी", english: "Hindi" },
@@ -9,80 +8,39 @@ export const LANGUAGES = [
   { code: "kn", native: "ಕನ್ನಡ", english: "Kannada" },
   { code: "ml", native: "മലയാളം", english: "Malayalam" },
   { code: "mr", native: "मराठी", english: "Marathi" },
-  { code: "bn", native: "বাংলা", english: "Bengali" }
+  { code: "bn", native: "বাংলা", english: "Bengali" },
 ];
 
-/** Language sample cards. Click play to hear the agent greet in that language. */
 export default function VoicePicker() {
   const [playing, setPlaying] = useState(null);
   const audioRef = useRef(null);
-
   useEffect(() => () => audioRef.current?.pause(), []);
 
   const play = (code) => {
     audioRef.current?.pause();
-    if (playing === code) {
-      setPlaying(null);
-      return;
-    }
-    const a = new Audio(`/voices/lang/${code}.wav`);
-    audioRef.current = a;
+    if (playing === code) { setPlaying(null); return; }
+    const audio = new Audio(`/voices/lang/${code}.wav`);
+    audioRef.current = audio;
     setPlaying(code);
-    a.onended = () => setPlaying(null);
-    a.play().catch(() => setPlaying(null));
+    audio.onended = () => setPlaying(null);
+    audio.play().catch(() => setPlaying(null));
   };
 
   return (
-    <div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {LANGUAGES.map((l) => {
-          const isPlaying = playing === l.code;
+    <div className="voice-picker">
+      <div className="voice-picker-grid">
+        {LANGUAGES.map((language) => {
+          const active = playing === language.code;
           return (
-            <button
-              key={l.code}
-              type="button"
-              onClick={() => play(l.code)}
-              aria-label={`Play ${l.english} sample`}
-              className={`flex items-center justify-between rounded-2xl border p-4 text-left transition ${
-                isPlaying
-                  ? "border-teal bg-teal-mint shadow-lift"
-                  : "border-hairline bg-surface/85 shadow-card hover:border-teal-light/60"
-              }`}
-            >
-              <div className="min-w-0">
-                <p className="truncate font-display text-lg font-semibold">{l.native}</p>
-                <p className="font-ui text-xs text-slate">{l.english}</p>
-              </div>
-              <span
-                className={`ml-3 grid h-11 w-11 shrink-0 place-items-center rounded-full border transition ${
-                  isPlaying
-                    ? "border-gold bg-gold-soft text-gold-ink"
-                    : "border-hairline bg-surface text-teal"
-                }`}
-              >
-                {isPlaying ? (
-                  <span className="flex items-end gap-0.5" aria-hidden>
-                    {[3, 5, 4].map((h, i) => (
-                      <span
-                        key={i}
-                        className="w-1 animate-pulse rounded-sm bg-gold-ink"
-                        style={{ height: `${h * 3}px`, animationDelay: `${i * 120}ms` }}
-                      />
-                    ))}
-                  </span>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden>
-                    <path d="M3 1.5v11l9-5.5z" />
-                  </svg>
-                )}
-              </span>
+            <button key={language.code} type="button" onClick={() => play(language.code)} aria-label={`${active ? "Pause" : "Play"} ${language.english} sample`} className={active ? "is-playing" : ""}>
+              <span><strong lang={language.code}>{language.native}</strong><small>{language.english}</small></span>
+              <span className="voice-play">{active ? <Pause size={16} weight="fill" /> : <Play size={16} weight="fill" />}</span>
+              {active && <span className="voice-bars" aria-hidden>{[1,2,3,4,5].map((bar) => <i key={bar} />)}</span>}
             </button>
           );
         })}
       </div>
-      <p className="mt-4 font-ui text-sm italic text-slate">
-        One AI agent — the same warm greeting, in your patients’ language.
-      </p>
+      <p>One reception workflow, spoken in the language your patient chooses.</p>
     </div>
   );
 }

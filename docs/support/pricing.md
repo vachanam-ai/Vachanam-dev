@@ -4,13 +4,31 @@ audience: public
 category: billing
 tags: price, plan, cost, gst, overage
 ---
-Vachanam has four plans. GST is currently waived, and every plan speaks
-all eight Indian languages and includes treatment follow-up calls. Lite is
-₹1,999 per month for low-volume clinics and includes 1 number and about 55
-calls (150 minutes) with up to 3 doctors. Starter is ₹5,999 per month and includes
-1 number and about 250 calls (700 minutes) with up to three doctors. Clinic
-is ₹9,999 per month with about 540 calls (1,500 minutes), up to five doctors,
-plus your own cloned voice and WhatsApp. Multi is ₹17,999 per month with
-about 1,080 calls (3,000 minutes), unlimited doctors, and your own voice in
-every language. Extra usage is billed at ₹5 per minute on every plan. You can
-start with a 14-day free trial (no card, about 100 calls) before you pay.
+
+Vachanam has three voice plans and one WhatsApp-only plan. Every voice plan
+includes all supported languages, accurate booking and rescheduling tools,
+reminder calls, treatment follow-up calls, the receptionist app, and owner
+analytics. Plans differ by monthly usage, doctor capacity, branches, and
+whether WhatsApp is bundled.
+
+| Plan | Monthly price | Included calling | Doctors | Branches | WhatsApp |
+|---|---:|---:|---:|---:|---|
+| Basic | ₹5,999 | 400 minutes (about 140 calls) | up to 3 | 1 | ₹1,499 add-on |
+| Growth (most popular) | ₹10,999 | 1,500 minutes (about 540 calls) | up to 10 | 1 | included |
+| Scale | ₹21,999 | 3,000 minutes (about 1,080 calls) | unlimited | 2 | included |
+| WhatsApp only | ₹1,499 | no voice line | up to 3 | 1 | included |
+
+- Voice overage is ₹6 per minute after the included monthly allowance.
+- An additional branch is ₹6,999/month.
+- An additional phone number is ₹2,499/month.
+- Included minutes reset on the clinic's billing anniversary and do not carry
+  over.
+- The free trial lasts 14 days and includes 30 voice minutes. It pauses when
+  either limit is reached.
+- GST is currently waived. If it is restored, the invoice will show 18% GST.
+- WhatsApp conversation charges, if any, are billed directly by Meta to the
+  clinic's own WhatsApp Business Account.
+
+Seven Indian languages plus English are supported: Telugu, Hindi, English,
+Tamil, Kannada, Malayalam, Marathi, and Bengali. A caller can switch language
+during a call and the agent continues in the selected language.

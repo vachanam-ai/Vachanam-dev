@@ -62,13 +62,13 @@ def test_four_voice_plans_call_blocked_unchanged():
         ) == "trial_expired"
 
         # trial ALWAYS hard-blocks on exhaust, flag or not
-        assert call_blocked("trial", plan, False, 299) is None
-        assert call_blocked("trial", plan, False, 300) == "minutes_exhausted"
+        assert call_blocked("trial", plan, False, 29) is None
+        assert call_blocked("trial", plan, False, 30) == "minutes_exhausted"
         # goodwill adjustment still extends the trial bucket
-        assert call_blocked("trial", plan, False, 300, adjustment=100) is None
+        assert call_blocked("trial", plan, False, 30, adjustment=100) is None
 
         # active + not exhausted -> allowed (None)
-        included = {"lite": 150, "solo": 700, "clinic": 1_500, "multi": 3_000}[plan]
+        included = {"lite": 150, "solo": 400, "clinic": 1_500, "multi": 3_000}[plan]
         assert call_blocked("active", plan, True, included - 1) is None
         # active + exhausted (hard block on) -> minutes_exhausted
         assert call_blocked("active", plan, True, included) == "minutes_exhausted"

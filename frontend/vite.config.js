@@ -16,6 +16,19 @@ const toBackend = {
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@phosphor-icons")) return "icons";
+          if (id.includes("gsap") || id.includes("@gsap")) return "motion";
+          if (id.includes("@tanstack") || id.includes("axios")) return "data";
+          return "vendor";
+        },
+      },
+    },
+  },
   // Vitest: jsdom so React components render to a DOM in tests; globals so
   // describe/it/expect need no imports; setup wires @testing-library/jest-dom
   // matchers. Scoped to src/**/*.test.jsx — never touches backend/python.

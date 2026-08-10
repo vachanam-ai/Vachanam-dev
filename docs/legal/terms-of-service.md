@@ -111,26 +111,24 @@ When you cancel your subscription (see Section 4.4):
 
 ### 4.1 Plans
 
-Vachanam offers four subscription plans. All prices are exclusive of 18% GST (charged additionally; B2B clinics can reclaim it via input credit).
+Vachanam offers three voice plans and one WhatsApp-only plan. GST is currently waived. If GST is restored, 18% GST will be shown separately on the invoice.
 
-| Plan | Monthly price | Included minutes | Doctors | Languages |
+| Plan | Monthly price | Included minutes | Doctors | Branches |
 |---|---|---|---|---|
-| **WhatsApp** | INR 1,499/month | No voice minutes — WhatsApp only, no phone line | up to 3 | English (WhatsApp messages) |
-| **Lite** | INR 1,999/month | 150 minutes (≈55 calls) | 1 | all 7 supported languages |
-| **Starter** | INR 5,999/month | 700 minutes (≈250 calls) | up to 3 | all 7 supported languages |
-| **Clinic** | INR 9,999/month | 1,500 minutes (≈540 calls) | up to 5 | all 7 supported languages |
-| **Multi** | INR 17,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 7 supported languages |
+| **WhatsApp** | INR 1,499/month | No voice minutes, WhatsApp only, no phone line | up to 3 | 1 |
+| **Basic** | INR 5,999/month | 400 minutes (about 140 calls) | up to 3 | 1 |
+| **Growth** | INR 10,999/month | 1,500 minutes (about 540 calls) | up to 10 | 1 |
+| **Scale** | INR 21,999/month | 3,000 minutes (about 1,080 calls) | unlimited | 2 |
 
-- Overage on every plan with included minutes: INR 5 per minute beyond the included minutes, billed with the next invoice. Included minutes reset monthly and do not carry over. The WhatsApp plan includes no voice service and therefore has no minute overage.
+- Overage on every plan with included minutes: INR 6 per minute beyond the included minutes, billed with the next invoice. Included minutes reset monthly and do not carry over. The WhatsApp plan includes no voice service and therefore has no minute overage.
 - **WhatsApp message costs are billed to you by Meta, not by Vachanam.** On any plan that uses WhatsApp, your clinic holds its own WhatsApp Business Account and its own payment method with Meta. Vachanam's fee covers the software only and adds no per-message markup.
-- Optional add-ons: additional phone number INR 1,999/month; additional branch INR 7,999/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
-- On the Lite and Starter plans, individual AI calls are capped at 4 minutes.
+- Optional add-ons: additional phone number INR 2,499/month; additional branch INR 6,999/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
 
 Current pricing and what each plan includes are always published at vachanam.in; if this table and the website ever differ, the website's published pricing at the time of purchase governs.
 
 ### 4.2 Free trial
 
-Every new clinic gets a 14-day free trial with up to 300 minutes of AI call handling (≈100 calls). No credit card is required to start the trial. When the included trial minutes are used up or the 14 days end — whichever comes first — the service pauses until a plan is activated. Around day 12, we will send a payment link to your registered email. Nothing is ever charged for the trial.
+Every new clinic gets a 14-day free trial with up to 30 minutes of AI call handling (about 10 calls). No credit card is required to start the trial. When the included trial minutes are used up or the 14 days end, whichever comes first, the service pauses until a plan is activated. Around day 12, we will send a payment link to your registered email. Nothing is ever charged for the trial.
 
 ### 4.3 Payment
 

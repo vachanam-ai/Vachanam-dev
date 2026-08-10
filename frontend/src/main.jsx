@@ -25,9 +25,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               position="top-center"
               toastOptions={{
                 style: {
-                  fontFamily: "Outfit, sans-serif",
-                  border: "1px solid #D0E4E4",
-                  color: "#1A2E2E"
+                  fontFamily: "General Sans, sans-serif",
+                  border: "1px solid rgb(var(--line2))",
+                  borderRadius: "14px",
+                  background: "rgb(var(--surface))",
+                  color: "rgb(var(--ink))",
+                  boxShadow: "var(--shadow-float)"
                 }
               }}
             />

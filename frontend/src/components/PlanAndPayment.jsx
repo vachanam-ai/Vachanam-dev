@@ -10,6 +10,7 @@ import {
   verifyAutopaySubscription,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
+import { PLAN_CATALOG, PUBLIC_PLAN_KEYS, planLabel } from "../lib/plans.js";
 
 /* Every control that takes money, in one place (Vinay 2026-08-09: "migrate
    entire billing to billing page. all billings. (now, if i click adjust it is
@@ -22,14 +23,12 @@ import { useAuth } from "../hooks/useAuth.jsx";
    by the same amount it moves, and there is exactly one implementation of the
    Razorpay flow to keep correct. */
 
-const PLAN_LABELS = {
-  lite: "Lite · ₹1,999/mo",
-  solo: "Starter · ₹5,999/mo",
-  clinic: "Clinic · ₹9,999/mo",
-  multi: "Multi · ₹17,999/mo",
-  wa: "WhatsApp · ₹1,499/mo",
-};
-const PLAN_PRICES = { lite: 1999, solo: 5999, clinic: 9999, multi: 17999, wa: 1499 };
+const PLAN_LABELS = Object.fromEntries(
+  PUBLIC_PLAN_KEYS.map((key) => [key, planLabel(key, true)]),
+);
+const PLAN_PRICES = Object.fromEntries(
+  Object.entries(PLAN_CATALOG).map(([key, plan]) => [key, plan.price]),
+);
 
 // Razorpay checkout script — loaded on demand, once.
 function loadRazorpay() {
@@ -91,7 +90,7 @@ export default function PlanAndPayment() {
         name: "Vachanam",
         description,
         prefill: { email: user?.email ?? "" },
-        theme: { color: "#1b1b1a" },
+        theme: { color: "#0e7468" },
         modal: { ondismiss: () => reject(new Error("Payment window closed")) },
         handler: async (resp) => {
           try {
@@ -123,7 +122,7 @@ export default function PlanAndPayment() {
         name: "Vachanam",
         description,
         prefill: { email: user?.email ?? "" },
-        theme: { color: "#1b1b1a" },
+        theme: { color: "#0e7468" },
         modal: { ondismiss: () => reject(new Error("Payment window closed")) },
         handler: async (resp) => {
           try {
@@ -205,10 +204,9 @@ export default function PlanAndPayment() {
           <select className="field min-w-[220px]" value={p?.plan ?? "clinic"}
             disabled={planChange.isPending || plan.isLoading}
             onChange={(e) => planChange.mutate(e.target.value)}>
-            <option value="lite">{PLAN_LABELS.lite}</option>
-            <option value="solo">{PLAN_LABELS.solo}</option>
-            <option value="clinic">{PLAN_LABELS.clinic}</option>
-            <option value="multi">{PLAN_LABELS.multi}</option>
+            {PUBLIC_PLAN_KEYS.map((key) => (
+              <option key={key} value={key}>{PLAN_LABELS[key]}</option>
+            ))}
           </select>
         </div>
         <span className={p?.status === "active" ? "chip-token" : "chip-muted"}>
@@ -255,7 +253,7 @@ export default function PlanAndPayment() {
         </p>
       )}
       {p?.pending_plan && (
-        <div className="mt-3 rounded-lg border border-line bg-surface-2 p-3">
+        <div className="mt-3 rounded-xl border border-line2 bg-pill p-3">
           <p className="font-ui text-sm">
             <strong>Scheduled change.</strong> Switching to <strong>{p.pending_plan}</strong> on{" "}
             <strong>{p.pending_plan_effective}</strong>. Pick your current plan to cancel.
@@ -281,9 +279,9 @@ export default function PlanAndPayment() {
               </p>
             </div>
             {p.whatsapp_included || p.whatsapp_addon ? (
-              <span className="chip whitespace-nowrap">on</span>
+              <span className="chip-token whitespace-nowrap">on</span>
             ) : p.whatsapp_included_pending ? (
-              <span className="chip whitespace-nowrap">from {p.pending_plan_effective}</span>
+              <span className="chip-muted whitespace-nowrap">from {p.pending_plan_effective}</span>
             ) : (
               <button className="btn-primary whitespace-nowrap px-4 py-2 text-sm"
                 disabled={buyingWa || p.status !== "active"}

@@ -424,7 +424,7 @@ if _STATIC.exists():
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False, response_model=None)
 async def landing():
-    """Serve the Vachanam landing page with canonical Solo/Clinic/Multi pricing."""
+    """Serve the legacy static mirror with canonical Basic/Growth/Scale pricing."""
     index = _STATIC / "index.html"
     if index.exists():
         return FileResponse(index)

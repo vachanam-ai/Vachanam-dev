@@ -8,8 +8,11 @@ import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
 import PasswordField from "../components/PasswordField.jsx";
+import { PLAN_CATALOG, PUBLIC_PLAN_KEYS } from "../lib/plans.js";
 
-const PLANS = { lite: "Lite", solo: "Starter", clinic: "Clinic", multi: "Multi", wa: "WhatsApp" };
+const PLANS = Object.fromEntries(
+  PUBLIC_PLAN_KEYS.map((key) => [key, PLAN_CATALOG[key].name]),
+);
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 // Mirror backend validators so the user gets instant, identical feedback.
@@ -196,9 +199,9 @@ export default function Register() {
   const checks = passwordChecks(form.password);
 
   return (
-    <div ref={pageRef} className="min-h-dvh grid place-items-center px-4 py-12">
+    <div ref={pageRef} className="auth-page auth-register">
       <ThemeToggle float />
-      <div className="w-full max-w-md">
+      <div className="auth-register-card">
         <Link to="/" data-reveal className="font-brand text-3xl text-teal">Vachanam</Link>
         <p data-reveal className="eyebrow mt-8">Get started · {PLANS[form.plan]} plan</p>
         <h1 data-reveal className="mt-2 font-display text-3xl font-semibold tracking-tight">
@@ -206,7 +209,7 @@ export default function Register() {
         </h1>
         <p data-reveal className="mt-2 font-ui text-sm text-slate">
           {step === "details"
-            ? (form.plan === "wa" ? "₹1,499/mo — no launch-offer discount on this plan" : "Launch offer — first 3 months at the offer price")
+            ? `${PLAN_CATALOG[form.plan].tagline} · ₹${PLAN_CATALOG[form.plan].price.toLocaleString("en-IN")}/month`
             : `Enter the 6-digit code we emailed to ${form.email}.`}
         </p>
 
@@ -259,7 +262,7 @@ export default function Register() {
               </div>
               {form.plan === "wa" && (
                 <p className="mt-1.5 font-ui text-xs text-slate">
-                  WhatsApp only — no phone line. ₹1,499/mo, patients book, reschedule and
+                  WhatsApp only, no phone line. ₹1,499/month. Patients book, reschedule and
                   cancel entirely in chat. No AI voice calls on this plan.
                 </p>
               )}

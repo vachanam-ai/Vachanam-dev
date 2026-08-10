@@ -503,17 +503,17 @@ gates. The browser never controls a charge amount.
 
 | Key | Display | Monthly price | Included minutes | Overage | Doctor limit |
 |---|---|---:|---:|---:|---:|
-| `lite` | Lite | INR 1,999 | 150 | INR 5/min | 3 |
-| `solo` | Starter | INR 5,999 | 700 | INR 5/min | 3 |
-| `clinic` | Clinic | INR 9,999 | 1,500 | INR 5/min | 5 |
-| `multi` | Multi | INR 17,999 | 3,000 | INR 5/min | unlimited |
+| `lite` | Lite (legacy, not sold) | INR 1,999 | 150 | INR 6/min | 3 |
+| `solo` | Basic | INR 5,999 | 400 | INR 6/min | 3 |
+| `clinic` | Growth | INR 10,999 | 1,500 | INR 6/min | 10 |
+| `multi` | Scale | INR 21,999 | 3,000 | INR 6/min | unlimited |
 
 Launch-offer pricing is removed; standard plan prices are charged. `GST_WAIVED`
 is currently true, and invoices omit a zero-tax/18% claim while it is waived.
-Trial allowance is 300 minutes and nominal pilot duration is 14 days.
+Trial allowance is 30 minutes and nominal pilot duration is 14 days.
 
 All plans receive supported languages and follow-up. Normal voice-clone access
-is Clinic/Multi but expands during the offer window. WhatsApp is Clinic/Multi.
+is removed. WhatsApp is bundled in Growth/Scale and sold separately for Basic.
 Trials hard-block at allowance; active paid organizations normally accrue
 overage unless explicitly hard-blocked.
 

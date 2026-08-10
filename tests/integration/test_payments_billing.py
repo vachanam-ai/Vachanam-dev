@@ -136,7 +136,7 @@ async def test_webhook_activates_subscription(client, db, org, monkeypatch):
     # removed 2026-08-04 that is the list price — but the contract under test
     # is unchanged: the ledger must never record a number the customer was not
     # billed, whichever way pricing goes.
-    assert bc.base_amount == 9999
+    assert bc.base_amount == 10999
 
 
 async def test_webhook_idempotent_on_redelivery(client, db, org, monkeypatch):

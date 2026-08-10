@@ -4,7 +4,7 @@ audience: both
 category: onboarding
 tags: language, telugu, hindi, english
 ---
-Vachanam speaks Telugu on every plan. The Clinic plan adds Hindi and English,
-and the Multi plan supports all eight languages. Each patient is answered in
-your clinic's language, and a caller can ask to switch language mid-call. You
-choose the languages for your clinic in Settings.
+Every voice plan supports Telugu, Hindi, English, Tamil, Kannada, Malayalam,
+Marathi and Bengali. Each patient is answered in the selected language, and a
+caller can ask to switch language mid-call. You choose the languages for your
+clinic in Settings.

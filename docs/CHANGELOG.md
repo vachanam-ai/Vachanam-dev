@@ -13,6 +13,30 @@ Format per session:
 
 ---
 
+## 2026-08-10 - Premium UI redesign and clinic-fit pricing
+
+Rebuilt the public website and authenticated clinic shell around a unified
+healthcare design system: responsive navigation, accessible light/dark themes,
+premium landing, authentication and support surfaces, clearer information
+hierarchy, purposeful GSAP motion with reduced-motion support, and route-level
+code splitting. The public hero uses an original clinic-reception image rather
+than stock or placeholder artwork.
+
+Removed Lite from new sales and finalized four clinic-fit offers: Basic
+(Rs 5,999 / 400 voice minutes), Growth (Rs 10,999 / 1,500), Scale
+(Rs 21,999 / 3,000), and WhatsApp-only (Rs 1,499), with Rs 6/minute overage.
+The same values now drive the landing page, registration, billing calculations,
+legal/support copy and backend validation; legacy Lite subscriptions continue
+to run but cannot be purchased or selected.
+
+Proof before production: frontend lint, 29 Vitest cases and Vite production
+build passed; Ruff and 98 focused pricing/payment/backend cases passed; the
+production dependency audit has no high or critical findings. Release is one
+atomic commit on top of v1.2.29 so Cloudflare/Render rollback is immediate and
+the four local voice-latency experiments remain outside production.
+
+---
+
 ## 2026-08-09 - Durable WhatsApp appointments and Razorpay autopay
 
 WhatsApp is now a first-class appointment channel instead of a best-effort

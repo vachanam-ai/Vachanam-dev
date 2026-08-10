@@ -33,6 +33,7 @@ from backend.middleware.rate_limit import (
 from backend.models.schema import Organization
 from backend.services.billing_math import (
     PLANS,
+    SELLABLE_PLANS,
     add_month,
     effective_price,
     subscription_order_breakdown,
@@ -92,7 +93,7 @@ def _get_client() -> razorpay.Client:
 class CreateOrderRequest(BaseModel):
     # The amount is NEVER client-controlled (TD-025/G1): a subscription order is
     # for a fixed plan price, derived server-side. The client only names the plan.
-    plan: str = Field(..., description="lite | solo | clinic | multi")
+    plan: str = Field(..., description="solo | clinic | multi | wa")
 
 
 class CreateOrderResponse(BaseModel):
@@ -193,7 +194,7 @@ async def create_autopay_subscription(
     if current_user.role != "org_admin" or not current_user.org_id:
         raise HTTPException(status_code=403, detail="Only a clinic owner can enable autopay")
     plan = req.plan.strip().lower()
-    if plan not in PLANS:
+    if plan not in SELLABLE_PLANS:
         raise HTTPException(status_code=422, detail="Unknown plan")
 
     org = await _load_my_org(current_user, db)
@@ -989,8 +990,11 @@ async def change_plan(
     if current_user.role != "org_admin":
         raise HTTPException(status_code=403, detail="Only a clinic owner can change the plan")
     plan = req.plan.strip().lower()
-    if plan not in PLANS:
-        raise HTTPException(status_code=422, detail="plan must be lite, solo, clinic or multi")
+    if plan not in SELLABLE_PLANS:
+        raise HTTPException(
+            status_code=422,
+            detail="plan must be solo, clinic, multi or wa",
+        )
 
     org = await _load_my_org(current_user, db)
     cycle_end = await _latest_cycle_end(db, org.id)

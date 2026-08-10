@@ -1,145 +1,86 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import { CaretDown, ChatCircleDots, PaperPlaneRight, Sparkle, X } from "@phosphor-icons/react";
 import { getToken } from "../api/client";
 import { sendChat } from "../api/support";
 import { chatErrorMessage, TypedText, TypingDots } from "./ChatBits.jsx";
 import Turnstile, { TURNSTILE_ON } from "./Turnstile.jsx";
 
-/** Floating support chatbot — a launcher bubble (bottom-right) that opens a
- *  small chat window. Grounded assistant; every chat auto-logs a ticket the
- *  clinic can follow up on under Support. Shown app-wide except full-screen
- *  kiosk routes. */
 export default function SupportWidget() {
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
-  const [q, setQ] = useState("");
-  const [msgs, setMsgs] = useState([]);
+  const [question, setQuestion] = useState("");
+  const [messages, setMessages] = useState([]);
   const [ticketId, setTicketId] = useState(null);
   const [busy, setBusy] = useState(false);
-  // "" until the anonymous visitor's Turnstile solves; signed-in users never need it
   const [captcha, setCaptcha] = useState("");
-  const needCaptcha = TURNSTILE_ON && !getToken();
   const listRef = useRef(null);
+  const needCaptcha = TURNSTILE_ON && !getToken();
 
-  // Scroll ONLY the message list. scrollIntoView walked every scrollable
-  // ancestor, so each typed chunk yanked the PAGE down under the widget
-  // (Vinay mobile report 2026-07-14).
   const scrollToEnd = (smooth) => {
-    const el = listRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    const list = listRef.current;
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: smooth ? "smooth" : "auto" });
   };
-  useEffect(() => { scrollToEnd(true); }, [msgs, open, busy]);
-  const markTyped = (i) =>
-    setMsgs((m) => m.map((msg, j) => (j === i ? { ...msg, typed: true } : msg)));
+  useEffect(() => { scrollToEnd(true); }, [messages, open, busy]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
 
-  // Hide on the waiting-room TV board (public kiosk, no chrome).
   if (pathname.startsWith("/tv/")) return null;
 
-  const ask = async (e) => {
-    e.preventDefault();
-    const question = q.trim();
-    if (!question || busy) return;
+  const markTyped = (index) => setMessages((items) => items.map((item, i) => i === index ? { ...item, typed: true } : item));
+  const ask = async (event) => {
+    event.preventDefault();
+    const text = question.trim();
+    if (!text || busy) return;
     setBusy(true);
-    const history = msgs.map((m) => ({ role: m.role, content: m.content }));
-    setMsgs((m) => [...m, { role: "user", content: question }]);
-    setQ("");
+    const history = messages.map((message) => ({ role: message.role, content: message.content }));
+    setMessages((items) => [...items, { role: "user", content: text }]);
+    setQuestion("");
     try {
-      const res = await sendChat({ question, history, ticketId, captcha });
-      setTicketId(res.ticket_id);
-      setMsgs((m) => [...m, { role: "bot", content: res.answer, typed: false }]);
-    } catch (err) {
-      setMsgs((m) => [...m, { role: "bot", content: chatErrorMessage(err), typed: true }]);
+      const response = await sendChat({ question: text, history, ticketId, captcha });
+      setTicketId(response.ticket_id);
+      setMessages((items) => [...items, { role: "bot", content: response.answer, typed: false }]);
+    } catch (error) {
+      setMessages((items) => [...items, { role: "bot", content: chatErrorMessage(error), typed: true }]);
     } finally { setBusy(false); }
   };
 
   return (
-    <>
-      {/* Chat panel */}
+    <div className="support-widget">
       {open && (
-        <div className="fixed bottom-24 right-4 z-50 flex h-[30rem] w-[22rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-hairline bg-surface shadow-card">
-          <div className="flex items-center gap-2 bg-accent px-4 py-3 text-accent-ink">
-            <div className="grid h-8 w-8 place-items-center rounded-full bg-accent-ink/20 font-brand">V</div>
-            <div className="leading-tight">
-              <p className="text-sm font-semibold">Vachanam Assistant</p>
-              <p className="text-[11px] text-accent-ink/80">Usually replies instantly</p>
-            </div>
-            <button className="ml-auto text-white/90 hover:text-white" aria-label="Close chat"
-              onClick={() => setOpen(false)}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                strokeWidth="2" strokeLinecap="round"><line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" /></svg>
-            </button>
-          </div>
-
-          <div ref={listRef} className="flex-1 space-y-2 overflow-y-auto bg-cream/40 p-3">
-            {msgs.length === 0 && (
-              <p className="text-sm text-ink-soft">Hi! Ask me anything about Vachanam — pricing, setup, your plan, a call that didn't work.</p>
+        <section className="support-panel" aria-label="Vachanam support assistant">
+          <header className="support-panel-head">
+            <span className="support-agent-icon"><Sparkle size={19} weight="fill" /></span>
+            <span><strong>Vachanam support</strong><small><i />Grounded product help</small></span>
+            <button type="button" onClick={() => setOpen(false)} aria-label="Close chat"><X size={18} weight="bold" /></button>
+          </header>
+          <div ref={listRef} className="support-messages" aria-live="polite">
+            {messages.length === 0 && (
+              <div className="support-welcome"><ChatCircleDots size={25} weight="duotone" /><strong>How can we help?</strong><p>Ask about pricing, setup, your plan or a call that did not work.</p></div>
             )}
-            {msgs.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
-                <span className={"inline-block max-w-[85%] rounded-2xl px-3 py-2 text-sm " +
-                  (m.role === "user" ? "bg-accent text-accent-ink" : "bg-teal-mint text-ink")}>
-                  {m.role === "bot" ? (
-                    <TypedText text={m.content} done={m.typed !== false}
-                      onTick={() => scrollToEnd(false)} onDone={() => markTyped(i)} />
-                  ) : (
-                    m.content
-                  )}
-                </span>
+            {messages.map((message, index) => (
+              <div key={index} className={`support-message ${message.role === "user" ? "is-user" : "is-bot"}`}>
+                <span>{message.role === "bot" ? <TypedText text={message.content} done={message.typed !== false} onTick={() => scrollToEnd(false)} onDone={() => markTyped(index)} /> : message.content}</span>
               </div>
             ))}
             {busy && <TypingDots />}
           </div>
-
-          {/* Anonymous visitors must solve one widget-scoped challenge per send. */}
-          {needCaptcha && (
-            <div className="border-t border-hairline px-2.5 pt-2">
-              <Turnstile onToken={setCaptcha} />
-            </div>
-          )}
-          <form onSubmit={ask} className="flex items-center gap-2 border-t border-hairline p-2.5">
-            <input className="input flex-1" placeholder="Type your question…" value={q}
-              onChange={(e) => setQ(e.target.value)} />
-            <button
-              className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-accent text-accent-ink transition hover:brightness-110 disabled:opacity-40"
-              disabled={busy || !q.trim() || (needCaptcha && !captcha)} aria-label="Send"
-            >
-              {busy ? (
-                <span className="text-xs">…</span>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                  <path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
-                </svg>
-              )}
-            </button>
+          {needCaptcha && <div className="support-captcha"><Turnstile onToken={setCaptcha} /></div>}
+          <form onSubmit={ask} className="support-composer">
+            <input className="field" aria-label="Support question" placeholder="Type your question…" value={question} onChange={(event) => setQuestion(event.target.value)} />
+            <button type="submit" disabled={busy || !question.trim() || (needCaptcha && !captcha)} aria-label="Send"><PaperPlaneRight size={18} weight="fill" /></button>
           </form>
-          <Link to="/tickets" onClick={() => setOpen(false)}
-            className="border-t border-hairline py-2 text-center text-xs text-teal hover:underline">
-            View all my tickets
-          </Link>
-        </div>
+          <Link to="/tickets" onClick={() => setOpen(false)} className="support-tickets-link">Open support history <span>→</span></Link>
+        </section>
       )}
-
-      {/* Launcher bubble */}
-      <button
-        aria-label={open ? "Close support chat" : "Open support chat"}
-        onClick={() => setOpen((o) => !o)}
-        className="fixed bottom-6 right-6 z-50 grid h-14 w-14 place-items-center rounded-full bg-accent text-accent-ink shadow-card transition hover:brightness-110">
-        {open ? (
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2" strokeLinecap="round"><polyline points="6 9 12 15 18 9" /></svg>
-        ) : (
-          // Iconly-style "chat ghost": rounded bubble with a bottom-left tail,
-          // two eyes, and a small circle top-right (Vinay pick 2026-07-29).
-          <svg width="27" height="27" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M13.5 5.6a6.6 6.6 0 1 0 4.9 4.7" />
-            <path d="M6.9 16.3 4.5 18.6 8.4 17.9" />
-            <circle cx="18.5" cy="6.5" r="1.7" />
-            <circle cx="9.8" cy="13" r=".55" fill="currentColor" stroke="none" />
-            <circle cx="13.2" cy="13.2" r=".55" fill="currentColor" stroke="none" />
-          </svg>
-        )}
+      <button type="button" aria-label={open ? "Close support chat" : "Open support chat"} aria-expanded={open} onClick={() => setOpen((value) => !value)} className="support-launcher">
+        {open ? <CaretDown size={24} weight="bold" /> : <ChatCircleDots size={27} weight="duotone" />}
+        {!open && <span className="support-launcher-dot" />}
       </button>
-    </>
+    </div>
   );
 }

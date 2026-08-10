@@ -169,9 +169,9 @@ export default function Login() {
   };
 
   return (
-    <div ref={pageRef} className="min-h-dvh grid lg:grid-cols-[1.1fr_1fr]">
+    <div ref={pageRef} className="auth-page auth-page-split">
       <ThemeToggle float />
-      <section className="relative hidden overflow-hidden bg-sel text-sel-ink lg:flex lg:flex-col lg:justify-between lg:p-12">
+      <section className="auth-story">
         <Link to="/" data-reveal className="font-brand text-2xl font-semibold tracking-[-0.02em]">Vachanam</Link>
         <div className="relative">
           <p data-reveal className="eyebrow !text-gold">Clinic console</p>
@@ -190,8 +190,8 @@ export default function Login() {
         </p>
       </section>
 
-      <section className="grid place-items-center p-6 sm:p-8">
-        <div className="w-full max-w-sm">
+      <section className="auth-form-panel">
+        <div className="auth-form-card">
           <Link to="/" data-reveal className="mb-8 block lg:hidden">
             <span className="font-brand text-3xl text-ink">Vachanam</span>
           </Link>

@@ -111,18 +111,18 @@ async def test_overview_money_and_usage_math(client, biz_org):
     data = r.json()
     row = next(c for c in data["clients"] if c["org_id"] == str(biz_org["org"].id))
     assert row["minutes_used"] == 120.0
-    assert row["minutes_included"] == 1500  # clinic plan (repriced 2026-07-11)
+    assert row["minutes_included"] == 1500  # Growth plan
     assert row["minutes_left"] == 1380.0  # 1500 - 120
-    assert row["revenue_month"] == 9999  # active clinic within bucket
+    assert row["revenue_month"] == 10999  # active Growth clinic within bucket
     assert row["expense_month"] == round(120 * 2.0 + 1000, 2)  # 1 DID
-    assert row["profit_month"] == round(9999 - (120 * 2.0 + 1000), 2)
+    assert row["profit_month"] == round(10999 - (120 * 2.0 + 1000), 2)
     assert row["calls_month"] == 6
     assert row["voice_bookings_month"] == 3
     assert row["approaching_limit"] is False
     assert row["blocked_now"] is False
     # totals include this org
     assert data["minutes_this_month"] >= 120.0
-    assert data["revenue_month"] >= 9999
+    assert data["revenue_month"] >= 10999
     # never any patient identifiers in the payload
     assert "patient" not in r.text.lower()
 
@@ -228,7 +228,7 @@ async def test_pilot_start_sets_trial_with_expiry(client, db, biz_org):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "trial"
-    assert body["pilot_minutes"] == 300  # TRIAL_MINUTES hard cap applies
+    assert body["pilot_minutes"] == 30  # TRIAL_MINUTES hard cap applies
 
     org = await _fresh_org(uuid.UUID(org_id))
     assert org.status == "trial"

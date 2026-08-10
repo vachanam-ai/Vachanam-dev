@@ -53,58 +53,32 @@ Calendar + PWA + Razorpay (WhatsApp deferred to MVP2 — see memory).
 
 ---
 
-## PRICING (FINAL — change only on Vinay's instruction)
+## PRICING (FINAL — changed by Vinay 2026-08-10)
 
-Repriced 2026-07-11 (Vinay): every plan holds ≥40% gross margin at WORST CASE
-(full use of included minutes; cost model ₹3/min + ₹1,500 infra/DID/clinic).
-Internal plan keys stay `solo|clinic|multi` (DB enum, Razorpay notes, agent
-cap logic); "Starter" is the DISPLAY name for `solo`.
+Sell the previous production voice stack only. The public plans are intentionally
+simple, include the complete booking workflow, and never gate correctness or
+supported languages. Internal plan keys remain stable for database and Razorpay
+compatibility.
 
-| Plan | Price | Included | Doctors | Languages | Premium |
-|---|---|---|---|---|---|
-| **Lite** (`lite`) | ₹1,999/mo + ₹5/min | 1 DID, 150 min (≈55 calls) | 1 | all 7 | follow-up loop; 4-min AI call cap |
-| **Starter** (`solo`) | ₹5,999/mo + ₹5/min | 1 DID, 700 min (≈250 calls) | 3 | all 7 | follow-up loop; 4-min AI call cap |
-| **Clinic** ← most popular | ₹9,999/mo + ₹5/min | 1 DID, 1,500 min (≈540 calls) | 5 | all 7 | WhatsApp, follow-up loop |
-| **Multi** | ₹17,999/mo + ₹5/min | 1 DID, 3,000 min (≈1,080 calls) | unlimited | all 7 | WhatsApp |
+| Public plan | Internal key | Price | Included voice | Doctors | Branches | WhatsApp |
+|---|---|---:|---:|---:|---:|---|
+| **Basic** | `solo` | ₹5,999/month | 400 minutes | 3 | 1 | ₹1,499 add-on |
+| **Growth** — most popular | `clinic` | ₹10,999/month | 1,500 minutes | 10 | 1 | included |
+| **Scale** | `multi` | ₹21,999/month | 3,000 minutes | unlimited | 2 | included |
+| **WhatsApp** | `wa` | ₹1,499/month | no voice | 3 | 1 | included |
 
-(2026-07-12, Vinay: Starter doctors 1→3 + all languages on every plan — both
-zero-variable-cost levers, margins unchanged.)
-(2026-07-15, Vinay: NEW **Lite** ₹1,999 entry plan for low-volume clinics that
-still pay a receptionist full salary. It DELIBERATELY does NOT hold the
-40%-worst invariant — the per-clinic DID+infra floor is too large a share of
-₹1,999. Vinay accepted the tradeoff: ~35% margin at TYPICAL cost + low volume,
-overage ₹5/min caps the downside. Follow-up loop is NOW on every plan
-(`FOLLOWUP_PLANS`); WhatsApp stays Clinic+. plan_type enum gains `lite`
-(migration gg30). Voice CLONING REMOVED platform-wide 2026-07-24, Vinay.)
+Overage is ₹6/minute. An additional branch is ₹6,999/month and is provisioned
+as an isolated clinic branch. An additional phone number is ₹2,499/month.
+The trial ends after 14 days or 30 voice minutes, whichever happens first.
+GST remains waived while `GST_WAIVED=True`; restore statutory GST before
+charging it. All prices and gates must come from
+`backend/services/billing_math.py`; frontend display data comes from
+`frontend/src/lib/plans.js` and must mirror it.
 
-Overage ₹5/min on every plan. Extra DID ₹1,999/mo. Extra branch ₹7,999/mo —
-each extra branch is provisioned as a full new clinic (own DID, Vobiz
-sub-account, trunk, doctors, staff; nothing carries over — RULE 1 isolation).
-Market in CALLS, meter in MINUTES. Single source of truth for plan economics
-AND feature gates: `backend/services/billing_math.py` (PLANS, PLAN_LANGUAGES,
-FOLLOWUP_PLANS, WHATSAPP_PLANS, TRIAL_MINUTES).
-
-All prices are **exclusive of 18% GST** (shown as "+18% GST"; B2B clinics reclaim
-it via input credit). **2026-07-17 LAUNCH OFFER (Vinay — clinic feedback "pricing
-too much; keep low until first clients"):** for a clinic's FIRST 3 PAID months —
-offer prices at 10-15% worst-case margin (Starter ₹3,999 · Clinic ₹6,999 ·
-Multi ₹11,999; Lite stays ₹1,999 — NO discount, Vinay: already margin-thin),
-GST NOT added for now (`GST_WAIVED` in billing_math — flip to restore), Lite
-doctors 1→3. UI shows actual price struck through + offer price labeled
-"Offer price — first 3 months". Source of truth: `billing_math.py`
-OFFER_PRICES / in_offer_window / effective_price. (Voice cloning REMOVED
-platform-wide 2026-07-24.)
-
-Free trial: REMOVED 2026-07-17 (Vinay) — new signups start `paused`; the AI
-line answers with the blocked line until the first payment activates. Legacy
-trial logic (TRIAL_MINUTES, call_blocked trial branches, trial jobs) stays for
-pre-existing trial orgs only.
-
-Cost (VARIABLE only): ~₹2.0/min typical, ₹2.6 worst (Vobiz + Soniox +
-smallest.ai + Gemini + LiveKit); pricing assumes ₹3/min for safety, + ₹1,000/mo
-per DID. Fixed overhead (servers, salaries) separate, dominates at low volume.
-Expected blended gross ≈58% at 60% bucket utilization (≈₹6k profit/clinic/mo).
-History: 2026-06-16 model (1,999/9,999/15,999 · 100/1800/3600) replaced 2026-07-11.
+`lite` remains a runtime-compatible legacy enum value only. It is not sellable,
+must not appear in registration or plan-change UI, and must not be reintroduced
+as a public plan. Core booking, cancellation, rescheduling, reminders, grounding,
+languages, auditability, and safety are available on every voice plan.
 
 ---
 

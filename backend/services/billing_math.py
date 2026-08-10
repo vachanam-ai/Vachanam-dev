@@ -17,35 +17,27 @@ class Plan:
     overage_per_min: float  # rupees
     max_doctors: int | None  # None = unlimited
     display_name: str
+    included_branches: int = 1
 
 
-# Repriced 2026-07-11 (Vinay): every plan holds >=40% gross margin at the
-# worst-case full use of its included bucket (cost model: Rs3/min + Rs1,500
-# infra/DID per clinic). Internal keys stay solo/clinic/multi (DB enum,
-# Razorpay notes, agent cap logic); "Starter" is display-only.
-# 2026-07-12 (Vinay): Starter doctor cap 1 → 3. Doctor count is zero-variable-
-# cost, so margins are untouched.
-# 2026-07-15 (Vinay): NEW entry plan "Lite" (₹1,999) for genuinely low-volume
-# clinics that still pay a receptionist full salary. It DELIBERATELY does NOT
-# hold the 40%-worst-case invariant the others do — the per-clinic fixed cost
-# (DID ₹1,000-1,500/mo) is too large a share of ₹1,999 for that to be possible
-# under ₹2k. Vinay accepted the tradeoff: at the TYPICAL cost (₹2/min + ₹1,000
-# DID) and its low-volume target, 150 min holds ~35% margin; overage (₹5/min)
-# caps the downside (a heavy month pays extra or upgrades). The margin guard
-# test carves Lite out explicitly. Follow-up loop IS included (retention).
-# 2026-07-17 (Vinay): Lite doctor cap 1 → 3 (zero-variable-cost, same lever
-# as Starter's 07-12 bump).
-# 2026-08-02 (Vinay): NEW "wa" — WhatsApp-only, no DID, no voice minutes.
-# Zero included_minutes/overage is deliberate: the plan buys no telephony at
-# all, so an inbound call is a configuration error, not an overage (see
-# call_blocked). Spec: docs/superpowers/specs/2026-08-02-whatsapp-pricing-design.md
+# Final public pricing, 2026-08-10. Internal keys remain stable for database,
+# webhook and agent compatibility. Lite is retained only for legacy rows and
+# is deliberately excluded from SELLABLE_PLANS. WhatsApp has no DID or voice
+# allowance; an inbound call on that plan is a configuration error.
 PLANS: dict[str, Plan] = {
     "wa": Plan(1_499, 0, 0.0, 3, "WhatsApp"),
-    "lite": Plan(1_999, 150, 5.0, 3, "Lite"),
-    "solo": Plan(5_999, 700, 5.0, 3, "Starter"),
-    "clinic": Plan(9_999, 1_500, 5.0, 5, "Clinic"),
-    "multi": Plan(17_999, 3_000, 5.0, None, "Multi"),
+    "lite": Plan(1_999, 150, 6.0, 3, "Lite (legacy)"),
+    "solo": Plan(5_999, 400, 6.0, 3, "Basic"),
+    "clinic": Plan(10_999, 1_500, 6.0, 10, "Growth"),
+    "multi": Plan(21_999, 3_000, 6.0, None, "Scale", included_branches=2),
 }
+
+# New clinics can choose only these plans. Lite remains runtime-compatible for
+# old rows but is retired from signup and self-serve plan changes.
+SELLABLE_PLANS = frozenset({"wa", "solo", "clinic", "multi"})
+
+ADDITIONAL_BRANCH_RUPEES = 6_999
+ADDITIONAL_NUMBER_RUPEES = 2_499
 
 # Fixed monthly cost per clinic, split by whether the plan buys a phone number.
 # Until 2026-08-02 this was one flat Rs1,500 constant with the DID folded in —
@@ -61,17 +53,8 @@ def fixed_cost_for(plan: str) -> float:
     has_voice = bool(p and p.included_minutes > 0)
     return (DID_RUPEES + BASE_INFRA) if has_voice else BASE_INFRA
 
-# LAUNCH OFFER (Vinay 2026-07-17 — clinic feedback: "pricing too much; keep it
-# low until you get some clients"). For a clinic's FIRST 3 PAID MONTHS:
-#   * offer price targets only 10-15% gross margin at the table's own
-#     WORST-case cost discipline (Rs3/min x full bucket + Rs1,500 infra/DID):
-#     solo 3,999 (10.0%) · clinic 6,999 (14.3%) · multi 11,999 (12.5%).
-#     Lite 1,799 CANNOT hold 10% at worst case (fixed DID floor — it already
-#     sat below the 40% invariant at Rs1,999, accepted 07-15); ~breakeven at
-#     typical cost, flagged to Vinay.
-#   * GST not added on top (GST_WAIVED below — "for now remove gst 18%").
-# After the window: standard price, standard gates. UI shows the actual price
-# struck through + the offer price, labeled "Offer price — first 3 months".
+# Dormant offer machinery is retained for backward compatibility. The empty
+# OFFER_PRICES mapping means every clinic pays list price from its first cycle.
 OFFER_MONTHS = 3
 # Restored 2026-07-21: after the 14-day trial, the first three paid months use
 # an acquisition price. Starter/Clinic/Multi retain 10–15% margin at the
@@ -142,10 +125,9 @@ FOLLOWUP_PLANS = ("lite", "solo", "clinic", "multi")
 # directly, so our marginal message cost is zero and unmeterable.
 WHATSAPP_PLANS = frozenset({"clinic", "multi", "wa"})
 
-# Lite/Starter may BUY WhatsApp for the same Rs1,499 the standalone plan costs
-# — one number everywhere, so a clinic never sees it priced two ways. Starter
-# + add-on stays under Clinic, which also buys 800 more minutes and 2 more
-# doctors, so the upgrade path survives.
+# Legacy Lite and Basic may buy WhatsApp for the same Rs1,499 the standalone
+# plan costs. Basic + add-on remains below Growth, which adds 1,100 voice
+# minutes and seven doctor seats.
 WHATSAPP_ADDON_RUPEES = 1_499
 WHATSAPP_ADDON_PLANS = frozenset({"lite", "solo"})
 
@@ -154,11 +136,9 @@ def whatsapp_enabled(plan: str, addon: bool = False) -> bool:
     """Single gate for every WhatsApp capability check."""
     return plan in WHATSAPP_PLANS or (bool(addon) and plan in WHATSAPP_ADDON_PLANS)
 
-# The 14-day free trial grants a flat voice-minute bucket regardless of the
-# plan picked at signup. 500→300 on 2026-07-11 (Vinay): ~100 calls is enough
-# to convince, and the cap is now HARD-enforced for trials in call_blocked
-# (trial minutes are Vachanam's own cash — Rs3/min worst case).
-TRIAL_MINUTES = 300
+# The 14-day trial grants 30 voice minutes regardless of selected voice plan.
+# The cap is hard-enforced because trial usage is paid by Vachanam.
+TRIAL_MINUTES = 30
 
 # FOUNDING-CLINIC PILOT (Vinay 2026-07-19). Self-serve free trial stays
 # REMOVED (signups start paused, 2026-07-17); instead Vinay hand-picks

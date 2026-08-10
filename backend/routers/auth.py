@@ -317,7 +317,7 @@ class RegisterRequest(BaseModel):
     # 500; an out-of-enum string is now a clean 422. Keys are the internal plan
     # ids (billing_math.PLANS); "Starter" is the DISPLAY name for solo.
     # "wa" added WA MVP1 Task 8: WhatsApp-only signup at ₹1,499, no phone line.
-    plan: Literal["lite", "solo", "clinic", "multi", "wa"] = "clinic"
+    plan: Literal["solo", "clinic", "multi", "wa"] = "clinic"
     email_otp: str | None = None  # email-OTP verification (Vinay 2026-06-15)
     # DPDP (Vinay 2026-07-17): the clinic (Data Fiduciary) must explicitly
     # accept the Terms + DPA at signup — Vachanam is the Data Processor acting
@@ -436,7 +436,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         raise HTTPException(status_code=422, detail="Clinic name is required")
     if not body.owner_name.strip():
         raise HTTPException(status_code=422, detail="Your name is required")
-    if body.plan not in ("lite", "solo", "clinic", "multi", "wa"):
+    if body.plan not in ("solo", "clinic", "multi", "wa"):
         raise HTTPException(status_code=422, detail="Invalid plan")
     # DPDP consent gate: the clinic is the Data Fiduciary; Vachanam processes
     # patient data only on its instructions. No consent, no account.

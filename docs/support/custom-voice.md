@@ -1,16 +1,11 @@
 ---
-title: Setting up a custom voice (voice cloning)
+title: Choosing the clinic voice
 audience: clinic
 category: onboarding
-tags: voice, clone, custom, cloning, tts, record
+tags: voice, tts, language, catalog
 ---
-Vachanam can speak in a custom voice you provide, so callers hear a familiar
-voice for your clinic. Voice cloning is available on the Clinic and Multi plans.
-To set it up, open **Settings → Clinic voices**, pick the language, then either
-record a 10–15 second sample using your microphone or upload an audio file.
-Vachanam creates the cloned voice and starts using it on the next call. You add
-one voice per language — a Telugu clone speaks Telugu, a Hindi clone speaks
-Hindi. To change a voice, just record or upload again for that language; the new
-sample replaces the old one. Until you add your own voice for a language, a
-built-in catalog voice is used. On the Starter plan the catalog voices are used;
-upgrade to Clinic or Multi to add your own.
+Vachanam uses the supported catalog voices shown during setup. Voice cloning is
+not offered because the catalog voices provide more consistent quality across
+languages and calls. The clinic can choose its preferred supported voice in
+Settings. Changing the selection applies to subsequent calls and does not alter
+the clinic's booking rules, language support or patient data.

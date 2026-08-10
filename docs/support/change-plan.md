@@ -4,10 +4,10 @@ audience: clinic
 category: billing
 tags: plan, upgrade, downgrade, doctors, change, minutes
 ---
-You can change your plan any time from **Settings**. A change takes effect from
+You can change your plan any time from **Plan & billing**. A change takes effect from
 the next billing cycle, so you never lose minutes you've already paid for. The
-number of doctors you can add depends on the plan: one on Starter, up to five on
-Clinic, and unlimited on Multi. Extra languages and voice cloning come with the
-Clinic and Multi plans. If you go over your included minutes in a month, the
-extra is billed at ₹5 per minute. To add more numbers or a second branch, contact
-us and we'll set it up.
+number of doctors you can add depends on the plan: three on Basic, ten on
+Growth, and unlimited on Scale. Every voice plan includes the supported
+languages and core appointment workflow. If you go over your included minutes,
+the extra is billed at ₹6 per minute. An additional phone number is ₹2,499/month
+and an additional branch is ₹6,999/month.

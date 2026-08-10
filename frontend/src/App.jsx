@@ -1,16 +1,17 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { roleHome, useAuth } from "./hooks/useAuth.jsx";
-import Shell from "./components/Shell.jsx";
-// Public entry pages stay eager — they ARE the first paint.
+// Only the landing page is eager. Authentication and the authenticated shell
+// are route-split so marketing visitors do not download clinic operations UI.
 import Landing from "./pages/Landing.jsx";
-import Login from "./pages/Login.jsx";
-import Register from "./pages/Register.jsx";
 import SupportWidget from "./components/SupportWidget.jsx";
 
 // Everything behind login (plus kiosk/help) loads on demand: a public visitor
 // on the landing page should not download the dashboard, charts, or admin
 // consoles (PSI: landing shipped the whole 550KB bundle, FIXLOG #338).
+const Shell = lazy(() => import("./components/Shell.jsx"));
+const Login = lazy(() => import("./pages/Login.jsx"));
+const Register = lazy(() => import("./pages/Register.jsx"));
 const Settings = lazy(() => import("./pages/Settings.jsx"));
 const Billing = lazy(() => import("./pages/Billing.jsx"));
 const Queue = lazy(() => import("./pages/Queue.jsx"));

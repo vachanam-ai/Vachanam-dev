@@ -42,8 +42,8 @@ async def _seed_cycle(db, org, end, start=None):
         org_id=org.id,
         cycle_start=start or (end - timedelta(days=30)),
         cycle_end=end,
-        plan=org.plan, base_amount=5999, included_minutes=700,
-        minutes_used=0, overage_minutes=0, overage_rate=5, overage_amount=0,
+        plan=org.plan, base_amount=5999, included_minutes=400,
+        minutes_used=0, overage_minutes=0, overage_rate=6, overage_amount=0,
         status="paid", razorpay_payment_id=f"pay_{uuid.uuid4().hex[:12]}",
     )
     db.add(bc)

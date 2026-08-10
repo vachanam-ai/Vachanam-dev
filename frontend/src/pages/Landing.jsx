@@ -1,588 +1,275 @@
-import ThemeToggle from "../components/ThemeToggle.jsx";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { submitContact } from "../api/support";
-import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
+import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
+import { ScrollTrigger } from "gsap/ScrollTrigger";
+import {
+  ArrowRight, CalendarCheck, Check, CheckCircle, Database, FirstAidKit,
+  GlobeHemisphereEast, Headset, LockKey, PhoneCall, ShieldCheck, Sparkle,
+  Stethoscope, UserCircleCheck, WhatsappLogo,
+} from "@phosphor-icons/react";
+import ThemeToggle from "../components/ThemeToggle.jsx";
 import VoicePicker from "../components/VoicePicker.jsx";
+import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
+import { submitContact } from "../api/support";
 import { API_BASE } from "../api/client.js";
+import {
+  PLAN_CATALOG, VOICE_PLAN_KEYS, OVERAGE_RUPEES, WHATSAPP_ADDON_RUPEES,
+  ADDITIONAL_BRANCH_RUPEES, ADDITIONAL_NUMBER_RUPEES, TRIAL_MINUTES,
+} from "../lib/plans.js";
 
-// #391 launch offer (Vinay 2026-07-17): actual price struck through, offer
-// price for the first 3 months shown big. Source of truth: billing_math
-// OFFER_PRICES — keep in sync (guarded by tests/unit/test_launch_offer.py).
-// 2026-08-04 (Vinay: "remove discount pricings"): list price from the first
-// paid month. billing_math.OFFER_PRICES is empty, so the site must not keep
-// advertising an acquisition price the invoice will not honour.
-const PLANS = [
-  {
-    name: "Starter",
-    key: "solo",
-    price: "₹5,999",
-    per: "/month + ₹5/min after",
-    tagline: "Small clinics, up to 3 doctors",
-    points: ["≈250 calls included (700 min)", "3 doctors · 1 AI phone number", "All 7 Indian languages", "Natural human-like AI voice", "Token booking + calendar", "Reminder calls + receptionist app"]
-  },
-  {
-    name: "Clinic",
-    key: "clinic",
-    price: "₹9,999",
-    per: "/month + ₹5/min after",
-    tagline: "Growing clinics, up to 5 doctors",
-    popular: true,
-    points: ["≈540 calls included (1,500 min)", "5 doctors", "All 7 Indian languages", "Natural human-like AI voice", "WhatsApp confirmations + reminders", "Treatment follow-up calls", "Owner analytics"]
-  },
-  {
-    name: "Multi",
-    key: "multi",
-    price: "₹17,999",
-    per: "/month + ₹5/min after",
-    tagline: "Multi-specialty, unlimited doctors",
-    points: ["≈1,080 calls included (3,000 min)", "Unlimited doctors", "All 7 Indian languages", "Natural human-like AI voice", "WhatsApp confirmations + reminders", "Multi-doctor routing", "Branch-level analytics"]
-  }
+gsap.registerPlugin(ScrollTrigger, useGSAP);
+
+const WORKFLOW = [
+  { icon: PhoneCall, step: "01", title: "Every call is answered", text: "Your existing clinic number routes to a receptionist that is ready throughout the day." },
+  { icon: Database, step: "02", title: "Facts come from your clinic", text: "Doctor, schedule and appointment answers are checked against your configured data before the agent responds." },
+  { icon: CalendarCheck, step: "03", title: "The action is completed", text: "Bookings, cancellations and reschedules use deterministic tools, then confirm only the result that was actually saved." },
+  { icon: WhatsappLogo, step: "04", title: "Everyone stays informed", text: "The dashboard updates immediately. Connected clinics can send confirmations and reminders in WhatsApp." },
 ];
 
-const STEPS = [
-  ["Patient calls", "Your existing number forwards to your Vachanam AI line."],
-  ["AI answers in your language", "Understands the problem, matches the right doctor."],
-  ["Token assigned", "Atomic numbering. Two callers can never get the same token."],
-  ["Everyone notified", "Calendar event created. Your front desk sees it instantly."]
+const TRUST = [
+  { icon: ShieldCheck, title: "Grounded by design", text: "Unknown clinic facts are never invented. Questions that need a doctor are captured for a real answer." },
+  { icon: LockKey, title: "Clinic-isolated data", text: "Every patient, doctor and booking query stays inside the active clinic and branch." },
+  { icon: UserCircleCheck, title: "Caller privacy", text: "Appointment lookups are scoped to the caller number. One family number can still book for multiple family members." },
+  { icon: Stethoscope, title: "No medical improvisation", text: "Vachanam handles reception. Diagnosis, prescriptions and clinical advice stay with qualified doctors." },
 ];
+
+const FAQ = [
+  ["Do patients need a new number?", "No. You can forward the clinic number patients already know to the Vachanam line."],
+  ["Can it handle changing doctor schedules?", "Yes. Each doctor can have multiple time windows and date-specific availability. The agent checks the configured date before answering."],
+  ["What happens when it does not know an answer?", "It tells the caller the clinic will check, records the question with their name and number, and surfaces it for staff or the doctor."],
+  ["Does it provide medical advice?", "No. It can relay clinic-approved information and doctor instructions, but it does not diagnose or prescribe."],
+  ["What happens after the included minutes?", `Voice plans continue at ₹${OVERAGE_RUPEES} per minute. Usage and remaining minutes are visible in the clinic workspace.`],
+  ["How quickly can we start?", "We configure the clinic, doctors, schedules and call routing with your team. A demo lets you validate the real flow before going live."],
+];
+
+function Brand() {
+  return (
+    <span className="marketing-brand">
+      <span className="brand-symbol" aria-hidden><span /><span /><span /></span>
+      <span><strong>Vachanam</strong><small>AI clinic receptionist</small></span>
+    </span>
+  );
+}
+
+function CheckItem({ children }) {
+  return <li><span><Check size={14} weight="bold" /></span>{children}</li>;
+}
 
 export default function Landing() {
-  const heroRef = useRef(null);
   const rootRef = useRef(null);
-
-  // #426 founding trial: live slot count gates every free-trial claim on the
-  // page. null / fetch-failure / 0 → no claim shown (never advertise what we
-  // can't grant). Backend: GET /auth/founding-slots.
-  // trial_for_all → every clinic gets it (no counter); else slots_left>0.
   const [slotsLeft, setSlotsLeft] = useState(null);
   const [trialForAll, setTrialForAll] = useState(false);
-  useEffect(() => {
-    fetch(`${API_BASE}/auth/founding-slots`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!d) return;
-        setSlotsLeft(d.slots_left);
-        setTrialForAll(Boolean(d.trial_for_all));
-      })
-      .catch(() => {});
-  }, []);
-  const trialOn = trialForAll || slotsLeft > 0;
-
-  useEffect(() => {
-    // Respect prefers-reduced-motion: content is visible without gsap.
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const ctx = gsap.context(() => {
-      gsap.fromTo(
-        "[data-hero]",
-        { opacity: 0, y: 26 },
-        { opacity: 1, y: 0, duration: 0.8, ease: "power3.out", stagger: 0.12 }
-      );
-      // Scroll-triggered section reveals without the plugin: IntersectionObserver
-      document.querySelectorAll("[data-section]").forEach((el) => {
-        const io = new IntersectionObserver(
-          ([e]) => {
-            if (e.isIntersecting) {
-              gsap.fromTo(
-                el.querySelectorAll("[data-item]"),
-                { opacity: 0, y: 20 },
-                { opacity: 1, y: 0, duration: 0.6, ease: "power3.out", stagger: 0.08 }
-              );
-              io.disconnect();
-            }
-          },
-          { threshold: 0.2 }
-        );
-        io.observe(el);
-      });
-    }, rootRef);
-    return () => ctx.revert();
-  }, []);
-
-  // Book-a-demo lead (same /support/contact pipeline + category as Help's form)
   const [demo, setDemo] = useState({ clinic: "", name: "", phone: "", body: "" });
   const [demoSent, setDemoSent] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
   const [demoTouched, setDemoTouched] = useState(false);
   const [demoCaptcha, setDemoCaptcha] = useState("");
-  const [dErr, setDErr] = useState("");
-  const submitDemo = async (e) => {
-    e.preventDefault();
-    setDErr("");
+  const [demoError, setDemoError] = useState("");
+
+  useEffect(() => {
+    fetch(`${API_BASE}/auth/founding-slots`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!data) return;
+        setSlotsLeft(data.slots_left);
+        setTrialForAll(Boolean(data.trial_for_all));
+      })
+      .catch(() => {});
+  }, []);
+  const trialOn = trialForAll || slotsLeft > 0;
+
+  useGSAP(() => {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    gsap.from("[data-hero-copy] > *", { opacity: 0, y: 24, duration: .75, stagger: .09, ease: "power3.out" });
+    gsap.from("[data-hero-visual]", { opacity: 0, x: 34, scale: .97, duration: .95, ease: "power3.out", delay: .12 });
+    gsap.utils.toArray("[data-motion-section]").forEach((section) => {
+      const targets = section.querySelectorAll("[data-motion-item]");
+      gsap.from(targets, { scrollTrigger: { trigger: section, start: "top 78%", once: true }, opacity: 0, y: 26, duration: .65, stagger: .08, ease: "power3.out" });
+    });
+    gsap.to(".journey-line-fill", {
+      scrollTrigger: { trigger: ".journey-grid", start: "top 72%", end: "bottom 58%", scrub: .35 },
+      scaleY: 1, transformOrigin: "top",
+    });
+  }, { scope: rootRef });
+
+  const submitDemo = async (event) => {
+    event.preventDefault();
+    setDemoError("");
     setDemoBusy(true);
     try {
       await submitContact({
         name: demo.name,
         phone: demo.phone,
-        subject: `Demo request — ${demo.clinic}`.slice(0, 200),
+        subject: `Demo request: ${demo.clinic}`.slice(0, 200),
         body: demo.body.trim() || "Please call me to arrange a demo.",
         category: "sales_demo",
       }, demoCaptcha);
       setDemoSent(true);
-    } catch (x) {
-      setDErr(x.response?.data?.detail === "captcha_failed"
-        ? "Please tick the verification box below, then send again."
-        : x.response?.data?.detail || "Could not send — email hello@vachanam.in");
+    } catch (error) {
+      setDemoError(error.response?.data?.detail === "captcha_failed"
+        ? "Please complete the verification and try again."
+        : error.response?.data?.detail || "We could not send this. Email hello@vachanam.in instead.");
     } finally { setDemoBusy(false); }
   };
 
   return (
-    <div ref={rootRef} className="overflow-x-clip">
-      {/* Nav */}
-      <header className="sticky top-0 z-40 border-b border-hairline bg-cream/80 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
-          <a href="/" className="font-brand text-2xl text-teal"
-            onClick={(e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-            Vachanam
-          </a>
-          <nav className="hidden items-center gap-6 font-ui text-sm md:flex">
-            <a href="#how" className="text-ink-soft hover:text-teal">How it works</a>
-            <a href="#voices" className="text-ink-soft hover:text-teal">Voices</a>
-            <a href="#pricing" className="text-ink-soft hover:text-teal">Pricing</a>
-            <a href="#demo" className="text-ink-soft hover:text-teal">Book a demo</a>
-            <Link to="/help" className="text-ink-soft hover:text-teal">Help</Link>
-          </nav>
-          <div className="flex items-center gap-3">
-            {/* Desktop nav is hidden below md — Help must survive on mobile
-                (Vinay mobile report 2026-07-14). */}
-            <Link to="/help" className="font-ui text-sm text-ink-soft hover:text-teal md:hidden">Help</Link>
-            <ThemeToggle />
-            <Link to="/login" className="btn-primary px-5 py-2 text-sm">Clinic sign in</Link>
+    <div ref={rootRef} className="marketing-page">
+      <header className="marketing-nav-wrap">
+        <nav className="marketing-nav" aria-label="Main navigation">
+          <a href="#top" className="marketing-brand-link"><Brand /></a>
+          <div className="marketing-nav-links">
+            <a href="#workflow">How it works</a><a href="#voices">Languages</a>
+            <a href="#pricing">Pricing</a><a href="#trust">Trust</a><Link to="/help">Help</Link>
           </div>
-        </div>
+          <div className="marketing-nav-actions"><ThemeToggle /><Link to="/login" className="marketing-signin">Sign in</Link><a href="#demo" className="btn-primary">Book a demo</a></div>
+        </nav>
       </header>
 
-      {/* Hero */}
-      <section ref={heroRef} className="relative">
-        <div
-          className="pointer-events-none absolute inset-0 -z-10"
-          style={{
-            background:
-              "radial-gradient(760px 440px at 82% -8%, rgba(166,124,34,.07), transparent 60%)"
-          }}
-        />
-        <div className="mx-auto grid max-w-6xl gap-12 px-4 py-20 lg:grid-cols-[1.15fr_1fr] lg:py-28">
-          <div>
-            <p data-hero className="eyebrow">AI voice agent &amp; receptionist for Indian clinics</p>
-            <h1 data-hero className="mt-4 font-display text-5xl font-semibold leading-[1.05] tracking-tight sm:text-6xl">
-              Every missed call is a
-              <span className="relative whitespace-nowrap">
-                <em className="px-2 not-italic text-teal"> patient lost.</em>
-              </span>
-              <br />
-              We answer every one.
-            </h1>
-            <p data-hero className="mt-6 max-w-xl font-ui text-lg text-ink-soft">
-              Vachanam picks up your clinic&rsquo;s calls in natural Telugu and 7 more Indian
-              languages, books the right doctor, assigns the token, updates your calendar,
-              all in under four minutes, around the clock.
-            </p>
-            <div data-hero className="mt-8 flex flex-wrap items-center gap-4">
-              {trialOn ? (
-                <Link to="/register" className="btn-primary px-6 py-3">Start free trial</Link>
-              ) : (
-                <a href="#pricing" className="btn-primary px-6 py-3">Get started</a>
-              )}
-              <a href="#demo" className="btn-gold px-6 py-3">Book a demo</a>
-              <a href="#voices" className="btn-ghost px-6 py-3">Hear the voices</a>
+      <main id="top">
+        <section className="marketing-hero">
+          <div data-hero-copy className="marketing-hero-copy">
+            <span className="marketing-kicker"><Sparkle size={15} weight="fill" />Reception that stays present</span>
+            <h1>Your clinic answers with <em>clarity, warmth and proof.</em></h1>
+            <p className="marketing-lede">Vachanam answers patient calls in familiar Indian languages, checks real clinic availability, and completes appointments without losing the conversation.</p>
+            <div className="marketing-hero-actions">
+              <a href="#demo" className="btn-primary">See a real call <ArrowRight size={18} weight="bold" /></a>
+              <a href="#workflow" className="btn-ghost">Explore the workflow</a>
             </div>
-            {/* Trial claims gated on live slots (#426) — guarded by
-                test_no_free_trial_claims_on_landing. */}
-            <p data-hero className="mt-4 font-ui text-xs text-slate">
-              {trialOn ? (
-                <>
-                  <span className="font-semibold text-gold-ink">
-                    14-day free trial
-                  </span>
-                  {" · "}no credit card{" · "}cancel anytime
-                  {!trialForAll && slotsLeft != null && (
-                    <> · <span className="numeral">{slotsLeft}</span> {slotsLeft === 1 ? "slot" : "slots"} left</>
-                  )}
-                </>
-              ) : (
-                <>Keep your existing number · live the same day · cancel anytime</>
-              )}
-            </p>
-          </div>
-
-          {/* Live call vignette */}
-          <div data-hero className="relative">
-            <div className="card relative z-10 rotate-1 p-6">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal/60" />
-                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-teal" />
-                  </span>
-                  <span className="eyebrow">Live call</span>
-                </span>
-                <span className="numeral text-sm text-slate">0:42</span>
-              </div>
-
-              <div className="mt-5 space-y-4 font-ui text-sm">
-                {[
-                  ["Patient", "“My tooth is hurting — can I come in tomorrow?”", false],
-                  ["Vachanam AI", "“Of course. Dr. Srinivas can see you tomorrow morning. May I have your name?”", true],
-                  ["Patient", "“Lakshmi.”", false],
-                  ["Vachanam AI", null, true],
-                ].map(([who, line, isAgent], i) => (
-                  <div key={i} className="flex gap-3">
-                    <span
-                      className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-semibold ${
-                        isAgent ? "bg-accent text-accent-ink" : "bg-pill text-ink"
-                      }`}
-                    >
-                      {isAgent ? "AI" : "P"}
-                    </span>
-                    <div>
-                      <p
-                        className={`font-ui text-[11px] font-semibold uppercase tracking-wide ${
-                          isAgent ? "text-ink" : "text-slate"
-                        }`}
-                      >
-                        {who}
-                      </p>
-                      {line ? (
-                        <p className="mt-0.5 text-ink-soft">{line}</p>
-                      ) : (
-                        <p className="mt-0.5 text-ink-soft">
-                          “Thank you, Lakshmi. Your token number is{" "}
-                          <span className="numeral font-semibold text-teal-deep">8</span>. See you tomorrow morning!”
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <p className="mt-5 border-t border-hairline pt-3 font-ui text-[11px] text-slate">
-                A real booking call — spoken in Telugu, shown here in English.
-              </p>
+            <div className="marketing-proof-row">
+              <span><CheckCircle size={18} weight="fill" />Uses your existing number</span>
+              <span><CheckCircle size={18} weight="fill" />Date-specific doctor schedules</span>
+              <span><CheckCircle size={18} weight="fill" />Atomic appointment actions</span>
             </div>
-            <div className="card absolute -bottom-8 -left-6 z-20 -rotate-2 px-5 py-4">
-              <p className="eyebrow">Token assigned</p>
-              <p className="numeral text-5xl text-teal-deep">8</p>
+            {trialOn && <p className="marketing-trial">14 days or {TRIAL_MINUTES} voice minutes, whichever comes first{!trialForAll && slotsLeft != null ? ` · ${slotsLeft} pilot slots left` : ""}</p>}
+          </div>
+
+          <figure data-hero-visual className="marketing-hero-visual">
+            <div className="marketing-image-frame">
+              <img src="/images/clinic-reception-hero.png" alt="A receptionist speaking with a patient in a contemporary Indian clinic" width="1536" height="1024" fetchPriority="high" />
             </div>
-            <div className="absolute -right-4 -top-6 z-0 h-40 w-40 rounded-full bg-gold-soft blur-2xl" />
-          </div>
-        </div>
-      </section>
+            <figcaption>
+              <span className="visual-signal"><i /><i /><i /><i /><i /></span>
+              <span><strong>One continuous reception flow</strong><small>Call, verify, act, confirm</small></span>
+            </figcaption>
+          </figure>
+        </section>
 
-      {/* Stats strip */}
-      <section data-section className="border-y border-hairline bg-sel text-sel-ink">
-        <div className="mx-auto grid max-w-6xl grid-cols-2 gap-6 px-4 py-10 text-center md:grid-cols-4">
-          {[["20-30%", "calls missed by busy clinics"], ["₹3,000+", "lost revenue every day"], ["< 4 min", "average booking call"], ["24×7", "your line never sleeps"]].map(([n, l]) => (
-            <div key={l} data-item>
-              <p className="numeral text-3xl text-gold sm:text-4xl">{n}</p>
-              <p className="mt-1 font-ui text-xs text-sel-muted">{l}</p>
-            </div>
-          ))}
-        </div>
-      </section>
+        <section className="marketing-fact-band" aria-label="Product guarantees">
+          <div><Headset size={24} weight="duotone" /><span><strong>Always available</strong><small>When your desk is busy</small></span></div>
+          <div><GlobeHemisphereEast size={24} weight="duotone" /><span><strong>7 Indian languages</strong><small>One consistent workflow</small></span></div>
+          <div><Database size={24} weight="duotone" /><span><strong>Database grounded</strong><small>No invented availability</small></span></div>
+          <div><FirstAidKit size={24} weight="duotone" /><span><strong>Reception only</strong><small>Medical decisions stay human</small></span></div>
+        </section>
 
-      {/* How it works */}
-      <section id="how" data-section className="mx-auto max-w-6xl px-4 py-20">
-        <p data-item className="eyebrow">How it works</p>
-        <h2 data-item className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-          From ring to booked, hands-free
-        </h2>
-        <div className="mt-10 grid gap-6 md:grid-cols-4">
-          {STEPS.map(([t, d], i) => (
-            <div key={t} data-item className="card relative p-6">
-              <span className="numeral absolute -top-4 left-5 grid h-9 w-9 place-items-center rounded-full bg-accent text-lg text-accent-ink shadow-card">
-                {i + 1}
-              </span>
-              <h3 className="mt-3 font-display text-lg font-semibold">{t}</h3>
-              <p className="mt-2 font-ui text-sm text-slate">{d}</p>
-            </div>
-          ))}
-        </div>
-      </section>
+        <section id="workflow" data-motion-section className="marketing-section journey-section">
+          <div className="marketing-section-heading" data-motion-item>
+            <span className="marketing-kicker">The operational journey</span>
+            <h2>From the first ring to a verified result.</h2>
+            <p>The agent speaks naturally. The important actions underneath are controlled, scoped and confirmed by software.</p>
+          </div>
+          <div className="journey-grid">
+            <div className="journey-rail" aria-hidden><span className="journey-line-fill" /></div>
+            {WORKFLOW.map(({ icon: Icon, step, title, text }) => (
+              <article key={step} data-motion-item className="journey-card">
+                <span className="journey-number">{step}</span>
+                <span className="journey-icon"><Icon size={24} weight="duotone" /></span>
+                <div><h3>{title}</h3><p>{text}</p></div>
+              </article>
+            ))}
+          </div>
+        </section>
 
-      {/* Feature bento — the product beyond "answer the phone" */}
-      <section id="features" data-section className="mx-auto max-w-6xl px-4 pb-20">
-        <h2 data-item className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-          Beyond answering the phone
-        </h2>
-        <div className="mt-10 grid gap-5 md:grid-cols-6">
-          <div data-item className="card p-7 md:col-span-4 border-teal/30 bg-teal-mint/60">
-            <h3 className="font-display text-xl font-semibold text-teal-deep">Treatment follow-up calls</h3>
-            <p className="mt-2 max-w-lg font-ui text-sm text-ink-soft">
-              After a visit, your doctor writes one line of advice. Vachanam calls the
-              patient, delivers it in their language, asks how recovery is going, and
-              brings the answer back to the doctor. Patients feel cared for; you never
-              dial a number.
-            </p>
-            <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-teal/30 bg-surface/70 px-4 py-2 font-ui text-xs text-teal-deep">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal/60" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-teal" />
-              </span>
-              &ldquo;Doctor asked me to check: how is the swelling today?&rdquo;
-            </div>
+        <section data-motion-section className="marketing-section">
+          <div className="marketing-section-heading compact" data-motion-item>
+            <span className="marketing-kicker">A complete front desk</span>
+            <h2>Built around clinic reality, not a generic chatbot.</h2>
           </div>
-          <div data-item className="card p-7 md:col-span-2">
-            <h3 className="font-display text-lg font-semibold">Your own voice</h3>
-            <p className="mt-2 font-ui text-sm text-slate">
-              Record 15 seconds. The AI answers in your clinic&rsquo;s own voice,
-              in every language your patients speak.
-            </p>
+          <div className="feature-bento">
+            <article data-motion-item className="feature-card feature-primary">
+              <span className="feature-icon"><CalendarCheck size={28} weight="duotone" /></span>
+              <div><span>Appointment integrity</span><h3>Book, cancel and reschedule against the same source of truth.</h3><p>Multiple daily time windows, token capacity, date-specific schedules and family bookings from one number are handled in the booking layer.</p></div>
+            </article>
+            <article data-motion-item className="feature-card feature-saffron"><span className="feature-icon"><Stethoscope size={26} weight="duotone" /></span><h3>Questions for the doctor</h3><p>Unknown clinic questions become visible tasks with the patient name and number, ready for an answer and callback.</p></article>
+            <article data-motion-item className="feature-card feature-indigo"><span className="feature-icon"><WhatsappLogo size={26} weight="duotone" /></span><h3>WhatsApp continuity</h3><p>Connected clinics can confirm bookings, reschedules, cancellations and reminders in the patient channel.</p></article>
+            <article data-motion-item className="feature-card feature-wide"><span className="feature-quote">“</span><div><span>Conversation discipline</span><h3>Ragebait, interruptions and language changes do not change the receptionist’s role.</h3><p>Identity, privacy and action rules stay enforced even when a caller tries to pull the agent away from clinic work.</p></div></article>
           </div>
-          <div data-item className="card p-7 md:col-span-2">
-            <h3 className="font-display text-lg font-semibold">Reminder calls</h3>
-            <p className="mt-2 font-ui text-sm text-slate">
-              Every booking gets a call before the visit. No-shows drop; your day
-              stays predictable.
-            </p>
-          </div>
-          <div data-item className="card p-7 md:col-span-2">
-            <h3 className="font-display text-lg font-semibold">Receptionist app</h3>
-            <p className="mt-2 font-ui text-sm text-slate">
-              Your front desk sees the day&rsquo;s tokens and marks arrivals on any
-              phone. No new hardware, nothing to install.
-            </p>
-          </div>
-          <div data-item className="card p-7 md:col-span-2 border-gold/40 bg-gold-soft/50">
-            <h3 className="font-display text-lg font-semibold text-gold-ink">Owner dashboard</h3>
-            <p className="mt-2 font-ui text-sm text-ink-soft">
-              Calls answered, bookings made, minutes used, busiest hours. The whole
-              clinic at a glance.
-            </p>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Languages */}
-      <section id="voices" data-section className="border-y border-hairline bg-teal-mint/50 py-20">
-        <div className="mx-auto max-w-6xl px-4">
-          <p data-item className="eyebrow">Speaks your patients&rsquo; language</p>
-          <h2 data-item className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-            Seven languages. One warm AI agent.
-          </h2>
-          <p data-item className="mt-3 max-w-2xl font-ui text-ink-soft">
-            Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali. Natural pace,
-            warm tone. Tap any to hear exactly what your patients will hear.
-          </p>
-          <div data-item className="mt-8">
-            <VoicePicker />
+        <section id="voices" data-motion-section className="voices-section">
+          <div className="marketing-section-heading" data-motion-item><span className="marketing-kicker">Hear the experience</span><h2>A familiar voice in the patient’s language.</h2><p>Tap a language to hear the same clinic greeting. Language changes the conversation, not the rules behind it.</p></div>
+          <div data-motion-item className="voice-surface"><VoicePicker /></div>
+        </section>
+
+        <section id="trust" data-motion-section className="marketing-section trust-section">
+          <div className="trust-intro" data-motion-item><span className="marketing-kicker">Trust architecture</span><h2>The safest answer is the one the clinic can verify.</h2><p>Vachanam separates natural conversation from strict operational rules. The patient gets warmth without giving the model permission to invent facts or actions.</p><a href={`${API_BASE}/data-handling`}>How we handle your data <ArrowRight size={16} /></a></div>
+          <div className="trust-grid">
+            {TRUST.map(({ icon: Icon, title, text }) => <article key={title} data-motion-item><Icon size={25} weight="duotone" /><h3>{title}</h3><p>{text}</p></article>)}
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Trust — claims mirror docs/support/KNOWLEDGE.md (#420); don't overclaim */}
-      <section id="trust" data-section className="mx-auto max-w-6xl px-4 py-20">
-        <h2 data-item className="max-w-2xl font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-          Patient data is sacred. We treat it that way.
-        </h2>
-        <div className="mt-10 grid gap-x-10 gap-y-8 border-t border-hairline pt-8 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            ["DPDP Act 2023", "Built as a Data Processor under India's data protection law, with a signed processing agreement for every clinic."],
-            ["Isolated by clinic", "Your patients exist only inside your clinic's account. Never shared, never sold, never used to train AI."],
-            ["No call recordings", "Calls are not recorded. Only masked transcripts are kept, and they are deleted after 90 days."],
-            ["Encrypted throughout", "TLS on every call and page, AES-256 at rest. Payments run through Razorpay; card numbers never touch us."],
-          ].map(([t, d]) => (
-            <div key={t} data-item>
-              <h3 className="font-display text-lg font-semibold text-teal-deep">{t}</h3>
-              <p className="mt-2 font-ui text-sm text-slate">{d}</p>
-            </div>
-          ))}
-        </div>
-        <p data-item className="mt-8 font-ui text-sm text-ink-soft">
-          The full picture, in plain words:{" "}
-          <a href={`${API_BASE}/data-handling`} className="font-semibold text-teal underline-offset-4 hover:underline">
-            How we handle your data
-          </a>
-        </p>
-      </section>
-
-      {/* Pricing */}
-      <section id="pricing" data-section className="border-t border-hairline mx-auto max-w-6xl px-4 py-20">
-        <p data-item className="eyebrow">Pricing</p>
-        <h2 data-item className="mt-2 font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-          Pays for itself with two saved patients a day
-        </h2>
-        {/* Lite: entry tier, deliberately small and set apart from the main plans */}
-        <div data-item className="mt-8 flex flex-col gap-3 rounded-xl border border-hairline bg-pill px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="font-ui text-sm">
-              <span className="font-semibold">Lite · <span className="numeral text-teal-deep">₹1,999</span>/mo</span>
-              <span className="text-slate"> + ₹5/min after</span>
-            </p>
-            <p className="font-ui text-xs text-slate">
-              For low-volume clinics: ≈55 calls (150 min), 3 doctors, all 7 languages, reminder + treatment follow-up calls.
-            </p>
+        <section id="pricing" data-motion-section className="pricing-section">
+          <div className="marketing-section-heading" data-motion-item><span className="marketing-kicker">Clear monthly plans</span><h2>Choose capacity, not a stripped-down receptionist.</h2><p>Every voice plan includes the core booking workflow and supported languages. Plans scale by minutes, doctors, branches and WhatsApp.</p></div>
+          <div className="pricing-grid">
+            {VOICE_PLAN_KEYS.map((key) => {
+              const plan = PLAN_CATALOG[key];
+              const whatsapp = key !== "solo";
+              return (
+                <article key={key} data-motion-item className={`pricing-card ${plan.popular ? "is-popular" : ""}`}>
+                  {plan.popular && <span className="popular-label">Most popular</span>}
+                  <div className="pricing-card-head"><h3>{plan.name}</h3><p>{plan.tagline}</p></div>
+                  <p className="price"><sup>₹</sup>{plan.price.toLocaleString("en-IN")}<span>/month</span></p>
+                  <ul>
+                    <CheckItem>{plan.minutes.toLocaleString("en-IN")} voice minutes</CheckItem>
+                    <CheckItem>{plan.doctors}</CheckItem><CheckItem>{plan.branches}</CheckItem>
+                    <CheckItem>{whatsapp ? "WhatsApp included" : `WhatsApp add-on ₹${WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}`}</CheckItem>
+                    <CheckItem>Booking, cancellations and reschedules</CheckItem><CheckItem>All supported languages</CheckItem>
+                  </ul>
+                  <Link to={`/register?plan=${key}`} className={plan.popular ? "btn-primary" : "btn-ghost"}>Choose {plan.name}<ArrowRight size={17} /></Link>
+                </article>
+              );
+            })}
           </div>
-          <Link to="/register?plan=lite" className="btn-ghost shrink-0 px-5 py-2 text-sm">
-            Start with Lite
-          </Link>
-        </div>
-        {/* WhatsApp-only: no phone line, clearly labelled so nobody buys it expecting voice */}
-        <div data-item className="mt-3 flex flex-col gap-3 rounded-xl border border-hairline bg-pill px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="font-ui text-sm">
-              <span className="font-semibold">WhatsApp · <span className="numeral text-teal-deep">₹1,499</span>/mo</span>
-              <span className="text-slate"> — WhatsApp only, no phone line</span>
-            </p>
-            <p className="font-ui text-xs text-slate">
-              Patients book, reschedule, cancel and get answers entirely in WhatsApp chat — no AI voice calls, no DID. 3 doctors.
-            </p>
+          <div data-motion-item className="pricing-notes">
+            <div><WhatsappLogo size={22} weight="duotone" /><span><strong>WhatsApp only</strong><small>₹1,499/month · 3 doctors · 1 branch · no voice line</small></span><Link to="/register?plan=wa">Choose WhatsApp</Link></div>
+            <p>Overage ₹{OVERAGE_RUPEES}/minute · Additional branch ₹{ADDITIONAL_BRANCH_RUPEES.toLocaleString("en-IN")}/month · Additional number ₹{ADDITIONAL_NUMBER_RUPEES.toLocaleString("en-IN")}/month</p>
           </div>
-          <Link to="/register?plan=wa" className="btn-ghost shrink-0 px-5 py-2 text-sm">
-            Start with WhatsApp
-          </Link>
-        </div>
-        <div className="mt-6 grid gap-6 lg:grid-cols-3">
-          {PLANS.map((p) => (
-            <div
-              key={p.name}
-              data-item
-              className={`card relative flex flex-col p-7 ${p.popular ? "border-teal shadow-lift ring-1 ring-teal/30" : ""}`}
-            >
-              {p.popular && (
-                <span className="absolute -top-3 left-6 rounded-full bg-gold px-3 py-1 font-ui text-xs font-semibold text-black">
-                  Most popular
-                </span>
-              )}
-              <h3 className="font-display text-xl font-semibold">{p.name}</h3>
-              <p className="font-ui text-sm text-slate">{p.tagline}</p>
-              <p className="mt-4">
-                <span className="numeral text-4xl text-teal-deep">{p.price}</span>
-                <span className="font-ui text-sm text-slate"> {p.per}</span>
-              </p>
-              {trialOn && (
-                <p className="mt-1 font-ui text-xs font-semibold text-teal">
-                  Start with a 14-day free trial
-                </p>
-              )}
-              <ul className="mt-5 flex-1 space-y-2.5">
-                {p.points.map((pt) => (
-                  <li key={pt} className="flex items-start gap-2 font-ui text-sm">
-                    <span className="mt-0.5 text-teal">✓</span> {pt}
-                  </li>
-                ))}
-              </ul>
-              <Link to={`/register?plan=${p.key}`} className={p.popular ? "btn-primary mt-6 w-full" : "btn-ghost mt-6 w-full"}>
-                Get started
-              </Link>
-            </div>
-          ))}
-        </div>
-        <p data-item className="mt-6 text-center font-ui text-xs text-slate">
-          {trialOn
-            ? <>Every new clinic starts with a 14-day free trial · no credit card · cancel anytime</>
-            : <>Go live the same day · cancel anytime</>}
-          <br />
-          Offer starts after the trial. Standard price applies from month 4 · ₹5/min beyond included minutes.
-        </p>
-      </section>
+        </section>
 
-      {/* FAQ — native <details>, answers match product truth (no-trial, #418 unknown-info, pilot) */}
-      <section id="faq" data-section className="mx-auto max-w-3xl px-4 pb-20">
-        <h2 data-item className="font-display text-3xl font-semibold tracking-tight sm:text-4xl">
-          Questions clinics ask us
-        </h2>
-        <div data-item className="mt-8 divide-y divide-hairline border-y border-hairline">
-          {[
-            ["Do I need a new phone number?",
-             "No. Your existing clinic number forwards to your Vachanam AI line. Patients dial the number they already know; the only change is that someone always answers."],
-            ["Is there a free trial?",
-             trialOn
-               ? "Yes. Every new clinic gets a 14-day free trial with 300 minutes (≈100 calls) included — no credit card needed. After the trial, you continue on your chosen plan; cancel anytime."
-               : "You can see everything live on a free demo call before paying, and cancel anytime after you start."],
-            ["What if the AI doesn't know an answer?",
-             "It never guesses. It tells the patient the clinic will check and get back, logs the question for your staff, and moves on. You see every logged question on your dashboard."],
-            ["Does it give medical advice?",
-             "Never. Vachanam books appointments, sends reminders and relays your doctor's own follow-up instructions. Diagnosis and advice stay with your doctors."],
-            ["How fast can we go live?",
-             "The same day. Choose a plan, forward your number, add your doctors and timings. We walk you through it on a call."],
-            ["What happens after my included minutes?",
-             "Every extra minute is ₹5, on every plan. Your dashboard always shows remaining minutes, so there are no surprises on the invoice."],
-          ].map(([q, a]) => (
-            <details key={q} className="group py-4">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 font-display text-lg font-semibold [&::-webkit-details-marker]:hidden">
-                {q}
-                <span className="shrink-0 text-teal transition-transform group-open:rotate-45" aria-hidden="true">+</span>
-              </summary>
-              <p className="mt-3 max-w-2xl font-ui text-sm leading-relaxed text-ink-soft">{a}</p>
-            </details>
-          ))}
-        </div>
-      </section>
+        <section data-motion-section className="faq-section">
+          <div className="marketing-section-heading compact" data-motion-item><span className="marketing-kicker">Practical answers</span><h2>What clinics ask before going live.</h2></div>
+          <div className="faq-list" data-motion-item>
+            {FAQ.map(([question, answer]) => <details key={question}><summary>{question}<span>+</span></summary><p>{answer}</p></details>)}
+          </div>
+        </section>
 
-      {/* Book a demo — phone-first lead, same pipeline as Help's demo form
-          (Vinay 2026-07-19: "add book demo thing in this home page"). */}
-      <section id="demo" className="border-t border-hairline bg-teal-mint/40 py-16">
-        <div className="mx-auto max-w-xl px-4">
-          <p className="eyebrow text-center">See it answer a real call</p>
-          <h2 className="mt-2 text-center font-display text-3xl font-semibold tracking-tight">
-            Book a free demo
-          </h2>
-          <p className="mt-3 text-center font-ui text-sm text-ink-soft">
-            Leave your number — we call you, show Vachanam booking a live appointment
-            in your language, and answer everything. 15 minutes, no commitment.
-          </p>
-          {demoSent ? (
-            <div className="card mt-8 px-6 py-8 text-center">
-              <p className="font-display text-xl font-semibold text-teal-deep">Thank you! 🙏</p>
-              <p className="mt-2 font-ui text-sm text-ink-soft">
-                We got your request — expect a call within one working day.
-              </p>
-            </div>
-          ) : (
-            <form onSubmit={submitDemo} className="card mt-8 space-y-3 px-6 py-6"
-              onFocus={() => setDemoTouched(true)}>
-              <input className="input w-full" placeholder="Clinic name" required
-                value={demo.clinic} onChange={(e) => setDemo({ ...demo, clinic: e.target.value })} />
-              <div className="grid gap-3 sm:grid-cols-2">
-                <input className="input w-full" placeholder="Your name" required
-                  value={demo.name} onChange={(e) => setDemo({ ...demo, name: e.target.value })} />
-                <input className="input w-full" type="tel" placeholder="Phone number" required
-                  value={demo.phone} onChange={(e) => setDemo({ ...demo, phone: e.target.value })} />
-              </div>
-              <textarea className="input w-full" rows="2"
-                placeholder="Anything specific to show? (optional)"
-                value={demo.body} onChange={(e) => setDemo({ ...demo, body: e.target.value })} />
-              {TURNSTILE_ON && demoTouched && <Turnstile onToken={setDemoCaptcha} />}
-              {dErr && <p className="font-ui text-sm text-danger">{dErr}</p>}
-              <button className="btn-primary w-full py-3"
-                disabled={demoBusy || (TURNSTILE_ON && !demoCaptcha)}>
-                {demoBusy ? "Sending…" : "Book my demo"}
-              </button>
-            </form>
-          )}
-        </div>
-      </section>
+        <section id="demo" data-motion-section className="demo-section">
+          <div className="demo-copy" data-motion-item><span className="marketing-kicker">Test the real workflow</span><h2>Let your team hear it before you decide.</h2><p>We will walk through a patient call, doctor availability and an appointment action using a clinic-shaped setup.</p><div className="demo-promise"><CheckCircle size={19} weight="fill" />15 minutes. No commitment.</div></div>
+          <div data-motion-item className="demo-form-wrap">
+            {demoSent ? <div className="demo-success"><CheckCircle size={36} weight="duotone" /><h3>Request received</h3><p>We will call within one working day to arrange the demo.</p></div> : (
+              <form onSubmit={submitDemo} onFocus={() => setDemoTouched(true)}>
+                <label><span>Clinic name</span><input className="field" required value={demo.clinic} onChange={(e) => setDemo({ ...demo, clinic: e.target.value })} autoComplete="organization" /></label>
+                <div className="demo-form-row">
+                  <label><span>Your name</span><input className="field" required value={demo.name} onChange={(e) => setDemo({ ...demo, name: e.target.value })} autoComplete="name" /></label>
+                  <label><span>Phone number</span><input className="field" type="tel" required value={demo.phone} onChange={(e) => setDemo({ ...demo, phone: e.target.value })} autoComplete="tel" /></label>
+                </div>
+                <label><span>What should we demonstrate? <i>Optional</i></span><textarea className="field" rows="3" value={demo.body} onChange={(e) => setDemo({ ...demo, body: e.target.value })} /></label>
+                {TURNSTILE_ON && demoTouched && <Turnstile onToken={setDemoCaptcha} />}
+                {demoError && <p className="form-error" role="alert">{demoError}</p>}
+                <button className="btn-primary" disabled={demoBusy || (TURNSTILE_ON && !demoCaptcha)}>{demoBusy ? "Sending…" : "Book my demo"}<ArrowRight size={17} /></button>
+              </form>
+            )}
+          </div>
+        </section>
+      </main>
 
-      {/* Closing CTA */}
-      <section className="border-t border-hairline bg-sel py-16 text-center text-sel-ink">
-        <p className="font-brand text-3xl font-semibold tracking-[-0.02em] text-gold">Vachanam</p>
-        <h2 className="mx-auto mt-4 max-w-2xl font-display text-3xl font-semibold tracking-tight">
-          Healing starts with being heard.
-        </h2>
-        <p className="mt-3 font-ui text-sel-muted">
-          <a href="mailto:hello@vachanam.in" className="underline-offset-4 hover:underline">hello@vachanam.in</a>
-          {" · "}India
-        </p>
-        <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
-          <Link to="/register" className="btn-gold inline-flex px-8 py-3">Get started</Link>
-          <a href="mailto:hello@vachanam.in?subject=Talk%20to%20Vachanam" className="btn inline-flex rounded-full border border-sel-line px-8 py-3 text-sel-ink hover:bg-sel-ink/10">
-            Talk to us
-          </a>
-        </div>
-        <p className="mt-8 font-ui text-xs text-sel-muted">
-          © 2026 Vachanam · All rights reserved ·{" "}
-          <a href={`${API_BASE}/privacy`} className="underline-offset-4 hover:underline">Privacy</a>
-          {" · "}
-          <a href={`${API_BASE}/terms`} className="underline-offset-4 hover:underline">Terms</a>
-          {" · "}
-          <a href={`${API_BASE}/data-handling`} className="underline-offset-4 hover:underline">How we handle your data</a>
-          {" · "}
-          <a href={`${API_BASE}/data-deletion`} className="underline-offset-4 hover:underline">Delete your data</a>
-          {" · "}
-          <a href={`${API_BASE}/refunds`} className="underline-offset-4 hover:underline">Refunds & cancellation</a>
-        </p>
-      </section>
+      <footer className="marketing-footer">
+        <div><Brand /><p>Precise clinic reception with a human sense of care.</p></div>
+        <div><strong>Product</strong><a href="#workflow">How it works</a><a href="#pricing">Pricing</a><Link to="/help">Help centre</Link></div>
+        <div><strong>Company</strong><a href="mailto:hello@vachanam.in">hello@vachanam.in</a><a href={`${API_BASE}/privacy`}>Privacy</a><a href={`${API_BASE}/terms`}>Terms</a></div>
+        <p>© 2026 Vachanam. Built for clinics in India.</p>
+      </footer>
     </div>
   );
 }

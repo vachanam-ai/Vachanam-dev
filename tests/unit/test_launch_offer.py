@@ -1,7 +1,4 @@
-"""Launch offer #391 (Vinay 2026-07-17: clinic feedback "pricing too much" —
-first-3-months offer prices at 10-15% worst-case margin, GST removed for now,
-cloning on every plan during the window, Lite doctors 1→3, UI shows actual
-price struck through + offer price labeled "first 3 months")."""
+"""Pricing display and dormant offer machinery regression tests."""
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -23,8 +20,8 @@ def test_every_plan_bills_at_its_list_price():
     a struck-through price the invoice will not honour."""
     assert OFFER_PRICES == {}
     assert effective_price("solo", _NOW) == (5_999, False)
-    assert effective_price("clinic", _NOW) == (9_999, False)
-    assert effective_price("multi", _NOW) == (17_999, False)
+    assert effective_price("clinic", _NOW) == (10_999, False)
+    assert effective_price("multi", _NOW) == (21_999, False)
     assert effective_price("lite", _NOW) == (1_999, False)
     assert effective_price("solo", _OLD) == (5_999, False)
     assert effective_price("nope", _NOW) == (0, False)
@@ -44,16 +41,16 @@ def test_ui_surfaces_show_only_the_list_price():
     A struck-through acquisition price left behind after the offer ended would
     advertise a discount billing will not give."""
     landing = Path("frontend/src/pages/Landing.jsx").read_text(encoding="utf-8")
+    plans = Path("frontend/src/lib/plans.js").read_text(encoding="utf-8")
     static = Path("backend/static/index.html").read_text(encoding="utf-8")
-    for text, prices in ((landing, ("₹5,999", "₹9,999", "₹17,999")),
-                         (static, ("&#8377;5,999", "&#8377;9,999",
-                                   "&#8377;17,999"))):
+    for text, prices in ((plans, ("price: 5999", "price: 10999", "price: 21999")),
+                         (static, ("&#8377;5,999", "&#8377;10,999",
+                                   "&#8377;21,999"))):
         for price in prices:
             assert price in text, f"list price {price} missing"
-    for text in (landing, static):
+    for text in (landing, plans, static):
         assert "first 3 paid months" not in text
-        for gone in ("3,999", "6,999", "11,999", "1,799"):
-            assert gone not in text, f"offer price {gone} still advertised"
+        assert "offer price" not in text.lower()
 
 
 def test_no_free_trial_claims_on_landing():
@@ -69,13 +66,13 @@ def test_no_free_trial_claims_on_landing():
     if getattr(_bm, "TRIAL_FOR_ALL", False):
         # #433: trial is universal, so BOTH surfaces advertise it (the static
         # mirror can safely claim it — every clinic qualifies, no counter).
-        assert "14-day free trial" in landing
+        assert "14 days" in landing
         assert "14-day free trial" in static
         assert "trialOn" in landing                 # Landing still guards on live state
     elif _bm.FOUNDING_TRIAL_SLOTS > 0:
         # Capped founding offer: Landing gates on the live count; static stays
         # claim-free because it can't react.
-        assert "14-day free trial" in landing
+        assert "14 days" in landing
         assert "founding-slots" in landing
         assert "trialOn" in landing
         assert "free trial" not in static.lower()
