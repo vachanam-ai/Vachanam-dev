@@ -52,9 +52,10 @@ primary_region = "bom"
 [deploy]
   strategy = "immediate"     # a sandbox has no availability promise to keep
 
-# The earlier 2x/2GB sandbox crash was memory pressure, not CPU starvation.
-# Keep 4GB headroom; use 2 shared CPUs because Fly BOM has no 4x capacity.
+# Match the production-proven worker shape and preserve per-call headroom.
+# Cold inference warmup measured about 67 seconds on both tested CPU shapes;
+# routing is therefore gated on an actual LiveKit registration, not Fly state.
 [[vm]]
   cpu_kind = "shared"
-  cpus = 2
+  cpus = 4
   memory_mb = 4096
