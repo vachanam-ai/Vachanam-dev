@@ -151,7 +151,7 @@ async def test_renewal_charges_overage_and_gst(db, monkeypatch):
 
     # Derived, not hardcoded (the old "1209382 paise incl. GST" literal broke
     # on the 2026-07-17 GST waiver + launch offer): base honors the org's
-    # offer-window state, overage 50×5 = 250, GST per current GST_WAIVED.
+    # offer-window state, overage 50×6 = 300, GST per current GST_WAIVED.
     from backend.services.billing_math import subscription_order_breakdown
 
     expected = subscription_order_breakdown(
@@ -160,7 +160,7 @@ async def test_renewal_charges_overage_and_gst(db, monkeypatch):
     )["amount_paise"]
     assert resp.amount == expected
     assert captured["notes"]["overage_minutes"] == "50"
-    assert captured["notes"]["overage_amount"] == "250.0"
+    assert captured["notes"]["overage_amount"] == "300.0"
 
     # Webhook closes the meter on the old cycle and opens a contiguous one.
     res = await activate_subscription(db, str(org.id), "clinic",
@@ -169,7 +169,7 @@ async def test_renewal_charges_overage_and_gst(db, monkeypatch):
     c1, c2 = await _cycles(db, org)
     assert c1.minutes_used == 1550
     assert c1.overage_minutes == 50
-    assert c1.overage_amount == 250
+    assert c1.overage_amount == 300
     assert c2.cycle_start == c1.cycle_end  # contiguous
 
 

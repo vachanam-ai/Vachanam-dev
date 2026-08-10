@@ -357,10 +357,11 @@ def test_frontend_has_branch_selection_state():
 
 # Product truth/documentation
 
-@known("AUDIT-038", "landing calls 300 minutes '~100 call minutes'")
+@known("AUDIT-038", "landing trial copy must match the 30-minute bucket")
 def test_trial_marketing_uses_actual_minute_bucket():
     text = source("frontend/src/pages/Landing.jsx")
-    assert "≈100 call minutes included" not in text and "300 minutes" in text
+    assert "≈100 call minutes included" not in text
+    assert "{TRIAL_MINUTES} voice minutes" in text
 
 
 @known("AUDIT-039", "login advertises trial after founding slots are exhausted")
@@ -376,11 +377,11 @@ def test_marketed_csv_export_has_implementation():
     assert "CSV exports" not in landing or ("export" in client.lower() and "csv" in analytics.lower())
 
 
-@known("AUDIT-041", "support KB says Lite has one doctor; code allows three")
-def test_support_kb_matches_lite_doctor_limit():
+@known("AUDIT-041", "support KB markets the legacy-only Lite plan")
+def test_support_kb_does_not_market_legacy_lite():
     text = source("docs/support/KNOWLEDGE.md")
-    assert "| Lite | ₹1,999/month | 150 minutes (≈55 calls) | 1 |" not in text
-    assert "| Lite | ₹1,999/month | 150 minutes (≈55 calls) | up to 3 |" in text
+    assert "| Lite |" not in text
+    assert "| Basic | ₹5,999/month | 400 minutes (≈140 calls) | up to 3 |" in text
 
 
 @known("AUDIT-042", "support KB says 4-minute cap after runtime moved to 10")
@@ -398,7 +399,7 @@ def test_support_kb_matches_current_gst_policy():
 
 def test_plan_source_of_truth_has_current_doctor_caps():
     from backend.services.billing_math import PLANS
-    assert [PLANS[p].max_doctors for p in ("lite", "solo", "clinic", "multi")] == [3, 3, 5, None]
+    assert [PLANS[p].max_doctors for p in ("lite", "solo", "clinic", "multi")] == [3, 3, 10, None]
 
 
 def test_whatsapp_entitlement_is_not_free_on_the_cheap_voice_plans():
