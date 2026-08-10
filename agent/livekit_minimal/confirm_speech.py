@@ -29,6 +29,24 @@ _BOOKING_HELP = {
     'mr': 'आणखी काही मदत हवी आहे का?',
 }
 
+_CLINIC_QUESTION_ACK = {
+    'te': 'సరే అండి. ఈ ప్రశ్నను నమోదు చేశాను. క్లినిక్ డాక్టర్‌ని అడిగి మీకు కాల్ చేస్తారు.',
+    'en': 'All right. I have noted this question. The clinic will check with the doctor and call you back.',
+    'hi': 'ठीक है जी। मैंने यह सवाल दर्ज कर लिया है। क्लिनिक डॉक्टर से पूछकर आपको वापस कॉल करेगा।',
+    'ta': 'சரி. இந்தக் கேள்வியை பதிவு செய்துவிட்டேன். கிளினிக் மருத்துவரிடம் கேட்டுவிட்டு உங்களைத் திரும்ப அழைக்கும்.',
+    'kn': 'ಸರಿ. ಈ ಪ್ರಶ್ನೆಯನ್ನು ದಾಖಲಿಸಿದ್ದೇನೆ. ಕ್ಲಿನಿಕ್ ವೈದ್ಯರನ್ನು ಕೇಳಿ ನಿಮಗೆ ಮತ್ತೆ ಕರೆ ಮಾಡುತ್ತದೆ.',
+    'mr': 'ठीक आहे. हा प्रश्न नोंदवला आहे. क्लिनिक डॉक्टरांना विचारून तुम्हाला परत कॉल करेल.',
+    'bn': 'ঠিক আছে। প্রশ্নটি নথিভুক্ত করেছি। ক্লিনিক ডাক্তারকে জিজ্ঞেস করে আপনাকে আবার ফোন করবে।',
+    'ml': 'ശരി. ഈ ചോദ്യം രേഖപ്പെടുത്തിയിട്ടുണ്ട്. ക്ലിനിക്ക് ഡോക്ടറോട് ചോദിച്ചിട്ട് നിങ്ങളെ തിരികെ വിളിക്കും.',
+}
+
+
+def build_clinic_question_ack(lang_code: str) -> str:
+    """Verified acknowledgement after a clinic question is committed."""
+    return _CLINIC_QUESTION_ACK.get(
+        (lang_code or '').lower().strip(), _CLINIC_QUESTION_ACK['en']
+    )
+
 
 def _spoken_date(value: date_cls, lang_code: str) -> str:
     return (

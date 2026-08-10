@@ -79,6 +79,42 @@ _HINDI_NUMBERS: dict[str, int] = {
     "पैंतालीस": 45, "पचास": 50,
 }
 
+# Models occasionally romanize Telugu after a mid-call switch instead of
+# emitting Telugu script. These are pronunciation spellings, not English, and
+# must be normalized at the same deterministic TTS boundary. Token-level
+# entries deliberately compose: "iravai okati" becomes "twenty one".
+_ROMAN_TELUGU_NUMBERS: dict[str, int] = {
+    "sunna": 0,
+    "okati": 1,
+    "rendu": 2,
+    "moodu": 3,
+    "mudu": 3,
+    "nalugu": 4,
+    "aidu": 5,
+    "aaru": 6,
+    "aru": 6,
+    "edu": 7,
+    "yedu": 7,
+    "enimidi": 8,
+    "tommidi": 9,
+    "padi": 10,
+    "padakondu": 11,
+    "pannendu": 12,
+    "padamoodu": 13,
+    "padamudu": 13,
+    "padnalugu": 14,
+    "padihenu": 15,
+    "padaharu": 16,
+    "padihedu": 17,
+    "paddenimidi": 18,
+    "pantommidi": 19,
+    "iravai": 20,
+    "muppai": 30,
+    "nalabhai": 40,
+    "yaabhai": 50,
+    "yabhai": 50,
+}
+
 # Day-part and o'clock words: in an English call these must not be spoken at
 # all. They carry no information English does not already carry via A.M./P.M.,
 # so they are dropped rather than translated ("ఉదయం 10" -> "10").
@@ -86,6 +122,8 @@ _DAYPART_DROP = (
     "ఉదయం", "పొద్దున్నే", "పొద్దున", "మధ్యాహ్నం", "సాయంత్రం", "రాత్రి",
     "గంటలకి", "గంటలకు", "గంటలక", "గంటకి", "గంటలు", "గంటల",
     "सुबह", "दोपहर", "शाम", "रात", "बजे",
+    "udayam", "podduna", "madhyanam", "sayamtram", "sayantram", "ratri",
+    "gantalaki", "gantaki", "gantalu",
 )
 
 
@@ -103,6 +141,15 @@ def _english_number_words() -> dict[str, str]:
             out[f"{te}న్నర"] = f"{_cardinal(n)} thirty"
     for hi, n in _HINDI_NUMBERS.items():
         out[hi] = _cardinal(n)
+    for roman, n in _ROMAN_TELUGU_NUMBERS.items():
+        out[roman] = _cardinal(n)
+    # Common romanized Telugu half-hour forms produced by Gemini.
+    out.update({
+        "padinnara": "ten thirty",
+        "tommidinnara": "nine thirty",
+        "padakondunnara": "eleven thirty",
+        "pannendunnara": "twelve thirty",
+    })
     for month_index, te_month in enumerate(MONTHS_TE, start=1):
         out[te_month] = [
             "January", "February", "March", "April", "May", "June", "July",

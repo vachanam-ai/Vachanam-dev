@@ -393,6 +393,23 @@ async def test_padi_split_across_chunks_still_becomes_ten():
 
 
 @pytest.mark.asyncio
+async def test_romanized_padi_split_across_chunks_still_becomes_ten():
+    """Exact live regression: Gemini emitted Latin `padi am` after English."""
+    out = await _drain(["pa", "di", " am"], "en")
+    assert "ten am" in out.casefold()
+    assert "padi" not in out.casefold()
+
+
+def test_romanized_telugu_time_is_fully_english_at_tts_boundary():
+    from agent.services.pronunciation import build_replacer
+    from agent.services.spoken_words import speech_map
+
+    sub, _ = build_replacer(speech_map("en"))
+    assert sub("udayam padi gantalaki").strip() == "ten"
+    assert sub("padinnara am") == "ten thirty am"
+
+
+@pytest.mark.asyncio
 async def test_stream_never_drops_or_duplicates_surrounding_text():
     out = await _drain(["Dr Rao sits ", "సోమ", "వారం", " morning"], "te")
     assert out.startswith("Dr Rao sits ")

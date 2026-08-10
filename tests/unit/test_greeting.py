@@ -221,6 +221,20 @@ def test_play_wavs_all_segments_true_and_unpublishes(monkeypatch):
     room.local_participant.unpublish_track.assert_awaited_once()
 
 
+def test_play_wavs_flattens_async_segment_lists(monkeypatch):
+    """Cached prefix and dynamic tail tasks may each resolve to WAV lists."""
+    _patch_rtc(monkeypatch)
+    room = _fake_room()
+
+    async def _segments():
+        return [_wav(), _wav()]
+
+    ok = asyncio.run(g.play_wavs(room, [_segments()]))
+    assert ok is True
+    assert room.local_participant.publish_track.await_count == 1
+    room.local_participant.unpublish_track.assert_awaited_once()
+
+
 def test_play_wavs_bad_bytes_false_never_raises(monkeypatch):
     _patch_rtc(monkeypatch)
     room = _fake_room()

@@ -115,7 +115,8 @@ def test_the_sandbox_fly_config_cannot_collide_with_production():
     assert 'app = "vachanam-agent-sandbox"' in cfg
     assert 'app = "vachanam-agent"' in prod
     assert 'LIVEKIT_AGENT_NAME = "vachanam-sandbox"' in cfg
-    assert 'TTS_PROVIDER = "cartesia"' in cfg
+    assert 'TTS_PROVIDER = "soniox"' in cfg
+    assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in cfg
     # Production must NOT carry either sandbox switch.
     assert "TTS_PROVIDER" not in prod
     assert "LIVEKIT_AGENT_NAME" not in prod

@@ -1,4 +1,4 @@
-# VOICE LATENCY SANDBOX — Soniox STT + Cartesia TTS (Vinay 2026-08-09).
+# VOICE LATENCY SANDBOX — Soniox STT + Soniox TTS (Vinay 2026-08-10).
 #
 # A SEPARATE Fly app running the SAME code as production with two env vars
 # flipped. Nothing here can affect the live line:
@@ -9,10 +9,10 @@
 #                             would make both workers eligible for the same
 #                             call, which is how a "sandbox" ends up answering
 #                             real patients.
-#   * explicit provider env -> Soniox/Cartesia only inside this worker
+#   * explicit provider env -> Soniox only inside this worker
 #
 # Deploy:  flyctl deploy --config infra/fly.agent-sandbox.toml --remote-only
-# Secrets: flyctl secrets set -a vachanam-agent-sandbox CARTESIA_API_KEY=... \
+# Secrets: flyctl secrets set -a vachanam-agent-sandbox SONIOX_JP_API_KEY=... \
 #            (plus the same LiveKit/DB/Redis/Gemini secrets as the prod app)
 #
 # Routing a real number to it is a DELIBERATE, reversible step — see
@@ -28,12 +28,13 @@ primary_region = "bom"
   APP_ENV = "production"     # same code path; provider switches are explicit
   LOG_LEVEL = "info"
   # Pulse Telugu live canary failed silent after nine turns while still
-  # consuming audio. Keep the proven Soniox recognizer; isolate Cartesia TTS.
+  # consuming audio. Soniox is the proven recognizer and voice for this canary.
   STT_PROVIDER = "soniox"
-  TTS_PROVIDER = "cartesia"
-  CARTESIA_MODEL = "sonic-3-2026-01-12"
-  # Native Telugu receptionist voice: Ramya - Graceful Host.
-  CARTESIA_VOICE = "cf061d8b-a752-4865-81a2-57570a6e0565"
+  TTS_PROVIDER = "soniox"
+  # Local persistent-WS benchmark (6 warm samples): 16 kHz p50 453ms versus
+  # 24 kHz p50 490ms. PSTN delivers 8 kHz audio, so 16 kHz preserves the
+  # available phone-band quality without paying for unused samples.
+  SONIOX_TTS_SAMPLE_RATE = "16000"
   VOICE_ENDPOINTING_MIN_DELAY_S = "0"
   VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"
   SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"

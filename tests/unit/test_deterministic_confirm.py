@@ -3,7 +3,10 @@ from datetime import date, time
 from pathlib import Path
 
 from agent.i18n.lines import LINES
-from agent.livekit_minimal.confirm_speech import build_confirm_text
+from agent.livekit_minimal.confirm_speech import (
+    build_clinic_question_ack,
+    build_confirm_text,
+)
 
 D = date(2026, 7, 25)
 T = time(10, 30)
@@ -56,4 +59,19 @@ def test_agent_wiring_is_success_gated_and_reversible():
     assert "isinstance(sess, AgentSession)" in helper
     assert "sanitize_for_tts" in helper
     assert src.count("raise StopResponse()") >= 3
+
+
+def test_clinic_question_ack_is_localized_and_never_needs_second_llm():
+    for lang in ("te", "en", "hi", "ta", "kn", "mr", "bn", "ml"):
+        text = build_clinic_question_ack(lang)
+        assert text and "{" not in text and "}" not in text
+    src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
+    block = src.split("async def log_clinic_question", 1)[1].split(
+        "async def take_message", 1
+    )[0]
+    assert "build_clinic_question_ack" in block
+    assert "raise StopResponse()" in block
+    assert block.index("await self._db.commit()") < block.index(
+        "build_clinic_question_ack"
+    )
 

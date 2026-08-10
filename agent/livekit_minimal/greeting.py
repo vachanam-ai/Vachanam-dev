@@ -235,7 +235,7 @@ async def synth_wavs(texts: list[str], voice_id: str, lang_code: str) -> list[by
 # ------------------------------------------------------------------- playback
 
 async def play_wavs(room: rtc.Room, wav_items, t_answer: float | None = None) -> bool:
-    """Play WAV clips (bytes or awaitables of bytes) sequentially on ONE
+    """Play WAV clips (bytes or awaitables of bytes/lists) sequentially on ONE
     temporary track, then unpublish. Returns True only when EVERY segment
     played — the DPDP disclosure/consent record depends on completeness.
 
@@ -246,9 +246,17 @@ async def play_wavs(room: rtc.Room, wav_items, t_answer: float | None = None) ->
     pub = None
     sr0 = ch0 = None
     ok = False
+    pending = list(wav_items)
     try:
-        for item in wav_items:
+        # A prepared outbound item may resolve to several WAV segments. Keep a
+        # mutable queue so the cached welcome can play immediately while the
+        # dynamic reminder/follow-up body is still being synthesized.
+        while pending:
+            item = pending.pop(0)
             wav = item if isinstance(item, (bytes, bytearray)) else await item
+            if isinstance(wav, (list, tuple)):
+                pending[0:0] = list(wav)
+                continue
             wf = wave.open(io.BytesIO(wav), "rb")
             sr, ch, n = wf.getframerate(), wf.getnchannels(), wf.getnframes()
             pcm = normalize_pcm(wf.readframes(n))
@@ -284,6 +292,11 @@ async def play_wavs(room: rtc.Room, wav_items, t_answer: float | None = None) ->
     except Exception as e:  # noqa: BLE001 — a greeting clip must never break a call
         logger.warning("greeting_play_failed", error=str(e)[:160])
     finally:
+        # If an earlier segment failed or playback was cancelled, do not leave
+        # dynamic-body synthesis running without an awaiter.
+        for item in pending:
+            if isinstance(item, asyncio.Task) and not item.done():
+                item.cancel()
         if pub is not None:
             try:
                 await room.local_participant.unpublish_track(pub.sid)
@@ -355,6 +368,49 @@ async def warm_greeting_cache(
     except Exception as e:  # noqa: BLE001 — background warm never breaks calls
         logger.warning("greeting_cache_warm_failed", key=key, error=str(e)[:160])
         return False
+
+
+async def _cached_or_synth_segment(
+    key: str, text: str, voice_id: str, lang_code: str
+) -> list[bytes]:
+    """Return one static segment from Redis, synthesizing only on a miss."""
+    cached = await _greeting_cache_get(key)
+    if cached is not None:
+        logger.info("outbound_greeting_cache_hit", key=key)
+        return cached
+    wavs = await synth_wavs([text], voice_id, lang_code)
+    asyncio.create_task(_greeting_cache_set(key, wavs))
+    return wavs
+
+
+def prepare_outbound_prefix_items(
+    branch_id: str,
+    prefix_texts: list[str],
+    voice_id: str,
+    lang_code: str,
+    *,
+    recording_active: bool = False,
+) -> list[asyncio.Task]:
+    """Start resolving the static outbound opening without blocking its caller.
+
+    Each prefix is an independent task. `play_wavs` can therefore publish
+    the first cached segment as soon as the phone is answered; it does not wait
+    for names, message translation, or the dynamic call body.
+    """
+    items: list[asyncio.Task] = []
+    for index, text in enumerate(prefix_texts):
+        cache_branch = (
+            "recording-notice"
+            if recording_active and index == 0
+            else f"outbound:{branch_id}"
+        )
+        key = _greeting_cache_key(
+            cache_branch, lang_code, greeting_voice_key(voice_id), [text]
+        )
+        items.append(asyncio.create_task(
+            _cached_or_synth_segment(key, text, voice_id, lang_code)
+        ))
+    return items
 
 
 async def synth_and_play(

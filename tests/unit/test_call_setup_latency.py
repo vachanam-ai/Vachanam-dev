@@ -15,7 +15,11 @@ SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 
 
 def test_pre_call_reads_run_concurrently():
-    gather = SRC.split("await asyncio.gather(")[1][:200]
+    # There are other legitimate gathers (for example outbound prefix cache
+    # tasks). Anchor this guard to the pre-call result assignment it protects.
+    gather = SRC.split(
+        "_pref_res, _gate_res, _caller_res = await asyncio.gather(", 1
+    )[1][:200]
     assert "_read_pref_lang()" in gather
     assert "_service_gate_check(branch)" in gather
     assert "_read_caller()" in gather

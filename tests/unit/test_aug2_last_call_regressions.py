@@ -22,6 +22,8 @@ from agent.livekit_minimal.agent import (
     _hostile_recovery,
     _legal_threat_clarification,
     _privacy_safe_session_id,
+    _specialty_roster_query,
+    _specialty_roster_text,
 )
 from agent.services.meta_stub import MetaService
 from agent.session_state import SessionState
@@ -227,6 +229,49 @@ def test_roster_answer_contains_only_loaded_database_doctors():
     assert 'Lakshmi' in answer
     assert 'Orthopedic' not in answer
     assert 'available' not in answer.casefold()
+
+
+def test_specialty_question_is_resolved_only_from_loaded_roster():
+    doctors = (
+        _doctor('Srinivas', 'Dermatology'),
+        _doctor('Lakshmi', 'General Medicine'),
+    )
+    skin = _specialty_roster_query('Do you have a skin doctor?', doctors)
+    ortho = _specialty_roster_query('Is there an orthopedic doctor?', doctors)
+    assert skin is not None and [d.name for d in skin[1]] == ['Srinivas']
+    assert ortho is not None and ortho[1] == ()
+    assert 'Srinivas' in _specialty_roster_text(skin, 'en')
+    assert 'does not include' in _specialty_roster_text(ortho, 'en')
+
+
+@pytest.mark.parametrize(
+    'question',
+    (
+        'Is the skin doctor available at 10 am?',
+        'Can I book a skin doctor tomorrow?',
+        'Is the orthopedic doctor available right now?',
+        'రేపు స్కిన్ డాక్టర్ అపాయింట్మెంట్ ఉందా?',
+    ),
+)
+def test_timed_specialty_questions_still_use_availability_tools(question):
+    doctors = (_doctor('Srinivas', 'Dermatology'),)
+    assert _specialty_roster_query(question, doctors) is None
+
+
+@pytest.mark.asyncio
+async def test_specialty_roster_turn_bypasses_gemini():
+    doctors = (_doctor('Srinivas', 'Dermatology'),)
+    agent, state, session = _agent(language='en', doctors=doctors)
+
+    with pytest.raises(StopResponse):
+        await agent.on_user_turn_completed(
+            ChatContext.empty(),
+            SimpleNamespace(content=['Do you have a skin doctor?']),
+        )
+
+    session.say.assert_awaited_once()
+    assert 'Srinivas' in session.say.await_args.args[0]
+    assert state.quality_intent == 'specialty_roster'
 
 
 @pytest.mark.asyncio

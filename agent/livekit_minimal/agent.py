@@ -88,7 +88,10 @@ from backend.services.clinic_cache import (  # noqa: E402
 )
 from backend.services.doctor_schedule import doctors_on_shift_at  # noqa: E402
 from agent.i18n.transliterate import spoken_name, spoken_text  # noqa: E402
-from agent.livekit_minimal.confirm_speech import build_confirm_text  # noqa: E402
+from agent.livekit_minimal.confirm_speech import (  # noqa: E402
+    build_clinic_question_ack,
+    build_confirm_text,
+)
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
     build_date_table,
@@ -108,6 +111,7 @@ from agent.livekit_minimal.greeting import (  # noqa: E402
     normalize_pcm,
     outbound_greeting_texts,
     play_wavs,
+    prepare_outbound_prefix_items,
     synth_and_play,
     synth_wavs,
     warm_greeting_cache,
@@ -2542,6 +2546,112 @@ def _is_doctor_roster_question(text: str) -> bool:
     )
 
 
+_SPECIALTY_ALIASES: dict[str, tuple[str, ...]] = {
+    "dermatology": (
+        "dermat", "skin doctor", "skin specialist", "skin", "చర్మ", "స్కిన్",
+        "त्वचा", "स्किन", "தோல்", "சரும", "ಚರ್ಮ", "ത്വക്ക്", "চর্ম",
+    ),
+    "orthopedics": (
+        "orthopedic", "orthopaedic", "ortho", "bone doctor", "ఆర్థో", "ఎముక",
+        "हड्डी", "ऑर्थो", "எலும்பு", "ஆர்த்தோ", "ಮೂಳೆ", "ಆರ್ಥೋ", "അസ്ഥി",
+    ),
+    "pediatrics": (
+        "pediatric", "paediatric", "child doctor", "children doctor", "పిల్లల",
+        "बाल रोग", "बच्चों के डॉक्टर", "குழந்தை", "ಮಕ್ಕಳ", "ശിശു", "শিশু",
+    ),
+    "gynecology": (
+        "gynec", "gynaec", "women doctor", "lady doctor", "గైన", "స్త్రీ",
+        "स्त्री रोग", "மகப்பேறு", "பெண்கள் மருத்துவர்", "ಸ್ತ್ರೀರೋಗ", "ഗൈന",
+    ),
+    "ent": (
+        "ent doctor", "ear nose throat", "చెవి ముక్కు గొంతు", "ईएनटी",
+        "कान नाक गला", "காது மூக்கு தொண்டை", "ಕಿವಿ ಮೂಗು ಗಂಟಲು", "ഇഎൻടി",
+    ),
+    "dentistry": (
+        "dentist", "dental doctor", "tooth doctor", "డెంటిస్ట్", "దంత",
+        "दांत", "दंत", "பல் மருத்துவர்", "ದಂತ", "പല്ല്", "দাঁতের ডাক্তার",
+    ),
+    "ophthalmology": (
+        "ophthalm", "eye doctor", "eye specialist", "కంటి", "नेत्र", "आंख",
+        "கண் மருத்துவர்", "ಕಣ್ಣಿನ", "കണ്ണ്", "চোখের ডাক্তার",
+    ),
+    "cardiology": (
+        "cardio", "heart doctor", "heart specialist", "గుండె", "हृदय",
+        "दिल के डॉक्टर", "இதய", "ಹೃದಯ", "ഹൃദയ", "হৃদরোগ",
+    ),
+    "general medicine": (
+        "general physician", "general doctor", "general medicine", "జనరల్",
+        "सामान्य चिकित्सक", "பொது மருத்துவர்", "ಜನರಲ್ ಫಿಸಿಷಿಯನ್",
+    ),
+}
+
+_SPECIALTY_SCHEDULE_TERMS = (
+    "today", "tomorrow", "right now", "currently", "available now",
+    "morning", "evening", "slot", "appointment", "book",
+    "ఇవాళ", "రేపు", "ఇప్పుడు", "ప్రస్తుతం", "టైమ్", "స్లాట్", "అపాయింట్",
+    "आज", "कल", "अभी", "समय", "अपॉइंट", "இன்று", "நாளை", "நேரம்",
+    "ಇಂದು", "ನಾಳೆ", "ಸಮಯ", "आज", "उद्या", "वेळ",
+)
+
+
+def _specialty_roster_query(text: str, doctors) -> tuple[str, tuple] | None:
+    """Resolve a plain `do you have a <specialty> doctor?` from loaded DB data.
+
+    Date/time/booking questions deliberately fall through to availability
+    tools. Returning an empty tuple is an authoritative `not in this roster`,
+    distinct from None (`not a recognized specialty-roster question`).
+    """
+    clean = " ".join((text or "").casefold().split())
+    if not clean or any(term in clean for term in _SPECIALTY_SCHEDULE_TERMS):
+        return None
+    if re.search(r"\b(?:at|on)\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}\s*(?:am|pm)\b", clean):
+        return None
+    doctor_word = any(term in clean for term in _CURRENT_DOCTOR_TERMS)
+    for specialty, aliases in _SPECIALTY_ALIASES.items():
+        if not any(alias in clean for alias in aliases):
+            continue
+        if not doctor_word and len(clean.split()) > 4:
+            return None
+        matched = []
+        for doctor in doctors or ():
+            blob = " ".join([
+                str(getattr(doctor, "specialization", "") or ""),
+                " ".join(getattr(doctor, "routing_keywords", ()) or ()),
+            ]).casefold()
+            if specialty in blob or any(alias in blob for alias in aliases):
+                matched.append(doctor)
+        return specialty, tuple(matched)
+    return None
+
+
+def _specialty_roster_text(result: tuple[str, tuple], language: str) -> str:
+    specialty, matched = result
+    if matched:
+        return _doctor_roster_text(matched, language)
+    labels = {
+        "dermatology": "skin",
+        "orthopedics": "orthopedic",
+        "pediatrics": "children's",
+        "gynecology": "gynecology",
+        "ent": "ENT",
+        "dentistry": "dental",
+        "ophthalmology": "eye",
+        "cardiology": "heart",
+        "general medicine": "general-medicine",
+    }
+    label = labels.get(specialty, specialty)
+    return {
+        "te": f"మా క్లినిక్ డాక్టర్ల జాబితాలో {label} డాక్టర్ లేరండి.",
+        "hi": f"हमारे क्लिनिक की डॉक्टर सूची में {label} डॉक्टर नहीं हैं जी।",
+        "ta": f"எங்கள் கிளினிக் டாக்டர் பட்டியலில் {label} டாக்டர் இல்லைங்க.",
+        "kn": f"ನಮ್ಮ ಕ್ಲಿನಿಕ್ ಡಾಕ್ಟರ್ ಪಟ್ಟಿಯಲ್ಲಿ {label} ಡಾಕ್ಟರ್ ಇಲ್ಲ ರೀ.",
+        "mr": f"आमच्या क्लिनिकच्या डॉक्टर यादीत {label} डॉक्टर नाहीत.",
+        "ml": f"ഞങ്ങളുടെ ക്ലിനിക്കിലെ ഡോക്ടർ പട്ടികയിൽ {label} ഡോക്ടർ ഇല്ല.",
+        "bn": f"আমাদের ক্লিনিকের ডাক্তার তালিকায় {label} ডাক্তার নেই।",
+        "en": f"This clinic's doctor roster does not include a {label} doctor.",
+    }.get(language, f"This clinic's doctor roster does not include a {label} doctor.")
+
+
 _CURRENT_DOCTOR_TERMS = (
     'doctor', 'doctors', 'డాక్టర్', 'డాక్టర్స్', 'डॉक्टर', 'டாக்டர்',
     'ಡಾಕ್ಟರ್', 'ഡോക്ട', 'ডাক্তার',
@@ -3145,6 +3255,9 @@ class VachanamAgent(Agent):
         control_token_request = _is_control_token_request(utterance)
         current_doctors_question = _is_current_doctor_availability_question(utterance)
         roster_question = _is_doctor_roster_question(utterance)
+        specialty_query = _specialty_roster_query(
+            utterance, self._doctor_contexts
+        )
         legal_threat = _is_legal_threat(utterance)
         hostile_or_frustrated = _is_hostile_or_frustrated(utterance)
         response_language = detected_language or self._lang_code
@@ -3157,33 +3270,33 @@ class VachanamAgent(Agent):
         if not incomplete_fragment:
             self._state.clarification_attempts = 0
         if detected_language and detected_language != self._lang_code:
-            deterministic_speech = (
-                _control_token_refusal(detected_language)
-                if control_token_request
-                else (
-                _incomplete_clarification(detected_language, clarification_attempt)
-                if incomplete_fragment
-                else (
-                current_doctors_speech
-                if current_doctors_question
-                else (
-                _doctor_roster_text(self._doctor_contexts, detected_language)
-                if roster_question
-                else (
-                _legal_threat_clarification(detected_language)
-                if legal_threat
-                else (
-                _hostile_recovery(detected_language)
-                if hostile_or_frustrated
-                else None
+            deterministic_speech = None
+            if control_token_request:
+                deterministic_speech = _control_token_refusal(detected_language)
+            elif incomplete_fragment:
+                deterministic_speech = _incomplete_clarification(
+                    detected_language, clarification_attempt
                 )
+            elif current_doctors_question:
+                deterministic_speech = current_doctors_speech
+            elif specialty_query is not None:
+                deterministic_speech = _specialty_roster_text(
+                    specialty_query, detected_language
                 )
+            elif roster_question:
+                deterministic_speech = _doctor_roster_text(
+                    self._doctor_contexts, detected_language
                 )
+            elif legal_threat:
+                deterministic_speech = _legal_threat_clarification(
+                    detected_language
                 )
-                )
-            )
+            elif hostile_or_frustrated:
+                deterministic_speech = _hostile_recovery(detected_language)
             if current_doctors_question:
                 self._state.quality_intent = 'current_doctor_availability'
+            elif specialty_query is not None:
+                self._state.quality_intent = 'specialty_roster'
             elif roster_question:
                 self._state.quality_intent = 'doctor_roster'
             elif legal_threat:
@@ -3217,6 +3330,16 @@ class VachanamAgent(Agent):
             self._state.quality_intent = 'current_doctor_availability'
             await self.session.say(
                 sanitize_for_tts(current_doctors_speech),
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        if specialty_query is not None:
+            self._state.quality_intent = 'specialty_roster'
+            await self.session.say(
+                sanitize_for_tts(
+                    _specialty_roster_text(specialty_query, self._lang_code)
+                ),
                 allow_interruptions=True,
             )
             raise StopResponse()
@@ -4459,6 +4582,24 @@ class VachanamAgent(Agent):
             "clinic_question_logged branch_id=%s phone_last4=%s",
             str(self._state.branch_id), (self._state.patient_phone or "")[-4:] or "----",
         )
+        # The DB write is authoritative and there is no creative work left.
+        # A second Gemini pass added ~0.9s in the 2026-08-10 sandbox call and
+        # could contradict the successful write. Speak the verified result
+        # directly, just like booking/cancel/reschedule confirmations.
+        if settings.voice_deterministic_confirm:
+            try:
+                sess = getattr(context, "session", None)
+                if isinstance(sess, AgentSession):
+                    lang = self._state.language or self._lang_code
+                    sess.say(sanitize_for_tts(build_clinic_question_ack(lang)))
+                    logger.info(
+                        "deterministic_clinic_question_ack_spoken lang=%s", lang
+                    )
+                    raise StopResponse()
+            except StopResponse:
+                raise
+            except Exception as exc:  # noqa: BLE001 — logged result still wins
+                logger.warning("deterministic_clinic_question_ack_failed: %s", exc)
         return {"logged": True, "next": "Tell the caller the clinic will check "
                 "with the doctor and get back to them."}
 
@@ -5948,38 +6089,84 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         _glang = _gpref
                 except Exception:  # noqa: BLE001 — RULE 8
                     pass
-            if (is_followup or is_qa_call) and followup_meta.get("message"):
-                followup_meta["message"] = await _localize_message(
-                    followup_meta["message"], _glang
-                )
-                followup_meta["_localized"] = True  # skip the post-answer re-hop
-            _gclinic = (getattr(_gbr, "name_spoken", None) or "").strip() or _gbr.name
+            # Publish a playback plan as soon as branch + language are known.
+            # The static welcome is Redis-cached; names, message translation,
+            # and dynamic-body TTS continue concurrently behind that first clip.
+            # The previous implementation awaited ALL of those steps plus full
+            # synthesis before `wavs` existed, causing ~5s of post-answer silence.
+            _stored = (getattr(_gbr, "name_spoken", None) or "").strip()
+            _gclinic_raw = (
+                _stored
+                if _stored and _glang == (getattr(_gbr, "language", None) or DEFAULT_LANG)
+                else _gbr.name
+            )
+            _gclinic = await spoken_text(_gclinic_raw, _glang)
+            _gvoice = _voice_for_lang(_gbr, _glang)
             texts = outbound_greeting_texts(
                 _glang,
                 _gclinic,
-                await spoken_text(meta.get("patient_name", ""), _glang),
-                await spoken_text(meta.get("doctor_name", ""), _glang),
-                meta,
-                followup_meta,
-                is_reminder=is_reminder,
-                is_rebook=is_rebook_call,
-                is_followup=is_followup,
-                is_question_answer=is_qa_call,
+                "",
+                "",
+                {},
+                {},
                 recording_active=_outbound_recording_active,
             )
-            _t_synth = _perf_prep.monotonic()
-            wavs = await synth_wavs(texts, _voice_for_lang(_gbr, _glang), _glang)
-            logger.info(
-                "outbound_greet_synth_ms=%.0f segments=%d",
-                (_perf_prep.monotonic() - _t_synth) * 1000.0, len(texts),
+            wav_items = prepare_outbound_prefix_items(
+                str(_gbr.id),
+                texts,
+                _gvoice,
+                _glang,
+                recording_active=_outbound_recording_active,
             )
+            prefix_items = list(wav_items)
             _out_greet.update(
                 texts=texts,
-                wavs=wavs,
+                wav_items=wav_items,
                 lang=_glang,
                 recording_active=_outbound_recording_active,
             )
-            logger.info("outbound_greet_prep_ok segments=%d lang=%s", len(texts), _glang)
+
+            async def _prepare_dynamic_body() -> list[bytes]:
+                _t_synth = _perf_prep.monotonic()
+                # Soniox's organization concurrency is intentionally low. On a
+                # cache miss, let the welcome finish before opening the body
+                # stream; on the normal cache-hit path this await is only Redis.
+                await asyncio.gather(*prefix_items)
+                if (is_followup or is_qa_call) and followup_meta.get("message"):
+                    followup_meta["message"] = await _localize_message(
+                        followup_meta["message"], _glang
+                    )
+                    followup_meta["_localized"] = True
+                all_texts = outbound_greeting_texts(
+                    _glang,
+                    _gclinic,
+                    await spoken_text(meta.get("patient_name", ""), _glang),
+                    await spoken_text(meta.get("doctor_name", ""), _glang),
+                    meta,
+                    followup_meta,
+                    is_reminder=is_reminder,
+                    is_rebook=is_rebook_call,
+                    is_followup=is_followup,
+                    is_question_answer=is_qa_call,
+                    recording_active=_outbound_recording_active,
+                )
+                body = all_texts[len(texts):]
+                texts.extend(body)
+                if not body:
+                    return []
+                wavs = await synth_wavs(body, _gvoice, _glang)
+                logger.info(
+                    "outbound_greet_body_synth_ms=%.0f segments=%d",
+                    (_perf_prep.monotonic() - _t_synth) * 1000.0,
+                    len(body),
+                )
+                return wavs
+
+            wav_items.append(asyncio.create_task(_prepare_dynamic_body()))
+            logger.info(
+                "outbound_greet_prep_ok prefix_segments=%d lang=%s",
+                len(texts), _glang,
+            )
         except Exception as _ge:  # noqa: BLE001 — RULE 8: fall back to live greeting
             logger.warning("outbound_greet_prep_failed: %s", _ge)
 
@@ -5994,6 +6181,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         _switch_ack_clips_started = True
         asyncio.create_task(_prewarm_switch_ack_clips())
 
+    import time as _perf
+
+    _t_answer: float | None = None
+    _outbound_answer_play_task: asyncio.Task | None = None
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
         _out_trunk = await _validated_outbound_trunk(meta, ctx.api.sip)
@@ -6016,6 +6207,29 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     participant_identity=f"sip_{outbound_number}",
                     wait_until_answered=True,
                 )
+            )
+            # `wait_until_answered` returned: this is the real answer timestamp.
+            # Start the prepared track NOW, before DID reads, branch resolution,
+            # prompt construction, or session.start.
+            _t_answer = _perf.monotonic()
+
+            async def _play_outbound_at_answer() -> bool:
+                if _greet_prep_task is None:
+                    return False
+                try:
+                    await _greet_prep_task
+                    items = _out_greet.get("wav_items")
+                    if not items:
+                        return False
+                    return await play_wavs(
+                        ctx.room, items, t_answer=_t_answer
+                    )
+                except Exception as exc:  # noqa: BLE001 — live fallback remains
+                    logger.warning("outbound_answer_play_failed: %s", exc)
+                    return False
+
+            _outbound_answer_play_task = asyncio.create_task(
+                _play_outbound_at_answer()
             )
         except api.TwirpError as e:
             logger.error("Outbound dial failed: %s %s", e.code, e.message)
@@ -6072,8 +6286,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     logger.info("call_started did=...%s caller=...%s", did[-4:], caller[-4:] if caller else "????")
     # Pre-greeting latency anchor: measures answer -> first spoken word, to
     # localise the "10s before it talks" complaint (setup vs session-connect).
-    import time as _perf
-    _t_answer = _perf.monotonic()
+    if _t_answer is None:
+        _t_answer = _perf.monotonic()
 
     state = SessionState(session_id=ctx.room.name)
     state.patient_phone = caller or None
@@ -6498,6 +6712,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 await _early_greeting_task
             except (asyncio.CancelledError, Exception):
                 pass
+        if (
+            _outbound_answer_play_task is not None
+            and not _outbound_answer_play_task.done()
+        ):
+            _outbound_answer_play_task.cancel()
+            try:
+                await _outbound_answer_play_task
+            except (asyncio.CancelledError, Exception):
+                pass
         logger.warning(
             "call_blocked reason=%s branch_id=%s did=...%s",
             blocked_reason,
@@ -6736,44 +6959,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             if caller_greeting_name else None
         )
         if _is_outbound_greet:
-            # Pre-synthesized during ring time — play instantly. Language guard:
-            # if the authoritative post-answer resolution disagrees with the prep
-            # (row changed mid-ring), skip the clip; live fallback covers it.
-            if _greet_prep_task is not None:
-                # Vinay 2026-08-08: "lag is very very much for remainder call.
-                # 8-10sec for 1st word."
-                #
-                # THE OLD 2s CAP IS THE LAG. Prep has to finish two DB reads, a
-                # message translation, two Sarvam transliteration hops and then
-                # TTS a multi-segment opening — routinely more than 2s. When it
-                # overran, `_out_greet["wavs"]` was still empty, NO playback
-                # task was created at all, and the greeting fell through to the
-                # session.say after prompt build + prompt-cache resolve +
-                # session start. That deferral is the 8-10 seconds, not the
-                # synthesis.
-                #
-                # Waiting longer is very nearly free: this runs while the
-                # patient's phone is still RINGING, so the budget overlaps dead
-                # time we already spend. Worst case we play a moment after they
-                # answer instead of many seconds after.
-                _t_wait = _perf.monotonic()
-                try:
-                    await asyncio.wait_for(_greet_prep_task, timeout=8.0)
-                except Exception as _gw:  # noqa: BLE001
-                    logger.warning("outbound_greet_prep_wait: %s", _gw)
-                logger.info(
-                    "outbound_greet_prep_waited ms=%.0f ready=%s",
-                    (_perf.monotonic() - _t_wait) * 1000.0,
-                    bool(_out_greet.get("wavs")),
-                )
-            if (
-                _out_greet.get("wavs")
+            # Playback was launched at the exact point the outbound SIP leg
+            # answered. Reuse that task; never serialize the prompt path behind
+            # the old 8-second greeting-preparation wait.
+            if _outbound_answer_play_task is not None:
+                _greet_texts = _out_greet.get("texts")
+                _welcome_task = _outbound_answer_play_task
+            elif (
+                _out_greet.get("wav_items")
                 and _out_greet.get("lang") == lang_code
                 and _out_greet.get("recording_active") == _recording_active
             ):
+                # Defensive path for tests/non-SIP invocation.
                 _greet_texts = _out_greet["texts"]
                 _welcome_task = asyncio.create_task(
-                    play_wavs(ctx.room, _out_greet["wavs"], t_answer=_t_answer)
+                    play_wavs(
+                        ctx.room, _out_greet["wav_items"], t_answer=_t_answer
+                    )
                 )
         elif _early_greeting_task is not None:
             # Inbound fast path. For recorded admin test calls, only the notice
@@ -8674,29 +8876,71 @@ async def _warm_all_clinic_prompt_caches() -> None:
     greeting_requested = 0
     greeting_ready = 0
     for row in branches:
-        language = row["language"] if row["language"] in serviceable else DEFAULT_LANG
-        voice = (row["tts_voice"] or "").strip() or get_lang(language).default_voice
+        default_language = (
+            row["language"] if row["language"] in serviceable else DEFAULT_LANG
+        )
+        voice = (
+            (row["tts_voice"] or "").strip()
+            or get_lang(default_language).default_voice
+        )
         clinic_name = (row["name_spoken"] or row["name"] or "").strip()
-        intro = inbound_greeting_texts(language, clinic_name, recording_active=False)
+        intro = inbound_greeting_texts(
+            default_language, clinic_name, recording_active=False
+        )
         intro_key = _greeting_cache_key(
-            row["id"], language, _greeting_voice_key(voice), intro
+            row["id"], default_language, _greeting_voice_key(voice), intro
         )
         greeting_requested += 1
         greeting_ready += int(
-            await warm_greeting_cache(intro_key, intro, voice, language)
+            await warm_greeting_cache(
+                intro_key, intro, voice, default_language
+            )
         )
-        if settings.recording_allowed:
-            notice = get_recording_notice(language)
-            notice_key = _greeting_cache_key(
-                "recording-notice",
+
+        # Outbound calls can use the saved caller language (English is always
+        # included above). Warm the separately cached welcome prefix for every
+        # reachable language so answer-to-first-audio pays only a Redis read.
+        outbound_languages = set(languages_by_branch.get(row["id"], set()))
+        outbound_languages.add(default_language)
+        for language in sorted(outbound_languages):
+            raw_name = (
+                clinic_name if language == default_language else row["name"]
+            )
+            try:
+                spoken_clinic = await spoken_text(raw_name, language)
+            except Exception:  # noqa: BLE001 — cache warm is best effort
+                spoken_clinic = raw_name
+            prefix = outbound_greeting_texts(
+                language, spoken_clinic, "", "", {}, {},
+                recording_active=False,
+            )
+            welcome = prefix[-1]
+            welcome_key = _greeting_cache_key(
+                f"outbound:{row['id']}",
                 language,
                 _greeting_voice_key(voice),
-                [notice],
+                [welcome],
             )
             greeting_requested += 1
             greeting_ready += int(
-                await warm_greeting_cache(notice_key, [notice], voice, language)
+                await warm_greeting_cache(
+                    welcome_key, [welcome], voice, language
+                )
             )
+            if settings.recording_allowed:
+                notice = get_recording_notice(language)
+                notice_key = _greeting_cache_key(
+                    "recording-notice",
+                    language,
+                    _greeting_voice_key(voice),
+                    [notice],
+                )
+                greeting_requested += 1
+                greeting_ready += int(
+                    await warm_greeting_cache(
+                        notice_key, [notice], voice, language
+                    )
+                )
     logger.info(
         "greeting_cache_warm_complete clinics=%d requested=%d ready=%d",
         len(branches),

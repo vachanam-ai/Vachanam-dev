@@ -23,7 +23,9 @@ The prep side (_outbound_greet_prep) always handled question_answer correctly.
 Only the playback gate disagreed, which is why the audio was built and binned.
 """
 import pytest
+import inspect
 
+import agent.livekit_minimal.agent as agent_module
 from agent.livekit_minimal.agent import (
     _FOLLOWUP_CALLTYPES,
     opens_with_prepared_message,
@@ -61,3 +63,18 @@ def test_the_dispatched_call_type_matches_what_the_job_actually_sends():
     source = inspect.getsource(question_callback_caller)
     assert '"call_type": "question_answer"' in source
     assert opens_with_prepared_message("question_answer")
+
+
+def test_outbound_playback_is_launched_at_answer_before_tenant_prompt_work():
+    src = inspect.getsource(agent_module.entrypoint)
+    answered = src.index("_t_answer = _perf.monotonic()")
+    launched = src.index("_outbound_answer_play_task = asyncio.create_task")
+    did_reads = src.index("# Resolve the dialed DID")
+    assert answered < launched < did_reads
+
+
+def test_outbound_hot_path_has_no_eight_second_prep_wait():
+    src = inspect.getsource(agent_module.entrypoint)
+    assert "wait_for(_greet_prep_task, timeout=8.0)" not in src
+    assert "prepare_outbound_prefix_items" in src
+    assert "wav_items" in src

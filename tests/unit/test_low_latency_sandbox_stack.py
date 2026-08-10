@@ -1,4 +1,4 @@
-"""Guards for the isolated Pulse + Cartesia latency sandbox."""
+"""Guards for the isolated Soniox latency sandbox."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -52,9 +52,8 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'primary_region = "bom"' in cfg
     assert 'LIVEKIT_AGENT_NAME = "vachanam-sandbox"' in cfg
     assert 'STT_PROVIDER = "soniox"' in cfg
-    assert 'TTS_PROVIDER = "cartesia"' in cfg
-    assert 'CARTESIA_MODEL = "sonic-3-2026-01-12"' in cfg
-    assert 'CARTESIA_VOICE = "cf061d8b-a752-4865-81a2-57570a6e0565"' in cfg
+    assert 'TTS_PROVIDER = "soniox"' in cfg
+    assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in cfg
     assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in cfg
     assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"' in cfg
     assert 'SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"' in cfg
@@ -84,7 +83,7 @@ def test_non_soniox_stt_disables_soniox_manual_finalization():
     assert "settings.soniox_manual_finalize_delay_ms if _uses_soniox_stt else 0" in src
 
 
-def test_cartesia_sandbox_does_not_prewarm_or_preclip_with_soniox():
+def test_provider_aware_prewarm_and_switch_clips():
     import inspect
 
     from agent.livekit_minimal import agent as ag
