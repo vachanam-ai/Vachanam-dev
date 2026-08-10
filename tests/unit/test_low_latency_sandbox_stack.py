@@ -63,8 +63,22 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'MAX_CALL_DURATION_SECONDS = "600"' in cfg
     assert 'RECORDING_ENABLED = "true"' in cfg
     assert 'TRANSCRIPT_CAPTURE_ENABLED = "true"' in cfg
-    assert "STT_PROVIDER" not in prod
-    assert "TTS_PROVIDER" not in prod
+    # The tested Soniox profile is now shared with production, but the sandbox
+    # identity and test-only recording/transcript controls remain isolated.
+    assert 'STT_PROVIDER = "soniox"' in prod
+    assert 'TTS_PROVIDER = "soniox"' in prod
+    assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in prod
+    assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in prod
+    assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"' in prod
+    assert 'SONIOX_ENDPOINT_LATENCY_LEVEL = "1"' in prod
+    assert 'SONIOX_MAX_ENDPOINT_DELAY_MS = "2000"' in prod
+    assert 'SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"' in prod
+    assert 'VOICE_NUM_IDLE_PROCESSES = "4"' in prod
+    assert 'VOICE_TOOL_PREFETCH = "true"' in prod
+    assert 'VOICE_DETERMINISTIC_CONFIRM = "true"' in prod
+    assert "LIVEKIT_AGENT_NAME" not in prod
+    assert "RECORDING_ENABLED" not in prod
+    assert "TRANSCRIPT_CAPTURE_ENABLED" not in prod
 
 
 @pytest.mark.parametrize("code", ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"))

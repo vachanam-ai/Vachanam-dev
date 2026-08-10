@@ -13,6 +13,31 @@ Format per session:
 
 ---
 
+## 2026-08-10 - Proven Soniox latency profile promoted to production
+
+Compared durable Redis traces from the production Mumbai worker and the
+isolated Soniox canary. Production session 4a6ceaf5 measured 1,529 ms p50
+server-side with 503 ms Soniox TTS p50. Canary session 509e3a2a measured
+271 ms Soniox TTS p50 and produced a 599 ms fully preemptive reply. The
+remaining honest floor was Soniox finalization at 312-325 ms and Vertex
+Gemini at 563-901 ms; increasing Soniox endpoint aggression was rejected
+because the vendor documents the accuracy/fragmentation tradeoff and the
+project has already observed corrupted Telugu names and times on that path.
+
+Production now declares the quality-safe canary controls in
+infra/fly.agent.toml: Soniox-only STT/TTS, 16 kHz phone-band synthesis,
+0-60 ms LiveKit endpointing, Soniox latency level 1, the cancellable 200 ms
+finalize guard, tool prefetch and deterministic mutation confirmations. Four
+idle workers remain prewarmed for simultaneous calls; the sandbox-only value
+of one was deliberately not promoted. The stale Fly
+SONIOX_ENDPOINT_SENSITIVITY override is removed during deployment so an old
+experiment cannot supersede the source-controlled profile.
+
+Proof before deployment: 120 focused voice/latency tests, 186 booking-flow
+unit tests, 61 database-backed booking/reschedule/cancel/availability tests,
+and 8 appointment concurrency/stress tests passed. Ruff and diff validation
+passed. No frontend file changed.
+
 ## 2026-08-10 - Fail-closed outbound clinic identity
 
 Closed a live cross-clinic caller-ID incident: Sri Skincare reminder content

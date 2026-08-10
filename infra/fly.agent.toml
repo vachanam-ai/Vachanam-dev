@@ -9,6 +9,29 @@ primary_region = "bom"  # Mumbai — lowest latency for India
 [env]
   APP_ENV = "production"
   LOG_LEVEL = "info"
+  # Production voice profile, promoted from the isolated Soniox canary after
+  # real PSTN measurements. Keep these non-secret controls in source control so
+  # a stale Fly secret cannot silently put callers on a different latency path.
+  STT_PROVIDER = "soniox"
+  TTS_PROVIDER = "soniox"
+  # PSTN exposes an 8 kHz speech band. Soniox at 16 kHz retains all available
+  # phone detail while the canary measured lower first-audio latency than 24 kHz.
+  SONIOX_TTS_SAMPLE_RATE = "16000"
+  # Soniox supplies the authoritative semantic endpoint. These LiveKit values
+  # add virtually no second wait after the provider finalizes the transcript.
+  VOICE_ENDPOINTING_MIN_DELAY_S = "0"
+  VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"
+  # Quality-safe Soniox profile: level 1 plus a cancellable 200 ms local-VAD
+  # finalize. Sensitivity intentionally stays unset after the earlier aggressive
+  # experiment fragmented Telugu names and times.
+  SONIOX_ENDPOINT_LATENCY_LEVEL = "1"
+  SONIOX_MAX_ENDPOINT_DELAY_MS = "2000"
+  SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"
+  # Keep four processes prewarmed: concurrent callers must never wait for the
+  # roughly minute-long model/process initialization observed on a cold spawn.
+  VOICE_NUM_IDLE_PROCESSES = "4"
+  VOICE_TOOL_PREFETCH = "true"
+  VOICE_DETERMINISTIC_CONFIRM = "true"
 
 # The LiveKit worker dials OUT to LiveKit Cloud and registers as a worker; it
 # serves NO inbound HTTP (the old http_service internal_port=8080 pointed at the

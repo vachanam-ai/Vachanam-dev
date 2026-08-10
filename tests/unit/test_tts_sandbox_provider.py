@@ -117,6 +117,9 @@ def test_the_sandbox_fly_config_cannot_collide_with_production():
     assert 'LIVEKIT_AGENT_NAME = "vachanam-sandbox"' in cfg
     assert 'TTS_PROVIDER = "soniox"' in cfg
     assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in cfg
-    # Production must NOT carry either sandbox switch.
-    assert "TTS_PROVIDER" not in prod
+    # Production now carries the proven Soniox/16 kHz profile, never Cartesia
+    # or the sandbox worker identity.
+    assert 'TTS_PROVIDER = "soniox"' in prod
+    assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in prod
     assert "LIVEKIT_AGENT_NAME" not in prod
+    assert "cartesia" not in prod.lower()
