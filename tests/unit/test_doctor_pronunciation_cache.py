@@ -14,9 +14,11 @@ import pytest
 
 from agent.livekit_minimal.agent import _spoken_names_stream
 from agent.services.pronunciation import (
+    _generate,
     build_replacer,
     cache_key,
     needs_conversion,
+    normalize_pronunciation_mapping,
     roster_digest,
 )
 
@@ -103,6 +105,34 @@ def test_cache_key_is_per_clinic_and_per_language():
     d = roster_digest([("Dr. Srinivas", "Dental")])
     assert cache_key("branch-a", "te", d) != cache_key("branch-b", "te", d)
     assert cache_key("branch-a", "te", d) != cache_key("branch-a", "hi", d)
+
+
+def test_bad_cached_bare_name_cannot_add_a_second_doctor_honorific():
+    mapping = normalize_pronunciation_mapping(
+        {"Srinivas": "డాక్టర్ శ్రీనివాస్"}
+    )
+    assert mapping == {"Srinivas": "శ్రీనివాస్"}
+    sub, _ = build_replacer(mapping)
+    spoken = sub("డాక్టర్ Srinivas")
+    assert spoken == "డాక్టర్ శ్రీనివాస్"
+    assert spoken.count("డాక్టర్") == 1
+
+
+def test_stored_honorific_is_preserved_once():
+    mapping = normalize_pronunciation_mapping(
+        {"Dr. Srinivas": "డాక్టర్ శ్రీనివాస్"}
+    )
+    assert mapping == {"Dr. Srinivas": "డాక్టర్ శ్రీనివాస్"}
+
+
+@pytest.mark.asyncio
+async def test_generated_bare_name_is_sanitized(monkeypatch):
+    async def fake_call(_prompt):
+        return '[{"name":"డాక్టర్ శ్రీనివాస్","role":"దంత వైద్యులు"}]'
+
+    monkeypatch.setattr("agent.services.pronunciation._call_gemini", fake_call)
+    result = await _generate([("Srinivas", "Dental")], "te")
+    assert result["Srinivas"] == "శ్రీనివాస్"
 
 
 def test_same_roster_reuses_the_same_cache_entry():

@@ -44,12 +44,48 @@ _CACHE_VERSION = "v1"
 # call language's own script there is nothing to convert.
 _LATIN = re.compile(r"[A-Za-z]")
 
+# A roster normally stores the bare name ("Srinivas") while the deterministic
+# response adds the receptionist honorific ("Doctor Srinivas").  A generated
+# pronunciation must therefore never invent its own second honorific.  Keep
+# this multilingual because the same cached map is used after language
+# handoffs, and protect cached/model output here at the TTS boundary rather
+# than trusting a prompt instruction.
+_HONORIFIC = (
+    r"(?:dr|doctor)\.?|డాక్టర్|డా\.?|डॉक्टर|डॉ\.?|டாக்டர்|"
+    r"ಡಾಕ್ಟರ್|ಡಾ\.?|ഡോക്ടർ|ഡോ\.?|ডাক্তার|ডাঃ|ડૉક્ટર|ડૉ\.?|"
+    r"ਡਾਕਟਰ|ਡਾ\.?"
+)
+_HONORIFIC_PREFIX = re.compile(
+    rf"^(?:\s*(?:{_HONORIFIC})[\s:：.\-]+)+", re.IGNORECASE
+)
+
 # Per-process memo so repeated calls in one worker skip even the Redis hop.
 _LOCAL: dict[str, dict[str, str]] = {}
 
 
 def _clean(value) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def normalize_pronunciation_mapping(mapping: dict[str, str] | None) -> dict[str, str]:
+    """Remove an honorific the model added to a bare roster name.
+
+    This also sanitizes old/bad Redis values when ``build_replacer`` receives
+    them, so correctness does not depend on a cache purge or another model
+    generation.  If the stored key itself contains ``Dr.`` we preserve one
+    natural-language honorific in the spoken value.
+    """
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in (mapping or {}).items():
+        key, value = _clean(raw_key), _clean(raw_value)
+        if not key:
+            continue
+        if value and not _HONORIFIC_PREFIX.match(key):
+            without_added = _HONORIFIC_PREFIX.sub("", value).strip()
+            if without_added:
+                value = without_added
+        normalized[key] = value
+    return normalized
 
 
 def roster_digest(pairs: list[tuple[str, str]]) -> str:
@@ -75,8 +111,9 @@ _PROMPT = (
     "For each entry below, rewrite the doctor's name and their role in {script} "
     "script, spelled so a {script} text-to-speech voice pronounces them the way "
     "an Indian receptionist would SAY them out loud.\n"
-    "Rules: transliterate the SOUND, never translate the name. Keep the honorific "
-    "(Dr. -> the natural {script} equivalent). Roles ARE translated to the natural "
+    "Rules: transliterate the SOUND, never translate the name. Preserve an "
+    "honorific only when the input name contains one; NEVER add Dr./Doctor to a "
+    "bare name. Roles ARE translated to the natural "
     "everyday {script} word patients use. No extra words, no explanations.\n"
     'Reply with ONLY a JSON array, one object per entry, same order: '
     '[{{"name": "...", "role": "..."}}]\n\n'
@@ -147,7 +184,7 @@ async def _generate(pairs: list[tuple[str, str]], lang: str) -> dict[str, str]:
             out[_clean(name)] = spoken_name
         if spoken_role and not _LATIN.search(spoken_role) and _clean(role):
             out[_clean(role)] = spoken_role
-    return out
+    return normalize_pronunciation_mapping(out)
 
 
 async def cached_only(
@@ -238,6 +275,7 @@ def build_replacer(mapping: dict[str, str]):
     split and missed — so this holds back exactly the longest suffix that is a
     live prefix of some key, and nothing more.
     """
+    mapping = normalize_pronunciation_mapping(mapping)
     keys = [k for k in mapping if k]
     if not keys:
         return None, None

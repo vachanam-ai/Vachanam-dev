@@ -51,7 +51,14 @@ def fixed_cost_for(plan: str) -> float:
     """Vachanam's own fixed monthly cost to serve one clinic on this plan."""
     p = PLANS.get(plan)
     has_voice = bool(p and p.included_minutes > 0)
-    return (DID_RUPEES + BASE_INFRA) if has_voice else BASE_INFRA
+    # Scale includes two branches, and each branch needs its own DID plus its
+    # share of infrastructure. Counting only one made the pricing guard report
+    # an imaginary extra Rs1,500 of monthly margin on that plan.
+    return (
+        (DID_RUPEES + BASE_INFRA) * p.included_branches
+        if has_voice and p is not None
+        else BASE_INFRA
+    )
 
 # Dormant offer machinery is retained for backward compatibility. The empty
 # OFFER_PRICES mapping means every clinic pays list price from its first cycle.

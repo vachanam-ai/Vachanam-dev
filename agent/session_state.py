@@ -159,6 +159,13 @@ class SessionState:
     # Deterministic fragment recovery varies the next prompt instead of
     # repeating the same "I couldn't hear" sentence in a loop.
     clarification_attempts: int = 0
+    # A very short, cancellable grace period before replying to an obviously
+    # incomplete fragment ("around—", "tomorrow—").  The shared state rather
+    # than an Agent instance owns it so a language handoff can still cancel it
+    # the instant VAD sees the caller continue.
+    deferred_clarification_task: object | None = field(
+        default=None, repr=False, compare=False
+    )
 
     # Quality / feedback-loop signals (written to CallLog at call end).
     language: str | None = None          # clinic voice language code

@@ -162,6 +162,10 @@ AGENT_NAME = os.getenv("LIVEKIT_AGENT_NAME", "vachanam-agent")
 # guard remains the quality gate. This gives us a <=60 ms local turn-detection
 # signal without committing normal mid-sentence pauses.
 VAD_TURN_DETECTION_S = 0.06
+# Do not immediately answer a fragment that is likely only a caller pause.
+# This applies ONLY to deterministic incomplete-fragment clarifications; normal
+# complete turns retain the 60ms VAD path and pay no extra latency.
+INCOMPLETE_CLARIFICATION_GRACE_S = 0.35
 
 
 def _load_vad():
@@ -2697,6 +2701,15 @@ def _is_incomplete_fragment(text: str) -> bool:
     return clean.endswith(('...', '…')) and len(normalized.split()) <= 5
 
 
+def _cancel_deferred_clarification(state: SessionState, reason: str) -> None:
+    """Cancel a not-yet-spoken fragment clarification when the caller resumes."""
+    task = getattr(state, "deferred_clarification_task", None)
+    state.deferred_clarification_task = None
+    if task is not None and not task.done():
+        task.cancel()
+        logger.info("deferred_clarification_cancelled reason=%s", reason)
+
+
 def _incomplete_clarification(language: str, attempt: int = 0) -> str:
     first = {
         'te': 'చెప్పండి అండి, తొందరేమీ లేదు. ఏం అడగాలనుకున్నారు?',
@@ -2996,6 +3009,31 @@ class VachanamAgent(Agent):
         # word of the call.
         self.set_pronunciations({})
 
+    def _defer_incomplete_clarification(self, speech: str) -> None:
+        """Give a caller 350ms to finish a fragment, without slowing real turns."""
+        _cancel_deferred_clarification(self._state, "replacement")
+
+        async def _say_after_grace() -> None:
+            this_task = asyncio.current_task()
+            try:
+                await asyncio.sleep(INCOMPLETE_CLARIFICATION_GRACE_S)
+                if self._state.deferred_clarification_task is not this_task:
+                    return
+                self._state.deferred_clarification_task = None
+                await self.session.say(speech, allow_interruptions=True)
+                logger.info("deferred_clarification_spoken")
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:  # noqa: BLE001 — clarification is best effort
+                logger.warning("deferred_clarification_failed: %s", str(exc)[:140])
+            finally:
+                if self._state.deferred_clarification_task is this_task:
+                    self._state.deferred_clarification_task = None
+
+        self._state.deferred_clarification_task = asyncio.create_task(
+            _say_after_grace()
+        )
+
     async def _current_doctors_speech(self, language: str) -> str:
         '''One-query, DB-grounded current-shift response; never use the LLM.'''
         try:
@@ -3189,6 +3227,7 @@ class VachanamAgent(Agent):
         # lone "hello" is too short for that guard anyway.
         utterance = self._message_text(new_message).strip()
         self._state.last_user_utterance = utterance
+        _cancel_deferred_clarification(self._state, "next_turn_committed")
 
         # ONE ANSWER PER QUESTION. Vinay 2026-08-09: "when i repeat question,
         # before it replied. it is repeating answer 2 times."
@@ -3320,9 +3359,8 @@ class VachanamAgent(Agent):
 
         if incomplete_fragment:
             self._state.clarification_attempts = clarification_attempt + 1
-            await self.session.say(
-                _incomplete_clarification(self._lang_code, clarification_attempt),
-                allow_interruptions=True,
+            self._defer_incomplete_clarification(
+                _incomplete_clarification(self._lang_code, clarification_attempt)
             )
             raise StopResponse()
 
@@ -7623,12 +7661,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     # decide it was a false alarm and RESUME, which is what a
                     # caller hears as "it took ages to stop".
                     #
-                    # 0.6s keeps #403 intact (a lone "హలో?" still cannot commit
+                    # 0.45s keeps #403 intact (a lone "హలో?" still cannot commit
                     # an interruption) while cutting the worst case by ~1.4s.
                     # Safe because Soniox interims land in ~0.1-0.3s per the
                     # #403 note below, so two words comfortably arrive inside
-                    # 0.6s; the old 2.0s was ~3x longer than the signal needs.
-                    "false_interruption_timeout": 0.6,
+                    # 0.45s; the old 2.0s was ~4x longer than the signal needs.
+                    "false_interruption_timeout": 0.45,
                 },
             },
             # With the semantic turn detector backstopping, the silence timers can
@@ -7771,6 +7809,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             new_state = getattr(ev, 'new_state', None)
             if new_state == 'speaking':
                 _soniox_finalizer.cancel()
+                _cancel_deferred_clarification(state, "caller_resumed")
                 _turn_trace.mark_speech_start()
             elif old_state == 'speaking' and new_state == 'listening':
                 _soniox_finalizer.schedule(

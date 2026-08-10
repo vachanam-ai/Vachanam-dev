@@ -22,12 +22,16 @@ what a caller hears as "it took ages to stop". Kept #403's `min_words=2` (a
 lone "హలో?" must never cut a confirmation short) and shortened the window
 instead.
 """
+import asyncio
 import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from agent.livekit_minimal import agent as agent_mod
 from agent.livekit_minimal.agent import VachanamAgent
+from agent.session_state import SessionState
 
 SRC = inspect.getsource(VachanamAgent.on_user_turn_completed)
 ENTRY = inspect.getsource(agent_mod.entrypoint)
@@ -77,7 +81,7 @@ def test_it_does_not_force_the_interrupt():
 # ── stopping means stopping ──────────────────────────────────────────────────
 
 def test_the_false_interruption_window_is_shortened():
-    assert '"false_interruption_timeout": 0.6' in ENTRY, (
+    assert '"false_interruption_timeout": 0.45' in ENTRY, (
         "unset means LiveKit's 2.0s default — the 1-2s Vinay reported"
     )
 
@@ -107,3 +111,32 @@ def test_the_other_interruption_knobs_are_untouched(knob, expected):
     corrupted Telugu recognition."""
     block = ENTRY.split('"interruption": {')[1].split("}")[0]
     assert f'"{knob}": {expected}' in block
+
+
+def test_incomplete_fragment_has_a_cancellable_grace_window():
+    assert "_defer_incomplete_clarification(" in SRC
+    assert agent_mod.INCOMPLETE_CLARIFICATION_GRACE_S == 0.35
+    assert '_cancel_deferred_clarification(state, "caller_resumed")' in ENTRY
+
+
+@pytest.mark.asyncio
+async def test_caller_resume_cancels_fragment_clarification_before_audio():
+    state = SessionState()
+    fake = SimpleNamespace(state=None, _state=state, session=SimpleNamespace(say=AsyncMock()))
+    VachanamAgent._defer_incomplete_clarification(fake, "please continue")
+    agent_mod._cancel_deferred_clarification(state, "caller_resumed")
+    await asyncio.sleep(0)
+    fake.session.say.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_fragment_clarification_speaks_after_grace(monkeypatch):
+    monkeypatch.setattr(agent_mod, "INCOMPLETE_CLARIFICATION_GRACE_S", 0)
+    state = SessionState()
+    fake = SimpleNamespace(state=None, _state=state, session=SimpleNamespace(say=AsyncMock()))
+    VachanamAgent._defer_incomplete_clarification(fake, "please continue")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    fake.session.say.assert_awaited_once_with(
+        "please continue", allow_interruptions=True
+    )

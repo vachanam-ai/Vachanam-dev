@@ -179,8 +179,9 @@ def test_margin_invariant_costs_a_did_only_to_voice_plans():
     from backend.services.billing_math import BASE_INFRA, DID_RUPEES, fixed_cost_for
 
     assert DID_RUPEES + BASE_INFRA == 1500.0  # voice plans unchanged
-    for voice_plan in ("lite", "solo", "clinic", "multi"):
+    for voice_plan in ("lite", "solo", "clinic"):
         assert fixed_cost_for(voice_plan) == 1500.0
+    assert fixed_cost_for("multi") == 3000.0
     assert fixed_cost_for("wa") == BASE_INFRA
 
     wa = PLANS["wa"]
