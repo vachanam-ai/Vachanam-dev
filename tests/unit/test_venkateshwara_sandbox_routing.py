@@ -67,6 +67,37 @@ def test_started_sandbox_machine_passes_health_gate(monkeypatch):
     route._assert_sandbox_machine_started()
 
 
+def test_transient_empty_fly_response_is_retried(monkeypatch):
+    responses = iter(
+        [
+            SimpleNamespace(stdout=""),
+            SimpleNamespace(stdout=json.dumps([{"state": "started"}])),
+        ]
+    )
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(route.subprocess, "run", fake_run)
+    route._assert_sandbox_machine_started()
+    assert len(calls) == 2
+
+
+def test_three_empty_fly_responses_still_fail_closed(monkeypatch):
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(stdout="")
+
+    monkeypatch.setattr(route.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="cannot prove"):
+        route._assert_sandbox_machine_started()
+    assert len(calls) == 3
+
+
 def test_apply_checks_worker_before_touching_livekit():
     source = inspect.getsource(route.apply)
     assert source.index("_assert_sandbox_machine_started()") < source.index("_api()")

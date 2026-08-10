@@ -49,19 +49,35 @@ def _names(clinic: str) -> tuple[str, str]:
 
 def _assert_sandbox_machine_started() -> None:
     """Fail closed before moving a DID to a workerless sandbox."""
-    try:
-        result = subprocess.run(
-            ["flyctl", "machine", "list", "-a", SANDBOX_APP, "--json"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        machines = json.loads(result.stdout or "[]")
-    except (FileNotFoundError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+    machines = None
+    last_error: Exception | None = None
+    for _ in range(3):
+        try:
+            result = subprocess.run(
+                ["flyctl", "machine", "list", "-a", SANDBOX_APP, "--json"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if not result.stdout.strip():
+                raise ValueError("flyctl returned an empty machine list response")
+            decoded = json.loads(result.stdout)
+            if not isinstance(decoded, list):
+                raise ValueError("flyctl machine response was not a list")
+            machines = decoded
+            break
+        except (
+            FileNotFoundError,
+            subprocess.SubprocessError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
+            last_error = exc
+    if machines is None:
         raise RuntimeError(
             "cannot prove the sandbox is healthy; flyctl machine check failed"
-        ) from exc
+        ) from last_error
     started = [
         machine
         for machine in machines
