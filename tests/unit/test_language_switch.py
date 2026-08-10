@@ -3,6 +3,8 @@ per-caller mapping plumbing, switch directive in the prompt, and the
 voice fallback for a switched language."""
 from types import SimpleNamespace
 
+import pytest
+
 from agent.i18n import LANGUAGES, get_lang, get_lines, get_switch_ack, get_welcome
 from agent.livekit_minimal.agent import _voice_for_lang
 from agent.prompts.system_prompt import build_system_prompt
@@ -31,6 +33,42 @@ def test_switch_ack_exists_for_every_language():
         assert get_switch_ack(code), f"no switch ack for {code}"
     # Unknown code falls back to Telugu, never empty (RULE 8).
     assert get_switch_ack("xx") == get_switch_ack("te")
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected"),
+    [
+        ("Telugu lo matladandi", "te"),
+        ("English please", "en"),
+        ("Hindi mein baat kijiye", "hi"),
+        ("Tamil la pesunga", "ta"),
+        ("Kannada dalli matadi", "kn"),
+        ("Malayalam il samsarikkamo", "ml"),
+        ("Marathi madhe bola", "mr"),
+        ("Bangla te kotha bolun", "bn"),
+        ("മലയാളം", "ml"),
+        ("বাংলা", "bn"),
+    ],
+)
+def test_common_short_language_requests_switch_without_llm(utterance, expected):
+    from agent.livekit_minimal.agent import _explicit_language_request
+
+    assert _explicit_language_request(utterance) == expected
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Does the doctor speak English?",
+        "Which languages do you support?",
+        "My school language was Hindi but I need an appointment.",
+        "Can you compare Telugu and English?",
+    ],
+)
+def test_language_mentions_do_not_accidentally_switch(utterance):
+    from agent.livekit_minimal.agent import _explicit_language_request
+
+    assert _explicit_language_request(utterance) is None
 
 
 def test_prompt_carries_switch_directive_in_all_languages():

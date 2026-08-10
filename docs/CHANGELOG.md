@@ -13,6 +13,30 @@ Format per session:
 
 ---
 
+## 2026-08-10 - Restored isolated multilingual voice sandbox
+
+Restored the suspended `vachanam-agent-sandbox` as a fail-closed test
+environment without changing the production app or any frontend file. The
+Fly configuration explicitly pins Soniox STT, Cartesia TTS, deterministic
+appointment confirmations, tool prefetch, transcript capture and a ten-minute
+call ceiling. The sandbox keeps its own LiveKit agent name, Fly app, machine
+and staged secrets.
+
+Language switching now deterministically recognises natural requests across
+Telugu, English, Hindi, Tamil, Kannada, Malayalam, Marathi and Bengali while
+ignoring ordinary mentions such as asking whether a doctor speaks a language.
+The routing utility can move only an allowlisted clinic DID, uses distinct
+LiveKit resources per clinic, refuses to change routing unless the sandbox
+machine is running, and provides an independent rollback command.
+
+Proof before deployment: Ruff passed; 246 focused voice-state, language,
+sandbox and appointment lifecycle tests passed; 93 database-backed booking,
+reschedule, cancellation, family-member, schedule and language tests passed.
+The optional networked Gemini torture harness exceeded its ten-minute runner
+cap and is recorded as inconclusive rather than a pass.
+
+---
+
 ## 2026-08-10 - Premium UI redesign and clinic-fit pricing
 
 Rebuilt the public website and authenticated clinic shell around a unified

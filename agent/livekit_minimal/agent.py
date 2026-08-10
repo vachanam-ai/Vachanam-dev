@@ -2387,26 +2387,74 @@ def _caller_rejected_accidental_booking(text: str) -> bool:
 
 
 def _explicit_language_request(text: str) -> str | None:
-    '''Return a language code only for an explicit request to speak it.'''
-    low = (text or '').casefold()
-    request = any(term in low for term in (
-        'speak', 'talk in', 'మాట్లాడ', 'చెప్పండి', 'बात', 'बोल',
-        'பேச', 'ಮಾತನಾಡ', 'बोला',
-    ))
-    if not request:
+    '''Resolve a clear caller instruction to switch the whole voice pipeline.
+
+    This is deterministic and runs before the LLM. It accepts the short phrases
+    people actually use on calls, including all eight supported languages.
+    Merely mentioning a language in a longer clinic question does not switch it.
+    '''
+    low = ' '.join((text or '').casefold().strip().split())
+    if not low:
         return None
-    language_terms = (
-        ('te', ('telugu', 'తెలుగు', 'तेलुगु')),
-        ('en', ('english', 'ఇంగ్లీష్', 'अंग्रेजी', 'ஆங்கிலம்', 'ಇಂಗ್ಲಿಷ್')),
-        ('hi', ('hindi', 'హిందీ', 'हिंदी', 'हिन्दी')),
-        ('ta', ('tamil', 'తమిళం', 'தமிழ்')),
-        ('kn', ('kannada', 'కన్నడ', 'ಕನ್ನಡ')),
-        ('mr', ('marathi', 'మరాఠీ', 'मराठी')),
+    # A caller asking whether a doctor/staff member speaks a language is a
+    # clinic question, not an instruction to change this receptionist.
+    if any(role in low for role in ('doctor', 'nurse', 'staff', 'receptionist')):
+        return None
+
+    aliases = {
+        'te': ('telugu', 'telgu', 'తెలుగు', 'तेलुगु'),
+        'en': (
+            'english', 'inglish', 'ఇంగ్లీష్', 'अंग्रेज़ी', 'अंग्रेजी',
+            'ஆங்கிலம்', 'ಇಂಗ್ಲಿಷ್',
+        ),
+        'hi': ('hindi', 'హిందీ', 'हिंदी', 'हिन्दी'),
+        'ta': ('tamil', 'తమిళం', 'தமிழ்'),
+        'kn': ('kannada', 'kannad', 'కన్నడ', 'ಕನ್ನಡ'),
+        'ml': ('malayalam', 'malyalam', 'മലയാളം'),
+        'mr': ('marathi', 'మరాఠీ', 'मराठी'),
+        'bn': ('bengali', 'bangla', 'বাংলা'),
+    }
+
+    def _has_alias(alias: str) -> bool:
+        if alias.isascii():
+            return re.search(rf'\b{re.escape(alias)}\b', low) is not None
+        return alias in low
+
+    matches = [
+        code
+        for code, terms in aliases.items()
+        if any(_has_alias(term) for term in terms)
+    ]
+    if len(matches) != 1:
+        return None
+    code = matches[0]
+    if any(low == term for term in aliases[code]):
+        return code
+
+    words = re.findall(r'[^\W_]+', low, flags=re.UNICODE)
+    if len(words) == 1:
+        return code
+
+    request_cues = (
+        'can you', 'could you', 'would you', 'will you', 'do you speak',
+        'please', 'pls', 'kindly', 'speak', 'talk in', 'switch',
+        'change language', 'reply in', 'respond in', 'continue in',
+        'use ', 'prefer ', 'matlad', 'maatlad', 'cheppandi', 'baat',
+        'bolo', 'boliye', 'pesu', 'pesunga', 'matadi', 'mathadi',
+        'samsar', 'parayu', 'bola', 'bolaa', 'bolun', 'bolben',
+        'kotha bol', 'మాట్లాడ', 'చెప్పండి', 'बात', 'बोल', 'பேச',
+        'ಮಾತನಾಡ', 'സംസാര', 'बोला', 'বল', 'কথা',
     )
-    for code, terms in language_terms:
-        if any(term in low for term in terms):
-            return code
-    return None
+    locatives = (
+        ' lo', ' lo ', ' mein', ' me ', ' la', ' dalli', ' alli',
+        ' il', ' yil', ' madhe', ' madhye', ' te ', ' e ',
+    )
+    has_request_cue = any(cue in low for cue in request_cues)
+    padded = f' {low} '
+    has_short_locative = len(words) <= 5 and any(
+        marker in padded for marker in locatives
+    )
+    return code if has_request_cue or has_short_locative else None
 
 
 _NATIVE_SCRIPT_RANGES: tuple[tuple[str, int, int], ...] = (
@@ -4507,7 +4555,7 @@ class VachanamAgent(Agent):
         words from another language.
 
         Args:
-            language: te | en | hi | ta | kn | mr
+            language: te | en | hi | ta | kn | ml | mr | bn
         """
         code = (language or "").strip().lower()
         # The LLM sometimes passes the language NAME instead of the code.

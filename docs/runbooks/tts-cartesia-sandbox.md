@@ -47,7 +47,11 @@ You want `agent_name: vachanam-sandbox`. If it says `vachanam-agent`, **stop**
 — `LIVEKIT_AGENT_NAME` did not apply and the sandbox is competing for real
 calls.
 
-## Pointing the Venkateshwara number at it
+The routing script also refuses to move a DID unless `flyctl machine list`
+proves at least one sandbox machine is started. This prevents the old
+"nobody answers" failure where routing changed before a worker existed.
+
+## Pointing a clinic number at it
 
 This is the one step that touches live routing, so it is deliberate and
 reversible. The clinic's DID dispatch rule names an agent; switching it sends
@@ -55,18 +59,21 @@ reversible. The clinic's DID dispatch rule names an agent; switching it sends
 
 ```bash
 # Look at the current rule first, and SAVE the output — it is your rollback.
-lk sip dispatch-rule list
+python scripts/route_venkateshwara_tts_sandbox.py status
 
-# Repoint that rule's room_config agent name to: vachanam-sandbox
-# (edit + re-create the rule; note the rule id you replaced)
+python scripts/route_venkateshwara_tts_sandbox.py apply venkateshwara
 ```
 
 **Do it when the clinic is closed**, make your test calls, then put it back:
 
 ```bash
-# Restore the saved rule so the number points at vachanam-agent again.
-lk sip dispatch-rule list   # verify it reads vachanam-agent
+python scripts/route_venkateshwara_tts_sandbox.py revert venkateshwara
+python scripts/route_venkateshwara_tts_sandbox.py status
 ```
+
+Allowed clinic keys are intentionally hard-coded in `CLINICS`; an arbitrary
+number can never be moved by a typo. `skincare` is also available. Each clinic
+gets its own trunk/rule pair and can be reverted independently.
 
 Safer alternative if you have a spare DID: point the **test** number at
 `vachanam-sandbox` and leave the clinic's number alone entirely. Then nothing
@@ -80,6 +87,11 @@ Cartesia and Soniox differ most where our calls actually live:
 - **Time to first audio** — compare `lat_tts` / `lat_*` in both apps' logs
 - **Numbers**: "10:30", ages, token numbers (the `padi am` class of bug)
 - Whether it handles the sentence tokenizer's short first sentence naturally
+- Switch every supported language using short natural phrases: "English
+  please", "Hindi mein", "Telugu lo", "Tamil la", "Kannada dalli",
+  "Malayalam il", "Marathi madhe", and "Bangla te"
+- Book, reschedule, then cancel from the same caller number; verify every
+  success against the database/transcript, never only by what the model says
 
 Both engines use the **same** sentence tokenizer (`min_sentence_len=8`), so you
 are comparing engines, not two chunking strategies.

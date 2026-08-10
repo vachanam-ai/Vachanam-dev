@@ -1,4 +1,4 @@
-"""Route only Venkateshwara to the latency sandbox, and safely revert.
+"""Route one clinic DID to the latency sandbox, and safely revert.
 
 LiveKit inbound_numbers filters the CALLER (ANI), not the clinic number
 that was dialed. It must never be used for DID routing. LiveKit's supported
@@ -6,18 +6,21 @@ multi-number pattern is one inbound trunk per destination, with each dispatch
 rule bound to its trunk.
 
     python scripts/route_venkateshwara_tts_sandbox.py status
-    python scripts/route_venkateshwara_tts_sandbox.py apply
-    python scripts/route_venkateshwara_tts_sandbox.py revert
+    python scripts/route_venkateshwara_tts_sandbox.py apply venkateshwara
+    python scripts/route_venkateshwara_tts_sandbox.py revert venkateshwara
 
-Apply creates a number-specific sandbox trunk and rule, then moves only the
-Venkateshwara DID from the production trunk. Revert moves it back before
-deleting the sandbox resources. Both operations roll back the DID move if an
-API call fails.
+Apply first proves the Fly sandbox has a started machine, then creates a
+number-specific trunk/rule and moves only that clinic's DID from production.
+Revert restores the DID before deleting sandbox resources. Both operations
+roll back the DID move if an API call fails.
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
+import json
 import os
+import subprocess
 import sys
 
 from dotenv import load_dotenv
@@ -26,11 +29,48 @@ load_dotenv(".env")
 
 PROD_RULE_ID = "SDR_qbmQVnbrbMUv"
 PROD_TRUNK_ID = "ST_kcZDagvoGXMZ"
-VENKAT = "+918046733493"
 PROD_AGENT = "vachanam-agent"
 SANDBOX_AGENT = "vachanam-sandbox"
-SANDBOX_TRUNK_NAME = "vobiz-inbound-venkateshwara-sandbox"
-SANDBOX_RULE_NAME = "tts-sandbox-venkateshwara"
+SANDBOX_APP = "vachanam-agent-sandbox"
+
+# Explicit allow-list: a typo must never move an arbitrary production DID.
+CLINICS = {
+    "venkateshwara": "+918046733493",
+    "skincare": "+918071387303",
+}
+
+
+def _names(clinic: str) -> tuple[str, str]:
+    return (
+        f"vobiz-inbound-{clinic}-sandbox",
+        f"tts-sandbox-{clinic}",
+    )
+
+
+def _assert_sandbox_machine_started() -> None:
+    """Fail closed before moving a DID to a workerless sandbox."""
+    try:
+        result = subprocess.run(
+            ["flyctl", "machine", "list", "-a", SANDBOX_APP, "--json"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        machines = json.loads(result.stdout or "[]")
+    except (FileNotFoundError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "cannot prove the sandbox is healthy; flyctl machine check failed"
+        ) from exc
+    started = [
+        machine
+        for machine in machines
+        if str(machine.get("state", "")).lower() in {"started", "running"}
+    ]
+    if not started:
+        raise RuntimeError(
+            "sandbox has no started Fly machine; deploy it before changing call routing"
+        )
 
 
 def _api():
@@ -120,9 +160,12 @@ async def status() -> None:
         await lk.aclose()
 
 
-async def apply() -> None:
+async def apply(clinic: str) -> None:
     from livekit import api
 
+    _assert_sandbox_machine_started()
+    did = CLINICS[clinic]
+    trunk_name, rule_name = _names(clinic)
     lk = _api()
     sandbox_trunk = None
     sandbox_rule = None
@@ -130,48 +173,48 @@ async def apply() -> None:
         trunks = await _trunks(lk)
         rules = await _rules(lk)
         prod_trunk = _validate_prod(trunks, rules)
-        existing_trunks = [t for t in trunks if t.name == SANDBOX_TRUNK_NAME]
-        existing_rules = [r for r in rules if r.name == SANDBOX_RULE_NAME]
+        existing_trunks = [t for t in trunks if t.name == trunk_name]
+        existing_rules = [r for r in rules if r.name == rule_name]
 
         if existing_trunks or existing_rules:
             if len(existing_trunks) == len(existing_rules) == 1:
                 sandbox_trunk = existing_trunks[0]
                 sandbox_rule = existing_rules[0]
                 active = (
-                    VENKAT in sandbox_trunk.numbers
-                    and VENKAT not in prod_trunk.numbers
+                    did in sandbox_trunk.numbers
+                    and did not in prod_trunk.numbers
                     and list(sandbox_rule.trunk_ids)
                     == [sandbox_trunk.sip_trunk_id]
                     and not list(sandbox_rule.inbound_numbers)
                     and _agents(sandbox_rule) == [SANDBOX_AGENT]
                 )
                 if active:
-                    print("Sandbox trunk routing is already active.")
+                    print(f"{clinic}: sandbox trunk routing is already active.")
                     _show(trunks, rules)
                     return
             raise RuntimeError(
-                "partial or inconsistent sandbox resources found; run revert first"
+                f"partial or inconsistent sandbox resources for {clinic}; revert first"
             )
 
-        if VENKAT not in prod_trunk.numbers:
-            raise RuntimeError("Venkateshwara DID is absent from the production trunk")
+        if did not in prod_trunk.numbers:
+            raise RuntimeError(f"{clinic} DID is absent from the production trunk")
 
         # LiveKit requires a number and forbids the same DID on two unauthenticated
         # trunks. Move it transactionally; the exception path restores prod.
         await _set_numbers(
-            lk, prod_trunk, [number for number in prod_trunk.numbers if number != VENKAT]
+            lk, prod_trunk, [number for number in prod_trunk.numbers if number != did]
         )
         sandbox_trunk = await lk.sip.create_inbound_trunk(
             api.CreateSIPInboundTrunkRequest(
                 trunk=api.SIPInboundTrunkInfo(
-                    name=SANDBOX_TRUNK_NAME,
-                    numbers=[VENKAT],
+                    name=trunk_name,
+                    numbers=[did],
                 )
             )
         )
         sandbox_rule = await lk.sip.create_dispatch_rule(
             api.CreateSIPDispatchRuleRequest(
-                name=SANDBOX_RULE_NAME,
+                name=rule_name,
                 trunk_ids=[sandbox_trunk.sip_trunk_id],
                 rule=api.SIPDispatchRule(
                     dispatch_rule_individual=api.SIPDispatchRuleIndividual(
@@ -184,7 +227,7 @@ async def apply() -> None:
             )
         )
 
-        print("Venkateshwara now routes by its own inbound trunk to the sandbox.")
+        print(f"{clinic} ({did}) now routes by its own inbound trunk to the sandbox.")
         _show(await _trunks(lk), await _rules(lk))
     except Exception:
         # The number cannot exist on two trunks, so remove partial sandbox
@@ -204,8 +247,8 @@ async def apply() -> None:
                 )
             trunks = await _trunks(lk)
             prod = next((t for t in trunks if t.sip_trunk_id == PROD_TRUNK_ID), None)
-            if prod and VENKAT not in prod.numbers:
-                await _set_numbers(lk, prod, [*prod.numbers, VENKAT])
+            if prod and did not in prod.numbers:
+                await _set_numbers(lk, prod, [*prod.numbers, did])
         except Exception as rollback_error:
             print(f"ROLLBACK ERROR: {rollback_error}", file=sys.stderr)
         raise
@@ -213,16 +256,18 @@ async def apply() -> None:
         await lk.aclose()
 
 
-async def revert() -> None:
+async def revert(clinic: str) -> None:
     from livekit import api
 
+    did = CLINICS[clinic]
+    trunk_name, rule_name = _names(clinic)
     lk = _api()
     try:
         trunks = await _trunks(lk)
         rules = await _rules(lk)
         prod_trunk = _validate_prod(trunks, rules)
-        sandbox_trunks = [t for t in trunks if t.name == SANDBOX_TRUNK_NAME]
-        sandbox_rules = [r for r in rules if r.name == SANDBOX_RULE_NAME]
+        sandbox_trunks = [t for t in trunks if t.name == trunk_name]
+        sandbox_rules = [r for r in rules if r.name == rule_name]
 
         for rule in sandbox_rules:
             await lk.sip.delete_dispatch_rule(
@@ -234,17 +279,27 @@ async def revert() -> None:
             await lk.sip.delete_trunk(
                 api.DeleteSIPTrunkRequest(sip_trunk_id=trunk.sip_trunk_id)
             )
-        if VENKAT not in prod_trunk.numbers:
-            await _set_numbers(lk, prod_trunk, [*prod_trunk.numbers, VENKAT])
-        print("Venkateshwara restored to the production trunk and agent.")
+        if did not in prod_trunk.numbers:
+            await _set_numbers(lk, prod_trunk, [*prod_trunk.numbers, did])
+        print(f"{clinic} ({did}) restored to the production trunk and agent.")
         _show(await _trunks(lk), await _rules(lk))
     finally:
         await lk.aclose()
 
 
 if __name__ == "__main__":
-    command = (sys.argv[1] if len(sys.argv) > 1 else "status").lower()
-    if command not in ("status", "apply", "revert"):
-        print(__doc__)
-        raise SystemExit(2)
-    asyncio.run({"status": status, "apply": apply, "revert": revert}[command]())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("status", "apply", "revert"))
+    parser.add_argument(
+        "clinic",
+        nargs="?",
+        choices=tuple(CLINICS),
+        default="venkateshwara",
+    )
+    args = parser.parse_args()
+    if args.command == "status":
+        asyncio.run(status())
+    else:
+        asyncio.run(
+            {"apply": apply, "revert": revert}[args.command](args.clinic)
+        )

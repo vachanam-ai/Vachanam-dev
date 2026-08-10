@@ -57,9 +57,25 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'CARTESIA_VOICE = "cf061d8b-a752-4865-81a2-57570a6e0565"' in cfg
     assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in cfg
     assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"' in cfg
+    assert 'SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"' in cfg
     assert 'VOICE_NUM_IDLE_PROCESSES = "1"' in cfg
+    assert 'VOICE_TOOL_PREFETCH = "true"' in cfg
+    assert 'VOICE_DETERMINISTIC_CONFIRM = "true"' in cfg
+    assert 'MAX_CALL_DURATION_SECONDS = "600"' in cfg
+    assert 'RECORDING_ENABLED = "true"' in cfg
+    assert 'TRANSCRIPT_CAPTURE_ENABLED = "true"' in cfg
     assert "STT_PROVIDER" not in prod
     assert "TTS_PROVIDER" not in prod
+
+
+@pytest.mark.parametrize("code", ("te", "en", "hi", "ta", "kn", "ml", "mr", "bn"))
+def test_cartesia_sandbox_builds_every_supported_language(monkeypatch, code):
+    from agent.livekit_minimal import agent as ag
+
+    monkeypatch.setattr(ag.settings, "cartesia_api_key", "test-key")
+    monkeypatch.setattr(ag.settings, "cartesia_voice", "")
+    tts = ag._build_cartesia_tts(code)
+    assert tts._opts.language == code
 
 
 def test_non_soniox_stt_disables_soniox_manual_finalization():
