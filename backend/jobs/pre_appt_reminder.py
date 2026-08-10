@@ -393,6 +393,15 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
     """Create an explicit agent dispatch; the agent dials the patient. Returns
     True only when the dispatch was created (the caller marks reminder_sent on
     True, and retries next tick on False)."""
+    try:
+        outbound_trunk_id = branch_outbound_trunk_id(branch)
+    except RuntimeError:
+        logger.error(
+            "reminder_blocked_missing_branch_trunk",
+            branch_id=str(branch.id),
+            token_id=str(token.id),
+        )
+        return False
     # One outbound call per patient at a time, across every job that dials —
     # a reminder and a treatment follow-up due in the same minute rang the
     # patient twice (Vinay 2026-08-08). Returning False here leaves
@@ -419,9 +428,7 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                         {
                             "call_type": "reminder",
                             "branch_id": str(branch.id),  # outbound: no dialed DID
-                            # Per-clinic Vobiz sub-account outbound trunk (falls
-                            # back to the global trunk when not configured).
-                            "outbound_trunk_id": branch_outbound_trunk_id(branch),
+                            "outbound_trunk_id": outbound_trunk_id,
                             "phone_number": patient.phone,
                             "token_id": str(token.id),
                             "patient_name": patient.name,
