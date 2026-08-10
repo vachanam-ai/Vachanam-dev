@@ -21,7 +21,11 @@ from sqlalchemy import and_, select
 
 import backend.database as _db_module
 from backend.models.schema import Branch, Doctor, FollowupTask, Patient, Token
-from backend.services.telephony import branch_outbound_trunk_id
+from backend.services.telephony import (
+    OutboundTrunkIsolationError,
+    branch_outbound_trunk_id,
+    validate_branch_outbound_trunk,
+)
 
 load_dotenv()
 
@@ -92,6 +96,15 @@ async def run_cascade_rebook_calls() -> None:
                 task.status = "unreachable"  # nothing to dial
                 await db.commit()
                 continue
+            try:
+                outbound_trunk_id = branch_outbound_trunk_id(branch)
+            except RuntimeError:
+                logger.error(
+                    "cascade_rebook_blocked_missing_branch_trunk",
+                    branch_id=str(branch.id),
+                    task_id=str(task.id),
+                )
+                continue
             task.attempt_count += 1
             task.scheduled_at = now + timedelta(minutes=RETRY_BACKOFF_MIN)
             if task.attempt_count >= task.max_attempts:
@@ -101,18 +114,37 @@ async def run_cascade_rebook_calls() -> None:
             else:
                 task.status = "in_progress"
             await db.commit()
-            await _dispatch_rebook_call(task, patient, doctor, token, branch)
+            await _dispatch_rebook_call(
+                task, patient, doctor, token, branch, outbound_trunk_id
+            )
 
         # #299: park until the next cascade task is actually due (retry backoff
         # included), so idle ticks never touch Postgres.
         await wake_gate.set_next_at("cascade", await _next_cascade_epoch(db))
 
 
-async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
+async def _dispatch_rebook_call(
+    task, patient, doctor, token, branch, outbound_trunk_id
+) -> None:
+    try:
+        outbound_trunk_id = validate_branch_outbound_trunk(
+            branch, outbound_trunk_id
+        )
+    except OutboundTrunkIsolationError:
+        logger.error(
+            "cascade_rebook_blocked_unverified_branch_trunk",
+            branch_id=str(branch.id),
+            task_id=str(task.id),
+        )
+        return
+
     # One outbound call per patient at a time across every dialing job — a
     # rebook landing in the same minute as a reminder rang the patient twice
     # (Vinay 2026-08-08). Skipping leaves the task queued for the next tick.
-    from backend.services.outbound_guard import claim_outbound_call
+    from backend.services.outbound_guard import (
+        claim_outbound_call,
+        release_outbound_call,
+    )
 
     if not await claim_outbound_call(getattr(patient, "phone", None), "rebook"):
         return
@@ -133,9 +165,7 @@ async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
                             # dialed DID, so the branch must travel in metadata
                             # or a multi-clinic deploy resolves the wrong tenant.
                             "branch_id": str(task.branch_id),
-                            # Per-clinic Vobiz sub-account outbound trunk (falls
-                            # back to the global trunk when not configured).
-                            "outbound_trunk_id": branch_outbound_trunk_id(branch),
+                            "outbound_trunk_id": outbound_trunk_id,
                             "phone_number": patient.phone,
                             "followup_task_id": str(task.id),
                             "patient_name": patient.name,
@@ -163,3 +193,4 @@ async def _dispatch_rebook_call(task, patient, doctor, token, branch) -> None:
             await lkapi.aclose()
     except Exception as e:
         logger.error("cascade_rebook_dispatch_failed", task_id=str(task.id), error=str(e))
+        await release_outbound_call(getattr(patient, "phone", None))

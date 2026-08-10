@@ -1,10 +1,9 @@
 """Per-clinic telephony resolution (Vobiz sub-accounts, Vinay 2026-06-15).
 
 Each clinic can have its OWN Vobiz sub-account (isolated channel pool, CDRs and
-billing) instead of sharing one global account. When a Branch has a sub-account
-configured, these helpers return its credentials + per-clinic LiveKit outbound
-trunk; otherwise they fall back to the global settings.* / env so existing
-single-account branches keep working unchanged.
+billing) instead of sharing one global account. Credentials may use the legacy
+global account, but caller identity may not: every outbound dispatch must name
+an outbound trunk explicitly assigned to that branch.
 
 The SIP password is stored encrypted (Branch.vobiz_sip_password_enc); decrypt
 only here, at the point of use.
@@ -18,6 +17,10 @@ from backend.config import settings
 from backend.services.crypto import decrypt_secret
 
 logger = structlog.get_logger()
+
+
+class OutboundTrunkIsolationError(RuntimeError):
+    """Outbound dialing would not preserve the clinic's caller identity."""
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,33 @@ def resolve_branch_telephony(branch) -> BranchTelephony:
 
 
 def branch_outbound_trunk_id(branch) -> str:
-    """The LiveKit outbound trunk a clinic should dial through (per-clinic if set,
-    else the global trunk). Used to stamp outbound dispatch metadata."""
-    return resolve_branch_telephony(branch).outbound_trunk_id
+    """Return only the trunk explicitly assigned to this clinic.
+
+    Never fall back to the platform trunk: doing so makes one clinic's call
+    appear to come from another clinic's number.
+    """
+    trunk_id = str(getattr(branch, "outbound_trunk_id", "") or "").strip()
+    if not trunk_id:
+        logger.error(
+            "outbound_blocked_missing_branch_trunk",
+            branch_id=str(getattr(branch, "id", "")),
+        )
+        raise OutboundTrunkIsolationError(
+            "branch has no explicitly assigned outbound trunk"
+        )
+    return trunk_id
+
+
+def validate_branch_outbound_trunk(branch, supplied_trunk_id: str | None) -> str:
+    """Require dispatch metadata to match the branch's stored trunk exactly."""
+    expected = branch_outbound_trunk_id(branch)
+    supplied = str(supplied_trunk_id or "").strip()
+    if supplied != expected:
+        logger.error(
+            "outbound_blocked_branch_trunk_mismatch",
+            branch_id=str(getattr(branch, "id", "")),
+        )
+        raise OutboundTrunkIsolationError(
+            "dispatch trunk does not match the branch outbound trunk"
+        )
+    return expected

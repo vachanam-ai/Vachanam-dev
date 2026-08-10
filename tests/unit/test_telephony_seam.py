@@ -3,14 +3,19 @@
 Proves the credential seam is correct and SAFE:
   - SIP secrets round-trip through encryption and a tampered token is rejected
   - a branch WITH a sub-account uses its own (decrypted) creds + outbound trunk
-  - a branch WITHOUT one falls back to the global account (backward compatible)
+  - credentials may fall back, but outbound caller identity never does
 """
 from types import SimpleNamespace as NS
 
 import pytest
 
 from backend.services.crypto import decrypt_secret, encrypt_secret
-from backend.services.telephony import branch_outbound_trunk_id, resolve_branch_telephony
+from backend.services.telephony import (
+    OutboundTrunkIsolationError,
+    branch_outbound_trunk_id,
+    resolve_branch_telephony,
+    validate_branch_outbound_trunk,
+)
 
 
 def test_secret_round_trips():
@@ -58,6 +63,24 @@ def test_branch_without_subaccount_falls_back_to_global(monkeypatch):
     assert t.subaccount_id is None
     assert t.sip_username == "globaluser"
     assert t.outbound_trunk_id == "ST_global"
+    with pytest.raises(OutboundTrunkIsolationError):
+        branch_outbound_trunk_id(branch)
+
+
+def test_branch_without_subaccount_can_use_its_explicit_trunk():
+    branch = NS(
+        id="b2",
+        vobiz_subaccount_id=None,
+        outbound_trunk_id="ST_venkateshwara",
+    )
+    assert branch_outbound_trunk_id(branch) == "ST_venkateshwara"
+
+
+def test_dispatch_trunk_must_match_branch_exactly():
+    branch = NS(id="skin", outbound_trunk_id="ST_skin")
+    assert validate_branch_outbound_trunk(branch, "ST_skin") == "ST_skin"
+    with pytest.raises(OutboundTrunkIsolationError):
+        validate_branch_outbound_trunk(branch, "ST_venkateshwara")
 
 
 def test_decrypt_failure_falls_back_not_crash():

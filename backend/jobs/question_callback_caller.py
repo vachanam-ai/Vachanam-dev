@@ -48,6 +48,16 @@ def compose_message(question: str, answer: str) -> str:
 async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> bool:
     """Create the dispatch AND verify a worker actually joined (#423). Returns
     False when nobody picked it up — the row stays queued for the next tick."""
+    try:
+        outbound_trunk_id = branch_outbound_trunk_id(branch)
+    except RuntimeError:
+        logger.error(
+            "question_callback_blocked_missing_branch_trunk",
+            branch_id=str(branch.id),
+            question_id=str(q.id),
+        )
+        return False
+
     # Same collision guard as the other three dialers (Vinay 2026-08-08).
     from backend.services.outbound_guard import (
         claim_outbound_call,
@@ -64,7 +74,7 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
             meta = {
                 "call_type": "question_answer",
                 "branch_id": str(branch.id),
-                "outbound_trunk_id": branch_outbound_trunk_id(branch),
+                "outbound_trunk_id": outbound_trunk_id,
                 "phone_number": q.caller_phone,
                 "patient_name": patient_name or "",
                 "message": compose_message(q.question, q.answer or ""),

@@ -5759,6 +5759,61 @@ async def _reminder_retry_on_dial_fail(meta: dict) -> None:
         logger.warning("reminder_retry_reset_failed: %s", e)
 
 
+def _trunk_has_branch_did(branch, trunk_id: str, trunks) -> bool:
+    """True only when LiveKit says this trunk presents this branch's DID."""
+    branch_digits = re.sub(r"\D", "", str(getattr(branch, "did_number", "") or ""))
+    if not branch_digits:
+        return False
+    for trunk in trunks:
+        if str(getattr(trunk, "sip_trunk_id", "")) != trunk_id:
+            continue
+        return any(
+            re.sub(r"\D", "", str(number or "")) == branch_digits
+            for number in (getattr(trunk, "numbers", None) or [])
+        )
+    return False
+
+
+async def _validated_outbound_trunk(meta: dict, sip_api) -> str:
+    """Require DB ownership and provider caller-ID ownership before dialing."""
+    branch_id = meta.get("branch_id")
+    supplied = meta.get("outbound_trunk_id")
+    try:
+        branch_uuid = UUID(str(branch_id))
+    except (TypeError, ValueError, AttributeError):
+        logger.error("outbound_blocked_invalid_branch_metadata")
+        return ""
+    try:
+        async with AsyncSessionLocal() as db:
+            branch = (
+                await db.execute(select(Branch).where(Branch.id == branch_uuid))
+            ).scalar_one_or_none()
+        if branch is None:
+            logger.error("outbound_blocked_unknown_branch branch_id=%s", branch_id)
+            return ""
+        from backend.services.telephony import (
+            OutboundTrunkIsolationError,
+            validate_branch_outbound_trunk,
+        )
+
+        try:
+            trunk_id = validate_branch_outbound_trunk(branch, supplied)
+        except OutboundTrunkIsolationError:
+            return ""
+        trunks = (
+            await sip_api.list_outbound_trunk(api.ListSIPOutboundTrunkRequest())
+        ).items
+        if not _trunk_has_branch_did(branch, trunk_id, trunks):
+            logger.error(
+                "outbound_blocked_trunk_did_mismatch branch_id=%s", branch_id
+            )
+            return ""
+        return trunk_id
+    except Exception as exc:  # noqa: BLE001 - DB failure must fail closed
+        logger.error("outbound_trunk_validation_failed: %s", type(exc).__name__)
+        return ""
+
+
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
     logger.info("Joined room: %s", ctx.room.name)
@@ -5893,11 +5948,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
+        _out_trunk = await _validated_outbound_trunk(meta, ctx.api.sip)
+        if not _out_trunk:
+            logger.error(
+                "outbound_dial_blocked_no_verified_branch_trunk call_type=%s",
+                meta.get("call_type"),
+            )
+            await _reminder_retry_on_dial_fail(meta)
+            ctx.shutdown()
+            return
         try:
-            # Per-clinic Vobiz sub-account: the dispatching job stamps this
-            # branch's outbound trunk into the metadata. Fall back to the global
-            # trunk so single-account clinics keep working unchanged.
-            _out_trunk = meta.get("outbound_trunk_id") or os.getenv("OUTBOUND_TRUNK_ID", "")
+            # The dispatch trunk was reloaded from the branch and matched above.
+            # There is deliberately no platform/global caller-ID fallback.
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,

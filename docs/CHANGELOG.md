@@ -13,6 +13,27 @@ Format per session:
 
 ---
 
+## 2026-08-10 - Fail-closed outbound clinic identity
+
+Closed a live cross-clinic caller-ID incident: Sri Skincare reminder content
+was sent through the only platform outbound trunk, whose presented number
+belongs to Sri Venkateshwara. Outbound jobs no longer inherit a platform trunk.
+The branch row, dispatch metadata, LiveKit trunk ID and provider-advertised DID
+must all agree before SIP dialing. Missing or mismatched configuration blocks
+the call without consuming callback attempts.
+
+The active test database now explicitly binds Venkateshwara to its verified
+…3493 trunk. Sri Skincare remains fail-closed until it receives its own trunk.
+Proof: 69 reminder, treatment follow-up, doctor-answer callback, cascade and
+telephony tests passed; Ruff and diff validation passed.
+
+Latest Singapore sandbox call: measured caller-last-word to first audio was
+1.446 s and 1.797 s. STT finalization was 312–325 ms, LLM TTFT 563–901 ms on
+the measured response runs, Cartesia TTFB 271–294 ms, and the doctor-schedule
+tool took 1.461 s.
+
+---
+
 ## 2026-08-10 - Premium UI redesign and clinic-fit pricing
 
 Rebuilt the public website and authenticated clinic shell around a unified

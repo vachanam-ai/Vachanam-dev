@@ -52,6 +52,16 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
     _JOIN_TIMEOUT_S is deleted and the task stays pending — the next 15-min
     tick retries, and by then the watchdog (#411 gate) has restarted a dead
     worker. Dispatch-then-mutate preserved (FIXLOG #160)."""
+    try:
+        outbound_trunk_id = branch_outbound_trunk_id(branch)
+    except RuntimeError:
+        logger.error(
+            "followup_blocked_missing_branch_trunk",
+            branch_id=str(branch.id),
+            task_id=str(task.id),
+        )
+        return False
+
     # A follow-up and an appointment reminder falling due in the same minute
     # rang the same patient twice (Vinay 2026-08-08). Skipping leaves the task
     # pending, so the next tick retries — identical to a failed dispatch.
@@ -67,7 +77,7 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
         lkapi = lk_api.LiveKitAPI()
         try:
             meta = {"call_type": task.task_type, "branch_id": str(branch.id),
-                    "outbound_trunk_id": branch_outbound_trunk_id(branch),
+                    "outbound_trunk_id": outbound_trunk_id,
                     "phone_number": patient.phone, "task_id": str(task.id),
                     "patient_name": patient.name, "doctor_name": doctor.name,
                     "doctor_id": str(doctor.id), "message": task.what_to_ask or ""}
