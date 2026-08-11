@@ -285,8 +285,8 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized == 'pulse':
             normalized = 'smallest'
-        if normalized not in {'auto', 'soniox', 'sarvam', 'smallest'}:
-            raise ValueError('must be auto, soniox, sarvam, or smallest')
+        if normalized not in {'auto', 'soniox', 'sarvam', 'smallest', 'cartesia'}:
+            raise ValueError('must be auto, soniox, sarvam, smallest, or cartesia')
         return normalized
 
     @field_validator('smallest_eou_timeout_ms')
