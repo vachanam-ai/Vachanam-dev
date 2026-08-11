@@ -130,6 +130,15 @@ def _autopay_enabled(org: Organization) -> bool:
     )
 
 
+def _remember_autopay_plan(org: Organization, plan: str, last_cycle) -> None:
+    """Keep a future provider mandate and local plan state identical."""
+    if last_cycle is None or last_cycle.cycle_end <= date.today():
+        return
+    if plan != org.plan:
+        org.pending_plan = plan
+        org.pending_plan_effective = last_cycle.cycle_end
+
+
 async def _recurring_plan(
     db: AsyncSession, client, *, plan: str, amount_paise: int
 ) -> str:
@@ -198,6 +207,7 @@ async def create_autopay_subscription(
         raise HTTPException(status_code=422, detail="Unknown plan")
 
     org = await _load_my_org(current_user, db)
+    last = await _latest_cycle(db, org.id)
     if _autopay_enabled(org):
         raise HTTPException(status_code=409, detail="Autopay is already enabled")
 
@@ -219,6 +229,8 @@ async def create_autopay_subscription(
                 existing_status == "created"
                 and existing_notes.get("plan") == plan
             ):
+                _remember_autopay_plan(org, plan, last)
+                await db.commit()
                 return CreateSubscriptionResponse(
                     subscription_id=org.razorpay_subscription_id,
                     amount=breakdown["amount_paise"],
@@ -251,7 +263,6 @@ async def create_autopay_subscription(
             "notify_phone": org.owner_phone,
         },
     }
-    last = await _latest_cycle(db, org.id)
     if last is not None and last.cycle_end > date.today():
         payload["start_at"] = int(
             datetime(
@@ -270,6 +281,7 @@ async def create_autopay_subscription(
 
     org.razorpay_subscription_id = subscription["id"]
     org.razorpay_subscription_status = subscription.get("status") or "created"
+    _remember_autopay_plan(org, plan, last)
     await db.commit()
     return CreateSubscriptionResponse(
         subscription_id=subscription["id"],
@@ -1139,10 +1151,28 @@ async def cancel_plan_change(
     org = await _load_my_org(current_user, db)
     if org.pending_plan and org.razorpay_subscription_id:
         try:
-            await asyncio.to_thread(
-                _get_client().subscription.cancel_scheduled_changes,
-                org.razorpay_subscription_id,
+            provider = _get_client()
+            subscription = await asyncio.to_thread(
+                provider.subscription.fetch, org.razorpay_subscription_id
             )
+            start_at = int(subscription.get("start_at") or 0)
+            starts_in_future = (
+                subscription.get("status") in {"created", "authenticated", "pending"}
+                and start_at > int(datetime.now(timezone.utc).timestamp())
+            )
+            if starts_in_future:
+                await asyncio.to_thread(
+                    provider.subscription.cancel,
+                    org.razorpay_subscription_id,
+                    {"cancel_at_cycle_end": False},
+                )
+                org.razorpay_subscription_id = None
+                org.razorpay_subscription_status = "cancelled"
+            else:
+                await asyncio.to_thread(
+                    provider.subscription.cancel_scheduled_changes,
+                    org.razorpay_subscription_id,
+                )
         except Exception as exc:
             logger.error("autopay_plan_change_cancel_failed", error=str(exc)[:180])
             raise HTTPException(
@@ -1460,7 +1490,6 @@ async def activate_subscription(
 
     now = datetime.now(timezone.utc)
     org.status = "active"
-    org.plan = chosen_plan
     if org.subscription_started_at is None:
         org.subscription_started_at = now
 
@@ -1477,6 +1506,21 @@ async def activate_subscription(
         )
     ).scalar_one_or_none()
     start = last.cycle_end if (last is not None and last.cycle_end > today) else today
+    if start > today:
+        # A payment made before the old cycle ends buys the next cycle; it must
+        # not change today's entitlements early. The daily job promotes this
+        # plan exactly when the paid future cycle starts.
+        if chosen_plan != org.plan:
+            org.pending_plan = chosen_plan
+            org.pending_plan_effective = start
+        else:
+            org.pending_plan = None
+            org.pending_plan_effective = None
+    else:
+        org.plan = chosen_plan
+        if org.pending_plan_effective and org.pending_plan_effective <= today:
+            org.pending_plan = None
+            org.pending_plan_effective = None
     used_closing = 0.0
     if last is not None:
         # Close out the ending cycle's meter (#341): its extra usage was billed

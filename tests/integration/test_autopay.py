@@ -91,6 +91,7 @@ class _Subscriptions:
             "status": self.root.fetch_status,
             "customer_id": "cust_1",
             "notes": self.root.notes,
+            "start_at": self.root.start_at,
         }
 
     def cancel(self, subscription_id, payload):
@@ -114,6 +115,7 @@ class FakeRazorpay:
         self.cancelled_changes = []
         self.edit_payloads = []
         self.fetch_status = "authenticated"
+        self.start_at = 0
         self.notes = {}
         self.plan = _Plans(self)
         self.subscription = _Subscriptions(self)
@@ -573,4 +575,66 @@ async def test_scheduled_cancellation_never_shows_another_plan_charge(
     body = response.json()
     assert body["base_next"] == 0
     assert body["whatsapp_addon_amount"] == 0
-    assert body["total_next"] == body["overage_amount"]
+    assert body\["total_next"\] == body\["overage_amount"\]
+
+
+async def test_future_autopay_records_the_provider_plan_as_pending(
+    client, db, org, monkeypatch
+):
+    provider = FakeRazorpay()
+    monkeypatch.setattr(payments, "_get_client", lambda: provider)
+    monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_future")
+    org.plan = "solo"
+    org.status = "active"
+    await db.commit()
+    cycle = await _cycle(db, org, days=10)
+
+    response = await client.post(
+        "/api/create-subscription",
+        headers=_auth(org.id),
+        json={"plan": "multi"},
+    )
+
+    assert response.status_code == 200, response.text
+    await db.refresh(org)
+    assert org.plan == "solo"
+    assert org.pending_plan == "multi"
+    assert org.pending_plan_effective == cycle.cycle_end
+    assert provider.subscription_payloads[-1]["start_at"] == int(
+        datetime(
+            cycle.cycle_end.year,
+            cycle.cycle_end.month,
+            cycle.cycle_end.day,
+            tzinfo=timezone.utc,
+        ).timestamp()
+    )
+
+
+async def test_cancelling_not_yet_started_autopay_cancels_the_mandate(
+    client, db, org, monkeypatch
+):
+    provider = FakeRazorpay()
+    provider.fetch_status = "authenticated"
+    provider.start_at = int((datetime.now(timezone.utc) + timedelta(days=10)).timestamp())
+    monkeypatch.setattr(payments, "_get_client", lambda: provider)
+    org.plan = "solo"
+    org.status = "active"
+    org.pending_plan = "multi"
+    org.pending_plan_effective = date.today() + timedelta(days=10)
+    org.razorpay_subscription_id = "sub_future_cancel"
+    org.razorpay_subscription_status = "authenticated"
+    await db.commit()
+
+    response = await client.post(
+        "/api/plan-change/cancel",
+        headers=_auth(org.id),
+    )
+
+    assert response.status_code == 200, response.text
+    assert provider.cancel_payloads == [
+        ("sub_future_cancel", {"cancel_at_cycle_end": False})
+    ]
+    await db.refresh(org)
+    assert org.razorpay_subscription_id is None
+    assert org.razorpay_subscription_status == "cancelled"
+    assert org.pending_plan is None

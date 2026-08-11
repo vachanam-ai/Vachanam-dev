@@ -314,4 +314,25 @@ async def test_renewal_job_respects_grace_and_cycleless_orgs(db):
     await db.refresh(in_grace)
     await db.refresh(no_cycle)
     assert in_grace.status == "active"
-    assert no_cycle.status == "active"
+    assert no_cycle\.status == "active"
+
+
+async def test_early_paid_plan_change_stays_pending_until_new_cycle_starts(db):
+    org = await _org(db, status="active", plan="solo")
+    await activate_subscription(
+        db, str(org.id), "solo", f"pay_{uuid.uuid4().hex[:10]}"
+    )
+    (current,) = await _cycles(db, org)
+
+    result = await activate_subscription(
+        db, str(org.id), "clinic", f"pay_{uuid.uuid4().hex[:10]}"
+    )
+
+    assert result == "activated"
+    await db.refresh(org)
+    assert org.plan == "solo", "today's paid entitlements must not change early"
+    assert org.pending_plan == "clinic"
+    assert org.pending_plan_effective == current.cycle_end
+    current, future = await _cycles(db, org)
+    assert future.plan == "clinic"
+    assert future.cycle_start == current.cycle_end
