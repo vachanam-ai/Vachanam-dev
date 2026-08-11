@@ -20,6 +20,7 @@ including CORS preflight 204s — carries the security headers.
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
@@ -90,32 +91,6 @@ async def lifespan(app: FastAPI):
 
     neon_warm_task = asyncio.create_task(_neon_warm_loop())
 
-    # LEADER ELECTION (bug-bounty M1): every uvicorn worker / Render instance
-    # runs its own lifespan, so without a guard N schedulers fire the SAME tick
-    # and double-dispatch reminder/rebook calls and calendar writes. A Postgres
-    # session-level advisory lock makes exactly one process the scheduler
-    # leader; the lock auto-releases if that process dies (another then wins).
-    SCHED_LOCK_KEY = 0x7661636861  # "vacha"
-    # Leadership state shared with shutdown; the retry task may mutate it later.
-    lead: dict = {"scheduler": None, "conn": None, "got": False, "retry": None}
-
-    async def _try_lock():
-        """Acquire the leader lock on a dedicated conn, or None if held."""
-        import backend.database as _db_module
-
-        conn = await _db_module.engine.raw_connection()
-        try:
-            ok = await conn.driver_connection.fetchval(
-                "SELECT pg_try_advisory_lock($1)", SCHED_LOCK_KEY
-            )
-        except Exception:
-            await conn.close()
-            raise
-        if not ok:
-            await conn.close()
-            return None
-        return conn
-
     def _build_scheduler():
         from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
         from backend.jobs.data_retention import run_data_retention
@@ -124,8 +99,32 @@ async def lifespan(app: FastAPI):
         from backend.jobs.pre_appt_reminder import run_pre_appt_reminders
         from backend.jobs.trial_pause import run_pending_plan_changes, run_trial_pause
         from backend.services.wa_delivery import run_wa_delivery_queue
+        from backend.jobs.job_lease import leased_job
 
         scheduler = AsyncIOScheduler()
+        immediate_jobs = {
+            "calendar_writer",
+            "pre_appt_reminder",
+            "wa_delivery_queue",
+            "cascade_rebook_caller",
+            "next_visit_followups",
+            "question_callbacks",
+            "self_keepalive",
+            "hourly_maintenance",
+            "watchdog_tick",
+        }
+
+        def _add_job(function, trigger, *, id: str, replace_existing: bool = True):
+            options = {
+                "id": id,
+                "replace_existing": replace_existing,
+                "coalesce": True,
+                "max_instances": 1,
+                "misfire_grace_time": 3600,
+            }
+            if id in immediate_jobs:
+                options["next_run_time"] = datetime.now(timezone.utc)
+            return scheduler.add_job(leased_job(id, function), trigger, **options)
         # #299: calendar_writer / pre_appt_reminders / cascade_rebook keep their
         # fast ticks, but each now answers "is there work?" from Redis
         # (backend/jobs/wake_gate.py) and touches Postgres only when there is.
@@ -136,19 +135,19 @@ async def lifespan(app: FastAPI):
         # queue — a booking's calendar event is written inline at confirm_booking
         # (RULE 4). Halving the tick halves the Upstash command spend for no
         # loss: a failed write still retries within a minute.
-        scheduler.add_job(
+        _add_job(
             run_calendar_writer, IntervalTrigger(seconds=60),
             id="calendar_writer", replace_existing=True,
         )
-        scheduler.add_job(
+        _add_job(
             run_pre_appt_reminders, IntervalTrigger(seconds=60),
             id="pre_appt_reminder", replace_existing=True,
         )
-        scheduler.add_job(
+        _add_job(
             run_wa_delivery_queue, IntervalTrigger(seconds=60),
             id="wa_delivery_queue", replace_existing=True,
         )
-        scheduler.add_job(
+        _add_job(
             run_cascade_rebook_calls, IntervalTrigger(seconds=60),
             id="cascade_rebook_caller", replace_existing=True,
         )
@@ -157,7 +156,7 @@ async def lifespan(app: FastAPI):
         # 5 min, not 15: a 15-min first-fire lost the race with Render free
         # tier's ~15-min idle sleep — on a quiet afternoon the job NEVER fired
         # and a doctor_advice task sat pending for hours (prod 2026-07-03).
-        scheduler.add_job(
+        _add_job(
             run_next_visit_followups, IntervalTrigger(minutes=5),
             id="next_visit_followups", replace_existing=True,
         )
@@ -166,7 +165,7 @@ async def lifespan(app: FastAPI):
         # clinics cost one Redis GET, not a Postgres wake.
         from backend.jobs.question_callback_caller import run_question_callbacks
 
-        scheduler.add_job(
+        _add_job(
             run_question_callbacks, IntervalTrigger(minutes=5),
             id="question_callbacks", replace_existing=True,
         )
@@ -177,7 +176,7 @@ async def lifespan(app: FastAPI):
 
         from backend.jobs.wa_rating_ask import run_wa_rating_ask
 
-        scheduler.add_job(
+        _add_job(
             run_wa_rating_ask,
             CronTrigger(hour=19, minute=0, timezone="Asia/Kolkata"),
             id="wa_rating_ask", replace_existing=True,
@@ -199,19 +198,19 @@ async def lifespan(app: FastAPI):
                 except Exception as e:  # noqa: BLE001 — keep-alive must never crash
                     logger.warning("self_ping_failed", error=str(e)[:120])
 
-            scheduler.add_job(
+            _add_job(
                 _self_ping, IntervalTrigger(minutes=5),
                 id="self_keepalive", replace_existing=True,
             )
         # H5: pause expired trials once a day.
-        scheduler.add_job(
+        _add_job(
             run_trial_pause, IntervalTrigger(hours=6),
             id="trial_pause", replace_existing=True,
         )
         # Day-12 payment nudge: one email when a trial has <2 days left.
         from backend.jobs.trial_pause import run_trial_nudge
 
-        scheduler.add_job(
+        _add_job(
             run_trial_nudge, IntervalTrigger(hours=6),
             id="trial_nudge", replace_existing=True,
         )
@@ -219,18 +218,18 @@ async def lifespan(app: FastAPI):
         # cycle ends within 3 days; pause 3 days after an unpaid cycle end.
         from backend.jobs.trial_pause import run_billing_renewal
 
-        scheduler.add_job(
+        _add_job(
             run_billing_renewal, IntervalTrigger(hours=6),
             id="billing_renewal", replace_existing=True,
         )
         # Apply clinic-scheduled plan changes whose effective date (the current
         # cycle's end date) has arrived.
-        scheduler.add_job(
+        _add_job(
             run_pending_plan_changes, IntervalTrigger(hours=6),
             id="pending_plan_changes", replace_existing=True,
         )
         # DPDP s.8(7): erase patient PII past the retention window (daily).
-        scheduler.add_job(
+        _add_job(
             run_data_retention, IntervalTrigger(hours=24),
             id="data_retention", replace_existing=True,
         )
@@ -241,7 +240,7 @@ async def lifespan(app: FastAPI):
         # running 5 min after ANY query, so what costs money is the NUMBER of
         # distinct wakes, not the frequency: four staggered jobs burned ~20 min
         # of compute per hour, one shared tick burns ~5.
-        scheduler.add_job(
+        _add_job(
             run_hourly_maintenance, IntervalTrigger(hours=1),
             id="hourly_maintenance", replace_existing=True,
         )
@@ -252,7 +251,7 @@ async def lifespan(app: FastAPI):
         # Neon wakes.
         from backend.watchdog import run_watchdog_tick
 
-        scheduler.add_job(
+        _add_job(
             run_watchdog_tick, IntervalTrigger(seconds=60),
             id="watchdog_tick", replace_existing=True,
         )
@@ -263,58 +262,16 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         return scheduler
 
-    try:
-        _conn = await _try_lock()
-    except Exception as e:
-        _conn = None
-        logger.warning("scheduler_leader_lock_failed", error=str(e))
-    if _conn is not None:
-        lead.update(conn=_conn, got=True, scheduler=_build_scheduler())
-        logger.info("scheduler_started_as_leader")
-    else:
-        # ROLLING-DEPLOY FIX (prod 2026-07-03): the once-only check left NOBODY
-        # leader — Render starts the new instance while the OLD one still holds
-        # the lock and drains; the new instance gave up forever, the old died,
-        # and pg_locks showed zero advisory locks → no scheduler anywhere, so a
-        # doctor_advice follow-up sat pending for 2h with attempt_count=0.
-        # Keep retrying until we win (or shut down).
-        logger.info("scheduler_skipped_not_leader_will_retry")
-
-        async def _retry_leader() -> None:
-            while True:
-                await asyncio.sleep(60)
-                try:
-                    c2 = await _try_lock()
-                except Exception as e:  # noqa: BLE001 — transient DB errors
-                    logger.warning("leader_retry_failed", error=str(e)[:120])
-                    continue
-                if c2 is not None:
-                    lead.update(conn=c2, got=True, scheduler=_build_scheduler())
-                    logger.info("scheduler_started_as_leader_after_retry")
-                    return
-
-        lead["retry"] = asyncio.create_task(_retry_leader())
+    # Every process schedules every job. Renewable per-job Redis leases decide
+    # which process executes each tick. This remains correct behind Supavisor;
+    # a crashed process cannot strand leadership inside a pooled DB session.
+    scheduler = _build_scheduler()
+    logger.info("scheduler_started_with_distributed_job_leases")
 
     yield
 
     neon_warm_task.cancel()
-    if lead["retry"] is not None:
-        lead["retry"].cancel()
-    if lead["scheduler"] is not None:
-        lead["scheduler"].shutdown(wait=False)
-    if lead["conn"] is not None:
-        try:
-            # Explicit unlock (T5): closing a pooled connection returns it to
-            # the pool with the session-level advisory lock STILL held, so a
-            # graceful in-process restart could never elect a new leader.
-            # pg_advisory_unlock releases it before the connection goes back.
-            if lead["got"]:
-                await lead["conn"].driver_connection.fetchval(
-                    "SELECT pg_advisory_unlock($1)", SCHED_LOCK_KEY
-                )
-            await lead["conn"].close()
-        except Exception as e:
-            logger.warning("scheduler_leader_unlock_failed", error=str(e))
+    scheduler.shutdown(wait=False)
     await close_rate_limiter()
     logger.info("vachanam_shutdown")
 
@@ -444,8 +401,8 @@ async def dev_razorpay_test():
     return HTMLResponse("Dev test page not found", status_code=404)
 
 
-@app.get("/health", tags=["health"])
-async def health() -> dict:
+@app.get("/health", tags=["health"], response_model=None)
+async def health() -> dict | JSONResponse:
     """Health check for UptimeRobot + Render + Fly probes.
 
     Returns 200 with env tag. Does NOT touch DB or Redis — health endpoint
@@ -469,6 +426,17 @@ async def health() -> dict:
         # memory sample, so the growth curve is readable from Render logs and
         # curl without shelling into the box. Zero dependencies (/proc).
         out["mem_mb"] = mem
+    # Local and dependency-free: every process owns an APScheduler instance,
+    # and each leased wrapper records its latest tick in memory. If those ticks
+    # stop while HTTP still responds, Render must restart the process; otherwise
+    # patients get a healthy API with dead reminders/follow-ups.
+    from backend.jobs.job_lease import local_scheduler_health
+
+    scheduler_health = local_scheduler_health()
+    out["scheduler"] = scheduler_health
+    if settings.app_env == "production" and not scheduler_health["ok"]:
+        out["status"] = "degraded"
+        return JSONResponse(status_code=503, content=out)
     return out
 
 
