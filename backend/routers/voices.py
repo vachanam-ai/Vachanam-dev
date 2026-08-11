@@ -156,9 +156,25 @@ async def create_voice_clone(
         raise HTTPException(status_code=413, detail="Reference audio must be 10 MB or smaller")
 
     branch_uuid = uuid.UUID(branch_id)
-    branch = (await db.execute(select(Branch).where(Branch.id == branch_uuid))).scalar_one_or_none()
+    # Lock the owning branch before checking the quota. Locking only clone rows
+    # would allow two first uploads to race when a clinic has no rows yet.
+    branch = (
+        await db.execute(
+            select(Branch).where(Branch.id == branch_uuid).with_for_update()
+        )
+    ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
+    existing_voice = (
+        await db.execute(
+            select(BranchVoice.id).where(BranchVoice.branch_id == branch_uuid)
+        )
+    ).scalar_one_or_none()
+    if existing_voice is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This clinic already has a custom voice. Delete it before creating a replacement.",
+        )
     duplicate = (
         await db.execute(
             select(BranchVoice.id).where(
@@ -211,7 +227,14 @@ async def create_voice_clone(
             await db.commit()
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    row.provider_voice_id = str(provider["id"])
+    provider_voice_id = provider.get("id") or provider.get("voice_id")
+    if not provider_voice_id:
+        row.status = "failed"
+        row.error_type = "provider_invalid_response"
+        row.error_message = "Soniox accepted the request but did not return a voice ID."
+        await db.commit()
+        raise HTTPException(status_code=502, detail=row.error_message)
+    row.provider_voice_id = str(provider_voice_id)
     row.status, row.error_type, row.error_message = soniox_voice.model_state(provider)
     await db.commit()
     request.state.audit_resource_id = str(row.id)

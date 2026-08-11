@@ -177,3 +177,30 @@ async def test_clone_rejects_oversized_audio_before_provider(db, client, monkeyp
     )
     assert response.status_code == 413
     assert called is False
+
+
+async def test_clinic_can_keep_only_one_custom_voice(db, client, monkeypatch):
+    branch, auth = await _clinic(db, "4")
+    created_names = []
+
+    async def create(**kwargs):
+        created_names.append(kwargs["provider_name"])
+        return _provider_voice(str(uuid.uuid4()), kwargs["provider_name"])
+
+    monkeypatch.setattr(soniox_voice, "create_provider_voice", create)
+
+    first = await client.post(
+        f"/branches/{branch.id}/voice-clones", headers=auth,
+        data={"name": "Reception voice", "consent_confirmed": "true"},
+        files={"file": ("sample.webm", b"clean-audio", "audio/webm")},
+    )
+    assert first.status_code == 201, first.text
+
+    second = await client.post(
+        f"/branches/{branch.id}/voice-clones", headers=auth,
+        data={"name": "Replacement voice", "consent_confirmed": "true"},
+        files={"file": ("replacement.webm", b"clean-audio", "audio/webm")},
+    )
+    assert second.status_code == 409
+    assert "already has a custom voice" in second.json()["detail"]
+    assert len(created_names) == 1

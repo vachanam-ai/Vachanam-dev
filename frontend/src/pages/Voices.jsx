@@ -14,6 +14,17 @@ import { useAuth } from "../hooks/useAuth.jsx";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_SECONDS = 20;
+const MAX_CUSTOM_VOICES = 1;
+const LANGUAGES = [
+  { code: "te", label: "Telugu" },
+  { code: "en", label: "English" },
+  { code: "hi", label: "Hindi" },
+  { code: "ta", label: "Tamil" },
+  { code: "kn", label: "Kannada" },
+  { code: "ml", label: "Malayalam" },
+  { code: "mr", label: "Marathi" },
+  { code: "bn", label: "Bengali" },
+];
 
 function errorMessage(error, fallback) {
   return error?.response?.data?.detail ?? fallback;
@@ -128,6 +139,15 @@ export default function Voices() {
     },
     onError: (error) => toast.error(errorMessage(error, "Could not update the voice")),
   });
+  const setLanguage = useMutation({
+    mutationFn: (language) => setBranchVoice(branchId, null, language),
+    onSuccess: (updated) => {
+      qc.setQueryData(["branch-settings", branchId], updated);
+      qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
+      toast.success("Call language updated");
+    },
+    onError: (error) => toast.error(errorMessage(error, "Could not update the call language")),
+  });
   const upload = useMutation({
     mutationFn: () => {
       const form = new FormData();
@@ -136,12 +156,23 @@ export default function Voices() {
       form.append("file", file, file.name);
       return createVoiceClone(branchId, form);
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
+      // Cloning is asynchronous. Keep the returned row visible immediately so
+      // an accepted upload never appears to vanish while the list refetches.
+      qc.setQueryData(["voice-clones", branchId], (current) => ({
+        ...(current ?? { voices: [], clinic_count: 0, sync_warning: null }),
+        voices: [created, ...(current?.voices ?? []).filter((voice) => voice.id !== created.id)],
+        clinic_count: 1,
+      }));
       setName(""); setFile(null); setConsent(false);
       toast.success("Voice uploaded. Soniox is preparing it now.");
     },
-    onError: (error) => toast.error(errorMessage(error, "Could not create this voice")),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["voice-clones", branchId] }),
+    onError: (error) => {
+      toast.error(errorMessage(error, "Could not create this voice"));
+      // The server may have recorded a failed upload with a useful recovery
+      // message. Refresh only on failure; a success already seeded the cache.
+      qc.invalidateQueries({ queryKey: ["voice-clones", branchId] });
+    },
   });
 
   const stopRecording = () => {
@@ -176,15 +207,19 @@ export default function Voices() {
   const chooseFile = (candidate) => {
     if (!candidate) return;
     if (candidate.size > MAX_BYTES) { toast.error("Reference audio must be 10 MB or smaller"); return; }
+    // Metadata parsing differs between browsers and phone recordings. It is a
+    // helpful duration check, never a reason to silently discard a valid file.
+    setFile(candidate);
     const url = URL.createObjectURL(candidate);
     const audio = new Audio(url);
     audio.onloadedmetadata = () => {
       URL.revokeObjectURL(url);
       if (Number.isFinite(audio.duration) && audio.duration > MAX_SECONDS + 0.25) {
+        setFile(null);
         toast.error("Reference audio must be 20 seconds or shorter");
-      } else setFile(candidate);
+      }
     };
-    audio.onerror = () => { URL.revokeObjectURL(url); toast.error("This audio file could not be read"); };
+    audio.onerror = () => { URL.revokeObjectURL(url); };
   };
   const playClone = async (voice) => {
     if (playingId === voice.id) { audioRef.current?.pause(); setPlayingId(null); return; }
@@ -202,11 +237,32 @@ export default function Voices() {
   };
   const readyToUpload = Boolean(name.trim() && file && consent && !recording && !upload.isPending);
   const catalogVoices = (catalog.data?.voices ?? []).filter((voice) => voice.kind !== "clone");
+  const cloneCount = clones.data?.clinic_count ?? clones.data?.voices?.length ?? 0;
+  const hasCustomVoice = cloneCount >= MAX_CUSTOM_VOICES;
+  const languageOptions = branch.data?.allowed_languages?.length
+    ? branch.data.allowed_languages.map((language) => ({ code: language.code, label: `${language.native_name} (${language.name})` }))
+    : LANGUAGES;
 
   return (
     <div className="voices-page">
       <PageHeader eyebrow="Voice studio" title="A voice patients remember"
         sub="Choose a Soniox studio voice or create a consented clinic voice from one clean recording. The selected voice applies from the next call." />
+
+      <section className="voice-configuration" aria-label="Call language and voice settings">
+        <div>
+          <p className="voice-kicker">Call configuration</p>
+          <h2>Language and voice, in one place</h2>
+          <p>The language applies on the next call. Your selected studio or custom voice remains active.</p>
+        </div>
+        <label className="voice-language-field">
+          <span>Agent language</span>
+          <select className="field" value={branch.data?.language ?? "te"}
+            disabled={branch.isLoading || setLanguage.isPending}
+            onChange={(event) => setLanguage.mutate(event.target.value)}>
+            {languageOptions.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}
+          </select>
+        </label>
+      </section>
 
       <section className="voice-studio-grid">
         <article className="voice-recorder-panel">
@@ -221,9 +277,9 @@ export default function Voices() {
                 {recording ? <Stop size={17} weight="fill" /> : <Microphone size={17} weight="fill" />}
                 {recording ? "Stop recording" : "Record now"}
               </button>
-              <label className="upload-audio"><UploadSimple size={17} /><span>Upload audio</span><input type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm" onChange={(event) => chooseFile(event.target.files?.[0])} /></label>
+              <label className="upload-audio"><UploadSimple size={17} /><span>Upload audio</span><input type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm" onChange={(event) => { chooseFile(event.target.files?.[0]); event.target.value = ""; }} /></label>
             </div>
-            {previewUrl && <audio className="source-audio" controls src={previewUrl}>Your browser cannot play this recording.</audio>}
+            {previewUrl && <div className="source-preview"><audio className="source-audio" controls src={previewUrl}>Your browser cannot play this recording.</audio><button type="button" className="source-remove" onClick={() => setFile(null)} aria-label="Remove selected recording" title="Remove recording"><Trash size={16} /></button></div>}
           </div>
         </article>
 
@@ -235,14 +291,15 @@ export default function Voices() {
             <span><ShieldCheck size={22} weight="duotone" /><span><strong>I have the speaker’s explicit permission</strong><small>I confirm the speaker owns this voice or authorised this clinic to create and use its AI clone.</small></span></span>
           </label>
           <div className="voice-safety-note"><FileAudio size={20} /><p><strong>Before you create it</strong><span>Maximum 20 seconds and 10 MB. Avoid music, other speakers, echo, mouth clicks, and background noise.</span></p></div>
-          <button type="button" className="btn-primary voice-create-button" disabled={!readyToUpload} onClick={() => upload.mutate()}>
+          {hasCustomVoice && <p className="voice-limit-note">This clinic already has its one custom voice. Remove it below before creating a replacement.</p>}
+          <button type="button" className="btn-primary voice-create-button" disabled={!readyToUpload || hasCustomVoice} onClick={() => upload.mutate()}>
             <Waveform size={18} weight="bold" />{upload.isPending ? "Creating voice…" : "Create Soniox voice"}
           </button>
         </article>
       </section>
 
       <section className="voice-library">
-        <div className="voice-library-head"><div><span>03</span><h2>Your clinic voices</h2><p>Preparation normally finishes within seconds. Only ready voices can be used on calls.</p></div><span>{clones.data?.clinic_count ?? 0} clinic voices</span></div>
+        <div className="voice-library-head"><div><span>03</span><h2>Your clinic voice</h2><p>Preparation normally finishes within seconds. Only a ready voice can be used on calls.</p></div><span>{cloneCount}/{MAX_CUSTOM_VOICES} custom voice</span></div>
         {clones.data?.sync_warning && <p className="voice-sync-warning">{clones.data.sync_warning}. Showing the last known state.</p>}
         {clones.isLoading ? <div className="clone-loading"><i /><i /></div> : clones.data?.voices?.length ? (
           <div className="clone-list">{clones.data.voices.map((voice) => <CloneCard key={voice.id} voice={voice} branchId={branchId} playing={playingId === voice.id} onPlay={playClone} />)}</div>

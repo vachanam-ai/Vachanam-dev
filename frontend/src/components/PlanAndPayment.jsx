@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -57,6 +57,22 @@ export default function PlanAndPayment() {
   const plan = useQuery({
     queryKey: ["plan"], queryFn: fetchPlan, refetchInterval: 60_000,
   });
+  const p = plan.data;
+  const [selectedPlan, setSelectedPlan] = useState("solo");
+  const legacyPlan = Boolean(p?.plan && !PUBLIC_PLAN_KEYS.includes(p.plan));
+  const autopayBase = legacyPlan
+    ? (PLAN_PRICES[selectedPlan] ?? 0)
+    : (p?.next_base_rupees || PLAN_PRICES[p?.plan] || 0);
+
+  useEffect(() => {
+    if (!p) return;
+    const next = PUBLIC_PLAN_KEYS.includes(p.pending_plan)
+      ? p.pending_plan
+      : PUBLIC_PLAN_KEYS.includes(p.plan)
+        ? p.plan
+        : "solo";
+    setSelectedPlan(next);
+  }, [p?.plan, p?.pending_plan]);
 
   const planChange = useMutation({
     mutationFn: (p) => changePlan(p),
@@ -147,7 +163,10 @@ export default function PlanAndPayment() {
 
   const [paying, setPaying] = useState(false);
   const payNow = async () => {
-    const planKey = plan.data?.plan ?? "clinic";
+    // Lite is retained only for historical records. It is not sellable and
+    // would be rejected by the mandate API, so a legacy clinic always pays
+    // for the explicitly selected current plan instead.
+    const planKey = selectedPlan;
     setPaying(true);
     try {
       await loadRazorpay();
@@ -182,7 +201,6 @@ export default function PlanAndPayment() {
     }
   };
 
-  const p = plan.data;
   // Days left computed against NOW on every render; the 60s refetch keeps it
   // live. The backend enforces the same 3-day window, so the UI lock is
   // honest, not decorative.
@@ -200,15 +218,20 @@ export default function PlanAndPayment() {
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <div>
-          <label className="label">Plan</label>
-          <select className="field min-w-[220px]" value={p?.plan ?? "clinic"}
+          <label className="label">{legacyPlan ? "Choose a current plan" : "Plan"}</label>
+          <select className="field min-w-[220px]" value={selectedPlan}
             disabled={planChange.isPending || plan.isLoading}
-            onChange={(e) => planChange.mutate(e.target.value)}>
+            onChange={(e) => { setSelectedPlan(e.target.value); planChange.mutate(e.target.value); }}>
             {PUBLIC_PLAN_KEYS.map((key) => (
               <option key={key} value={key}>{PLAN_LABELS[key]}</option>
             ))}
           </select>
         </div>
+        {legacyPlan && (
+          <p className="mt-3 rounded-lg bg-gold-soft px-3 py-2 font-ui text-xs text-gold-ink">
+            Lite is a retired plan. Select Basic, Growth, or Scale before enabling autopay. Your past invoices remain unchanged.
+          </p>
+        )}
         <span className={p?.status === "active" ? "chip-token" : "chip-muted"}>
           {p?.status ?? "—"}
         </span>
@@ -228,7 +251,7 @@ export default function PlanAndPayment() {
         {p && !p.autopay_enabled && (
           <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
             {paying ? "Opening payment…"
-              : "Enable autopay — ₹" + (p.next_base_rupees || PLAN_PRICES[p.plan] || 0).toLocaleString("en-IN") + "/month"}
+              : "Enable autopay — ₹" + autopayBase.toLocaleString("en-IN") + "/month"}
           </button>
         )}
         {p?.autopay_enabled && (

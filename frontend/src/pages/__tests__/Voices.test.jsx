@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Voices from "../Voices.jsx";
 import {
-  activateVoiceClone, fetchBranchSettings, fetchVoiceClones, getBranchVoices,
+  activateVoiceClone, createVoiceClone, fetchBranchSettings, fetchVoiceClones, getBranchVoices, setBranchVoice,
 } from "../../api/client.js";
 
 vi.mock("../../hooks/useAuth.jsx", () => ({ useAuth: () => ({ branchId: "branch-a" }) }));
@@ -44,5 +44,44 @@ describe("Voices", () => {
     const useButton = await screen.findByRole("button", { name: "Use this voice" });
     fireEvent.click(useButton);
     await waitFor(() => expect(activateVoiceClone).toHaveBeenCalledWith("branch-a", "local-1"));
+  });
+
+  it("shows a real consent checkbox, keeps one custom voice visible, and blocks a second upload", async () => {
+    fetchVoiceClones.mockResolvedValue({
+      clinic_count: 1, sync_warning: null,
+      voices: [{ id: "local-1", voice_id: "provider-1", name: "Clinic voice", filename: "sample.webm", status: "ready", active: true }],
+    });
+    renderPage();
+    expect(await screen.findByRole("checkbox", { name: /explicit permission/i })).toBeInTheDocument();
+    expect(await screen.findByText("1/1 custom voice")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Clinic voice" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Create Soniox voice/i })).toBeDisabled();
+  });
+
+  it("moves the call language control into Voice studio", async () => {
+    renderPage();
+    const language = await screen.findByLabelText("Agent language");
+    fireEvent.change(language, { target: { value: "en" } });
+    await waitFor(() => expect(setBranchVoice).toHaveBeenCalledWith("branch-a", null, "en"));
+  });
+
+  it("keeps a successful upload in the library while Soniox prepares it", async () => {
+    vi.stubGlobal("Audio", class {});
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:voice"), revokeObjectURL: vi.fn() });
+    createVoiceClone.mockResolvedValue({
+      id: "local-upload", voice_id: "provider-upload", name: "Clinic welcome", filename: "sample.webm", status: "processing", active: false,
+    });
+    renderPage();
+    await screen.findByRole("heading", { name: "A voice patients remember" });
+    fireEvent.change(document.querySelector('input[type="file"]'), {
+      target: { files: [new File(["clean-audio"], "sample.webm", { type: "audio/webm" })] },
+    });
+    fireEvent.change(screen.getByPlaceholderText("e.g. Dr Lakshmi's clinic voice"), { target: { value: "Clinic welcome" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /explicit permission/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Create Soniox voice/i }));
+    await waitFor(() => expect(createVoiceClone).toHaveBeenCalledWith("branch-a", expect.any(FormData)));
+    expect(await screen.findByText("Clinic welcome")).toBeInTheDocument();
+    expect(screen.getByText("Preparing voice")).toBeInTheDocument();
+    vi.unstubAllGlobals();
   });
 });

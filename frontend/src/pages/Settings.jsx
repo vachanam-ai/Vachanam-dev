@@ -10,9 +10,7 @@ import {
   fetchStaff,
   removeStaff,
   getBranchFaq,
-  getBranchVoices,
   saveBranchFaq,
-  setBranchVoice,
   testCalendar,
   updateBranchSettings
 } from "../api/client.js";
@@ -36,21 +34,6 @@ const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 // onboarding is available. The backend independently enforces credentials and plan.
 const WHATSAPP_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
 
-// Static fallback for the language dropdown — the set is fixed metadata
-// (mirrors agent/i18n/languages.py). Used when the API response omits
-// allowed_languages (e.g. an older/not-yet-restarted backend) so the picker
-// never renders empty. The backend still validates the chosen code on PATCH.
-const LANGUAGES = [
-  { code: "te", name: "Telugu", native_name: "తెలుగు" },
-  { code: "en", name: "English", native_name: "English" },
-  { code: "hi", name: "Hindi", native_name: "हिन्दी" },
-  { code: "ta", name: "Tamil", native_name: "தமிழ்" },
-  { code: "kn", name: "Kannada", native_name: "ಕನ್ನಡ" },
-  { code: "ml", name: "Malayalam", native_name: "മലയാളം" },
-  { code: "mr", name: "Marathi", native_name: "मराठी" },
-  { code: "bn", name: "Bengali", native_name: "বাংলা" }
-];
-
 /* Setup checklist derived from live data — the owner's map through onboarding. */
 function checklist(data, calOk) {
   return [
@@ -65,7 +48,7 @@ function checklist(data, calOk) {
 function Section({ id, title, sub, done, tone, children }) {
   return (
     <section id={id}
-      className={`card scroll-mt-24 p-6 ${tone === "cream" ? "!bg-panel border-line2" : ""}`}>
+      className={`settings-section scroll-mt-24 ${tone === "cream" ? "is-muted" : ""}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-semibold">{title}</h2>
@@ -147,41 +130,12 @@ export default function Settings() {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Save failed")
   });
 
-  const voice = useMutation({
-    mutationFn: (v) => setBranchVoice(branchId, v),
-    onSuccess: (d) => {
-      qc.setQueryData(["branch-settings", branchId], d);
-      toast.success(`Voice set to ${d.tts_voice}`);
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change voice")
-  });
-
-  const language = useMutation({
-    mutationFn: (lang) => setBranchVoice(branchId, null, lang),
-    onSuccess: (d) => {
-      qc.setQueryData(["branch-settings", branchId], d);
-      const opt = (d.allowed_languages?.length ? d.allowed_languages : LANGUAGES).find(
-        (l) => l.code === d.language
-      );
-      toast.success(`Language set to ${opt?.name ?? d.language}`);
-    },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change language")
-  });
-
   // Plan & billing — current plan + any scheduled change. Refetches every
   // minute so cycle-end / days-left stay live without a reload (#353).
   const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan, refetchInterval: 60_000 });
   // The mutation and both Razorpay flows moved to
   // components/PlanAndPayment.jsx, rendered on /billing. The query stays:
   // the WhatsApp section reads whatsapp_included / whatsapp_addon off it.
-
-  // Soniox voice catalog for the clinic's language (drives the picker).
-  const voices = useQuery({
-    queryKey: ["branch-voices", branchId, data?.language],
-    queryFn: () => getBranchVoices(branchId, data?.language),
-    enabled: !!branchId && !!data,
-    staleTime: 5 * 60 * 1000
-  });
 
   // Clinic FAQ the agent answers on calls. Pre-seed the editor with the
   // standard Indian-clinic template when the clinic hasn't saved one yet.
@@ -273,39 +227,30 @@ export default function Settings() {
   const doneCount = steps.filter((s) => s.done).length;
 
   return (
-    <div className="space-y-6">
-      {/* Header + setup progress */}
-      <div className="card p-6">
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="eyebrow">Clinic setup</p>
-            <h1 className="section-title text-2xl">{data?.name}</h1>
-          </div>
-          <p className="font-ui text-sm text-slate">
-            <span className="numeral text-2xl text-teal-deep">{doneCount}</span>
-            <span className="text-lg text-slate">/{steps.length}</span> steps complete
-          </p>
+    <div className="settings-page">
+      <header className="settings-masthead">
+        <div>
+          <p className="settings-kicker">Clinic workspace</p>
+          <h1>{data?.name}</h1>
+          <p>Keep the clinic details, booking rules, team access, and call hand-off information accurate.</p>
         </div>
-        <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-teal-pale">
-          <div className="h-full rounded-full bg-teal transition-all duration-700"
-            style={{ width: `${(doneCount / steps.length) * 100}%` }} />
+        <div className="settings-progress" aria-label={`${doneCount} of ${steps.length} setup tasks complete`}>
+          <strong>{doneCount}<span>/{steps.length}</span></strong>
+          <span>setup tasks complete</span>
         </div>
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="settings-progress-line"><i style={{ width: `${(doneCount / steps.length) * 100}%` }} /></div>
+        <nav className="settings-checklist" aria-label="Clinic setup checklist">
           {steps.map((s, i) => (
             <a key={s.id} href={`#${s.id}`}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-ui text-xs font-medium transition ${
-                s.done
-                  ? "border-teal-pale bg-teal-mint text-teal-deep"
-                  : "border-hairline bg-surface text-slate hover:border-teal-light/50"
-              }`}>
-              <span className={`grid h-4 w-4 place-items-center rounded-full text-[10px] ${s.done ? "bg-accent text-accent-ink" : "bg-slate-light/30"}`}>
+              className={s.done ? "is-complete" : ""}>
+              <span>
                 {s.done ? "✓" : i + 1}
               </span>
               {s.label}
             </a>
           ))}
-        </div>
-      </div>
+        </nav>
+      </header>
 
       {/* Plan & billing MOVED to /billing (Vinay 2026-08-09: "migrate entire
           billing to billing page. all billings."). Settings keeps the `plan`
@@ -428,50 +373,6 @@ export default function Settings() {
       </Section>
       )}
 
-      {/* 5 — Language */}
-      <Section id="language" title="Agent language"
-        sub="The language the AI speaks and understands on calls. Applies from the next call.">
-        <select
-          className="field"
-          value={data?.language ?? "te"}
-          onChange={(e) => language.mutate(e.target.value)}
-          disabled={language.isPending}
-        >
-          {(data?.allowed_languages?.length ? data.allowed_languages : LANGUAGES).map((l) => (
-            <option key={l.code} value={l.code}>
-              {l.native_name} ({l.name})
-            </option>
-          ))}
-        </select>
-        <p className="mt-2 font-ui text-xs text-slate">
-          Each language has its own AI flow. Telugu is fully tuned; other languages are a first
-          pass and being refined.
-        </p>
-      </Section>
-
-      {/* 6 — Voice (cloning REMOVED 2026-07-24 — catalog voices only) */}
-      <Section id="voice" title="Agent voice"
-        sub="Pick the voice your AI agent speaks with. Applies from the next call.">
-        <select
-          className="field mt-1"
-          value={data?.tts_voice ?? ""}
-          onChange={(e) => voice.mutate(e.target.value)}
-          disabled={voice.isPending || voices.isLoading}
-        >
-          <option value="">Default voice for this language</option>
-          {(voices.data?.voices ?? []).map((v) => (
-            <option key={v.voice_id} value={v.voice_id}>
-              {v.display_name}
-              {v.gender ? ` · ${v.gender}` : ""}
-            </option>
-          ))}
-        </select>
-        {voices.isError && (
-          <p className="mt-2 font-ui text-xs text-danger">
-            Couldn’t load voices — try again shortly.
-          </p>
-        )}
-      </Section>
       </div>
 
       {/* Clinic FAQ + Team — side by side, compact */}
