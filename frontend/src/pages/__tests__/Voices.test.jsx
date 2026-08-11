@@ -3,13 +3,14 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Voices from "../Voices.jsx";
 import {
-  activateVoiceClone, createVoiceClone, fetchBranchSettings, fetchVoiceClones, getBranchVoices, setBranchVoice,
+  activateVoiceClone, createVoiceClone, fetchBranchSettings, fetchVoiceClones, getBranchVoices, importVoiceClone, setBranchVoice,
 } from "../../api/client.js";
 
 vi.mock("../../hooks/useAuth.jsx", () => ({ useAuth: () => ({ branchId: "branch-a" }) }));
 vi.mock("../../api/client.js", () => ({
   activateVoiceClone: vi.fn(), createVoiceClone: vi.fn(), deleteVoiceClone: vi.fn(),
   fetchBranchSettings: vi.fn(), fetchVoiceClones: vi.fn(), getBranchVoices: vi.fn(),
+  importVoiceClone: vi.fn(),
   previewVoiceClone: vi.fn(), setBranchVoice: vi.fn(),
 }));
 
@@ -63,6 +64,36 @@ describe("Voices", () => {
     const language = await screen.findByLabelText("Agent language");
     fireEvent.change(language, { target: { value: "en" } });
     await waitFor(() => expect(setBranchVoice).toHaveBeenCalledWith("branch-a", null, "en"));
+  });
+
+  it("verifies and adds an existing Soniox voice ID", async () => {
+    importVoiceClone.mockResolvedValue({
+      id: "local-import",
+      voice_id: "voice_existing_123",
+      name: "Existing clinic voice",
+      filename: "Existing Soniox voice",
+      status: "ready",
+      active: false,
+    });
+    renderPage();
+    await screen.findByRole("heading", { name: "A voice patients remember" });
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. Dr Lakshmi's clinic voice"), {
+      target: { value: "Existing clinic voice" },
+    });
+    fireEvent.change(await screen.findByLabelText("Soniox voice ID"), {
+      target: { value: "voice_existing_123" },
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /explicit permission/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Add existing voice/i }));
+
+    await waitFor(() => expect(importVoiceClone).toHaveBeenCalledWith("branch-a", {
+      name: "Existing clinic voice",
+      voice_id: "voice_existing_123",
+      consent_confirmed: true,
+    }));
+    expect(await screen.findByText("Existing clinic voice")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
   });
 
   it("keeps a successful upload in the library while Soniox prepares it", async () => {

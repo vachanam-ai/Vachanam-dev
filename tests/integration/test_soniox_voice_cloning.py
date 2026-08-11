@@ -204,3 +204,95 @@ async def test_clinic_can_keep_only_one_custom_voice(db, client, monkeypatch):
     assert second.status_code == 409
     assert "already has a custom voice" in second.json()["detail"]
     assert len(created_names) == 1
+
+async def test_browser_recording_codec_mime_is_normalized(db, client, monkeypatch):
+    branch, auth = await _clinic(db, "5")
+    received = {}
+
+    async def create(**kwargs):
+        received.update(kwargs)
+        return _provider_voice(str(uuid.uuid4()), kwargs["provider_name"])
+
+    monkeypatch.setattr(soniox_voice, "create_provider_voice", create)
+    response = await client.post(
+        f"/branches/{branch.id}/voice-clones",
+        headers=auth,
+        data={"name": "Browser recording", "consent_confirmed": "true"},
+        files={
+            "file": (
+                "recording.webm",
+                b"webm-opus-audio",
+                "audio/webm;codecs=opus",
+            )
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert received["content_type"] == "audio/webm"
+    assert received["audio"] == b"webm-opus-audio"
+
+
+async def test_existing_soniox_voice_id_is_verified_and_tenant_owned(
+    db, client, monkeypatch
+):
+    branch_a, auth_a = await _clinic(db, "6")
+    branch_b, auth_b = await _clinic(db, "7")
+    provider_id = str(uuid.uuid4())
+    provider = _provider_voice(provider_id, "existing-provider-voice")
+
+    async def list_all():
+        return [provider]
+
+    monkeypatch.setattr(soniox_voice, "list_provider_voices", list_all)
+
+    missing_consent = await client.post(
+        f"/branches/{branch_a.id}/voice-clones/import",
+        headers=auth_a,
+        json={
+            "name": "Imported voice",
+            "voice_id": provider_id,
+            "consent_confirmed": False,
+        },
+    )
+    assert missing_consent.status_code == 422
+
+    missing_provider = await client.post(
+        f"/branches/{branch_a.id}/voice-clones/import",
+        headers=auth_a,
+        json={
+            "name": "Imported voice",
+            "voice_id": str(uuid.uuid4()),
+            "consent_confirmed": True,
+        },
+    )
+    assert missing_provider.status_code == 404
+
+    connected = await client.post(
+        f"/branches/{branch_a.id}/voice-clones/import",
+        headers=auth_a,
+        json={
+            "name": "Imported voice",
+            "voice_id": provider_id,
+            "consent_confirmed": True,
+        },
+    )
+    assert connected.status_code == 201, connected.text
+    assert connected.json()["voice_id"] == provider_id
+    assert connected.json()["status"] == "ready"
+
+    cross_tenant = await client.post(
+        f"/branches/{branch_b.id}/voice-clones/import",
+        headers=auth_b,
+        json={
+            "name": "Stolen voice",
+            "voice_id": provider_id,
+            "consent_confirmed": True,
+        },
+    )
+    assert cross_tenant.status_code == 409
+    assert "already connected" in cross_tenant.json()["detail"]
+
+    own = await client.get(f"/branches/{branch_a.id}/voice-clones", headers=auth_a)
+    foreign = await client.get(f"/branches/{branch_b.id}/voice-clones", headers=auth_b)
+    assert [item["voice_id"] for item in own.json()["voices"]] == [provider_id]
+    assert foreign.json()["voices"] == []

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Check, FileAudio, Microphone, Pause, Play, ShieldCheck, Stop, Trash,
+  Check, FileAudio, LinkSimple, Microphone, Pause, Play, ShieldCheck, Stop, Trash,
   UploadSimple, Waveform,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import PageHeader from "../components/PageHeader.jsx";
 import {
   activateVoiceClone, createVoiceClone, deleteVoiceClone, fetchBranchSettings,
-  fetchVoiceClones, getBranchVoices, previewVoiceClone, setBranchVoice,
+  fetchVoiceClones, getBranchVoices, importVoiceClone, previewVoiceClone, setBranchVoice,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 
@@ -97,6 +97,7 @@ export default function Voices() {
   const { branchId } = useAuth();
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [voiceId, setVoiceId] = useState("");
   const [file, setFile] = useState(null);
   const [consent, setConsent] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -175,6 +176,27 @@ export default function Voices() {
     },
   });
 
+  const attach = useMutation({
+    mutationFn: () => importVoiceClone(branchId, {
+      name: name.trim(),
+      voice_id: voiceId.trim(),
+      consent_confirmed: consent,
+    }),
+    onSuccess: (created) => {
+      qc.setQueryData(["voice-clones", branchId], (current) => ({
+        ...(current ?? { voices: [], clinic_count: 0, sync_warning: null }),
+        voices: [created, ...(current?.voices ?? []).filter((voice) => voice.id !== created.id)],
+        clinic_count: 1,
+      }));
+      setName(""); setVoiceId(""); setConsent(false);
+      toast.success("Soniox voice added to this clinic");
+    },
+    onError: (error) => {
+      toast.error(errorMessage(error, "Could not add this Soniox voice"));
+      qc.invalidateQueries({ queryKey: ["voice-clones", branchId] });
+    },
+  });
+
   const stopRecording = () => {
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
   };
@@ -236,6 +258,7 @@ export default function Voices() {
     }
   };
   const readyToUpload = Boolean(name.trim() && file && consent && !recording && !upload.isPending);
+  const readyToAttach = Boolean(name.trim() && voiceId.trim() && consent && !attach.isPending);
   const catalogVoices = (catalog.data?.voices ?? []).filter((voice) => voice.kind !== "clone");
   const cloneCount = clones.data?.clinic_count ?? clones.data?.voices?.length ?? 0;
   const hasCustomVoice = cloneCount >= MAX_CUSTOM_VOICES;
@@ -284,16 +307,26 @@ export default function Voices() {
         </article>
 
         <article className="voice-create-panel">
-          <div className="voice-section-heading"><span>02</span><div><h2>Name and create</h2><p>The recording goes directly to Soniox Japan and is not stored by Vachanam.</p></div></div>
+          <div className="voice-section-heading"><span>02</span><div><h2>Add your custom voice</h2><p>Create one from the sample, or connect a voice already in your Soniox account.</p></div></div>
           <label className="voice-name-field"><span>Voice name</span><input className="field" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Dr Lakshmi's clinic voice" /></label>
           <label className="voice-consent">
             <input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} />
             <span><ShieldCheck size={22} weight="duotone" /><span><strong>I have the speaker’s explicit permission</strong><small>I confirm the speaker owns this voice or authorised this clinic to create and use its AI clone.</small></span></span>
           </label>
-          <div className="voice-safety-note"><FileAudio size={20} /><p><strong>Before you create it</strong><span>Maximum 20 seconds and 10 MB. Avoid music, other speakers, echo, mouth clicks, and background noise.</span></p></div>
-          {hasCustomVoice && <p className="voice-limit-note">This clinic already has its one custom voice. Remove it below before creating a replacement.</p>}
+          <div className="voice-safety-note"><FileAudio size={20} /><p><strong>Create from the sample</strong><span>Maximum 20 seconds and 10 MB. Avoid music, other speakers, echo, mouth clicks, and background noise.</span></p></div>
+          {hasCustomVoice && <p className="voice-limit-note">This clinic already has its one custom voice. Remove it below before adding a replacement.</p>}
           <button type="button" className="btn-primary voice-create-button" disabled={!readyToUpload || hasCustomVoice} onClick={() => upload.mutate()}>
             <Waveform size={18} weight="bold" />{upload.isPending ? "Creating voice…" : "Create Soniox voice"}
+          </button>
+
+          <div className="voice-existing-divider"><span>Already created in Soniox?</span></div>
+          <div className="voice-id-field">
+            <label htmlFor="soniox-voice-id">Soniox voice ID</label>
+            <input id="soniox-voice-id" className="field" maxLength={64} value={voiceId} onChange={(event) => setVoiceId(event.target.value)} placeholder="Paste the voice ID from Soniox" autoComplete="off" spellCheck="false" aria-describedby="soniox-voice-id-help" />
+            <small id="soniox-voice-id-help">We verify this ID against the connected Soniox account before saving it.</small>
+          </div>
+          <button type="button" className="btn-secondary voice-attach-button" disabled={!readyToAttach || hasCustomVoice} onClick={() => attach.mutate()}>
+            <LinkSimple size={18} weight="bold" />{attach.isPending ? "Verifying voice…" : "Add existing voice"}
           </button>
         </article>
       </section>

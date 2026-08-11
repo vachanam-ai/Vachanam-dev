@@ -12,6 +12,7 @@ from pathlib import Path
 
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +39,12 @@ _PREVIEW_TEXT = {
     "kn": "ನಮಸ್ಕಾರ. ನಾನು ನಿಮ್ಮ ಕ್ಲಿನಿಕ್‌ನ ವರ್ಚುವಲ್ ರಿಸೆಪ್ಷನಿಸ್ಟ್. ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?",
     "ml": "നമസ്കാരം. ഞാൻ നിങ്ങളുടെ ക്ലിനിക്കിന്റെ വെർച്വൽ റിസപ്ഷനിസ്റ്റാണ്. എങ്ങനെ സഹായിക്കാം?",
 }
+
+
+class AttachVoiceRequest(BaseModel):
+    name: str
+    voice_id: str
+    consent_confirmed: bool
 
 
 def _owner_only(user: CurrentUser) -> None:
@@ -145,7 +152,9 @@ async def create_voice_clone(
     display_name = _safe_name(name)
     if not consent_confirmed:
         raise HTTPException(status_code=422, detail="Voice-owner consent is required")
-    content_type = (file.content_type or "").lower()
+    # MediaRecorder includes codec parameters such as audio/webm;codecs=opus.
+    # Validate and forward the base type accepted by Soniox.
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     if content_type not in _ALLOWED_AUDIO_TYPES:
         raise HTTPException(status_code=415, detail="Upload WAV, MP3, M4A, OGG, or WebM audio")
     audio = await file.read(soniox_voice.MAX_CLIP_BYTES + 1)
@@ -241,6 +250,92 @@ async def create_voice_clone(
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
     logger.info("soniox_voice_clone_created", branch_id=branch_id, clone_id=str(row.id), status=row.status)
+    return _payload(row, branch.tts_voice)
+
+
+@router.post("/{branch_id}/voice-clones/import", status_code=201, dependencies=[Depends(queue_today_limit)])
+@audit("branch.voice_clone_imported", resource_type="branch_voice")
+async def import_voice_clone(
+    branch_id: str,
+    body: AttachVoiceRequest,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await assert_branch_access(current_user, branch_id, db)
+    _owner_only(current_user)
+    display_name = _safe_name(body.name)
+    if not body.consent_confirmed:
+        raise HTTPException(status_code=422, detail="Voice-owner consent is required")
+    provider_voice_id = (body.voice_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", provider_voice_id):
+        raise HTTPException(status_code=422, detail="Enter a valid Soniox voice ID")
+
+    branch_uuid = uuid.UUID(branch_id)
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == branch_uuid).with_for_update())
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    existing_voice = (
+        await db.execute(select(BranchVoice.id).where(BranchVoice.branch_id == branch_uuid))
+    ).scalar_one_or_none()
+    if existing_voice is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This clinic already has a custom voice. Delete it before adding a replacement.",
+        )
+    already_owned = (
+        await db.execute(
+            select(BranchVoice.id).where(BranchVoice.provider_voice_id == provider_voice_id)
+        )
+    ).scalar_one_or_none()
+    if already_owned is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="This Soniox voice is already connected to a clinic",
+        )
+
+    try:
+        provider = next(
+            (
+                item
+                for item in await soniox_voice.list_provider_voices()
+                if str(item.get("id") or item.get("voice_id") or "") == provider_voice_id
+            ),
+            None,
+        )
+    except soniox_voice.SonioxVoiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    if provider is None:
+        raise HTTPException(
+            status_code=404,
+            detail="This voice ID was not found in the connected Soniox account",
+        )
+
+    provider_name = str(provider.get("name") or f"soniox-{provider_voice_id}")[:128]
+    row = BranchVoice(
+        branch_id=branch_uuid,
+        provider_voice_id=provider_voice_id,
+        provider_name=provider_name,
+        name=display_name,
+        filename=Path(str(provider.get("filename") or "Existing Soniox voice")).name[:255],
+        model=settings.soniox_tts_model,
+        consent_user_id=uuid.UUID(current_user.user_id),
+        consent_text=soniox_voice.CONSENT_TEXT,
+    )
+    row.status, row.error_type, row.error_message = soniox_voice.model_state(provider)
+    db.add(row)
+    await db.commit()
+    request.state.audit_resource_id = str(row.id)
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    logger.info(
+        "soniox_voice_clone_imported",
+        branch_id=branch_id,
+        clone_id=str(row.id),
+        status=row.status,
+    )
     return _payload(row, branch.tts_voice)
 
 

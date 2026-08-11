@@ -201,6 +201,10 @@ export const createVoiceClone = (branchId, formData) =>
   api.post(`/branches/${branchId}/voice-clones`, formData, {
     timeout: 45000,
   }).then((r) => r.data);
+export const importVoiceClone = (branchId, payload) =>
+  api.post("/branches/" + branchId + "/voice-clones/import", payload, {
+    timeout: 20000,
+  }).then((r) => r.data);
 export const activateVoiceClone = (branchId, cloneId) =>
   api.post(`/branches/${branchId}/voice-clones/${cloneId}/activate`).then((r) => r.data);
 export const previewVoiceClone = (branchId, cloneId) =>
