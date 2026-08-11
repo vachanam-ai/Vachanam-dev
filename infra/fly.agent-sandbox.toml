@@ -1,9 +1,19 @@
-# VOICE LATENCY SANDBOX — Sarvam STT + Cartesia TTS (Vinay 2026-08-11).
+# VOICE LATENCY SANDBOX — Smallest STT + Gemini + Cartesia TTS (Vinay 2026-08-11).
 #
-# Aggressive latency reduction: Sarvam STT (regional India) replaces Soniox Japan
-# (383ms), Cartesia TTS replaces Soniox Japan TTS (509ms). Measured baseline
-# today: Soniox STT+TTS = 892ms = 52% of end-to-end latency. Sarvam + Cartesia
-# target: ~200-300ms, buying ~600ms on the call path.
+# Cartesia TTS already collected the TTS half: 509ms -> 97ms measured, because
+# that half really was the Tokyo round trip.
+#
+# The STT half is NOT geography. Benched from this worker (scripts/benchmark_stt.py,
+# n=9 each): Soniox JP med 413ms with only +/-10ms run-to-run spread, in-region
+# Sarvam med 721ms. A deterministic ~400ms with no jitter is an ENDPOINTING
+# decision, not a round trip, which is why moving the vendor to India made it
+# worse. Sarvam, Deepgram (accuracy, Vinay) and Cartesia STT (reverted b1fca10)
+# are all closed.
+#
+# Smallest Pulse is the remaining candidate because it exposes eou_timeout_ms
+# (100ms default) instead of a heuristic endpointer — it attacks the component
+# that is actually costing us. Telugu is BETA there; this sandbox exists to find
+# out whether that matters on a real call before anything reaches production.
 #
 # A SEPARATE Fly app running the SAME code as production with env vars
 # flipped. Nothing here can affect the live line:
@@ -32,8 +42,14 @@ primary_region = "bom"
 [env]
   APP_ENV = "production"     # same code path; provider switches are explicit
   LOG_LEVEL = "info"
-  # Cartesia STT (regional HTTP, low-latency vs Soniox JP 383ms).
-  STT_PROVIDER = "soniox"
+  # Smallest Pulse STT — real-call evaluation (Vinay 2026-08-11). Benched from
+  # this worker it is SLOWER than Soniox (med 629ms vs 324ms, n=12) and it
+  # transliterates code-mixed English into Telugu script ("ten o'clock" ->
+  # "టెన్ ఓ క్లాక్") where Soniox returns "10 o'clock". Both matter for booking.
+  # Kept here anyway because the bench is synthetic TTS audio, not an 8kHz PSTN
+  # caller, and Vinay judged Smallest accurate on real speech. Revert = set this
+  # back to "soniox".
+  STT_PROVIDER = "smallest"
   TTS_PROVIDER = "cartesia"
   LLM_PROVIDER = "gemini"
   CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"
