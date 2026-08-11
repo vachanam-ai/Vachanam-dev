@@ -1930,6 +1930,8 @@ async def _load_shared_prompt_cache(key, instructions: str) -> bool:
     patient data. The key already contains branch, language, day and the exact
     static-prompt digest, so a cache can never cross clinic boundaries.
     """
+    if not settings.voice_prompt_cache:
+        return False
     try:
         from backend.redis_client import get_redis
 
@@ -1951,7 +1953,7 @@ async def _create_prompt_cache(key, instructions: str, tools) -> bool:
     """Background: bake instructions + tool declarations into a CachedContent
     for FUTURE calls of this branch+lang today. Best-effort — failure only
     means calls keep the plain path."""
-    if settings.llm_provider != 'gemini':
+    if settings.llm_provider != 'gemini' or not settings.voice_prompt_cache:
         _PROMPT_CACHE_PENDING.discard(key)
         return False
     lock_redis = None
@@ -2022,7 +2024,7 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
     None when the cache isn't ready / doesn't byte-match (plain path). The
     global-API fallbacks are the same as _build_fallback_llm — they receive
     the full system prompt + tools per request as always."""
-    if settings.llm_provider != 'gemini':
+    if settings.llm_provider != 'gemini' or not settings.voice_prompt_cache:
         return None
     entry = _PROMPT_CACHE.get(key)
     if entry is None or entry[1] != instructions:
@@ -2059,7 +2061,7 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
 async def _resolve_cached_primary_llm(
     key, instructions: str
 ) -> lk_llm.FallbackAdapter | None:
-    if settings.llm_provider != 'gemini':
+    if settings.llm_provider != 'gemini' or not settings.voice_prompt_cache:
         return None
     cached = _cached_primary_llm(key, instructions)
     if cached is not None:
@@ -6321,7 +6323,7 @@ async def _reminder_retry_on_dial_fail(meta: dict) -> None:
     try:
         state, _ = await _reminder_dial_state(meta)
         if state != "ready":
-            logger.info("reminder_retry_closed", token=str(token_id)[-8:], state=state)
+            logger.info("reminder_retry_closed token=%s state=%s", str(token_id)[-8:], state)
             return
         from backend.models.schema import Token as _Token
 
@@ -6601,10 +6603,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             reminder_state, reminder_lead = await _reminder_dial_state(meta)
             if reminder_state != "ready":
                 logger.info(
-                    "reminder_dial_blocked",
-                    state=reminder_state,
-                    lead_seconds=reminder_lead,
-                    token=str(meta.get("token_id", ""))[-8:],
+                    "reminder_dial_blocked state=%s lead_seconds=%s token=%s",
+                    reminder_state,
+                    reminder_lead,
+                    str(meta.get("token_id", ""))[-8:],
                 )
                 if reminder_state == "too_early":
                     await _requeue_early_reminder(meta)

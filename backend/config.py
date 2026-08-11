@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     smallest_api_key: str = ""    # Pulse STT sandbox; production remains Soniox
     smallest_model: str = "pulse"
     smallest_eou_timeout_ms: int = 100
+    # Vertex explicit context caching. Measured 2026-08-11 over 1,529 turns it
+    # buys NO latency (llm_ttft p50 556ms cached vs 563ms uncached) while
+    # storage runs ~Rs650/mo per clinic-language, so it only pays for itself
+    # above ~660 talk-minutes/month. Off = the plain prompt path, which is the
+    # same path every cache miss already takes.
+    voice_prompt_cache: bool = True
     # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
     # conservative production canary; 0 restores Soniox's default behavior.
     # Tune one control at a time on real Telugu calls (0..3).

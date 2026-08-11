@@ -61,6 +61,12 @@ primary_region = "bom"
   SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"
   VOICE_NUM_IDLE_PROCESSES = "1"
   LIVEKIT_AGENT_NAME = "vachanam-sandbox"
+  # Vertex context caching OFF (Vinay 2026-08-12). Measured over 1,529 turns it
+  # buys NO latency — llm_ttft p50 556ms with cache_hit=True vs 563ms without —
+  # while storage costs ~Rs650/mo per clinic-language, which only pays for
+  # itself above ~660 talk-minutes/month. This sandbox exists to confirm the
+  # plain path is indistinguishable on a real call before production follows.
+  VOICE_PROMPT_CACHE = "0"
   VOICE_TOOL_PREFETCH = "true"
   VOICE_DETERMINISTIC_CONFIRM = "true"
   MAX_CALL_DURATION_SECONDS = "600"
