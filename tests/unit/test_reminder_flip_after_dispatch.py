@@ -79,6 +79,37 @@ async def test_successful_dispatch_marks_reminder_sent(db, monkeypatch, redis):
     assert called.get("token_id") == tok.id  # dispatch was attempted
     await db.refresh(tok)  # the job committed on its own session — reload from DB
     assert tok.reminder_sent is True
+    assert tok.reminder_30m_dispatched_at is not None
+
+
+@pytest.mark.asyncio
+async def test_reminder_dial_guard_allows_only_current_confirmed_booking(db, redis):
+    from agent.livekit_minimal.agent import _reminder_dial_state
+
+    tok = await _seed_in_window(db)
+    meta = {"call_type": "reminder", "token_id": str(tok.id), "branch_id": str(tok.branch_id)}
+    state, lead = await _reminder_dial_state(meta)
+    assert state == "ready"
+    assert 0 <= lead <= 31 * 60
+
+    tok.status = "cancelled_by_patient"
+    await db.commit()
+    assert (await _reminder_dial_state(meta))[0] == "not_confirmed"
+
+
+@pytest.mark.asyncio
+async def test_reminder_dial_guard_rejects_expired_or_early_dispatches(db, redis):
+    from agent.livekit_minimal.agent import _reminder_dial_state
+
+    tok = await _seed_in_window(db)
+    meta = {"call_type": "reminder", "token_id": str(tok.id), "branch_id": str(tok.branch_id)}
+    tok.appointment_time = (datetime.now(IST) - timedelta(minutes=1)).time()
+    await db.commit()
+    assert (await _reminder_dial_state(meta))[0] == "expired"
+
+    tok.appointment_time = (datetime.now(IST) + timedelta(minutes=40)).time()
+    await db.commit()
+    assert (await _reminder_dial_state(meta))[0] == "too_early"
 
 
 # ── prod 2026-07-27: a reminder marked sent on agent-JOIN but whose outbound
@@ -94,7 +125,9 @@ async def test_failed_dial_requeues_reminder(db, redis):
     tok.reminder_sent = True  # the job flips this on agent-join, before the dial
     await db.commit()
 
-    await _reminder_retry_on_dial_fail({"call_type": "reminder", "token_id": str(tok.id)})
+    await _reminder_retry_on_dial_fail(
+        {"call_type": "reminder", "token_id": str(tok.id), "branch_id": str(tok.branch_id)}
+    )
 
     await db.refresh(tok)
     assert tok.reminder_sent is False  # requeued → the next tick re-dials
@@ -108,7 +141,7 @@ async def test_dial_retry_is_bounded_by_attempt_cap(db, redis):
     )
 
     tok = await _seed_in_window(db)
-    meta = {"call_type": "reminder", "token_id": str(tok.id)}
+    meta = {"call_type": "reminder", "token_id": str(tok.id), "branch_id": str(tok.branch_id)}
 
     for _ in range(_REMINDER_MAX_DIAL_ATTEMPTS):  # attempts 1..cap → requeued
         tok.reminder_sent = True
@@ -122,6 +155,24 @@ async def test_dial_retry_is_bounded_by_attempt_cap(db, redis):
     await _reminder_retry_on_dial_fail(meta)
     await db.refresh(tok)
     assert tok.reminder_sent is True  # exhausted → NOT reset again
+
+
+@pytest.mark.asyncio
+async def test_failed_dial_after_appointment_never_requeues(db, redis):
+    from agent.livekit_minimal.agent import _reminder_retry_on_dial_fail
+
+    tok = await _seed_in_window(db)
+    tok.reminder_sent = True
+    tok.appointment_time = (datetime.now(IST) - timedelta(minutes=1)).time()
+    await db.commit()
+
+    await _reminder_retry_on_dial_fail(
+        {"call_type": "reminder", "token_id": str(tok.id), "branch_id": str(tok.branch_id)}
+    )
+
+    await db.refresh(tok)
+    assert tok.reminder_sent is True
+    assert tok.reminder_30m_dial_attempts == 0
 
 
 @pytest.mark.asyncio

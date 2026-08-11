@@ -10,7 +10,7 @@ a missed one, and the call itself confirms with the patient anyway.
 """
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -293,6 +293,7 @@ async def run_pre_appt_reminders() -> None:
                     )
                 if ok:
                     token.reminder_sent = True
+                    token.reminder_30m_dispatched_at = datetime.now(timezone.utc)
                     await db.commit()
                     # WA T8: WhatsApp reminder rides ALONGSIDE the voice call
                     # (spec 2026-07-13 — not replacing it yet). Independent
@@ -358,6 +359,7 @@ async def run_pre_appt_reminders() -> None:
                     ok = False
                 if ok:
                     token.reminder_24h_sent = True
+                    token.reminder_24h_dispatched_at = datetime.now(timezone.utc)
                     await db.commit()
 
         # #299: park until the next reminder is genuinely due, so every tick
@@ -435,6 +437,10 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                             "doctor_name": doctor.name,
                             "doctor_id": str(doctor.id),
                             "appointment_time": token.appointment_time.strftime("%H:%M"),
+                            # The worker rechecks this token immediately before
+                            # dialing; DB state, not dispatch metadata, wins.
+                            "appointment_date": token.date.isoformat(),
+                            "branch_timezone": branch.timezone or "Asia/Kolkata",
                         }
                     ),
                 )

@@ -524,11 +524,23 @@ class Token(Base):
     google_calendar_event_id: Mapped[str | None] = mapped_column(String(255))
     # The ~30-minute-before reminder.
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Operational audit for the 30-minute reminder. `reminder_sent` remains
+    # the compatibility/state flag; these fields preserve dispatch timing and
+    # retry state through Redis eviction or process restarts.
+    reminder_30m_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reminder_30m_dial_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     # The day-before reminder, sent only when the booking was made ≥24h ahead
     # (Vinay 2026-08-04). Its own flag: one boolean cannot say "the day-before
     # call went, the half-hour one has not", and sharing it would mean the
     # first reminder silently cancels the second.
     reminder_24h_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminder_24h_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # marked_by_user_id: UUID of User who marked attendance (plain UUID, no FK to avoid circular deps)

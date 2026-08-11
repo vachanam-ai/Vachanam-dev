@@ -6226,30 +6226,111 @@ class VachanamAgent(Agent):
 _REMINDER_MAX_DIAL_ATTEMPTS = 3
 
 
+async def _reminder_dial_state(meta: dict) -> tuple[str, int | None]:
+    """Return whether an outbound reminder is still safe to dial.
+
+    A queued dispatch can be delayed long enough for its booking to be
+    cancelled, moved, or already over. The scheduler's earlier read is never
+    sufficient; this is the final authoritative DB guard before SIP.
+    """
+    token_id = meta.get("token_id")
+    branch_id = meta.get("branch_id")
+    if not token_id or not branch_id:
+        return "invalid", None
+    try:
+        from zoneinfo import ZoneInfo
+
+        from backend.models.schema import Branch as _Branch, Token as _Token
+
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(_Token, _Branch)
+                    .join(_Branch, _Branch.id == _Token.branch_id)
+                    .where(
+                        _Token.id == UUID(str(token_id)),
+                        _Token.branch_id == UUID(str(branch_id)),
+                    )
+                )
+            ).first()
+        if row is None:
+            return "missing", None
+        token, branch = row
+        if token.status != "confirmed" or token.appointment_time is None:
+            return "not_confirmed", None
+        now = datetime_cls.now(ZoneInfo(branch.timezone or "Asia/Kolkata"))
+        appointment = datetime_cls.combine(
+            token.date, token.appointment_time, tzinfo=now.tzinfo
+        )
+        lead_seconds = int((appointment - now).total_seconds())
+        if lead_seconds < 0:
+            return "expired", lead_seconds
+        if lead_seconds > 31 * 60:
+            return "too_early", lead_seconds
+        return "ready", lead_seconds
+    except Exception as exc:  # noqa: BLE001 - patient calls fail closed
+        logger.warning("reminder_dial_state_unavailable: %s", type(exc).__name__)
+        return "unverified", None
+
+
+async def _requeue_early_reminder(meta: dict) -> None:
+    """Undo an erroneously early dispatch so the normal scheduler can retry."""
+    token_id = meta.get("token_id")
+    branch_id = meta.get("branch_id")
+    if not token_id or not branch_id:
+        return
+    try:
+        from backend.jobs import wake_gate
+        from backend.models.schema import Token as _Token
+
+        async with AsyncSessionLocal() as db:
+            row = (
+                await db.execute(
+                    select(_Token)
+                    .where(
+                        _Token.id == UUID(str(token_id)),
+                        _Token.branch_id == UUID(str(branch_id)),
+                    )
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if row is not None and row.status == "confirmed":
+                row.reminder_sent = False
+                await db.commit()
+        await wake_gate.clear_next_at("reminders")
+    except Exception as exc:  # noqa: BLE001 - later scheduler pass self-heals
+        logger.warning("reminder_early_requeue_failed: %s", type(exc).__name__)
+
+
 async def _reminder_retry_on_dial_fail(meta: dict) -> None:
     token_id = meta.get("token_id")
     if meta.get("call_type") != "reminder" or not token_id:
         return
     try:
-        async with aioredis.from_url(settings.redis_url, decode_responses=True) as r:
-            attempts = await r.incr(f"rem_retry:{token_id}")
-            await r.expire(f"rem_retry:{token_id}", 86400)  # RULE 9: same-day
+        state, _ = await _reminder_dial_state(meta)
+        if state != "ready":
+            logger.info("reminder_retry_closed", token=str(token_id)[-8:], state=state)
+            return
+        from backend.models.schema import Token as _Token
+
+        async with AsyncSessionLocal() as _db:
+            row = (
+                await _db.execute(
+                    select(_Token).where(_Token.id == UUID(str(token_id))).with_for_update()
+                )
+            ).scalar_one_or_none()
+            if row is None or row.status != "confirmed":
+                return
+            row.reminder_30m_dial_attempts = (row.reminder_30m_dial_attempts or 0) + 1
+            attempts = row.reminder_30m_dial_attempts
+            if attempts <= _REMINDER_MAX_DIAL_ATTEMPTS:
+                row.reminder_sent = False
+            await _db.commit()
         if attempts > _REMINDER_MAX_DIAL_ATTEMPTS:
             logger.warning(
                 "reminder_retry_exhausted token=%s attempts=%d", str(token_id)[-8:], attempts
             )
             return
-        from sqlalchemy import update as _update
-
-        from backend.models.schema import Token as _Token
-
-        async with AsyncSessionLocal() as _db:
-            await _db.execute(
-                _update(_Token)
-                .where(_Token.id == UUID(str(token_id)))
-                .values(reminder_sent=False)
-            )
-            await _db.commit()
         # The scheduler parked itself until the NEXT pending reminder after it
         # dispatched this one; clear the gate so the coming tick runs the DB pass
         # and re-dials THIS token while it is still inside the reminder window.
@@ -6504,6 +6585,19 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     _outbound_answer_play_task: asyncio.Task | None = None
     if outbound_number:
         logger.info("Outbound: dialing ...%s", outbound_number[-4:])
+        if is_reminder:
+            reminder_state, reminder_lead = await _reminder_dial_state(meta)
+            if reminder_state != "ready":
+                logger.info(
+                    "reminder_dial_blocked",
+                    state=reminder_state,
+                    lead_seconds=reminder_lead,
+                    token=str(meta.get("token_id", ""))[-8:],
+                )
+                if reminder_state == "too_early":
+                    await _requeue_early_reminder(meta)
+                ctx.shutdown()
+                return
         _out_trunk = await _validated_outbound_trunk(meta, ctx.api.sip)
         if not _out_trunk:
             logger.error(
