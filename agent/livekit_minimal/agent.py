@@ -1563,6 +1563,18 @@ def _build_stt(
     endpointing/latency risk.
     """
     provider = settings.stt_provider
+    if provider == 'cartesia':
+        if not settings.cartesia_api_key:
+            raise RuntimeError(
+                'STT_PROVIDER=cartesia but CARTESIA_API_KEY is unset'
+            )
+        from livekit.plugins import cartesia
+
+        logger.info('stt_config provider=cartesia lang=%s', lang_cfg.code)
+        return cartesia.STT(
+            api_key=settings.cartesia_api_key,
+            language=lang_cfg.code,
+        )
     if provider == 'smallest':
         if not settings.smallest_api_key:
             raise RuntimeError(

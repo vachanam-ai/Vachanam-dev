@@ -1,6 +1,11 @@
-# VOICE LATENCY SANDBOX — Soniox STT + Soniox TTS (Vinay 2026-08-10).
+# VOICE LATENCY SANDBOX — Sarvam STT + Cartesia TTS (Vinay 2026-08-11).
 #
-# A SEPARATE Fly app running the SAME code as production with two env vars
+# Aggressive latency reduction: Sarvam STT (regional India) replaces Soniox Japan
+# (383ms), Cartesia TTS replaces Soniox Japan TTS (509ms). Measured baseline
+# today: Soniox STT+TTS = 892ms = 52% of end-to-end latency. Sarvam + Cartesia
+# target: ~200-300ms, buying ~600ms on the call path.
+#
+# A SEPARATE Fly app running the SAME code as production with env vars
 # flipped. Nothing here can affect the live line:
 #
 #   * different app        -> its own machine, its own deploys
@@ -9,10 +14,10 @@
 #                             would make both workers eligible for the same
 #                             call, which is how a "sandbox" ends up answering
 #                             real patients.
-#   * explicit provider env -> Soniox only inside this worker
+#   * explicit provider env -> Sarvam STT + Cartesia TTS inside this worker
 #
 # Deploy:  flyctl deploy --config infra/fly.agent-sandbox.toml --remote-only
-# Secrets: flyctl secrets set -a vachanam-agent-sandbox SONIOX_JP_API_KEY=... \
+# Secrets: flyctl secrets set -a vachanam-agent-sandbox SARVAM_API_KEY=... CARTESIA_API_KEY=... \
 #            (plus the same LiveKit/DB/Redis/Gemini secrets as the prod app)
 #
 # Routing a real number to it is a DELIBERATE, reversible step — see
@@ -27,9 +32,8 @@ primary_region = "bom"
 [env]
   APP_ENV = "production"     # same code path; provider switches are explicit
   LOG_LEVEL = "info"
-  # Pulse Telugu live canary failed silent after nine turns while still
-  # consuming audio. Soniox is the proven recognizer for this canary.
-  STT_PROVIDER = "soniox"
+  # Cartesia STT (regional HTTP, low-latency vs Soniox JP 383ms).
+  STT_PROVIDER = "cartesia"
   TTS_PROVIDER = "cartesia"
   LLM_PROVIDER = "gemini"
   CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"
