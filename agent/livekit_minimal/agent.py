@@ -1373,6 +1373,58 @@ def _build_session_tts(
     return primary
 
 
+def _prewarm_llm_connection(proc) -> None:
+    """Pay the cold Vertex handshake in the IDLE subprocess, not on turn 1.
+
+    Measured 2026-08-12 with three fresh clients: the first request to
+    asia-south1 costs 1231-1340ms against 553-730ms warm — a +567 to +668ms
+    penalty for TLS, HTTP/2 and the SA token exchange. Production turn 1 shows
+    llm_ttft 775ms versus 491ms steady.
+
+    A per-call dummy request was removed here once before (see the entrypoint
+    comment) for two good reasons: it competed with a fast caller's real
+    request and could double generation, and prompt caching was warming the
+    connection anyway. VOICE_PROMPT_CACHE=0 removed that second warmth, so the
+    warm has to come back — but ONCE PER SUBPROCESS at prewarm, where there is
+    no caller to compete with, rather than once per call.
+
+    Runs on a daemon thread because prewarm is sync and the LLM needs a loop.
+    Entirely best-effort: a failure just means turn 1 pays what it pays today.
+    """
+    if not settings.voice_llm_prewarm:
+        return
+    llm_obj = proc.userdata.get("llm")
+    if llm_obj is None:
+        return
+
+    import threading
+    import time as _time
+
+    def _run() -> None:
+        async def _warm() -> None:
+            from livekit.agents.utils import http_context
+
+            async with http_context.open():
+                ctx = ChatContext.empty()
+                ctx.add_message(role="user", content="hi")
+                stream = llm_obj.chat(chat_ctx=ctx)
+                try:
+                    async for _chunk in stream:
+                        break  # first token proves the connection is up
+                finally:
+                    await stream.aclose()
+
+        try:
+            t0 = _time.perf_counter()
+            asyncio.run(_warm())
+            logger.info("llm_connection_prewarmed ms=%d",
+                        int((_time.perf_counter() - t0) * 1000))
+        except Exception as e:  # noqa: BLE001 — best-effort, never blocks a call
+            logger.warning("llm_connection_prewarm_failed: %s", str(e)[:140])
+
+    threading.Thread(target=_run, name="llm-prewarm", daemon=True).start()
+
+
 def _prewarm_soniox_tts(proc) -> None:
     """#8 part 1: build the default-voice Soniox TTS object ONCE per worker
     (proc.userdata['tts_soniox']), reused by _build_session_tts when the call's
@@ -9605,6 +9657,9 @@ def _prewarm(proc) -> None:
     # process and reuse, so its construction is off every call's pre-greeting
     # path (part of the ~3s lat_setup before the agent can speak).
     proc.userdata["llm"] = _build_fallback_llm()
+    # Building the object does not open a connection. Fire one throwaway
+    # generation now so the caller's first turn skips the cold handshake.
+    _prewarm_llm_connection(proc)
     # CalendarService builds a Google API client (the slow part of the ~2.9s
     # pre-session work). The SA is global, so build it once and reuse.
     try:

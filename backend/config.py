@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # above ~660 talk-minutes/month. Off = the plain prompt path, which is the
     # same path every cache miss already takes.
     voice_prompt_cache: bool = True
+    # One throwaway Vertex generation per job subprocess at prewarm. The first
+    # request to asia-south1 costs +567 to +668ms over a warm one (measured
+    # 2026-08-12), which the caller hears on turn 1. Off = turn 1 pays it.
+    voice_llm_prewarm: bool = True
     # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
     # conservative production canary; 0 restores Soniox's default behavior.
     # Tune one control at a time on real Telugu calls (0..3).
