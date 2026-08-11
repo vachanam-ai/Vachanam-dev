@@ -42,14 +42,15 @@ primary_region = "bom"
 [env]
   APP_ENV = "production"     # same code path; provider switches are explicit
   LOG_LEVEL = "info"
-  # Smallest Pulse STT — real-call evaluation (Vinay 2026-08-11). Benched from
-  # this worker it is SLOWER than Soniox (med 629ms vs 324ms, n=12) and it
-  # transliterates code-mixed English into Telugu script ("ten o'clock" ->
-  # "టెన్ ఓ క్లాక్") where Soniox returns "10 o'clock". Both matter for booking.
-  # Kept here anyway because the bench is synthetic TTS audio, not an 8kHz PSTN
-  # caller, and Vinay judged Smallest accurate on real speech. Revert = set this
-  # back to "soniox".
-  STT_PROVIDER = "smallest"
+  # Smallest Pulse STT was evaluated on a real call 2026-08-11 (session dda1e4ad,
+  # 14 turns) and REVERTED. stt_finalize p50 762ms vs 409ms on Soniox, total p50
+  # 1737ms — worse than production's 1653ms, so it ate the entire Cartesia TTS
+  # win. It also stalled audibly mid-call: one turn at 4388ms with 2892ms
+  # unaccounted, another with a 1306ms playout gap and no transcript at all.
+  # Its STT metrics fire every 5.00s regardless of speech, so an utterance that
+  # ends just past a window boundary waits for the next window to close.
+  # Do not re-try Smallest without evidence that windowing changed.
+  STT_PROVIDER = "soniox"
   TTS_PROVIDER = "cartesia"
   LLM_PROVIDER = "gemini"
   CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"
