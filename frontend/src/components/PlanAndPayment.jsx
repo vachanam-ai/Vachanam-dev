@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   changePlan,
+  cancelPlanChange,
   createAutopaySubscription,
   createWhatsappAddonOrder,
   fetchPlan,
@@ -48,7 +49,7 @@ const fmt = (d) =>
     day: "numeric", month: "short", year: "numeric",
   });
 
-export default function PlanAndPayment() {
+export default function PlanAndPayment({ initialPlan = null }) {
   const qc = useQueryClient();
   const { user } = useAuth();
 
@@ -60,19 +61,26 @@ export default function PlanAndPayment() {
   const p = plan.data;
   const [selectedPlan, setSelectedPlan] = useState("solo");
   const legacyPlan = Boolean(p?.plan && !PUBLIC_PLAN_KEYS.includes(p.plan));
-  const autopayBase = legacyPlan
-    ? (PLAN_PRICES[selectedPlan] ?? 0)
-    : (p?.next_base_rupees || PLAN_PRICES[p?.plan] || 0);
+  const autopayBase = selectedPlan === p?.plan
+    ? (p?.next_base_rupees || PLAN_PRICES[selectedPlan] || 0)
+    : (PLAN_PRICES[selectedPlan] ?? 0);
 
   useEffect(() => {
     if (!p) return;
-    const next = PUBLIC_PLAN_KEYS.includes(p.pending_plan)
+    const serverPlan = PUBLIC_PLAN_KEYS.includes(p.pending_plan)
       ? p.pending_plan
       : PUBLIC_PLAN_KEYS.includes(p.plan)
         ? p.plan
         : "solo";
-    setSelectedPlan(next);
-  }, [p?.plan, p?.pending_plan]);
+    setSelectedPlan(PUBLIC_PLAN_KEYS.includes(initialPlan) ? initialPlan : serverPlan);
+  }, [p?.plan, p?.pending_plan, initialPlan]);
+
+  const serverPlan = PUBLIC_PLAN_KEYS.includes(p?.pending_plan)
+    ? p.pending_plan
+    : PUBLIC_PLAN_KEYS.includes(p?.plan)
+      ? p.plan
+      : "solo";
+  const hasDraftChange = Boolean(p && selectedPlan !== serverPlan);
 
   const planChange = useMutation({
     mutationFn: (p) => changePlan(p),
@@ -86,6 +94,17 @@ export default function PlanAndPayment() {
       else toast.success("Scheduled change cancelled");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not change plan"),
+  });
+
+  const cancelChange = useMutation({
+    mutationFn: cancelPlanChange,
+    onSuccess: (d) => {
+      qc.setQueryData(["plan"], d);
+      qc.invalidateQueries({ queryKey: ["billing-summary"] });
+      toast.success("Scheduled plan change cancelled");
+    },
+    onError: (e) =>
+      toast.error(e?.response?.data?.detail ?? "Could not cancel the scheduled change"),
   });
 
   const refresh = () => {
@@ -208,7 +227,7 @@ export default function PlanAndPayment() {
     ? Math.ceil((new Date(p.cycle_end) - Date.now()) / 86400000)
     : null;
   return (
-    <section data-reveal className="card p-6">
+    <section id="plan-payment" data-reveal className="card p-6 scroll-mt-24">
       <p className="eyebrow">Plan &amp; payment</p>
       <h2 className="section-title text-xl">Change plan or pay</h2>
       <p className="mt-1 font-ui text-sm text-slate">
@@ -218,15 +237,23 @@ export default function PlanAndPayment() {
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <div>
-          <label className="label">{legacyPlan ? "Choose a current plan" : "Plan"}</label>
-          <select className="field min-w-[220px]" value={selectedPlan}
+          <label className="label" htmlFor="plan-select">{legacyPlan ? "Choose a current plan" : "Plan"}</label>
+          <select id="plan-select" className="field min-w-[220px]" value={selectedPlan}
             disabled={planChange.isPending || plan.isLoading}
-            onChange={(e) => { setSelectedPlan(e.target.value); planChange.mutate(e.target.value); }}>
+            onChange={(e) => setSelectedPlan(e.target.value)}>
             {PUBLIC_PLAN_KEYS.map((key) => (
               <option key={key} value={key}>{PLAN_LABELS[key]}</option>
             ))}
           </select>
         </div>
+        <button
+          type="button"
+          className="btn-primary mt-5"
+          disabled={!hasDraftChange || planChange.isPending || cancelChange.isPending}
+          onClick={() => planChange.mutate(selectedPlan)}
+        >
+          {planChange.isPending ? "Scheduling..." : "Schedule plan change"}
+        </button>
         {legacyPlan && (
           <p className="mt-3 rounded-lg bg-gold-soft px-3 py-2 font-ui text-xs text-gold-ink">
             Lite is a retired plan. Select Basic, Growth, or Scale before enabling autopay. Your past invoices remain unchanged.
@@ -279,8 +306,16 @@ export default function PlanAndPayment() {
         <div className="mt-3 rounded-xl border border-line2 bg-pill p-3">
           <p className="font-ui text-sm">
             <strong>Scheduled change.</strong> Switching to <strong>{p.pending_plan}</strong> on{" "}
-            <strong>{p.pending_plan_effective}</strong>. Pick your current plan to cancel.
+            <strong>{p.pending_plan_effective}</strong>.
           </p>
+          <button
+            type="button"
+            className="btn-ghost mt-3"
+            disabled={cancelChange.isPending || planChange.isPending}
+            onClick={() => cancelChange.mutate()}
+          >
+            {cancelChange.isPending ? "Cancelling..." : "Cancel scheduled change"}
+          </button>
         </div>
       )}
 

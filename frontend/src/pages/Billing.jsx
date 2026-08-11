@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader.jsx";
 import PlanAndPayment from "../components/PlanAndPayment.jsx";
 import { revealStagger } from "../lib/motion.js";
@@ -77,6 +77,7 @@ function UsageBar({ used, included }) {
 }
 
 export default function Billing() {
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const cancelM = useMutation({
@@ -202,7 +203,9 @@ export default function Billing() {
             <p className="eyebrow">Next charge</p>
             <h2 className="section-title text-xl">What you will pay</h2>
             <div className="mt-3 divide-y divide-line">
-              <Row label={`${d.plan_label} plan`} value={money(d.base_next)} />
+              {d.base_next > 0 && (
+                <Row label={`${d.next_plan_label} plan`} value={money(d.base_next)} />
+              )}
               {d.whatsapp_addon_amount > 0 && (
                 <Row label="WhatsApp add-on" value={money(d.whatsapp_addon_amount)} />
               )}
@@ -217,17 +220,19 @@ export default function Billing() {
               <Row label="Total" value={money(d.total_next)} strong />
             </div>
             <p className="mt-3 font-ui text-xs text-slate">
-              {d.autopay_enabled
-                ? "Plan and WhatsApp charges renew automatically. Extra voice minutes are invoiced separately."
-                : "Paid manually each cycle — the button is below."}
+              {d.cancellation_effective
+                ? "No plan renewal will be charged. Any current-cycle extra minutes remain payable."
+                : d.autopay_enabled
+                  ? "Plan and WhatsApp charges renew automatically. Extra voice minutes are invoiced separately."
+                  : "Paid manually each cycle - the button is below."}
             </p>
           </section>
 
           {/* Plan & payment — moved here from Settings (Vinay 2026-08-09).
               Anchored so "Adjust plan" above scrolls to it instead of leaving
               the page. */}
-          <div id="plan-payment" className="scroll-mt-24">
-            <PlanAndPayment />
+          <div>
+            <PlanAndPayment initialPlan={searchParams.get("plan")} />
           </div>
 
           {/* History */}
@@ -328,8 +333,8 @@ export default function Billing() {
                       Switch to the WhatsApp-only plan instead and keep booking patients on
                       chat. You keep your patients, doctors and history.
                     </p>
-                    <Link to="/settings" className="btn-ghost mt-3 inline-flex">
-                      Switch to WhatsApp-only
+                    <Link to="/billing?plan=wa#plan-payment" className="btn-ghost mt-3 inline-flex">
+                      Review WhatsApp-only switch
                     </Link>
                   </div>
                 )}

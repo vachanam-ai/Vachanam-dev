@@ -116,7 +116,7 @@ def test_summary_always_reports_a_period_and_says_if_it_is_invoiced():
         "usage is still measured only inside an existing BillingCycle; an "
         "unpaid clinic will keep seeing zeros"
     )
-    assert "has_billed=last is not None" in src, (
+    assert "has_billed=current is not None" in src, (
         "the page cannot tell 'Renews on' from 'First charge on' without this"
     )
 

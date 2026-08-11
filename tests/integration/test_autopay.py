@@ -404,3 +404,173 @@ async def test_recurring_charge_uses_due_pending_plan(
     fresh = await db.get(Organization, org_id)
     assert fresh.plan == "multi"
     assert fresh.pending_plan is None
+async def test_plan_change_response_preserves_paid_whatsapp_entitlement(client, db, org):
+    org.plan = "solo"
+    org.status = "active"
+    branch = Branch(
+        org_id=org.id,
+        name="Entitled Branch",
+        status="active",
+        whatsapp_number="+919876500066",
+        whatsapp_addon=True,
+    )
+    db.add(branch)
+    await db.commit()
+    await _cycle(db, org)
+
+    response = await client.post(
+        "/api/plan-change",
+        headers=_auth(org.id),
+        json={"plan": "multi"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["whatsapp_addon"] is True
+    assert response.json()["pending_plan"] == "multi"
+
+
+async def test_retired_plan_can_cancel_scheduled_change_without_losing_addon(
+    client, db, org
+):
+    org.plan = "lite"
+    org.status = "active"
+    org.pending_plan = "solo"
+    org.pending_plan_effective = date.today() + timedelta(days=10)
+    branch = Branch(
+        org_id=org.id,
+        name="Legacy Branch",
+        status="active",
+        whatsapp_number="+919876500055",
+        whatsapp_addon=True,
+    )
+    db.add(branch)
+    await db.commit()
+
+    response = await client.post(
+        "/api/plan-change/cancel",
+        headers=_auth(org.id),
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["pending_plan"] is None
+    assert response.json()["whatsapp_addon"] is True
+
+
+async def test_future_paid_cycle_never_replaces_the_cycle_being_used_today(
+    client, db, org
+):
+    org.plan = "solo"
+    org.status = "active"
+    branch = Branch(
+        org_id=org.id,
+        name="Cycle Branch",
+        status="active",
+        whatsapp_number="+919876500044",
+    )
+    db.add(branch)
+    current = BillingCycle(
+        org_id=org.id,
+        cycle_start=date.today() - timedelta(days=20),
+        cycle_end=date.today() + timedelta(days=10),
+        plan="solo",
+        base_amount=5999,
+        included_minutes=400,
+        minutes_used=0,
+        overage_minutes=0,
+        overage_rate=6,
+        overage_amount=0,
+        status="paid",
+        razorpay_payment_id=f"pay_current_{uuid.uuid4().hex[:8]}",
+    )
+    future = BillingCycle(
+        org_id=org.id,
+        cycle_start=current.cycle_end,
+        cycle_end=current.cycle_end + timedelta(days=30),
+        plan="clinic",
+        base_amount=10999,
+        included_minutes=1500,
+        minutes_used=0,
+        overage_minutes=0,
+        overage_rate=6,
+        overage_amount=0,
+        status="paid",
+        razorpay_payment_id=f"pay_future_{uuid.uuid4().hex[:8]}",
+    )
+    db.add_all([current, future])
+    await db.commit()
+
+    response = await client.get("/api/billing/summary", headers=_auth(org.id))
+
+    assert response.status_code == 200, response.text
+    assert response.json()["cycle_end"] == current.cycle_end.isoformat()
+    assert response.json()["plan"] == "solo"
+    assert response.json()["included_minutes"] == 400
+async def test_gstin_update_preserves_whatsapp_entitlement(client, db, org):
+    org.plan = "solo"
+    org.status = "active"
+    branch = Branch(
+        org_id=org.id,
+        name="GST Branch",
+        status="active",
+        whatsapp_number="+919876500033",
+        whatsapp_addon=True,
+    )
+    db.add(branch)
+    await db.commit()
+
+    response = await client.post(
+        "/api/billing/gstin",
+        headers=_auth(org.id),
+        json={"gstin": "29ABCDE1234F1Z5"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["whatsapp_addon"] is True
+    assert response.json()["gstin"] == "29ABCDE1234F1Z5"
+
+
+async def test_next_charge_uses_pending_plan_and_drops_redundant_addon(
+    client, db, org
+):
+    org.plan = "solo"
+    org.status = "active"
+    org.pending_plan = "clinic"
+    org.pending_plan_effective = date.today() + timedelta(days=10)
+    branch = Branch(
+        org_id=org.id,
+        name="Upgrade Branch",
+        status="active",
+        whatsapp_number="+919876500022",
+        whatsapp_addon=True,
+    )
+    db.add(branch)
+    await db.commit()
+    await _cycle(db, org)
+
+    response = await client.get("/api/billing/summary", headers=_auth(org.id))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["plan"] == "solo"
+    assert body["next_plan"] == "clinic"
+    assert body["next_plan_label"] == "Growth"
+    assert body["base_next"] == 10999
+    assert body["whatsapp_addon_amount"] == 0
+
+
+async def test_scheduled_cancellation_never_shows_another_plan_charge(
+    client, db, org
+):
+    org.plan = "solo"
+    org.status = "active"
+    current = await _cycle(db, org)
+    org.cancellation_effective = current.cycle_end
+    await db.commit()
+
+    response = await client.get("/api/billing/summary", headers=_auth(org.id))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["base_next"] == 0
+    assert body["whatsapp_addon_amount"] == 0
+    assert body["total_next"] == body["overage_amount"]

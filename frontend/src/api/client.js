@@ -85,6 +85,8 @@ export const logoutSession = () => api.post("/auth/logout");
 export const fetchPlan = () => api.get("/api/plan").then((r) => r.data);
 export const changePlan = (plan) =>
   api.post("/api/plan-change", { plan }).then((r) => r.data);
+export const cancelPlanChange = () =>
+  api.post("/api/plan-change/cancel").then((r) => r.data);
 export const createPaymentOrder = (plan) =>
   api.post("/api/create-order", { plan }).then((r) => r.data);
 export const createAutopaySubscription = (plan) =>

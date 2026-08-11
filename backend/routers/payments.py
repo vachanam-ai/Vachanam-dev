@@ -550,15 +550,47 @@ def _metering_period(org: Organization, today: date) -> tuple[date, date]:
         start = nxt
 
 
+async def _current_cycle(db: AsyncSession, org_id, today: date | None = None):
+    """Paid cycle containing today; future renewals are never current.
+
+    A clinic may pay a renewal early. Ordering all cycles by cycle_end made
+    that future row replace the cycle being consumed today, which reset the
+    billing screen's usage and moved its renewal date forward by a month.
+    """
+    from backend.models.schema import BillingCycle
+
+    today = today or date.today()
+    return (
+        await db.execute(
+            select(BillingCycle)
+            .where(
+                BillingCycle.org_id == org_id,
+                BillingCycle.cycle_start <= today,
+                BillingCycle.cycle_end > today,
+                BillingCycle.status == "paid",
+            )
+            .order_by(BillingCycle.cycle_start.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def _latest_cycle_end(db: AsyncSession, org_id) -> date | None:
     last = await _latest_cycle(db, org_id)
     return last.cycle_end if last else None
 
 
-def _plan_info(org: Organization, last_cycle=None, wa_addon: bool = False) -> "PlanInfo":
+def _plan_info(
+    org: Organization,
+    current_cycle=None,
+    wa_addon: bool = False,
+    latest_payment_cycle=None,
+) -> "PlanInfo":
     from backend.services.billing_math import WHATSAPP_PLANS
 
-    _base, _is_offer = effective_price(org.plan, org.subscription_started_at)
+    plan_key = current_cycle.plan if current_cycle is not None else org.plan
+    payment_cycle = latest_payment_cycle or current_cycle
+    _base, _is_offer = effective_price(plan_key, org.subscription_started_at)
     return PlanInfo(
         autopay_enabled=_autopay_enabled(org),
         autopay_status=getattr(org, "razorpay_subscription_status", None),
@@ -566,10 +598,10 @@ def _plan_info(org: Organization, last_cycle=None, wa_addon: bool = False) -> "P
         is_offer=_is_offer,
         # Three distinct states, because offering to SELL a clinic something
         # their plan already includes is worse than not offering it at all.
-        whatsapp_included=org.plan in WHATSAPP_PLANS,
+        whatsapp_included=plan_key in WHATSAPP_PLANS,
         whatsapp_addon=bool(wa_addon),
         whatsapp_included_pending=(org.pending_plan or "") in WHATSAPP_PLANS,
-        plan=org.plan,
+        plan=plan_key,
         status=org.status,
         pending_plan=org.pending_plan,
         pending_plan_effective=(
@@ -579,12 +611,12 @@ def _plan_info(org: Organization, last_cycle=None, wa_addon: bool = False) -> "P
             org.cancellation_effective.isoformat()
             if org.cancellation_effective else None
         ),
-        cycle_end=last_cycle.cycle_end.isoformat() if last_cycle else None,
+        cycle_end=current_cycle.cycle_end.isoformat() if current_cycle else None,
         # The cycle row is created the moment the webhook confirms payment —
         # its created_at IS the payment timestamp (#353 "last payment date").
         last_payment_date=(
-            last_cycle.created_at.date().isoformat()
-            if last_cycle is not None and last_cycle.created_at
+            payment_cycle.created_at.date().isoformat()
+            if payment_cycle is not None and payment_cycle.created_at
             else None
         ),
         gstin=getattr(org, "gstin", None),
@@ -598,7 +630,12 @@ async def get_plan(
 ) -> "PlanInfo":
     """Caller's current plan + any scheduled change + current cycle end."""
     org = await _load_my_org(current_user, db)
-    return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
+    return _plan_info(
+        org,
+        await _current_cycle(db, org.id),
+        await _org_wa_addon(db, org.id),
+        await _latest_cycle(db, org.id),
+    )
 
 
 class BillingCycleOut(BaseModel):
@@ -625,6 +662,8 @@ class BillingSummary(BaseModel):
     """
     plan: str
     plan_label: str
+    next_plan: str = ""
+    next_plan_label: str = ""
     status: str
     cycle_start: str | None = None
     cycle_end: str | None = None
@@ -657,16 +696,16 @@ async def billing_summary(
     )
 
     org = await _load_my_org(current_user, db)
-    plan_key = org.plan or "clinic"
+    current = await _current_cycle(db, org.id)
+    plan_key = (current.plan if current is not None else org.plan) or "clinic"
     plan_def = PLANS.get(plan_key)
-    last = await _latest_cycle(db, org.id)
     wa_addon = await _org_wa_addon(db, org.id)
 
     # Meter the CURRENT period whether or not it has been invoiced yet — see
     # _metering_period. A clinic that has not paid still makes calls, and those
     # minutes are what tells them whether the plan fits.
-    if last is not None:
-        period_start, period_end = last.cycle_start, last.cycle_end
+    if current is not None:
+        period_start, period_end = current.cycle_start, current.cycle_end
     else:
         period_start, period_end = _metering_period(org, date.today())
     used = await _cycle_minutes_used(db, org.id, period_start, period_end)
@@ -676,10 +715,22 @@ async def billing_summary(
     rate = plan_def.overage_per_min if plan_def else 0.0
     over_amt = int(round(over_min * rate))
 
-    base_next, is_offer = effective_price(plan_key, org.subscription_started_at)
-    addon_amt = (
-        WHATSAPP_ADDON_RUPEES if wa_addon and plan_key in WHATSAPP_ADDON_PLANS else 0
-    )
+    next_plan_key = (org.pending_plan or plan_key).lower()
+    next_plan_def = PLANS.get(next_plan_key)
+    if org.cancellation_effective:
+        # Cancellation stops the fixed renewal, but current-cycle overage is
+        # still owed. Never show a full plan charge after promising an exit.
+        base_next, is_offer = 0, False
+        addon_amt = 0
+    else:
+        base_next, is_offer = effective_price(
+            next_plan_key, org.subscription_started_at
+        )
+        addon_amt = (
+            WHATSAPP_ADDON_RUPEES
+            if wa_addon and next_plan_key in WHATSAPP_ADDON_PLANS
+            else 0
+        )
     subtotal = base_next + addon_amt + over_amt
     gst = _gst_on(subtotal)
 
@@ -695,6 +746,10 @@ async def billing_summary(
     return BillingSummary(
         plan=plan_key,
         plan_label=(plan_def.display_name if plan_def else plan_key),
+        next_plan=next_plan_key,
+        next_plan_label=(
+            next_plan_def.display_name if next_plan_def else next_plan_key
+        ),
         status=org.status or "paused",
         cycle_start=period_start.isoformat(),
         cycle_end=period_end.isoformat(),
@@ -702,7 +757,7 @@ async def billing_summary(
         # either way, but "Renews on" and "First charge on" are different
         # sentences and the page must not promise a renewal to a clinic that
         # has not paid once.
-        has_billed=last is not None,
+        has_billed=current is not None,
         included_minutes=included,
         minutes_used=used_min,
         overage_minutes=over_min,
@@ -1065,7 +1120,46 @@ async def change_plan(
         to_plan=org.pending_plan,
         effective=org.pending_plan_effective.isoformat() if org.pending_plan_effective else None,
     )
-    return _plan_info(org)
+    return _plan_info(
+        org,
+        await _current_cycle(db, org.id),
+        await _org_wa_addon(db, org.id),
+        await _latest_cycle(db, org.id),
+    )
+
+
+@router.post("/plan-change/cancel", response_model=PlanInfo)
+async def cancel_plan_change(
+    current_user: CurrentUser = Depends(get_current_user),
+    db: "AsyncSession" = Depends(get_db),
+) -> "PlanInfo":
+    """Cancel a scheduled plan switch, including from a retired plan."""
+    if current_user.role != "org_admin":
+        raise HTTPException(status_code=403, detail="Only a clinic owner can change the plan")
+    org = await _load_my_org(current_user, db)
+    if org.pending_plan and org.razorpay_subscription_id:
+        try:
+            await asyncio.to_thread(
+                _get_client().subscription.cancel_scheduled_changes,
+                org.razorpay_subscription_id,
+            )
+        except Exception as exc:
+            logger.error("autopay_plan_change_cancel_failed", error=str(exc)[:180])
+            raise HTTPException(
+                status_code=502,
+                detail="Razorpay could not cancel this scheduled plan change",
+            ) from exc
+    org.pending_plan = None
+    org.pending_plan_effective = None
+    await db.commit()
+    await db.refresh(org)
+    logger.info("plan_change_cancelled", org_id=current_user.org_id)
+    return _plan_info(
+        org,
+        await _current_cycle(db, org.id),
+        await _org_wa_addon(db, org.id),
+        await _latest_cycle(db, org.id),
+    )
 
 
 class CancelRequest(BaseModel):
@@ -1118,7 +1212,12 @@ async def cancel_subscription(
         await db.commit()
         await db.refresh(org)
         logger.info("cancellation_withdrawn", org_id=current_user.org_id)
-        return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
+        return _plan_info(
+            org,
+            await _current_cycle(db, org.id),
+            await _org_wa_addon(db, org.id),
+            await _latest_cycle(db, org.id),
+        )
 
     cycle_end = await _latest_cycle_end(db, org.id)
     if org.razorpay_subscription_id:
@@ -1150,7 +1249,12 @@ async def cancel_subscription(
         org_id=current_user.org_id,
         effective=org.cancellation_effective.isoformat() if org.cancellation_effective else "now",
     )
-    return _plan_info(org, await _latest_cycle(db, org.id), await _org_wa_addon(db, org.id))
+    return _plan_info(
+        org,
+        await _current_cycle(db, org.id),
+        await _org_wa_addon(db, org.id),
+        await _latest_cycle(db, org.id),
+    )
 
 
 class GstinBody(BaseModel):
@@ -1177,7 +1281,12 @@ async def set_gstin(
     org.gstin = g or None
     await db.commit()
     logger.info("gstin_saved", org_id=current_user.org_id, set=bool(g))
-    return _plan_info(org, await _latest_cycle(db, org.id))
+    return _plan_info(
+        org,
+        await _current_cycle(db, org.id),
+        await _org_wa_addon(db, org.id),
+        await _latest_cycle(db, org.id),
+    )
 
 
 @router.post(
