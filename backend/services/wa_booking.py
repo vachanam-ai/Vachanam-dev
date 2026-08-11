@@ -32,7 +32,7 @@ import re
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -49,7 +49,7 @@ from agent.tools.booking_tools import (
     route_to_doctor,
 )
 from backend.config import settings
-from backend.models.schema import Branch, Doctor, Patient, Token
+from backend.models.schema import Branch, CalendarWriteTask, Doctor, Patient, Token
 from backend.services.doctor_schedule import resolve_doctor_schedule
 from backend.services.validators import normalize_indian_phone
 
@@ -658,7 +658,7 @@ async def upcoming(db: AsyncSession, branch: Branch, phone: str) -> list[Token]:
 
 
 async def _owned_token(
-    db: AsyncSession, branch: Branch, phone: str, token_id: str
+    db: AsyncSession, branch: Branch, phone: str, token_id: str, *, lock: bool = False
 ) -> Token | None:
     """The booking, only if this number owns it. RULE 1 + the ownership check
     that stops an invented id touching somebody else's appointment."""
@@ -669,17 +669,18 @@ async def _owned_token(
         tid = uuid.UUID(str(token_id))
     except (ValueError, AttributeError, TypeError):
         return None
-    return (
-        await db.execute(
-            select(Token)
-            .join(Patient, Patient.id == Token.patient_id)
-            .where(
-                Token.id == tid,
-                Token.branch_id == branch.id,  # RULE 1
-                Patient.phone.like(f"%{last10}"),
-            )
+    stmt = (
+        select(Token)
+        .join(Patient, Patient.id == Token.patient_id)
+        .where(
+            Token.id == tid,
+            Token.branch_id == branch.id,  # RULE 1
+            Patient.phone.like(f"%{last10}"),
         )
-    ).scalars().first()
+    )
+    if lock:
+        stmt = stmt.with_for_update()
+    return (await db.execute(stmt)).scalars().first()
 
 
 def _phone_last10(phone: str | None) -> str:
@@ -690,19 +691,35 @@ def _phone_last10(phone: str | None) -> str:
 async def cancel(db: AsyncSession, branch: Branch, phone: str, token_id: str) -> bool:
     """Cancel one of this caller's bookings. True only if something changed.
 
-    Frees the seat as well as marking the row: the Redis reservation is given
-    back and the calendar event deleted, or the slot stays blocked for a
-    patient who is no longer coming. Calendar failure does NOT undo the
-    cancel — the patient has been told it is cancelled, and a stale calendar
-    entry is a smaller wrong than a booking the clinic still thinks is live.
+    The cancellation and durable calendar-delete task commit together. The
+    patient is never told it was cancelled unless the database truth is
+    committed, and a transient Google outage cannot strand a ghost event
+    without retry.
     """
-    token = await _owned_token(db, branch, phone, token_id)
+    token = await _owned_token(db, branch, phone, token_id, lock=True)
     if token is None or token.status != "confirmed":
         return False
 
     token.status = "cancelled_by_patient"
     token.cancellation_reason = "patient cancelled on WhatsApp"
+    event_id = getattr(token, "google_calendar_event_id", None)
+    if event_id:
+        db.add(CalendarWriteTask(
+            branch_id=token.branch_id,
+            token_id=token.id,
+            operation="delete",
+            payload_json={"calendar_id": branch.google_calendar_id},
+            google_event_id=event_id,
+            status="pending",
+            attempts=0,
+            next_attempt_at=datetime.now(timezone.utc),
+        ))
     await db.commit()
+
+    if event_id:
+        from backend.jobs import wake_gate
+
+        await wake_gate.clear_next_at("calendar")
 
     if token.appointment_time is not None:
         await _release_hold(
@@ -712,15 +729,6 @@ async def cancel(db: AsyncSession, branch: Branch, phone: str, token_id: str) ->
     else:
         await _release_hold(f"token:{token.doctor_id}:{branch.id}:{token.date}")
 
-    event_id = getattr(token, "google_calendar_event_id", None)
-    if event_id:
-        try:
-            await _LazyGoogleCalendar().delete_event(branch.google_calendar_id, event_id)
-        except Exception as e:  # noqa: BLE001 — see docstring
-            logger.warning(
-                "wa_cancel_calendar_delete_failed",
-                branch_id=str(branch.id), error=str(e)[:150],
-            )
     logger.info(
         "wa_booking_cancelled", branch_id=str(branch.id), phone_last4=_last4(phone),
     )
@@ -787,7 +795,34 @@ async def reschedule(
 
     token = _suppress_notify.set(True)  # one message for one action, not two
     try:
-        await cancel(db, branch, phone, str(old.id))
+        old_cancelled = await cancel(db, branch, phone, str(old.id))
+        if not old_cancelled:
+            replacement_cancelled = await cancel(
+                db, branch, phone, str(result.token.id)
+            )
+            logger.warning(
+                "wa_reschedule_original_changed",
+                branch_id=str(branch.id),
+                old_token_id=str(old.id),
+                replacement_token_id=str(result.token.id),
+                compensated=replacement_cancelled,
+            )
+            if replacement_cancelled:
+                return BookingResult(
+                    reason="original_booking_changed",
+                    instruction=(
+                        "The original appointment changed during rescheduling; "
+                        "the replacement was rolled back. Refresh appointments "
+                        "before trying again."
+                    ),
+                )
+            return BookingResult(
+                reason="manual_reconciliation_required",
+                instruction=(
+                    "The clinic must reconcile this reschedule manually. Do not "
+                    "claim that the appointment was moved."
+                ),
+            )
     finally:
         _suppress_notify.reset(token)
 

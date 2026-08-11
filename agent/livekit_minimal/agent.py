@@ -6309,7 +6309,7 @@ async def _reminder_retry_on_dial_fail(meta: dict) -> None:
     try:
         state, _ = await _reminder_dial_state(meta)
         if state != "ready":
-            logger.info("reminder_retry_closed", token=str(token_id)[-8:], state=state)
+            logger.info("reminder_retry_closed token=%s state=%s", str(token_id)[-8:], state)
             return
         from backend.models.schema import Token as _Token
 
@@ -6589,10 +6589,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             reminder_state, reminder_lead = await _reminder_dial_state(meta)
             if reminder_state != "ready":
                 logger.info(
-                    "reminder_dial_blocked",
-                    state=reminder_state,
-                    lead_seconds=reminder_lead,
-                    token=str(meta.get("token_id", ""))[-8:],
+                    "reminder_dial_blocked state=%s lead_seconds=%s token=%s",
+                    reminder_state,
+                    reminder_lead,
+                    str(meta.get("token_id", ""))[-8:],
                 )
                 if reminder_state == "too_early":
                     await _requeue_early_reminder(meta)

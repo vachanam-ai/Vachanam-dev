@@ -19,10 +19,10 @@ import pytest
 from sqlalchemy import select
 
 from backend.models.schema import (
-    Branch, ClinicQuestion, Doctor, DoctorUnavailability, Organization, Patient,
-    Token,
+    Branch, CalendarWriteTask, ClinicQuestion, Doctor, DoctorUnavailability,
+    Organization, Patient, Token,
 )
-from backend.services import wa_agent, wa_service
+from backend.services import wa_agent, wa_booking, wa_service
 
 
 async def _clinic(db):
@@ -36,6 +36,7 @@ async def _clinic(db):
     br = Branch(
         org_id=org.id, name="Agent Clinic", status="active",
         timezone="Asia/Kolkata", address="12 Main Rd, Hyderabad",
+        google_calendar_id="test-calendar@example.com",
         whatsapp_number=f"+9199{str(uuid.uuid4().int)[:8]}",
         wa_phone_number_id="pnid-agent",
         wa_status="connected",
@@ -350,6 +351,25 @@ async def test_cancelling_frees_the_seat_for_someone_else(db, redis):
 
 
 @pytest.mark.asyncio
+async def test_cancelling_queues_calendar_delete_in_same_db_flow(db, redis):
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+    appt = await _book(db, br)
+
+    assert (await _tools(db, br).cancel_appointment(appointment_id=appt))["success"] is True
+
+    task = (await db.execute(
+        select(CalendarWriteTask).where(
+            CalendarWriteTask.branch_id == br.id,
+            CalendarWriteTask.token_id == uuid.UUID(appt),
+            CalendarWriteTask.operation == "delete",
+        )
+    )).scalar_one()
+    assert task.status == "pending"
+    assert task.google_event_id == "evt-1"
+    assert task.payload_json["calendar_id"] == br.google_calendar_id
+
+@pytest.mark.asyncio
 async def test_i_cannot_cancel_someone_elses_booking(db, redis):
     _org, br = await _clinic(db)
     await _doctor(db, br)
@@ -396,6 +416,35 @@ async def test_a_failed_reschedule_leaves_the_original_intact(db, redis):
 
 
 # ── RULE 7 ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_reschedule_race_rolls_back_replacement(db, redis, monkeypatch):
+    """A concurrent old-booking change must not leave a second replacement."""
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+    appt = await _book(db, br)
+    real_cancel = wa_booking.cancel
+
+    async def concurrent_cancel(db_arg, branch, phone, token_id):
+        if str(token_id) == appt:
+            old = (await db_arg.execute(
+                select(Token).where(Token.id == uuid.UUID(appt))
+            )).scalar_one()
+            old.status = "cancelled_by_patient"
+            await db_arg.commit()
+            return False
+        return await real_cancel(db_arg, branch, phone, token_id)
+
+    monkeypatch.setattr(wa_booking, "cancel", concurrent_cancel)
+    out = await _tools(db, br).reschedule_appointment(
+        appointment_id=appt, date=_tomorrow(), time="09:30",
+    )
+
+    assert out == {"success": False, "error": "original_booking_changed"}
+    confirmed = (await db.execute(
+        select(Token).where(Token.branch_id == br.id, Token.status == "confirmed")
+    )).scalars().all()
+    assert confirmed == [], "the raced replacement must be compensated"
 
 @pytest.mark.asyncio
 async def test_a_symptom_question_is_recorded_for_the_doctor(db):
