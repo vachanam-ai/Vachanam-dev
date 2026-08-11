@@ -33,7 +33,7 @@ primary_region = "bom"
   APP_ENV = "production"     # same code path; provider switches are explicit
   LOG_LEVEL = "info"
   # Cartesia STT (regional HTTP, low-latency vs Soniox JP 383ms).
-  STT_PROVIDER = "cartesia"
+  STT_PROVIDER = "soniox"
   TTS_PROVIDER = "cartesia"
   LLM_PROVIDER = "gemini"
   CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"

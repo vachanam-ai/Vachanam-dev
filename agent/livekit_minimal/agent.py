@@ -7611,7 +7611,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # finalization against Pulse/Sarvam: the live Pulse canary kept logging
         # empty five-second audio windows after it stopped emitting transcripts.
         _uses_soniox_stt = (
-            settings.stt_provider not in ("smallest", "sarvam")
+            settings.stt_provider == "soniox"
             and bool(settings.soniox_jp_api_key)
         )
         _soniox_finalizer = _SonioxFinalizeController(
