@@ -35,7 +35,12 @@ from agent.logging_config import configure_structlog
 from backend.config import settings
 from backend.memstat import process_mem_mb
 from backend.jobs.calendar_writer import run_calendar_writer
-from backend.middleware.rate_limit import close_rate_limiter, init_rate_limiter
+from backend.middleware.rate_limit import (
+    close_rate_limiter,
+    default_limit,
+    init_rate_limiter,
+    whatsapp_webhook_limit,
+)
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 
 # Gap 3: configure structlog JSON output before any logger.info() call.
@@ -356,22 +361,37 @@ from backend.routers import support as support_router
 from backend.routers import treatment as treatment_router
 from backend.routers import whatsapp_webhook as whatsapp_webhook_router
 
-app.include_router(auth_router.router, prefix="/auth", tags=["auth"])
-app.include_router(queue_router.router, prefix="/queue", tags=["queue"])
-app.include_router(payments_router.router, prefix="/api", tags=["payments"])
-app.include_router(admin_router.router, prefix="/admin", tags=["admin"])
-app.include_router(doctors_router.router, prefix="/doctors", tags=["doctors"])
-app.include_router(availability_router.router, prefix="/availability", tags=["availability"])
-app.include_router(branches_router.router, prefix="/branches", tags=["branches"])
-app.include_router(voices_router.router, prefix="/branches", tags=["voices"])
+# EVERY router carries a rate-limit floor. Per-endpoint limiters (auth 5/min,
+# order 10/min, queue 60/min ...) still apply on the routes that declare them
+# and are stricter, so they trip first; this only guarantees that no route
+# ships with NO limit at all. Measured 2026-08-12 before this line: 78 of 138
+# routes were unlimited, including /api/plan-change, /api/plan-cancel,
+# /api/billing/gstin, every /support/* ticket route and every /treatment/*
+# route. Attaching the floor here rather than to 78 signatures means a NEW
+# route is covered the moment it is added — the failure mode was never a
+# missing limiter, it was remembering to attach one.
+_FLOOR = [Depends(default_limit)]
+
+app.include_router(auth_router.router, prefix="/auth", tags=["auth"], dependencies=_FLOOR)
+app.include_router(queue_router.router, prefix="/queue", tags=["queue"], dependencies=_FLOOR)
+app.include_router(payments_router.router, prefix="/api", tags=["payments"], dependencies=_FLOOR)
+app.include_router(admin_router.router, prefix="/admin", tags=["admin"], dependencies=_FLOOR)
+app.include_router(doctors_router.router, prefix="/doctors", tags=["doctors"], dependencies=_FLOOR)
+app.include_router(availability_router.router, prefix="/availability", tags=["availability"], dependencies=_FLOOR)
+app.include_router(branches_router.router, prefix="/branches", tags=["branches"], dependencies=_FLOOR)
+app.include_router(voices_router.router, prefix="/branches", tags=["voices"], dependencies=_FLOOR)
 # Legal pages — public, no auth, no prefix (routes are /privacy /terms /dpa)
-app.include_router(legal_router.router, tags=["legal"])
-app.include_router(analytics_router.router, tags=["analytics"])
-app.include_router(treatment_router.router, prefix="/treatment", tags=["treatment"])
-app.include_router(patients_router.router, prefix="/patients", tags=["patients"])
-app.include_router(support_router.router, prefix="/support", tags=["support"])
+app.include_router(legal_router.router, tags=["legal"], dependencies=_FLOOR)
+app.include_router(analytics_router.router, tags=["analytics"], dependencies=_FLOOR)
+app.include_router(treatment_router.router, prefix="/treatment", tags=["treatment"], dependencies=_FLOOR)
+app.include_router(patients_router.router, prefix="/patients", tags=["patients"], dependencies=_FLOOR)
+app.include_router(support_router.router, prefix="/support", tags=["support"], dependencies=_FLOOR)
 # WhatsApp webhook — public (Meta calls it); HMAC-verified inside (WA T5).
-app.include_router(whatsapp_webhook_router.router)
+# NOT the 100/min floor: Meta bursts deliveries and a 429 makes it retry, so
+# this router gets the purpose-built 1000/min bucket instead.
+app.include_router(
+    whatsapp_webhook_router.router, dependencies=[Depends(whatsapp_webhook_limit)]
+)
 
 # Landing page (Vachanam marketing mirror + Razorpay test target).
 # Static files served from backend/static/ — landing index.html at /,
@@ -381,7 +401,8 @@ if _STATIC.exists():
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False, response_model=None)
+@app.get("/", response_class=HTMLResponse, include_in_schema=False,
+         response_model=None, dependencies=[Depends(default_limit)])
 async def landing():
     """Serve the legacy static mirror with canonical Basic/Growth/Scale pricing."""
     index = _STATIC / "index.html"
@@ -390,7 +411,8 @@ async def landing():
     return HTMLResponse("<h1>Vachanam</h1><p>Landing page not found.</p>", status_code=404)
 
 
-@app.get("/dev/test", response_class=HTMLResponse, include_in_schema=False, response_model=None)
+@app.get("/dev/test", response_class=HTMLResponse, include_in_schema=False,
+         response_model=None, dependencies=[Depends(default_limit)])
 async def dev_razorpay_test():
     """Developer-only Razorpay test page (single button, any amount)."""
     if _is_prod:
@@ -466,7 +488,8 @@ async def _diag_guard(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Admin only")
 
 
-@app.get("/health/voice-plane", tags=["health"], dependencies=[Depends(_diag_guard)])
+@app.get("/health/voice-plane", tags=["health"],
+         dependencies=[Depends(_diag_guard), Depends(default_limit)])
 async def health_voice_plane() -> dict:
     """Diagnostic (Vinay 2026-06-22, missing reminders): confirm THIS host can
     dispatch outbound calls. Returns booleans + a reachability probe only — NO
@@ -498,7 +521,8 @@ async def health_voice_plane() -> dict:
     return out
 
 
-@app.get("/health/whatsapp", tags=["health"], dependencies=[Depends(_diag_guard)])
+@app.get("/health/whatsapp", tags=["health"],
+         dependencies=[Depends(_diag_guard), Depends(default_limit)])
 async def health_whatsapp(branch_id: str | None = None) -> dict:
     """Diagnostic (Vinay 2026-08-03, "still not working. no one is replying"):
     WHY is a WhatsApp message not answered?
@@ -560,7 +584,8 @@ async def health_whatsapp(branch_id: str | None = None) -> dict:
         }
 
 
-@app.get("/health/ratelimit", tags=["health"], dependencies=[Depends(_diag_guard)])
+@app.get("/health/ratelimit", tags=["health"],
+         dependencies=[Depends(_diag_guard), Depends(default_limit)])
 async def health_ratelimit(request: Request) -> dict:
     """Diagnostic: what client IP + rate-limit key does THIS request resolve to,
     and what is trusted_proxy_hops? If the key VARIES across repeated requests
@@ -579,7 +604,8 @@ async def health_ratelimit(request: Request) -> dict:
     }
 
 
-@app.get("/health/redis", tags=["health"], dependencies=[Depends(_diag_guard)])
+@app.get("/health/redis", tags=["health"],
+         dependencies=[Depends(_diag_guard), Depends(default_limit)])
 async def health_redis() -> dict:
     """Diagnostic: can THIS host reach Redis? Uses the rate-limiter's OWN client
     and does a ping + set/get/del round-trip. Booleans + error class only, no
