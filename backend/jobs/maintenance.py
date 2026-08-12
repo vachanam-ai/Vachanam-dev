@@ -20,6 +20,7 @@ async def run_hourly_maintenance() -> None:
     from backend.jobs.call_scoring import run_call_scoring
     from backend.jobs.close_past_attendance import run_close_past_attendance
     from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
+    from backend.jobs.spend_watch import run_spend_watch
     from backend.jobs.support_sla import run_sla_escalation
 
     steps = [
@@ -33,6 +34,11 @@ async def run_hourly_maintenance() -> None:
         # own midnight without a per-tz schedule, and a missed run self-heals on
         # the next wake. Idempotent: once flipped, the rows no longer match.
         ("close_past_attendance", run_close_past_attendance),
+        # Voice-minute runaway detection. Notifies only — Vinay 2026-08-13
+        # chose never to block a paying clinic on spend. Rides this wake so it
+        # costs no extra DB wake, and its own Redis dedupe keeps an hourly
+        # re-detection from mailing the same condition every hour.
+        ("spend_watch", run_spend_watch),
     ]
 
     # Same guard main.py used: CDR sync only runs when Vobiz creds exist.
