@@ -2873,7 +2873,7 @@ def _explicit_roster_doctor_id(
         # contains the other: that is TWO doctors named, and picking either is
         # guessing. Only collapse overlapping names, never distinct ones.
         by_len = sorted(set(full_matches), key=lambda pair: -pair[0])
-        best_print, best_id = by_len[0][0], by_len[0][1]
+        best_id = by_len[0][1]
         best_name = next(
             consonant_skeleton(re.sub(
                 r"^\s*(?:dr\.?|doctor)\s+", "",
@@ -6489,6 +6489,27 @@ async def _requeue_early_reminder(meta: dict) -> None:
         logger.warning("reminder_early_requeue_failed: %s", type(exc).__name__)
 
 
+def _reminder_went_unheard(is_reminder: bool, patient_turns: int) -> bool:
+    """Did this reminder call reach a machine (or nobody) rather than a human?
+
+    Vinay 2026-08-13: "calls going to voicemail are getting missed."
+
+    An answering machine ANSWERS. `wait_until_answered` returns, the dispatch
+    succeeds, the agent reads the reminder to a beep, and the scheduler marks
+    reminder_sent=True — because `ok` only ever meant "the call was placed".
+    The patient was never reminded and the row is never revisited.
+
+    There is no carrier AMD on this trunk, so the conversation is the signal: a
+    human on a reminder call always says SOMETHING. Zero patient turns means
+    nobody heard it.
+
+    patient_turns < 0 means we never got a reading (the call-quality write threw
+    before counting). Unknown must never re-dial a patient who may well have
+    spoken, so only a real zero counts.
+    """
+    return bool(is_reminder) and patient_turns == 0
+
+
 async def _reminder_retry_on_dial_fail(meta: dict) -> None:
     token_id = meta.get("token_id")
     if meta.get("call_type") != "reminder" or not token_id:
@@ -8588,6 +8609,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 except Exception as e:
                     logger.warning("call_log_write_failed: %s", e)
 
+                # -1 = we never got a reading. The voicemail retry below treats
+                # only a REAL zero as "nobody answered"; an unknown must never
+                # re-dial a patient who may well have spoken.
+                _patient_turns_seen = -1
+
                 # CALL QUALITY + TRANSCRIPT (monitoring + feedback loop). Written
                 # for EVERY call, independent of agent_call_log_enabled (CallLog is
                 # billing; this is quality). Own try/except — must never break
@@ -8596,6 +8622,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     from backend.models.schema import CallQuality
 
                     turns, transcript = _extract_call_record(session)
+                    _patient_turns_seen = turns
                     abandoned = bool(state.token_held and not state.token_confirmed)
                     fail_reason = (
                         state.fail_reason
@@ -8633,6 +8660,38 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         await db.rollback()
                     except Exception:
                         pass
+
+                # VOICEMAIL ATE THE REMINDER (Vinay 2026-08-13: "calls going to
+                # voicemail are getting missed").
+                #
+                # An answering machine ANSWERS. wait_until_answered returns, the
+                # dispatch succeeds, the agent cheerfully reads the reminder to a
+                # beep, and pre_appt_reminder sets reminder_sent=True because
+                # `ok` only ever meant "the call was placed". The patient was
+                # never reminded, and the row is never looked at again.
+                #
+                # There is no carrier AMD on this trunk, but the conversation
+                # itself is the signal: a human on a reminder call always says
+                # SOMETHING — "హా", "cheppandi", even "who is this". Zero patient
+                # turns means nobody heard it. Reuse the bounded dial-fail retry
+                # rather than inventing a second path: it re-checks the booking
+                # is still confirmed and in-window, counts attempts against
+                # _REMINDER_MAX_DIAL_ATTEMPTS, and clears the wake gate so the
+                # next tick re-dials inside the reminder window.
+                #
+                # Deliberately retry-only, never a block: a real but silent
+                # caller (bad line, elderly, confused) costs at most one extra
+                # reminder call, capped by the attempt ceiling. A missed
+                # appointment costs the clinic a consultation.
+                try:
+                    if _reminder_went_unheard(is_reminder, _patient_turns_seen):
+                        logger.info(
+                            "reminder_no_human_retrying token=%s duration=%ss",
+                            str(meta.get("token_id", ""))[-8:], duration,
+                        )
+                        await _reminder_retry_on_dial_fail(meta)
+                except Exception as e:  # noqa: BLE001 — RULE 8, teardown only
+                    logger.warning("reminder_voicemail_retry_failed: %s", e)
 
                 # MESSAGE SAFETY NET (2026-07-17 real call): the agent SPOKE a
                 # delivery promise ("డాక్టర్ గారికి తెలియజేస్తాను") but never

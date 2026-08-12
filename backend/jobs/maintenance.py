@@ -18,6 +18,7 @@ async def run_hourly_maintenance() -> None:
     from backend.config import settings
     from backend.jobs.calendar_writer import requeue_stale_in_progress
     from backend.jobs.call_scoring import run_call_scoring
+    from backend.jobs.close_past_attendance import run_close_past_attendance
     from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
     from backend.jobs.support_sla import run_sla_escalation
 
@@ -27,6 +28,11 @@ async def run_hourly_maintenance() -> None:
         ("call_scoring", run_call_scoring),
         # Support SLA escalation rides this wake (#299 — no extra Neon wake).
         ("support_sla_escalation", run_sla_escalation),
+        # Yesterday's unmarked bookings become no_show. Hourly rather than a
+        # daily 00:00 trigger so branches in different timezones each get their
+        # own midnight without a per-tz schedule, and a missed run self-heals on
+        # the next wake. Idempotent: once flipped, the rows no longer match.
+        ("close_past_attendance", run_close_past_attendance),
     ]
 
     # Same guard main.py used: CDR sync only runs when Vobiz creds exist.
