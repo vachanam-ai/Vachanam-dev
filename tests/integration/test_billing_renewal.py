@@ -314,7 +314,7 @@ async def test_renewal_job_respects_grace_and_cycleless_orgs(db):
     await db.refresh(in_grace)
     await db.refresh(no_cycle)
     assert in_grace.status == "active"
-    assert no_cycle\.status == "active"
+    assert no_cycle.status == "active"
 
 
 async def test_early_paid_plan_change_stays_pending_until_new_cycle_starts(db):

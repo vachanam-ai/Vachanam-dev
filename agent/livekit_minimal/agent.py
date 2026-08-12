@@ -4119,10 +4119,48 @@ class VachanamAgent(Agent):
         asyncio.create_task(_persist_detected())
         return True
 
-    async def _resolve_doctor_id(self, doctor_id: str | None) -> UUID:
+    def _established_doctor_or(self, passed: UUID) -> UUID:
+        """Keep the doctor the conversation is actually about.
+
+        The roster in the prompt carries every doctor's UUID, so the model can
+        emit any of them — and on a messy turn it does. LIVE 2026-08-12: the
+        caller had been routed to Dr Srinivas, asked "is he in on Saturday?",
+        and heard "his timings for August 15 are not published yet". Srinivas
+        sits 9-12 and 5-9 that Saturday; "unpublished" is only reachable for
+        the OTHER doctor on that roster (schedule_mode=date_specific), so the
+        lookup ran on a doctor the caller had never mentioned.
+
+        The escapes are deterministic, so a caller who really does change
+        doctor is never trapped: naming one, or asking by specialty, both let
+        the model's own choice through.
+        """
+        established = self._state.doctor_id
+        if established is None or established == passed:
+            return passed
+        utterance = self._state.last_user_utterance or ""
+        if _explicit_roster_doctor_id(utterance, self._doctor_contexts) is not None:
+            return passed  # caller named a doctor this turn
+        if _specialty_roster_query(utterance, self._doctor_contexts) is not None:
+            return passed  # caller asked by specialty ("the skin doctor")
+        logger.warning(
+            "doctor_drift_blocked passed=%s kept=%s session=%s",
+            str(passed)[-8:],
+            str(established)[-8:],
+            _privacy_safe_session_id(self._state.session_id),
+        )
+        return established
+
+    async def _resolve_doctor_id(
+        self, doctor_id: str | None, *, keep_established: bool = False
+    ) -> UUID:
         """Never trust the LLM to echo a UUID. Accept a real UUID, else match a
         doctor name within this branch, else fall back to the doctor selected by
-        route_to_doctor. Raises ToolError (LLM-visible) instead of crashing."""
+        route_to_doctor. Raises ToolError (LLM-visible) instead of crashing.
+
+        keep_established pins the answer to the conversation's current doctor
+        when the caller's own words point at no other one — see
+        :meth:`_established_doctor_or`. Read-only tools only: a booking or
+        reschedule legitimately carries a doctor_id from find_my_bookings."""
         # A doctor the caller named explicitly outranks every LLM-authored UUID
         # or name. This prevents a stale Srinivas tool argument from overriding
         # the caller's later "Doctor Lakshmi".
@@ -4130,9 +4168,11 @@ class VachanamAgent(Agent):
             return self._state.caller_named_doctor_id
         if doctor_id:
             try:
-                return UUID(doctor_id)
+                parsed = UUID(doctor_id)
             except ValueError:
                 pass  # probably a name — try matching below
+            else:
+                return self._established_doctor_or(parsed) if keep_established else parsed
             needle = doctor_id.strip().lower().removeprefix("dr.").removeprefix("dr").strip()
             if needle and not needle.isascii():
                 # LIVE 2026-07-08: patient asked for "డాక్టర్ లక్ష్మి" by name; the
@@ -4325,7 +4365,7 @@ class VachanamAgent(Agent):
 
         self._state.quality_intent = "availability"
         _say_lookup_filler(context)
-        resolved = await self._resolve_doctor_id(doctor_id)
+        resolved = await self._resolve_doctor_id(doctor_id, keep_established=True)
         when = self._parse_date(target_date)
 
         doctor = await self._db.get(Doctor, resolved)
@@ -4334,6 +4374,12 @@ class VachanamAgent(Agent):
 
         schedule = await resolve_doctor_schedule(
             doctor, self._state.branch_id, when, self._db
+        )
+        # Which doctor/date this answer is really about. Without it a wrong
+        # answer is unprovable once Fly's log buffer rotates (2026-08-12).
+        logger.info(
+            "doctor_schedule_resolved doctor=%s date=%s status=%s source=%s",
+            str(resolved)[-8:], when, schedule.status, schedule.source,
         )
         spoken_date = when.strftime("%d %B")
         if schedule.status == "unavailable" and schedule.source == "leave":

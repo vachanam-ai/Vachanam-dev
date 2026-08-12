@@ -575,7 +575,7 @@ async def test_scheduled_cancellation_never_shows_another_plan_charge(
     body = response.json()
     assert body["base_next"] == 0
     assert body["whatsapp_addon_amount"] == 0
-    assert body\["total_next"\] == body\["overage_amount"\]
+    assert body["total_next"] == body["overage_amount"]
 
 
 async def test_future_autopay_records_the_provider_plan_as_pending(
