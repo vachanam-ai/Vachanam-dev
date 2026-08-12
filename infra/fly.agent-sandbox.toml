@@ -67,6 +67,13 @@ primary_region = "bom"
   # itself above ~660 talk-minutes/month. This sandbox exists to confirm the
   # plain path is indistinguishable on a real call before production follows.
   VOICE_PROMPT_CACHE = "0"
+  # LLM prewarm OFF pending diagnosis (Vinay reported the agent stopped
+  # understanding intent on the first call after it shipped, 2026-08-12).
+  # Suspect: the warm runs asyncio.run() on a daemon thread, which CLOSES that
+  # event loop on exit while the shared proc.userdata["llm"] client may have
+  # bound its connection to it. Cache-off alone ran 7 clean turns earlier
+  # (session 77354351), so the prewarm is the new variable.
+  VOICE_LLM_PREWARM = "0"
   VOICE_TOOL_PREFETCH = "true"
   VOICE_DETERMINISTIC_CONFIRM = "true"
   MAX_CALL_DURATION_SECONDS = "600"
