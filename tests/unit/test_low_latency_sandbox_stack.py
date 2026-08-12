@@ -58,8 +58,13 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert "LIVEKIT_INFERENCE_MODEL" not in cfg
     assert 'CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"' in cfg
     assert 'CARTESIA_MIN_SENTENCE_LEN = "4"' in cfg
-    assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in cfg
-    assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"' in cfg
+    # 2026-08-12: 0/0.06 ended the caller's turn after 60ms of silence, so a
+    # mid-sentence pause truncated the question and the agent answered a
+    # fragment. Vinay asked which doctors the clinic has and the transcript
+    # recorded only "అంటే, మీ దగ్గర ఎవరైనా డాక్టర్" (session 6a3695d7). Back to
+    # the config.py defaults; the measured cost was +81ms per turn.
+    assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0.05"' in cfg
+    assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.30"' in cfg
     assert 'SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"' in cfg
     assert 'VOICE_NUM_IDLE_PROCESSES = "1"' in cfg
     assert 'VOICE_TOOL_PREFETCH = "true"' in cfg
@@ -98,7 +103,8 @@ def test_cartesia_sandbox_builds_every_supported_language(monkeypatch, code):
 
 def test_non_soniox_stt_disables_soniox_manual_finalization():
     src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
-    assert 'settings.stt_provider not in ("smallest", "sarvam")' in src
+    assert 'settings.stt_provider == "soniox"' in src
+    assert "and bool(settings.soniox_jp_api_key)" in src
     assert "settings.soniox_manual_finalize_delay_ms if _uses_soniox_stt else 0" in src
 
 

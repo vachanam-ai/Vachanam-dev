@@ -238,8 +238,64 @@ async def _synth_wavs_soniox(texts: list[str], voice_id: str, lang_code: str) ->
             pass
 
 
+async def _synth_wavs_cartesia(texts: list[str], lang_code: str) -> list[bytes]:
+    """Cartesia equivalent of the Soniox path, same WAV-out contract.
+
+    Uses the streaming plugin rather than the REST endpoint so the greeting and
+    the conversation come from the same engine and voice settings.  Raises on
+    failure — the caller falls back (RULE 8)."""
+    from livekit.plugins import cartesia as _ct
+
+    kw = dict(
+        model=settings.cartesia_model,
+        language=lang_code,
+        sample_rate=settings.cartesia_sample_rate,
+        api_key=settings.cartesia_api_key,
+    )
+    if settings.cartesia_voice:
+        kw["voice"] = settings.cartesia_voice
+    tts = _ct.TTS(**kw)
+    try:
+        out: list[bytes] = []
+        for text in texts:
+            frames: list[bytes] = []
+            sr, ch = settings.cartesia_sample_rate, 1
+            async with asyncio.timeout(30):
+                async for ev in tts.synthesize(sanitize_for_tts(text)):  # RULE 6
+                    frame = getattr(ev, "frame", None)
+                    if frame is not None:
+                        frames.append(bytes(frame.data))
+                        sr, ch = frame.sample_rate, frame.num_channels
+            if not frames:
+                raise RuntimeError("cartesia synth returned no audio")
+            buf = io.BytesIO()
+            wf = wave.open(buf, "wb")
+            wf.setnchannels(ch)
+            wf.setsampwidth(2)  # pcm_s16le
+            wf.setframerate(sr)
+            wf.writeframes(b"".join(frames))
+            wf.close()
+            out.append(buf.getvalue())
+        return out
+    finally:
+        try:
+            await tts.aclose()
+        except Exception:  # noqa: BLE001 — cleanup must not mask a synth result
+            pass
+
+
 async def synth_wavs(texts: list[str], voice_id: str, lang_code: str) -> list[bytes]:
-    """Synthesize every segment through Soniox, the sole TTS provider."""
+    """Synthesize greeting segments through the CONFIGURED TTS provider.
+
+    This was Soniox-only, so a Cartesia deployment greeted the caller in
+    Soniox's Priya and then switched to a different voice for the conversation
+    — one call, two people (Vinay heard this 2026-08-12). The greeting is
+    cached per (voice, language) in Redis, so the provider has to be part of
+    what the cache key already distinguishes, or a provider swap would serve
+    the previous engine's audio.
+    """
+    if (settings.tts_provider or "soniox").lower() == "cartesia":
+        return await _synth_wavs_cartesia(texts, lang_code)
     return await _synth_wavs_soniox(texts, voice_id, lang_code)
 
 
@@ -324,11 +380,18 @@ async def play_wavs(room: rtc.Room, wav_items, t_answer: float | None = None) ->
 def _greeting_cache_key(branch_id: str, lang_code: str, voice_id: str, texts: list[str]) -> str:
     """#439: key the cached welcome audio by branch+lang+voice AND a hash of the
     exact text, so a clinic rename / template change auto-misses (never serves
-    a stale greeting)."""
+    a stale greeting).
+
+    The TTS PROVIDER is part of the key (2026-08-12). Without it a Cartesia
+    deployment kept serving the Soniox audio already cached under the same
+    branch/lang/voice, so the greeting stayed in the old voice no matter what
+    synth_wavs did. v1 -> v2 also retires every greeting cached before that fix.
+    """
     import hashlib
 
+    provider = (settings.tts_provider or "soniox").lower()
     h = hashlib.sha1(("||".join(texts)).encode("utf-8")).hexdigest()[:12]
-    return f"greet:v1:{branch_id}:{lang_code}:{voice_id}:{h}"
+    return f"greet:v2:{provider}:{branch_id}:{lang_code}:{voice_id}:{h}"
 
 
 async def _greeting_cache_get(key: str) -> list[bytes] | None:
