@@ -241,47 +241,70 @@ async def _synth_wavs_soniox(texts: list[str], voice_id: str, lang_code: str) ->
 async def _synth_wavs_cartesia(texts: list[str], lang_code: str) -> list[bytes]:
     """Cartesia equivalent of the Soniox path, same WAV-out contract.
 
-    Uses the streaming plugin rather than the REST endpoint so the greeting and
-    the conversation come from the same engine and voice settings.  Raises on
-    failure — the caller falls back (RULE 8)."""
-    from livekit.plugins import cartesia as _ct
+    Deliberately raw REST rather than the livekit plugin: the greeting warmer
+    runs on a background thread, and constructing a plugin there raises
+    "Plugins must be registered on the main thread" — which silently emptied
+    the whole greeting cache (requested=17 ready=0, 2026-08-12). Soniox only
+    escapes this because agent.py imports its plugin at module scope.
 
-    kw = dict(
-        model=settings.cartesia_model,
-        language=lang_code,
-        sample_rate=settings.cartesia_sample_rate,
-        api_key=settings.cartesia_api_key,
-    )
-    if settings.cartesia_voice:
-        kw["voice"] = settings.cartesia_voice
-    tts = _ct.TTS(**kw)
-    try:
-        out: list[bytes] = []
+    One-shot synthesis also has no use for a streaming client. Cartesia returns
+    a WAV container directly, so the downstream cache/playout stays
+    provider-agnostic. Raises on failure — caller falls back (RULE 8)."""
+    import json as _json
+
+    import aiohttp
+
+    if not settings.cartesia_api_key:
+        raise RuntimeError("TTS_PROVIDER=cartesia but CARTESIA_API_KEY is unset")
+
+    out: list[bytes] = []
+    async with aiohttp.ClientSession() as sess:
         for text in texts:
-            frames: list[bytes] = []
-            sr, ch = settings.cartesia_sample_rate, 1
+            payload = {
+                "model_id": settings.cartesia_model,
+                "transcript": sanitize_for_tts(text),  # RULE 6
+                "language": lang_code,
+                # RAW, not "wav": Cartesia's WAV container ships a placeholder
+                # frame count (a 2.6s clip declared 89,478s), and play_wavs
+                # sizes its read from getnframes(). We wrap the PCM ourselves
+                # so the header is honest, same as the Soniox path.
+                "output_format": {
+                    "container": "raw",
+                    "encoding": "pcm_s16le",
+                    "sample_rate": settings.cartesia_sample_rate,
+                },
+            }
+            if settings.cartesia_voice:
+                payload["voice"] = {"mode": "id", "id": settings.cartesia_voice}
+            # Warmers run outside the low-latency path; a short timeout here
+            # loses the cache and makes the next caller pay live synthesis.
             async with asyncio.timeout(30):
-                async for ev in tts.synthesize(sanitize_for_tts(text)):  # RULE 6
-                    frame = getattr(ev, "frame", None)
-                    if frame is not None:
-                        frames.append(bytes(frame.data))
-                        sr, ch = frame.sample_rate, frame.num_channels
-            if not frames:
+                async with sess.post(
+                    "https://api.cartesia.ai/tts/bytes",
+                    data=_json.dumps(payload),
+                    headers={
+                        "X-API-Key": settings.cartesia_api_key,
+                        "Cartesia-Version": "2024-06-10",
+                        "Content-Type": "application/json",
+                    },
+                ) as resp:
+                    if resp.status != 200:
+                        body = (await resp.text())[:200]
+                        raise RuntimeError(
+                            f"cartesia synth HTTP {resp.status}: {body}"
+                        )
+                    pcm = await resp.read()
+            if not pcm:
                 raise RuntimeError("cartesia synth returned no audio")
             buf = io.BytesIO()
             wf = wave.open(buf, "wb")
-            wf.setnchannels(ch)
+            wf.setnchannels(1)
             wf.setsampwidth(2)  # pcm_s16le
-            wf.setframerate(sr)
-            wf.writeframes(b"".join(frames))
+            wf.setframerate(settings.cartesia_sample_rate)
+            wf.writeframes(pcm)
             wf.close()
             out.append(buf.getvalue())
-        return out
-    finally:
-        try:
-            await tts.aclose()
-        except Exception:  # noqa: BLE001 — cleanup must not mask a synth result
-            pass
+    return out
 
 
 async def synth_wavs(texts: list[str], voice_id: str, lang_code: str) -> list[bytes]:
