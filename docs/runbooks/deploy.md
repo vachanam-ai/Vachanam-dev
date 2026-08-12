@@ -1,8 +1,10 @@
 # Vachanam — Deploy Runbook (go-live)
 
-Topology: **Render** = backend API · **Fly.io (Mumbai)** = voice agent · **Cloudflare Pages** = frontend · **Neon** = DB · **Upstash** = Redis. (Backend on Render is fine — latency-critical path is the agent, which is on Fly Mumbai and talks directly to Neon/LiveKit/providers.)
+Topology: **Render** = backend API · **Fly.io (Mumbai)** = voice agent · **Cloudflare Pages** = frontend · **Supabase Postgres (ap-south-1 Mumbai)** = DB · **Upstash** = Redis. (Backend on Render is fine — latency-critical path is the agent, which is on Fly Mumbai and talks directly to Supabase/LiveKit/providers.)
 
-Already done (2026-06-17): Neon + schema/migrations (head q14) · Upstash · FIELD_ENCRYPTION_KEY · JWT · Resend · LiveKit/Vobiz/Google creds verified · super_admin `vachanamai@gmail.com` seeded.
+> Neon was PURGED on 2026-07-31 and must not be reintroduced. The Supabase pooler needs asyncpg `ssl="require"`, NOT `ssl=True`.
+
+Already done (2026-06-17, DB since migrated to Supabase): schema/migrations (head q14) · Upstash · FIELD_ENCRYPTION_KEY · JWT · Resend · LiveKit/Vobiz/Google creds verified · super_admin `vachanamai@gmail.com` seeded.
 
 ---
 

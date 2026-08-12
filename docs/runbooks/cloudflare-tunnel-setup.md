@@ -1,11 +1,17 @@
 # Cloudflare Tunnel Setup — vachanam-agent
 
+> **RETIRED — do not follow as live procedure.** This documents the Pipecat/Vobiz
+> webhook architecture, which was replaced by LiveKit Agents on 2026-06-10. The
+> app it tunnels (`agent.server:app`) no longer exists, nothing in the codebase
+> references `agent-dev.vachanam.in`, and the voice worker now dials OUT to
+> LiveKit Cloud and serves no inbound HTTP at all. The spec this was linked from
+> was deleted on 2026-06-15. Kept only because the generic `cloudflared`
+> mechanics below are still correct if a future task needs a dev tunnel.
+
 **Owner:** Vinay (manual setup) | **Env:** dev-only | **Reusable by:** future devs
-**Last reviewed:** 2026-06-08 | **Execute on:** before Vobiz webhook testing (Task 12)
+**Last reviewed:** 2026-06-08 | **Status:** retired 2026-08-12
 
-**Purpose:** expose local FastAPI agent server (`uvicorn agent.server:app --port 7860`) at the stable public URL `https://agent-dev.vachanam.in` so Vobiz webhooks (`/answer`, `/recording-finished`, `/recording-ready`) can reach it during local development. Dev-only — Phase 5 production deployment swaps Cloudflare Tunnel for Fly.io public hostname.
-
-Linked from: `docs/superpowers/specs/2026-06-07-pipecat-vobiz-integration.md` §8.
+**Original purpose (historical):** expose local FastAPI agent server (`uvicorn agent.server:app --port 7860`) at the stable public URL `https://agent-dev.vachanam.in` so Vobiz webhooks (`/answer`, `/recording-finished`, `/recording-ready`) could reach it during local development.
 
 ---
 
