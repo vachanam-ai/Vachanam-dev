@@ -66,13 +66,16 @@ primary_region = "bom"
   # while storage costs ~Rs650/mo per clinic-language, which only pays for
   # itself above ~660 talk-minutes/month. This sandbox exists to confirm the
   # plain path is indistinguishable on a real call before production follows.
-  VOICE_PROMPT_CACHE = "0"
-  # LLM prewarm OFF pending diagnosis (Vinay reported the agent stopped
-  # understanding intent on the first call after it shipped, 2026-08-12).
-  # Suspect: the warm runs asyncio.run() on a daemon thread, which CLOSES that
-  # event loop on exit while the shared proc.userdata["llm"] client may have
-  # bound its connection to it. Cache-off alone ran 7 clean turns earlier
-  # (session 77354351), so the prewarm is the new variable.
+  # BOTH 2026-08-12 experiments reverted after Vinay reported the agent stopped
+  # understanding intent. This restores the exact stack that was working before
+  # today: Soniox STT + Cartesia TTS + Gemini, prompt cache ON, no LLM prewarm.
+  #
+  # Prompt cache: left ON (the default) despite costing ~Rs650/mo per
+  # clinic-language for no latency, because correctness outranks that saving
+  # and cache-off is not yet cleared on a real call.
+  # LLM prewarm: OFF. It ran asyncio.run() on a daemon thread, which closes
+  # that event loop on exit while the shared proc.userdata["llm"] object reused
+  # by every call may have bound a connection to it.
   VOICE_LLM_PREWARM = "0"
   VOICE_TOOL_PREFETCH = "true"
   VOICE_DETERMINISTIC_CONFIRM = "true"
