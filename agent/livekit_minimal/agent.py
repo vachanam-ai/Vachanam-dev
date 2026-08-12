@@ -7032,7 +7032,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     lang_code = branch_lang_code
     # The prewarmed map is only an audio head start; this query is authoritative.
     # Refuse a mismatched cached tenant before any later call logic can use it.
-    if _early_route_id is not None and _early_route_id != str(branch.id):
+    # The prewarmed map is a snapshot taken when this subprocess started. A
+    # voice changed in the dashboard after that keeps greeting in the OLD voice
+    # while the rest of the call uses the new one — one call, two voices (Vinay
+    # 2026-08-12). Compare the VOICE too, not just the tenant, so a stale
+    # snapshot is discarded and the block below restarts the greeting from the
+    # authoritative row. Costs the head start only on calls that actually
+    # mismatch, i.e. the first calls after a change.
+    _early_voice_stale = (
+        _early_route_id is not None
+        and _early_route_id == str(branch.id)
+        and _early_voice is not None
+        and _greeting_voice_key(_early_voice)
+        != _greeting_voice_key(getattr(branch, "tts_voice", None) or _early_voice)
+    )
+    if (_early_route_id is not None and _early_route_id != str(branch.id)) or _early_voice_stale:
         if _early_greeting_task is not None and not _early_greeting_task.done():
             _early_greeting_task.cancel()
             try:
@@ -7041,7 +7055,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 pass
         _early_greeting_task = None
         _early_route_id = None
-        logger.error("early_greeting_route_mismatch authoritative_lookup_won=True")
+        if _early_voice_stale:
+            logger.warning(
+                "early_greeting_voice_stale cached=%s live=%s authoritative_lookup_won=True",
+                _early_voice, getattr(branch, "tts_voice", None),
+            )
+        else:
+            logger.error("early_greeting_route_mismatch authoritative_lookup_won=True")
 
     # Cache miss / safe fallback: start immediately after authoritative tenant
     # resolution, preserving the old behavior.
