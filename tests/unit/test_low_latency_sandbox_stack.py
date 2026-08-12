@@ -77,8 +77,11 @@ def test_sandbox_is_isolated_and_latency_tuned():
     assert 'STT_PROVIDER = "soniox"' in prod
     assert 'TTS_PROVIDER = "soniox"' in prod
     assert 'SONIOX_TTS_SAMPLE_RATE = "16000"' in prod
-    assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0"' in prod
-    assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"' in prod
+    # Production carries the same reverted endpointing as the sandbox: 0/0.06
+    # truncated callers mid-sentence and made the agent restart sentences it
+    # had already begun (2026-08-12).
+    assert 'VOICE_ENDPOINTING_MIN_DELAY_S = "0.05"' in prod
+    assert 'VOICE_ENDPOINTING_MAX_DELAY_S = "0.30"' in prod
     assert 'SONIOX_ENDPOINT_LATENCY_LEVEL = "1"' in prod
     assert 'SONIOX_MAX_ENDPOINT_DELAY_MS = "2000"' in prod
     assert 'SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"' in prod

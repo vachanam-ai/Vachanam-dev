@@ -413,8 +413,16 @@ def _greeting_cache_key(branch_id: str, lang_code: str, voice_id: str, texts: li
     import hashlib
 
     provider = (settings.tts_provider or "soniox").lower()
+    # The voice that will ACTUALLY be spoken, not the branch's stored id.
+    # _synth_wavs_cartesia renders settings.cartesia_voice and ignores the
+    # Soniox-style voice_id entirely, so keying on voice_id alone meant
+    # changing CARTESIA_VOICE kept serving the previous voice's cached audio
+    # forever (Vinay, production 2026-08-12).
+    effective_voice = (
+        settings.cartesia_voice or "default"
+    ) if provider == "cartesia" else voice_id
     h = hashlib.sha1(("||".join(texts)).encode("utf-8")).hexdigest()[:12]
-    return f"greet:v2:{provider}:{branch_id}:{lang_code}:{voice_id}:{h}"
+    return f"greet:v3:{provider}:{branch_id}:{lang_code}:{effective_voice}:{h}"
 
 
 async def _greeting_cache_get(key: str) -> list[bytes] | None:

@@ -17,7 +17,10 @@ def test_cache_key_changes_with_text():
     k3 = g._greeting_cache_key("b2", "te", "kavya", ["namaskaram A"])
     assert k1 != k2          # text change → new key (no stale greeting)
     assert k1 != k3          # branch change → new key
-    assert k1.startswith("greet:v1:b1:te:kavya:")
+    # v3 carries the TTS provider and the voice actually rendered: a Cartesia
+    # deployment was serving Soniox audio, and changing CARTESIA_VOICE did not
+    # change the greeting at all (2026-08-12).
+    assert k1.startswith("greet:v3:soniox:b1:te:kavya:")
 
 
 @pytest.mark.asyncio

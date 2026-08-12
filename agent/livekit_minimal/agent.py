@@ -2835,21 +2835,64 @@ def _explicit_roster_doctor_id(
     spoken = consonant_skeleton(text)
     if not spoken:
         return None
-    matches: list[UUID] = []
+    full_matches: list[tuple[int, UUID]] = []
+    token_matches: list[UUID] = []
     for doctor in doctors or []:
         name = re.sub(
             r"^\s*(?:dr\.?|doctor)\s+", "",
             str(getattr(doctor, "name", "") or ""),
             flags=re.IGNORECASE,
         )
-        fingerprint = consonant_skeleton(name)
-        if len(fingerprint) < 3 or fingerprint not in spoken:
-            continue
         try:
-            matches.append(UUID(str(getattr(doctor, "id", ""))))
+            doctor_uuid = UUID(str(getattr(doctor, "id", "")))
         except (TypeError, ValueError):
             continue
-    unique = list(dict.fromkeys(matches))
+        fingerprint = consonant_skeleton(name)
+        if len(fingerprint) >= 3 and fingerprint in spoken:
+            full_matches.append((len(fingerprint), doctor_uuid))
+            continue
+        # Callers shorten names, and Telugu honorifics fuse onto the last word.
+        # "vishnu vardhan reddy" is skeleton 'vsnvrdnrdy'; a caller asking
+        # "విష్ణు వర్ధన్ గారి టైమింగ్స్" gives 'vsnvrdngrtmgstd', and even saying
+        # "reddy" yields 'rdgr' because "రెడ్డి గారి" fuses — so a whole-name
+        # match could NEVER identify that doctor (live 2026-08-12: every
+        # schedule lookup kept returning the previously named Lakshmi).
+        # Fall back to per-token, still requiring a UNIQUE hit across the
+        # roster so an ambiguous surname leaves state untouched.
+        for token in name.split():
+            token_print = consonant_skeleton(token)
+            if len(token_print) >= 3 and token_print in spoken:
+                token_matches.append(doctor_uuid)
+                break
+    if full_matches:
+        # "Lakshmi" and "Lakshmi Narayana" BOTH match when the caller says the
+        # longer name, because the shorter skeleton is contained in it — that
+        # is one doctor named specifically, so the longest wins.
+        #
+        # "Lakshmi or Srinivas" also yields two matches, but neither skeleton
+        # contains the other: that is TWO doctors named, and picking either is
+        # guessing. Only collapse overlapping names, never distinct ones.
+        by_len = sorted(set(full_matches), key=lambda pair: -pair[0])
+        best_print, best_id = by_len[0][0], by_len[0][1]
+        best_name = next(
+            consonant_skeleton(re.sub(
+                r"^\s*(?:dr\.?|doctor)\s+", "",
+                str(getattr(d, "name", "") or ""), flags=re.IGNORECASE))
+            for d in doctors if str(getattr(d, "id", "")) == str(best_id)
+        )
+        for length, doctor_id in by_len[1:]:
+            if doctor_id == best_id:
+                continue
+            other = next(
+                consonant_skeleton(re.sub(
+                    r"^\s*(?:dr\.?|doctor)\s+", "",
+                    str(getattr(d, "name", "") or ""), flags=re.IGNORECASE))
+                for d in doctors if str(getattr(d, "id", "")) == str(doctor_id)
+            )
+            if other not in best_name:
+                return None  # two distinct doctors named — never guess
+        return best_id
+    unique = list(dict.fromkeys(token_matches))
     return unique[0] if len(unique) == 1 else None
 
 
@@ -4718,6 +4761,38 @@ class VachanamAgent(Agent):
                 time_=parsed_time,
             ):
                 raise StopResponse()
+        elif result.get("reason") == "already_booked":
+            # The duplicate guard cannot tell "this patient booked last week"
+            # from "this patient booked ten seconds ago, on this call". When it
+            # is OUR OWN booking it fired on, the stock instruction ("tell them
+            # their existing booking instead of creating another... offer to
+            # move it") made the agent re-read the booking back to the caller
+            # and offer a different time for it — sounding like it was about to
+            # book a second one (Vinay, production 2026-08-12).
+            #
+            # last_confirmed_token_id is the durable booking made in THIS call,
+            # so an exact id match is proof, not a heuristic.
+            mine = self._state.last_confirmed_token_id
+            if mine is not None and str(result.get("existing_token_id")) == str(mine):
+                logger.info(
+                    "already_booked_is_this_calls_own_booking token=%s session=%s",
+                    str(mine)[-8:],
+                    _privacy_safe_session_id(self._state.session_id),
+                )
+                return {
+                    "success": True,
+                    "reason": "already_confirmed_this_call",
+                    "token_id": str(mine),
+                    "token_number": result.get("existing_token_number"),
+                    "existing_time": result.get("existing_time"),
+                    "instruction": (
+                        "This is the booking you ALREADY made for this caller "
+                        "on this call — it is confirmed and correct. Do not "
+                        "read it back as a clash, do not offer another time, "
+                        "and do not book again. Simply confirm it stands and "
+                        "ask if they need anything else."
+                    ),
+                }
         return result
 
     def _speak_deterministic_confirm(

@@ -103,11 +103,15 @@ async def test_reminder_dial_guard_rejects_expired_or_early_dispatches(db, redis
 
     tok = await _seed_in_window(db)
     meta = {"call_type": "reminder", "token_id": str(tok.id), "branch_id": str(tok.branch_id)}
-    tok.appointment_time = (datetime.now(IST) - timedelta(minutes=1)).time()
+    expired = datetime.now(IST) - timedelta(minutes=1)
+    tok.date = expired.date()
+    tok.appointment_time = expired.time()
     await db.commit()
     assert (await _reminder_dial_state(meta))[0] == "expired"
 
-    tok.appointment_time = (datetime.now(IST) + timedelta(minutes=40)).time()
+    early = datetime.now(IST) + timedelta(minutes=40)
+    tok.date = early.date()
+    tok.appointment_time = early.time()
     await db.commit()
     assert (await _reminder_dial_state(meta))[0] == "too_early"
 
@@ -193,3 +197,25 @@ async def test_non_reminder_call_never_touches_token(db, redis):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_stdlib_logger_calls_use_only_supported_keywords():
+    """Structured kwargs on ``logging.Logger`` crash the whole voice job."""
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8"))
+    allowed = {"exc_info", "stack_info", "stacklevel", "extra"}
+    invalid = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        target = node.func.value
+        if not isinstance(target, ast.Name) or target.id != "logger":
+            continue
+        if node.func.attr not in {"debug", "info", "warning", "error", "exception", "critical"}:
+            continue
+        bad = [kw.arg for kw in node.keywords if kw.arg not in allowed]
+        if bad:
+            invalid.append((node.lineno, node.func.attr, bad))
+    assert invalid == []

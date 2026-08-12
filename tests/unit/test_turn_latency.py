@@ -17,7 +17,7 @@ SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 
 
 def test_soniox_uses_isolated_conservative_latency_profile():
-    stt = SRC.split("def _build_stt")[1][:5000]
+    stt = SRC.split("def _build_stt")[1][:8000]
     assert "endpoint_latency_adjustment_level=settings.soniox_endpoint_latency_level" in stt
     assert "max_endpoint_delay_ms=settings.soniox_max_endpoint_delay_ms" in stt
     assert "endpoint_sensitivity=settings.soniox_endpoint_sensitivity" in stt

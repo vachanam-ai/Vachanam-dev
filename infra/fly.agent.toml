@@ -19,8 +19,19 @@ primary_region = "bom"  # Mumbai — lowest latency for India
   SONIOX_TTS_SAMPLE_RATE = "16000"
   # Soniox supplies the authoritative semantic endpoint. These LiveKit values
   # add virtually no second wait after the provider finalizes the transcript.
-  VOICE_ENDPOINTING_MIN_DELAY_S = "0"
-  VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"
+  # REVERTED from 0/0.06 on 2026-08-12. At a 60ms endpoint the agent decided
+  # the caller had finished during a normal mid-sentence pause. Two live
+  # symptoms, one cause:
+  #   * the caller's question was truncated and the agent answered a fragment
+  #     ("అంటే, మీ దగ్గర ఎవరైనా డాక్టర్" — session 6a3695d7)
+  #   * the agent started replying too early, was genuinely interrupted, and
+  #     regenerated the whole sentence, which sounds like it repeating itself
+  #     ("agent: ఈరోజు" then the full line — production session 76d3771498147559)
+  # Sandbox measured the fix at +81ms per turn, and the call went from 2 turns
+  # to 11. This is the STT endpoint tuning the latency guardrails ban; do not
+  # lower it again without real-call evidence.
+  VOICE_ENDPOINTING_MIN_DELAY_S = "0.05"
+  VOICE_ENDPOINTING_MAX_DELAY_S = "0.30"
   # Quality-safe Soniox profile: level 1 plus a cancellable 200 ms local-VAD
   # finalize. Sensitivity intentionally stays unset after the earlier aggressive
   # experiment fragmented Telugu names and times.

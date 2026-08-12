@@ -36,9 +36,35 @@ def test_cache_key_separates_providers(monkeypatch):
 
 
 def test_cache_key_version_bumped_past_v1():
-    """v1 keys hold pre-fix Soniox audio; they must not be readable."""
-    monkeypatch_free = g._greeting_cache_key(BRANCH, "te", "Priya", TEXTS)
-    assert not monkeypatch_free.startswith("greet:v1:")
+    """v1/v2 keys hold audio from before these fixes; must not be readable."""
+    key = g._greeting_cache_key(BRANCH, "te", "Priya", TEXTS)
+    assert not key.startswith("greet:v1:")
+    assert not key.startswith("greet:v2:")
+
+
+def test_changing_the_cartesia_voice_invalidates_the_greeting(monkeypatch):
+    """Production 2026-08-12: changing the voice did not change the greeting.
+
+    _synth_wavs_cartesia renders settings.cartesia_voice and ignores the
+    Soniox-style voice_id, but the key carried only voice_id — so a new voice
+    kept serving the old voice's cached audio forever.
+    """
+    monkeypatch.setattr(settings, "tts_provider", "cartesia")
+    monkeypatch.setattr(settings, "cartesia_voice", "07bc462a-c644-49f1-baf7")
+    first = g._greeting_cache_key(BRANCH, "te", "Priya", TEXTS)
+    monkeypatch.setattr(settings, "cartesia_voice", "aaaaaaaa-1111-2222-3333")
+    second = g._greeting_cache_key(BRANCH, "te", "Priya", TEXTS)
+
+    assert first != second, "changing CARTESIA_VOICE did not change the key"
+    assert "07bc462a-c644-49f1-baf7" in first
+    assert "aaaaaaaa-1111-2222-3333" in second
+
+
+def test_soniox_greetings_stay_voice_scoped(monkeypatch):
+    """The Soniox path (production) must keep keying on its own voice."""
+    monkeypatch.setattr(settings, "tts_provider", "soniox")
+    assert (g._greeting_cache_key(BRANCH, "te", "Priya", TEXTS)
+            != g._greeting_cache_key(BRANCH, "te", "Maya", TEXTS))
 
 
 def test_synth_routes_to_the_configured_provider(monkeypatch):
