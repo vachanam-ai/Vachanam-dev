@@ -648,7 +648,11 @@ a.app-person-row:hover { background: rgba(236,255,248,.08); }
   .band { grid-template-columns: 1fr; padding: 20px; }
   .chartwrap { grid-column: auto; }
   .marketing-nav { height: 65px; padding-inline: 15px; }
-  .marketing-brand small, .marketing-signin { display: none; }
+  .marketing-brand small { display: none; }
+  /* Sign in stays visible on phones. The nav links are already hidden at 900px,
+     so hiding this too left a phone with NO way to reach /login from the
+     landing page at all (Vinay 2026-08-12). Shrink it; never hide it. */
+  .marketing-signin { font-size: 12px; white-space: nowrap; }
   .marketing-nav-actions .btn-primary { min-height: 40px; padding-inline: 12px; font-size: 11px; }
   .marketing-hero { display: flex; min-height: auto; flex-direction: column; padding: 54px 17px 70px; }
   .marketing-hero h1 { font-size: 48px; }
