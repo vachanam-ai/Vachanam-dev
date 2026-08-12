@@ -122,7 +122,14 @@ async def test_the_schedule_tool_hands_the_model_free_time_not_just_sittings(db)
     from agent.prompts.grounded_prompt import build_grounded_prompt
 
     src = inspect.getsource(agent_mod)
-    tool = src[src.index("async def get_doctor_schedule"):][:4000]
+    # Slice the WHOLE tool, bounded by the next @function_tool, not a fixed
+    # byte count. The old [:4000] window silently excluded the tail of the
+    # function: adding a 7-line log statement pushed `"free_now"` to offset
+    # 4302 and failed this test without changing a line of its behaviour
+    # (2026-08-12). A window that moves with unrelated edits tests the wrong
+    # thing.
+    tool = src[src.index("async def get_doctor_schedule"):]
+    tool = tool.split("@function_tool", 1)[0]
     assert '"free_now"' in tool
     assert "check_availability(" in tool, "must reuse the slot arithmetic"
 

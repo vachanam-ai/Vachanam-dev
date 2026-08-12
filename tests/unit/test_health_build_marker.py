@@ -86,9 +86,65 @@ def test_diagnostics_require_admin_in_prod(monkeypatch):
     assert r.status_code == 403, "non-admin reached prod diagnostics"
 
 
+def _tick_critical_jobs(monkeypatch, *, status: str = "ok"):
+    """Give this process the scheduler ticks a real API process would have.
+
+    /health returns 503 in production when the critical jobs stop ticking, so
+    Render restarts a process serving HTTP with dead reminders. In a test
+    process no scheduler ever runs, so the jobs read "starting" for 180s and
+    "missing" after that — meaning this test passed alone (2s) and failed
+    inside the full suite (26 min), purely on elapsed wall-clock time
+    (2026-08-12). Pin the state instead of racing it.
+    """
+    from backend.jobs import job_lease
+
+    ticks = dict(job_lease._LOCAL_TICKS)
+    monkeypatch.setattr(job_lease, "_LOCAL_TICKS", ticks)
+    for job_id in ("pre_appt_reminder", "calendar_writer", "wa_delivery_queue"):
+        job_lease._mark(job_id, status)
+    return ticks
+
+
 def test_public_health_still_open_in_prod(monkeypatch):
     """UptimeRobot must still get an unauthenticated 200 from /health itself."""
     import backend.config as cfg
     monkeypatch.setattr(cfg.settings, "app_env", "production")
+    _tick_critical_jobs(monkeypatch)
     r = _client().get("/health")
     assert r.status_code == 200 and r.json()["status"] == "ok"
+
+
+def test_prod_health_goes_503_when_the_schedulers_stop(monkeypatch):
+    """The other half of the contract: HTTP alive + jobs dead must NOT read ok.
+
+    Without this, the fix above could be "assert 200 no matter what" and the
+    restart signal Render depends on would be untested.
+    """
+    import time
+
+    import backend.config as cfg
+    from backend.jobs import job_lease
+
+    monkeypatch.setattr(cfg.settings, "app_env", "production")
+    ticks = _tick_critical_jobs(monkeypatch)
+    # Age every tick past the 180s staleness ceiling.
+    for state in ticks.values():
+        state["at_monotonic"] = time.monotonic() - 10_000
+
+    r = _client().get("/health")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["status"] == "degraded"
+    assert body["scheduler"]["ok"] is False
+
+
+def test_a_failing_job_status_is_degraded_even_when_fresh(monkeypatch):
+    """Staleness is not the only failure: a job ticking with an error status
+    is still a dead reminder pipeline."""
+    import backend.config as cfg
+
+    monkeypatch.setattr(cfg.settings, "app_env", "production")
+    _tick_critical_jobs(monkeypatch, status="lease_error")
+    r = _client().get("/health")
+    assert r.status_code == 503
+    assert r.json()["scheduler"]["ok"] is False

@@ -336,7 +336,19 @@ async def test_b9_leave_range_starting_in_past_never_cancels_past_bookings(
 async def test_post_unavailability_cascade_cancels_existing_tokens(
     client, db: AsyncSession, clinic, org_admin_jwt
 ):
-    """5 confirmed tokens in range must all become 'cancelled_by_clinic' after POST."""
+    """5 confirmed tokens in range must all become 'cancelled_by_clinic' after POST.
+
+    Dates are relative to the BRANCH's today, never hardcoded. The original
+    2026-08-10..2026-08-14 literals turned this into a time bomb: the cascade
+    deliberately leaves past bookings alone (proved by
+    test_cascade_never_touches_a_past_booking above), so from 2026-08-11 on,
+    the earlier seeded dates fell into the past and the count dropped to 3.
+    That is the product behaving correctly against a test that had expired.
+    """
+    from backend.routers.queue import _branch_today
+
+    branch_uuid = uuid.UUID(clinic["branch_id"])
+    branch_today = await _branch_today(branch_uuid, db)
     doctor = await _seed_doctor(db, clinic["branch_id"])
 
     token_ids = []
@@ -346,7 +358,7 @@ async def test_post_unavailability_cascade_cancels_existing_tokens(
             name=f"Patient {i}",
             phone=f"+9199999{str(i).zfill(5)}",
         )
-        on_date = date(2026, 8, 10 + i)
+        on_date = branch_today + timedelta(days=i)
         tok = await _seed_token(
             db, clinic["branch_id"], doctor, patient,
             on_date=on_date, token_number=i + 1,
@@ -355,7 +367,10 @@ async def test_post_unavailability_cascade_cancels_existing_tokens(
 
     r = await client.post(
         f"/availability/{clinic['branch_id']}/{doctor.id}",
-        json={"date_from": "2026-08-10", "date_to": "2026-08-14"},
+        json={
+            "date_from": branch_today.isoformat(),
+            "date_to": (branch_today + timedelta(days=4)).isoformat(),
+        },
         headers=_auth(org_admin_jwt),
     )
     assert r.status_code == 200, r.text
