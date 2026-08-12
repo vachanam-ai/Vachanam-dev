@@ -56,8 +56,14 @@ primary_region = "bom"
   CARTESIA_VOICE = "07bc462a-c644-49f1-baf7-82d5599131be"
   CARTESIA_MIN_SENTENCE_LEN = "4"
   CARTESIA_SAMPLE_RATE = "24000"
-  VOICE_ENDPOINTING_MIN_DELAY_S = "0"
-  VOICE_ENDPOINTING_MAX_DELAY_S = "0.06"
+  # REVERTED to the production defaults 2026-08-12. At max_delay 0.06 the agent
+  # ended the caller's turn after 60ms of silence, so any mid-sentence pause
+  # truncated the question and it answered a fragment. Vinay asked which
+  # doctors the clinic has; the transcript recorded only "అంటే, మీ దగ్గర ఎవరైనా
+  # డాక్టర్" and the agent guessed at a specialist. This is the STT endpoint
+  # tuning the latency guardrails already ban — do not lower these again.
+  VOICE_ENDPOINTING_MIN_DELAY_S = "0.05"
+  VOICE_ENDPOINTING_MAX_DELAY_S = "0.30"
   SONIOX_MANUAL_FINALIZE_DELAY_MS = "200"
   VOICE_NUM_IDLE_PROCESSES = "1"
   LIVEKIT_AGENT_NAME = "vachanam-sandbox"
@@ -66,16 +72,17 @@ primary_region = "bom"
   # while storage costs ~Rs650/mo per clinic-language, which only pays for
   # itself above ~660 talk-minutes/month. This sandbox exists to confirm the
   # plain path is indistinguishable on a real call before production follows.
-  # BOTH 2026-08-12 experiments reverted after Vinay reported the agent stopped
-  # understanding intent. This restores the exact stack that was working before
-  # today: Soniox STT + Cartesia TTS + Gemini, prompt cache ON, no LLM prewarm.
-  #
-  # Prompt cache: left ON (the default) despite costing ~Rs650/mo per
-  # clinic-language for no latency, because correctness outranks that saving
-  # and cache-off is not yet cleared on a real call.
-  # LLM prewarm: OFF. It ran asyncio.run() on a daemon thread, which closes
-  # that event loop on exit while the shared proc.userdata["llm"] object reused
-  # by every call may have bound a connection to it.
+  # Prompt cache OFF again (Vinay 2026-08-12). It was reverted during the
+  # "agent stopped understanding intent" incident, which turned out to be
+  # endpointing truncating the caller, not the cache. Measured over 1,529 turns
+  # the cache buys NO latency (llm_ttft p50 556ms cached vs 563ms uncached)
+  # while storage costs ~Rs650/mo per clinic-language, paying for itself only
+  # above ~660 talk-minutes/month.
+  VOICE_PROMPT_CACHE = "0"
+  # LLM prewarm stays OFF — still unproven, and it has a real defect: it runs
+  # asyncio.run() on a daemon thread, which closes that event loop on exit
+  # while the shared proc.userdata["llm"] object reused by every call may have
+  # bound a connection to it. Fix that before re-enabling.
   VOICE_LLM_PREWARM = "0"
   VOICE_TOOL_PREFETCH = "true"
   VOICE_DETERMINISTIC_CONFIRM = "true"
