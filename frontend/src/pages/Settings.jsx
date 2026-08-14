@@ -26,6 +26,7 @@ const WA_STATUS_LABEL = {
   error: { label: "Connection error", chip: "chip-danger" }
 };
 
+import GoogleReauth from "../components/GoogleReauth.jsx";
 import WaConnectCard from "../components/WaConnectCard.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 
@@ -200,11 +201,19 @@ export default function Settings() {
   });
 
   // DPDP erasure: delete the whole clinic, then sign out to the landing page.
+  //
+  // Two authentication paths, because the API has two. A password account
+  // sends its password. A Google account must send a FRESH Google ID token —
+  // the Jul-25 security review made that mandatory so a stolen session cannot
+  // destroy a clinic, and the typed "DELETE" is only a UI guard. Sending
+  // {confirm:"DELETE"} alone got a 401 every time, which is why the button did
+  // nothing at all for three weeks (Vinay 2026-08-14).
   const [delConfirm, setDelConfirm] = useState("");
+  const wantsGoogleDelete = delConfirm.trim().toUpperCase() === "DELETE";
   const nukeClinic = useMutation({
-    mutationFn: () => deleteAccount(
-      delConfirm.trim().toUpperCase() === "DELETE"
-        ? { confirm: "DELETE" }
+    mutationFn: (googleToken) => deleteAccount(
+      wantsGoogleDelete
+        ? { confirm: "DELETE", id_token: googleToken }
         : { password: delConfirm }
     ),
     onSuccess: () => {
@@ -536,17 +545,43 @@ export default function Settings() {
             <label className="label">Your password (or type DELETE if you sign in with Google)</label>
             <input className="field" type="password" value={delConfirm}
               onChange={(e) => setDelConfirm(e.target.value)} placeholder="Password or DELETE" />
+            {wantsGoogleDelete && (
+              <p className="mt-2 font-ui text-xs text-slate">
+                Confirm with Google to finish — deleting a clinic needs a fresh
+                sign-in, so a stolen session can&apos;t erase your data.
+              </p>
+            )}
           </div>
           <div className="flex items-end">
-            <button type="button"
-              className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
-              disabled={nukeClinic.isPending || !delConfirm.trim()}
-              onClick={() => {
-                if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))
-                  nukeClinic.mutate();
-              }}>
-              {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
-            </button>
+            {wantsGoogleDelete ? (
+              /* Google path: the typed DELETE is only a UI guard. The API
+                 requires a fresh ID token, so the Google button IS the delete
+                 action — its callback carries the token straight into the
+                 mutation. */
+              <div className="w-full">
+                <GoogleReauth
+                  disabled={nukeClinic.isPending}
+                  text="continue_with"
+                  onToken={(token) => {
+                    if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))
+                      nukeClinic.mutate(token);
+                  }}
+                />
+                {nukeClinic.isPending && (
+                  <p className="mt-2 font-ui text-xs text-slate">Deleting…</p>
+                )}
+              </div>
+            ) : (
+              <button type="button"
+                className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
+                disabled={nukeClinic.isPending || !delConfirm.trim()}
+                onClick={() => {
+                  if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))
+                    nukeClinic.mutate();
+                }}>
+                {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
+              </button>
+            )}
           </div>
         </div>
       </Section>
