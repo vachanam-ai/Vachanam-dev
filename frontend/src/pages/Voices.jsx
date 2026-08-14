@@ -11,6 +11,7 @@ import {
   fetchVoiceClones, getBranchVoices, importVoiceClone, previewVoiceClone, setBranchVoice,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_SECONDS = 20;
@@ -42,6 +43,7 @@ function VoiceBars({ active = false }) {
 }
 
 function CloneCard({ voice, branchId, playing, onPlay }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["voice-clones", branchId] });
@@ -84,7 +86,14 @@ function CloneCard({ voice, branchId, playing, onPlay }) {
             </button>
           )}
           <button type="button" className="clone-delete" aria-label={`Delete ${voice.name}`} disabled={remove.isPending || voice.status === "deleting"}
-            onClick={() => window.confirm(`Delete “${voice.name}”? The original recording and clone will be permanently removed from Soniox.`) && remove.mutate()}>
+            onClick={async () => {
+              if (await confirm({
+                title: `Delete “${voice.name}”?`,
+                body: "The original recording and the clone are permanently removed from Soniox. This cannot be undone.",
+                confirmLabel: "Delete voice",
+                destructive: true,
+              })) remove.mutate();
+            }}>
             <Trash size={17} />
           </button>
         </div>

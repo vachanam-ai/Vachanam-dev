@@ -12,6 +12,7 @@ import {
   installWaSystemTemplates,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 
 // WA MVP1 Task 10 — option C (chosen over a card grid, which doesn't scale
 // past ~15 templates, and a bare table, which reads like an admin console
@@ -38,6 +39,7 @@ function StatusChip({ status }) {
 }
 
 function TemplateRow({ branchId, t, onDeleted }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const isSystem = SYSTEM_TEMPLATES.has(t.name);
   const remove = useMutation({
@@ -69,9 +71,13 @@ function TemplateRow({ branchId, t, onDeleted }) {
           <button type="button"
             className="font-ui text-xs font-medium text-danger underline-offset-2 hover:underline"
             disabled={remove.isPending}
-            onClick={() => {
-              if (window.confirm(`Delete template "${t.name}"? This cannot be undone.`))
-                remove.mutate();
+            onClick={async () => {
+              if (await confirm({
+                title: `Delete template “${t.name}”?`,
+                body: "This cannot be undone. Messages already sent are unaffected.",
+                confirmLabel: "Delete template",
+                destructive: true,
+              })) remove.mutate();
             }}>
             {remove.isPending ? "Deleting…" : "Delete"}
           </button>

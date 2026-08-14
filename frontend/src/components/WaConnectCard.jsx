@@ -9,6 +9,7 @@ import {
   fetchWaSignupConfig,
 } from "../api/client.js";
 import useEmbeddedSignup from "../hooks/useEmbeddedSignup.js";
+import { useConfirm } from "./ConfirmDialog.jsx";
 
 // One button. The clinic owner presses Connect, walks through Meta's own
 // popup with the number they ALREADY use for the clinic, and comes back
@@ -144,6 +145,7 @@ function ManualConnect({ branchId, onConnected }) {
 }
 
 export default function WaConnectCard({ branchId }) {
+  const confirm = useConfirm();
   const qc = useQueryClient();
   const { launch, launching } = useEmbeddedSignup();
 
@@ -221,10 +223,13 @@ export default function WaConnectCard({ branchId }) {
           both places.
         </p>
         <button type="button" className="btn-ghost text-danger" disabled={remove.isPending}
-          onClick={() => {
-            if (window.confirm(
-              "Disconnect WhatsApp? Patients messaging your number will stop getting replies until you reconnect.",
-            )) remove.mutate();
+          onClick={async () => {
+            if (await confirm({
+              title: "Disconnect WhatsApp?",
+              body: "Patients messaging your number will stop getting replies until you reconnect.",
+              confirmLabel: "Disconnect",
+              destructive: true,
+            })) remove.mutate();
           }}>
           {remove.isPending ? "Disconnecting…" : "Disconnect"}
         </button>

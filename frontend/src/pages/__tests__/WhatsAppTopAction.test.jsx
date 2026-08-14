@@ -33,6 +33,8 @@ vi.mock("../../hooks/useEmbeddedSignup.js", () => ({
 }));
 
 import WhatsApp from "../WhatsApp.jsx";
+// ConfirmProvider mirrors main.jsx: the app mounts it above every page.
+import { ConfirmProvider } from "../../components/ConfirmDialog.jsx";
 
 afterEach(() => {
   cleanup();
@@ -44,9 +46,11 @@ function renderAt(path) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <QueryClientProvider client={qc}>
+      <ConfirmProvider>
         <Routes>
           <Route path="/whatsapp" element={<WhatsApp />} />
         </Routes>
+      </ConfirmProvider>
       </QueryClientProvider>
     </MemoryRouter>,
   );

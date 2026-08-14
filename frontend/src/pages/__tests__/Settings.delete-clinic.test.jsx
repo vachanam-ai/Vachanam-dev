@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
+// ConfirmProvider mirrors main.jsx: the app mounts it above every page.
+import { ConfirmProvider } from "../../components/ConfirmDialog.jsx";
 
 // Vinay 2026-08-14: "DELETE not working."
 //
@@ -61,7 +63,6 @@ beforeEach(() => {
   };
   deleteAccount.mockClear();
   logout.mockClear();
-  vi.stubGlobal("confirm", vi.fn(() => true));
 });
 
 afterEach(cleanup);
@@ -71,9 +72,11 @@ function renderSettings() {
   return import("../Settings.jsx").then(({ default: Settings }) =>
     render(
       <QueryClientProvider client={qc}>
+      <ConfirmProvider>
         <MemoryRouter>
           <Settings />
         </MemoryRouter>
+      </ConfirmProvider>
       </QueryClientProvider>,
     ),
   );
@@ -85,12 +88,22 @@ async function typeConfirm(value) {
   return input;
 }
 
+/** Click through the in-app confirmation that replaced window.confirm. */
+async function acceptDialog() {
+  fireEvent.click(await screen.findByRole("button", { name: /Erase everything/i }));
+}
+
+async function dismissDialog() {
+  fireEvent.click(await screen.findByRole("button", { name: /^Cancel$/i }));
+}
+
 describe("delete clinic — Google account", () => {
   it("sends a fresh Google id_token, not just the typed word", async () => {
     await renderSettings();
     await typeConfirm("DELETE");
 
     fireEvent.click(screen.getByRole("button", { name: /Confirm with Google/i }));
+    await acceptDialog();
 
     await waitFor(() => expect(deleteAccount).toHaveBeenCalled());
     expect(deleteAccount).toHaveBeenCalledWith({
@@ -103,6 +116,7 @@ describe("delete clinic — Google account", () => {
     await renderSettings();
     await typeConfirm("DELETE");
     fireEvent.click(screen.getByRole("button", { name: /Confirm with Google/i }));
+    await acceptDialog();
 
     await waitFor(() => expect(deleteAccount).toHaveBeenCalled());
     const payload = deleteAccount.mock.calls[0][0];
@@ -130,11 +144,13 @@ describe("delete clinic — Google account", () => {
     expect(screen.getByText(/fresh\s+sign-in/i)).toBeTruthy();
   });
 
-  it("still asks for confirmation before erasing", async () => {
-    globalThis.confirm.mockReturnValueOnce(false);
+  it("still asks for confirmation before erasing, and cancel means cancel", async () => {
     await renderSettings();
     await typeConfirm("DELETE");
     fireEvent.click(screen.getByRole("button", { name: /Confirm with Google/i }));
+    // The in-app dialog states the blast radius before anything is destroyed.
+    expect(await screen.findByText(/Erase this entire clinic\?/i)).toBeTruthy();
+    await dismissDialog();
     expect(deleteAccount).not.toHaveBeenCalled();
   });
 
@@ -142,6 +158,7 @@ describe("delete clinic — Google account", () => {
     await renderSettings();
     await typeConfirm("DELETE");
     fireEvent.click(screen.getByRole("button", { name: /Confirm with Google/i }));
+    await acceptDialog();
     await waitFor(() => expect(logout).toHaveBeenCalled());
   });
 });
@@ -154,6 +171,7 @@ describe("delete clinic — password account", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Delete clinic permanently/i }),
     );
+    await acceptDialog();
 
     await waitFor(() => expect(deleteAccount).toHaveBeenCalled());
     expect(deleteAccount).toHaveBeenCalledWith({ password: "hunter2hunter2" });

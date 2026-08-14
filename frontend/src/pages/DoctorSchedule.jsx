@@ -14,6 +14,7 @@ import {
 import QuestionsCard from "../components/QuestionsCard.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 0-6
 
@@ -387,6 +388,7 @@ function timingSummary(doctor) {
  *  date publisher; the other cards compress to make room. */
 function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, onChanged, setRef }) {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const editorRef = useRef(null);
   const isAdmin = role === "org_admin";
 
@@ -450,10 +452,13 @@ function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, o
           )}
           {isAdmin && (
             <button className="btn-danger px-3 py-1.5 text-sm" disabled={remove.isPending}
-              onClick={() => {
-                if (window.confirm(`Remove ${doctor.name}? Patients can no longer be booked with them; past bookings stay.`)) {
-                  remove.mutate();
-                }
+              onClick={async () => {
+                if (await confirm({
+                  title: `Remove ${doctor.name}?`,
+                  body: "Patients can no longer be booked with them. Past bookings stay exactly as they are.",
+                  confirmLabel: "Remove doctor",
+                  destructive: true,
+                })) remove.mutate();
               }}>
               Remove
             </button>
