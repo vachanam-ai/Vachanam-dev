@@ -4,6 +4,7 @@ import { roleHome, useAuth } from "./hooks/useAuth.jsx";
 // Only the landing page is eager. Authentication and the authenticated shell
 // are route-split so marketing visitors do not download clinic operations UI.
 import Landing from "./pages/Landing.jsx";
+import NotFound from "./pages/NotFound.jsx";
 import SupportWidget from "./components/SupportWidget.jsx";
 
 // Everything behind login (plus kiosk/help) loads on demand: a public visitor
@@ -208,7 +209,9 @@ export default function App() {
         />
       </Route>
 
-      <Route path="*" element={<Navigate to={user ? roleHome(role) : "/login"} replace />} />
+      {/* 404, not a silent redirect (Vinay 2026-08-14). Bouncing an unknown
+          URL to the dashboard made a dead link look like it had worked. */}
+      <Route path="*" element={<NotFound />} />
     </Routes>
     </Suspense>
     {showWidget && <SupportWidget />}

@@ -267,7 +267,10 @@ export default function Landing() {
       <footer className="marketing-footer">
         <div><Brand /><p>Precise clinic reception with a human sense of care.</p></div>
         <div><strong>Product</strong><a href="#workflow">How it works</a><a href="#pricing">Pricing</a><Link to="/help">Help centre</Link></div>
-        <div><strong>Company</strong><a href="mailto:hello@vachanam.in">hello@vachanam.in</a><a href={`${API_BASE}/privacy`}>Privacy</a><a href={`${API_BASE}/terms`}>Terms</a></div>
+        {/* Razorpay requires a publicly reachable refund/cancellation policy.
+            /refunds has existed on the backend since launch but nothing linked
+            to it, so it was effectively unpublished (Vinay 2026-08-14). */}
+        <div><strong>Company</strong><a href="mailto:hello@vachanam.in">hello@vachanam.in</a><a href={`${API_BASE}/privacy`}>Privacy</a><a href={`${API_BASE}/terms`}>Terms</a><a href={`${API_BASE}/refunds`}>Refunds &amp; cancellation</a><a href={`${API_BASE}/data-safety`}>Data safety</a></div>
         <p>© 2026 Vachanam. Built for clinics in India.</p>
       </footer>
     </div>
