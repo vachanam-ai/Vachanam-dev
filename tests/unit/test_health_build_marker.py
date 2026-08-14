@@ -123,7 +123,6 @@ def test_prod_health_goes_503_when_the_schedulers_stop(monkeypatch):
     import time
 
     import backend.config as cfg
-    from backend.jobs import job_lease
 
     monkeypatch.setattr(cfg.settings, "app_env", "production")
     ticks = _tick_critical_jobs(monkeypatch)

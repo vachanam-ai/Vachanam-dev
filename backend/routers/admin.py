@@ -747,24 +747,31 @@ async def _hard_delete_org(db, org) -> None:
     """Delete an org and ALL its tenant data in FK-safe order (children →
     branches → users → billing → org). Admin-initiated, audited, irreversible.
     Ordering is load-bearing: every tenant FK is ondelete=RESTRICT."""
-    from sqlalchemy import delete as _delete
+    from sqlalchemy import delete as _delete, text
 
     from backend.models.schema import (
+        AddonPurchase as _AP,
         BillingCycle as _BC,
         Branch as _B,
+        BranchVoice as _BV,
         Call as _Call,
         CalendarWriteTask as _CWT,
         CallLog as _CL,
         CallQuality as _CQ,
+        ClinicQuestion as _CumQ,
         Consent as _Cons,
         Doctor as _Doc,
+        DoctorDateSchedule as _DDS,
         DoctorUnavailability as _DU,
         FollowupTask as _FT,
         Patient as _Pat,
+        PatientMessage as _PM,
+        Rating as _Rat,
         Token as _Tok,
         TreatmentNote as _TN,
         SupportMessage as _SM,
         SupportTicket as _ST,
+        WhatsAppDelivery as _WD,
         WhatsAppSession as _WA,
     )
 
@@ -774,8 +781,27 @@ async def _hard_delete_org(db, org) -> None:
 
     if branch_ids:
         # Children that reference tokens/treatment_notes/doctors/patients first.
-        for model in (_FT, _TN, _CWT, _CQ, _CL, _Call, _Cons, _Tok, _DU, _Pat, _Doc, _WA):
+        #
+        # EVERY table with a branch FK must appear here, not just the RESTRICT
+        # ones. Two of these were missing and are RESTRICT, so deleting a clinic
+        # that had published a doctor's dates, or had ever queued a WhatsApp
+        # message, failed outright with an IntegrityError — the delete looked
+        # like it did nothing (Vinay 2026-08-14: "EVEN AFTER DELETING CLINIC.
+        # EVERYTHING STILL PRESENT"). The rest are CASCADE and would have been
+        # swept by Postgres, but relying on that for tenant data is exactly the
+        # kind of silent assumption DPDP erasure must not rest on: this function
+        # promises to erase, so it erases explicitly.
+        for model in (
+            _FT, _TN, _CWT, _CQ, _CL, _Call, _Cons, _Tok, _DU,
+            _DDS,            # RESTRICT — references doctors, so before _Doc
+            _WD,             # RESTRICT — queued/sent WhatsApp deliveries
+            _CumQ, _PM, _Rat, _BV,
+            _Pat, _Doc, _WA,
+        ):
             await db.execute(_delete(model).where(model.branch_id.in_(branch_ids)))
+        # Paid add-ons are keyed by BOTH org and branch; clear by branch here so
+        # the branch delete below cannot be blocked, and by org further down.
+        await db.execute(_delete(_AP).where(_AP.branch_id.in_(branch_ids)))
 
     # Support threads can contain owner contact details and clinic context.
     # Self-service deletion promises erasure, so remove the thread before the
@@ -784,8 +810,33 @@ async def _hard_delete_org(db, org) -> None:
     await db.execute(_delete(_SM).where(_SM.ticket_id.in_(ticket_ids)))
     await db.execute(_delete(_ST).where(_ST.org_id == org.id))
 
+    await db.execute(_delete(_AP).where(_AP.org_id == org.id))
     await db.execute(_delete(_BC).where(_BC.org_id == org.id))
+    # Deleting the logins is what makes this a real erasure rather than a
+    # deactivation: with no user row, signing in again is treated as a brand
+    # new clinic (Vinay 2026-08-14 — "when i try to login in again it should
+    # treat as a new clinic. not just manipulating. actually delete.").
+    #
+    # EVERY role goes, not just the owner: doctors and receptionists are
+    # clinic staff and their logins must die with it ("all linked doctors,
+    # receptionists accounts should also be deleted").
     await db.execute(_delete(User).where(User.org_id == org.id))
+    # Second sweep, because User.org_id is NULLABLE: a login whose org_id was
+    # never set (or was cleared) but whose branch_ids still point at this
+    # clinic would otherwise survive as an orphan that can still authenticate
+    # and carries a dead tenant scope. Platform roles are explicitly spared —
+    # super_admin and support have no org_id by design and must never be
+    # removed by a tenant deletion.
+    if branch_ids:
+        await db.execute(
+            _delete(User).where(
+                User.org_id.is_(None),
+                User.role.notin_(("super_admin", "support")),
+                text("users.branch_ids ?| :orphan_branch_ids").bindparams(
+                    orphan_branch_ids=[str(b) for b in branch_ids]
+                ),
+            )
+        )
     if branch_ids:
         await db.execute(_delete(_B).where(_B.id.in_(branch_ids)))
     await db.execute(_delete(Organization).where(Organization.id == org.id))

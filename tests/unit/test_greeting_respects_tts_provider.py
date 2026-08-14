@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 
 from agent.livekit_minimal import greeting as g
 from backend.config import settings

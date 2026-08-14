@@ -10,7 +10,6 @@ from __future__ import annotations
 import time
 from types import SimpleNamespace
 
-import pytest
 
 from agent.livekit_minimal import agent as ag
 from backend.config import settings

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
 
 
 def _agent_layer_decision(result: dict, last_confirmed_token_id):
