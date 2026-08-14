@@ -36,8 +36,6 @@ vi.mock("../hooks/useAuth.jsx", () => ({
 vi.mock("../lib/recorder.js", () => ({ startRecording: vi.fn() }));
 
 import Settings from "./Settings.jsx";
-// ConfirmProvider mirrors main.jsx: the app mounts it above every page.
-import { ConfirmProvider } from "../components/ConfirmDialog.jsx";
 
 afterEach(cleanup);
 
@@ -45,10 +43,8 @@ function renderSettings() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <ConfirmProvider>
       <Settings />
-    </ConfirmProvider>
-      </QueryClientProvider>
+    </QueryClientProvider>
   );
 }
 

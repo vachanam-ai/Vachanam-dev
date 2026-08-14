@@ -1,0 +1,234 @@
+"""Dispatch outbound treatment follow-up calls (M2).
+
+Every 15 min. Calling hours 09:00-20:00 branch-local IST (DPDP courtesy, RULE 8).
+next_visit_book fires at/after 09:00 on its scheduled day; doctor_advice fires
+ASAP. RULE 9: metadata carries ONLY operational fields + the doctor's message
+(what_to_ask) — never steps_performed/next_steps. Reuses the reminder dispatch."""
+from __future__ import annotations
+import json
+import uuid
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
+import structlog
+from sqlalchemy import select
+from backend.database import AsyncSessionLocal
+from backend.models.schema import FollowupTask, Branch, Doctor, Patient, TreatmentNote
+from backend.services.telephony import branch_outbound_trunk_id
+
+logger = structlog.get_logger()
+IST = ZoneInfo("Asia/Kolkata")
+CALL_START_H, CALL_END_H = 9, 20
+# #393 (Vinay 2026-07-17: doctor replied at 21:10 IST, patient got no call —
+# task parked until 09:00): doctor_advice is a doctor-INITIATED service
+# callback the patient is waiting for, not a marketing nudge — it gets a wider
+# window. Booking nudges (next_visit_book) keep the courtesy 9-20 window.
+DA_START_H, DA_END_H = 8, 22
+AGENT_NAME = "vachanam-agent"
+
+
+def _window(task_type: str) -> tuple[int, int]:
+    return (DA_START_H, DA_END_H) if task_type == "doctor_advice" else (
+        CALL_START_H, CALL_END_H)
+
+
+def _is_due(task, now_ist: datetime) -> bool:
+    lo, hi = _window(task.task_type)
+    if not (lo <= now_ist.hour < hi):
+        return False
+    sched = task.scheduled_date or now_ist.date()
+    if sched > now_ist.date():
+        return False
+    return task.task_type in ("next_visit_book", "doctor_advice")
+
+
+async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
+    """Create the outbound agent dispatch AND verify a worker took it.
+
+    Returns True ONLY when an agent participant actually JOINED the room —
+    #423 (2026-07-19/20, three lost calls): create_dispatch succeeds even when
+    NO worker is registered (deploy left the agent unconnected to LiveKit),
+    so 'dispatch created' marked tasks done while the room sat empty and the
+    patient never got the call. Now a dispatch nobody picks up within
+    _JOIN_TIMEOUT_S is deleted and the task stays pending — the next 15-min
+    tick retries, and by then the watchdog (#411 gate) has restarted a dead
+    worker. Dispatch-then-mutate preserved (FIXLOG #160)."""
+    try:
+        outbound_trunk_id = branch_outbound_trunk_id(branch)
+    except RuntimeError:
+        logger.error(
+            "followup_blocked_missing_branch_trunk",
+            branch_id=str(branch.id),
+            task_id=str(task.id),
+        )
+        return False
+
+    # A follow-up and an appointment reminder falling due in the same minute
+    # rang the same patient twice (Vinay 2026-08-08). Skipping leaves the task
+    # pending, so the next tick retries — identical to a failed dispatch.
+    from backend.services.outbound_guard import (
+        claim_outbound_call,
+        release_outbound_call,
+    )
+
+    if not await claim_outbound_call(patient.phone, "next_visit"):
+        return False
+    try:
+        from livekit import api as lk_api
+        lkapi = lk_api.LiveKitAPI()
+        try:
+            meta = {"call_type": task.task_type, "branch_id": str(branch.id),
+                    "outbound_trunk_id": outbound_trunk_id,
+                    "phone_number": patient.phone, "task_id": str(task.id),
+                    "patient_name": patient.name, "doctor_name": doctor.name,
+                    "doctor_id": str(doctor.id), "message": task.what_to_ask or ""}
+            # RULE 9: the NOTE's date is a booking concern belonging to the
+            # next_visit_book task — never leak it onto a doctor_advice call
+            # linked to the same note. A date the DOCTOR typed on this reply is
+            # different: it is the instruction being relayed, so it travels, and
+            # it means MOVE the existing booking rather than add one (#478).
+            if task.task_type == "next_visit_book":
+                if target_date:
+                    meta["target_date"] = target_date
+                    meta["window"] = 2
+            # getattr, not attribute access: _dispatch's whole body is inside a
+            # broad try/except that returns False, so an AttributeError here
+            # does not raise — it silently reports "dispatch failed" for EVERY
+            # follow-up, leaving tasks pending until they exhaust and go
+            # unreachable. The loop would have died quietly.
+            elif getattr(task, "target_date", None):
+                meta["target_date"] = task.target_date.isoformat()
+                meta["window"] = 2
+            room = f"followup-{uuid.uuid4().hex[:10]}"
+            await lkapi.agent_dispatch.create_dispatch(lk_api.CreateAgentDispatchRequest(
+                agent_name=AGENT_NAME, room=room, metadata=json.dumps(meta)))
+            from backend.services.dispatch_verify import verify_or_cleanup
+
+            if not await verify_or_cleanup(lkapi, room, f"followup:{task.id}"):
+                # No call happened — hand the number back so a real retry
+                # does not have to wait out the guard TTL.
+                await release_outbound_call(patient.phone)
+                return False
+            logger.info("followup_call_dispatched", task_id=str(task.id),
+                        call_type=task.task_type, room=room,
+                        phone_last4=(patient.phone or "")[-4:])
+            return True
+        finally:
+            await lkapi.aclose()
+    except Exception as e:  # noqa: BLE001
+        logger.error("followup_dispatch_failed", task_id=str(task.id), error=str(e)[:160])
+        await release_outbound_call(patient.phone)
+        return False
+
+
+async def _next_due_epoch(db, now_ist: datetime) -> float | None:
+    """When the earliest pending voice follow-up becomes dialable, or None when
+    none are pending. A task is due once scheduled_date has arrived and we are
+    inside calling hours — so a future task's due moment is CALL_START_H on its
+    scheduled day (#299)."""
+    row = (
+        await db.execute(
+            select(FollowupTask.scheduled_date)
+            .where(
+                FollowupTask.status == "pending",
+                FollowupTask.channel == "voice",
+                FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"]),
+            )
+            .order_by(FollowupTask.scheduled_date.asc())
+            .limit(1)
+        )
+    ).first()
+    if not row:
+        return None
+    sched = row[0] or now_ist.date()
+    if sched <= now_ist.date():
+        return now_ist.timestamp()  # due now (or overdue) — keep ticking
+    return datetime.combine(sched, dtime(CALL_START_H), tzinfo=IST).timestamp()
+
+
+async def run_next_visit_followups(now: datetime | None = None) -> int:
+    from backend.jobs import wake_gate
+
+    now_ist = (now or datetime.now(IST)).astimezone(IST)
+    # Widest window across task types (#393) — per-task windows enforced in
+    # _is_due; outside 8-22 nothing at all is dialable.
+    if not (DA_START_H <= now_ist.hour < DA_END_H):
+        return 0
+    # #299: the next task isn't dialable yet ⇒ answer from Redis and leave
+    # Postgres asleep. Schedule-driven (not producer-driven), so a task created
+    # by ANY path is still picked up: the job recomputes the due time from the
+    # database on every real pass, and wake_gate fails open on Redis trouble.
+    if not await wake_gate.should_run_scheduled("followups"):
+        return 0
+    dispatched = 0
+    async with AsyncSessionLocal() as db:
+        tasks = (await db.execute(select(FollowupTask).where(
+            FollowupTask.status == "pending", FollowupTask.channel == "voice",
+            FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"])))).scalars().all()
+        for t in tasks:
+            if not _is_due(t, now_ist):
+                continue
+            branch = (await db.execute(select(Branch).where(Branch.id == t.branch_id))).scalar_one_or_none()
+            doctor = (await db.execute(select(Doctor).where(Doctor.id == t.doctor_id))).scalar_one_or_none()
+            patient = (await db.execute(select(Patient).where(Patient.id == t.patient_id))).scalar_one_or_none()
+            if not (branch and doctor and patient and patient.phone):
+                t.status = "unreachable"
+                logger.warning("followup_skipped_missing_data", task_id=str(t.id))
+                await db.commit()   # COMMIT PER TASK — one task can't roll back the batch
+                continue
+            # CONSENT GATE (FIXLOG #303, DPDP): follow-up calls are consent-based
+            # (privacy policy §9 promises withdrawal works). followup_consent is
+            # captured at booking and clearable by the clinic / a DSAR — a False
+            # here must actually stop the phone from ringing. Reminders and
+            # cascade-rebook are NOT gated: they are part of the booked service.
+            if patient.followup_consent is False:
+                t.status = "completed"
+                logger.info("followup_skipped_no_consent", task_id=str(t.id),
+                            phone_last4=(patient.phone or "")[-4:])
+                await db.commit()
+                continue
+            # PLAN GATE: the treatment follow-up loop is available on EVERY
+            # plan since 2026-07-15 (Vinay: retention lever; it is just metered
+            # minutes). FOLLOWUP_PLANS lists them all — the gate stays as the
+            # seam in case a future plan drops the loop.
+            from backend.models.schema import Organization
+            from backend.services.billing_math import FOLLOWUP_PLANS
+
+            org = (await db.execute(select(Organization).where(
+                Organization.id == branch.org_id))).scalar_one_or_none()
+            if org is not None and org.plan not in FOLLOWUP_PLANS:
+                t.status = "completed"
+                logger.info("followup_skipped_plan", task_id=str(t.id), plan=org.plan)
+                await db.commit()
+                continue
+            target_date = None
+            if t.treatment_note_id:
+                tn = (await db.execute(select(TreatmentNote).where(
+                    TreatmentNote.id == t.treatment_note_id))).scalar_one_or_none()
+                if tn and tn.is_final:
+                    t.status = "completed"   # treatment closed since enqueue
+                    await db.commit()
+                    continue
+                if tn and tn.next_reporting_date:
+                    target_date = tn.next_reporting_date.isoformat()
+            # DISPATCH-THEN-MUTATE (FIXLOG #160, mirrors #151): do NOT flip in_progress
+            # before dialing — the run query only pulls 'pending' and NO job requeues a
+            # stranded 'in_progress' FollowupTask, so a flip-before-dispatch crash strands
+            # the task forever (permanent miss). Dispatch first; mutate on the result.
+            t.attempt_count = (t.attempt_count or 0) + 1
+            ok = await _dispatch(t, branch, doctor, patient, target_date)
+            if ok:
+                # Call dispatched. The agent enriches response_summary on call-end
+                # (later task); the task is now non-pending so the next 15-min tick
+                # will NOT re-dial it (no duplicate calls).
+                t.status = "completed"
+                dispatched += 1
+            else:
+                # Dispatch failed: exhaust → unreachable, else keep pending so the next
+                # tick retries (self-healing). Never marked done before a real dispatch.
+                t.status = "unreachable" if t.attempt_count >= (t.max_attempts or 3) else "pending"
+            await db.commit()   # COMMIT PER TASK
+
+        # #299: park until the next follow-up is actually dialable. Capped by
+        # wake_gate.SAFETY_SECONDS, so nothing sleeps longer than an hour.
+        await wake_gate.set_next_at("followups", await _next_due_epoch(db, now_ist))
+    return dispatched

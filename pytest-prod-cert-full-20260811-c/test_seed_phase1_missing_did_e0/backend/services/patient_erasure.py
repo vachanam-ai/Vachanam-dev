@@ -1,0 +1,112 @@
+"""Shared patient-PII erasure (DPDP s.8(7) / right to erasure).
+
+One implementation used by BOTH the automatic retention job
+(backend/jobs/data_retention.py) and the clinic-initiated "end treatment &
+delete data" action (backend/routers/treatment.py), so the two paths can
+never drift on WHAT gets erased.
+
+RULE 9: erases PII, logs IDs + last-4 only.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.models.schema import (
+    ClinicQuestion,
+    FollowupTask,
+    Patient,
+    PatientMessage,
+    TreatmentNote,
+    WhatsAppSession,
+)
+
+logger = structlog.get_logger()
+
+# Name is NOT NULL on patients — fixed placeholder rather than NULL.
+ERASED_NAME = "[erased]"
+
+
+async def erase_patient_pii(db: AsyncSession, p: Patient) -> None:
+    """Erase one patient's PII in-place (caller commits).
+
+    - name/phone/age/gender cleared, anonymized_at stamped (idempotent guard is
+      the caller's job via anonymized_at IS NULL, but re-running is harmless).
+    - Treatment notes DELETED (health data), follow-up thread health text NULLed
+      (task rows survive for non-PII outcome trends).
+    FK ORDER: FollowupTask.treatment_note_id -> treatment_notes is RESTRICT, so
+    the link must be cleared BEFORE the notes are deleted.
+    """
+    now = datetime.now(timezone.utc)
+    last4 = (p.phone or "")[-4:] or "----"
+    # Caller messages carry the full phone + free text (#349) — DELETE them,
+    # both linked rows and unlinked rows matching the phone (message taken
+    # before the patient row existed). Must run BEFORE p.phone is nulled.
+    _msg_filter = PatientMessage.patient_id == p.id
+    if p.phone:
+        _msg_filter = _msg_filter | (
+            (PatientMessage.branch_id == p.branch_id)
+            & (PatientMessage.caller_phone == p.phone)
+        )
+    await db.execute(PatientMessage.__table__.delete().where(_msg_filter))
+    # Clinic questions are FAQ material, not patient data — the QUESTION stays,
+    # but the identity attached to it for the callback goes, and any queued
+    # callback is closed so an erased patient is never dialed (2026-08-02).
+    _q_filter = ClinicQuestion.patient_id == p.id
+    if p.phone:
+        _q_filter = _q_filter | (
+            (ClinicQuestion.branch_id == p.branch_id)
+            & (ClinicQuestion.caller_phone == p.phone)
+        )
+    await db.execute(
+        ClinicQuestion.__table__.update()
+        .where(_q_filter, ClinicQuestion.status == "answered")
+        .values(status="unreachable")
+    )
+    await db.execute(
+        ClinicQuestion.__table__.update()
+        .where(_q_filter)
+        .values(patient_id=None, caller_phone=None, caller_last4=None)
+    )
+    # WhatsApp conversation state (WA MVP1 Task 3, backend/services/wa_session.py)
+    # — the last-10-turns working memory + any in-progress booking. Keyed on
+    # phone only (no patient_id column on whatsapp_sessions), so this too must
+    # run BEFORE p.phone is nulled below.
+    if p.phone:
+        await db.execute(
+            WhatsAppSession.__table__.delete().where(
+                WhatsAppSession.branch_id == p.branch_id,
+                WhatsAppSession.patient_phone == p.phone,
+            )
+        )
+    p.name = ERASED_NAME
+    p.phone = None
+    p.age = None
+    p.gender = None
+    p.followup_consent = False
+    p.anonymized_at = now
+
+    await db.execute(
+        FollowupTask.__table__.update()
+        .where(FollowupTask.patient_id == p.id)
+        .values(treatment_note_id=None, what_to_ask=None, response_summary=None)
+    )
+    await db.execute(
+        TreatmentNote.__table__.delete().where(TreatmentNote.patient_id == p.id)
+    )
+    # An erased patient must never be dialed again — close any queued calls.
+    await db.execute(
+        FollowupTask.__table__.update()
+        .where(FollowupTask.patient_id == p.id,
+               FollowupTask.status.in_(("pending", "in_progress")))
+        .values(status="completed")
+    )
+
+    logger.info(
+        "patient_pii_erased",
+        patient_id=str(p.id),
+        branch_id=str(p.branch_id),
+        phone_last4=last4,
+    )

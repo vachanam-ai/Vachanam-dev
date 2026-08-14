@@ -1,0 +1,1349 @@
+import uuid
+from datetime import datetime, date, time
+from sqlalchemy import (
+    String, Boolean, Integer, Text, DateTime, Date, Time, LargeBinary,
+    ForeignKey, Enum, ARRAY, JSON, func, text, false, Index, UniqueConstraint,
+    CheckConstraint,
+)
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from backend.database import Base
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    owner_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    owner_email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    plan: Mapped[str] = mapped_column(Enum("lite", "solo", "clinic", "multi", "wa", name="plan_type"), nullable=False)
+    subscription_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    razorpay_customer_id: Mapped[str | None] = mapped_column(String(255))
+    razorpay_subscription_id: Mapped[str | None] = mapped_column(String(255))
+    razorpay_subscription_status: Mapped[str | None] = mapped_column(String(30))
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(
+        Enum("active", "trial", "paused", "cancelled", name="org_status"),
+        default="trial",
+        nullable=False,
+    )
+    # Super-admin kill switch: when True and the month's voice minutes reach
+    # the plan's included bucket, the agent answers with a one-line "service
+    # unavailable" and hangs up. Default False — overage billing is normal.
+    hard_block_on_exhaust: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    # Super-admin per-clinic minute override (signed): added to the plan/trial
+    # bucket. Positive = goodwill grant, negative = claw back. Floored at 0.
+    minutes_adjustment: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    # Clinic's GST number — printed on payment invoices so the clinic can claim
+    # input credit (B2B). Optional; set by the owner in Settings.
+    gstin: Mapped[str | None] = mapped_column(String(15))
+    # Clinic-scheduled plan change: takes effect at pending_plan_effective (1st
+    # of next month) so a switch never shrinks the current month's paid bucket.
+    # A daily job applies it. Both NULL = no pending change.
+    pending_plan: Mapped[str | None] = mapped_column(String(20))
+    pending_plan_effective: Mapped[date | None] = mapped_column(Date)
+    # End-of-cycle cancellation (Vinay 2026-08-07). A DATE, not a flag: the
+    # clinic has paid for the cycle it is in and keeps full service until it
+    # ends. The daily job that promotes pending_plan flips status to
+    # "cancelled" once this date arrives.
+    cancellation_effective: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    branches: Mapped[list["Branch"]] = relationship(back_populates="organization")
+    billing_cycles: Mapped[list["BillingCycle"]] = relationship(back_populates="organization")
+    users: Mapped[list["User"]] = relationship(back_populates="organization")
+
+
+class Branch(Base):
+    __tablename__ = "branches"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: org must be explicitly cleared before a branch can be deleted (DPDP data-lifecycle)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Clinic name in the call's TTS script (RULE 6), so it is SPOKEN not
+    # mispronounced as English ("Datta" → "దత్త", not "data"). Transliterated +
+    # stored once (lazy, off the per-call path); falls back to `name` when unset.
+    name_spoken: Mapped[str | None] = mapped_column(String(255))
+    # Pre-rendered welcome+greeting audio (WAV bytes), played INSTANTLY on answer
+    # to mask the ~6s LiveKit session.start (Sarvam STT cold connect). Generated
+    # once per clinic, so the caller hears continuous warm speech
+    # instead of a cold-TTS delay + dead air. NULL → fall back to live synth.
+    welcome_audio: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Welcome-ONLY clip ("నమస్కారం, <clinic> క్లినిక్‌కి స్వాగతం") for OUTBOUND calls
+    # (reminder/rebook/followup). Same instant-mask trick as welcome_audio, but
+    # without the inbound "how can I help" tail — the call's own body follows.
+    # NULL → live synth. Lets outbound say namaskaram exactly ONCE (the body drops
+    # its leading namaskaram).
+    welcome_short_audio: Mapped[bytes | None] = mapped_column(LargeBinary)
+    address: Mapped[str | None] = mapped_column(Text)
+    city: Mapped[str | None] = mapped_column(String(100))
+    # whatsapp_number: human-readable phone (+91XXXXXXXXXX) used in messages
+    whatsapp_number: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+    # meta_phone_number_id: Meta's internal numeric ID — used to identify receiving branch in webhook
+    meta_phone_number_id: Mapped[str | None] = mapped_column(String(50), unique=True)
+    did_number: Mapped[str | None] = mapped_column(String(20))
+    # clinic_phone: the clinic's existing patient-facing number (forwards to the DID)
+    clinic_phone: Mapped[str | None] = mapped_column(String(20))
+    vobiz_did_id: Mapped[str | None] = mapped_column(String(255))
+    # Per-clinic Vobiz SUB-ACCOUNT (concurrency isolation: each clinic gets its
+    # own channel pool + CDRs + billing instead of sharing one global account).
+    # When vobiz_subaccount_id is set, the agent/outbound jobs use these creds +
+    # outbound_trunk_id instead of the global settings.vobiz_*. The SIP password
+    # is encrypted at rest (DPDP/RULE 9) — never store it plaintext; use
+    # backend/services/crypto.py. All nullable → existing single-account branches
+    # keep working unchanged (telephony.py falls back to the global account).
+    vobiz_subaccount_id: Mapped[str | None] = mapped_column(String(128))
+    vobiz_sip_username: Mapped[str | None] = mapped_column(String(128))
+    vobiz_sip_password_enc: Mapped[str | None] = mapped_column(Text)  # Fernet token
+    vobiz_sip_domain: Mapped[str | None] = mapped_column(String(255))
+    outbound_trunk_id: Mapped[str | None] = mapped_column(String(255))  # per-clinic LiveKit outbound trunk
+    emergency_contact: Mapped[str | None] = mapped_column(String(20))
+    google_calendar_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # Meta Cloud API phone_number_id of the clinic's own WhatsApp number
+    # (Coexistence-linked into Vachanam's WABA — spec 2026-07-13). Presence =
+    # WhatsApp active for this branch. RULE 5 for inbound: webhook events are
+    # resolved to a branch by THIS id (the receiving clinic number), never by
+    # the patient's number. Unique — one linked number belongs to one branch.
+    wa_phone_number_id: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, unique=True
+    )
+    # The Rs1,499 WhatsApp add-on (spec 2026-08-02 pricing §1, migration nn37).
+    # Lets a Lite/Starter clinic buy WhatsApp without upgrading to Clinic.
+    # Per-BRANCH because WhatsApp is provisioned per number: each branch holds
+    # its own WABA and its own Meta billing, so an org with three branches
+    # genuinely needs three numbers and three add-ons.
+    whatsapp_addon: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    # Clinic-owned WhatsApp Business Account (spec 2026-08-02, migration mm36).
+    # The clinic holds its own WABA and its own Meta billing; we send on its
+    # behalf with ITS token. UNIQUE so one WABA can only ever be claimed by one
+    # branch — a second claim must fail loudly, never silently route one
+    # clinic's patients to another (RULE 1).
+    wa_waba_id: Mapped[str | None] = mapped_column(String(32), nullable=True, unique=True)
+    # Fernet-encrypted Meta business token — never plaintext, never logged,
+    # never returned by any API (same discipline as the Vobiz SIP password).
+    # NULL means "fall back to the platform token" (bridge mode).
+    wa_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    wa_verified_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # none | connected | disconnected | error
+    wa_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="none", server_default="none"
+    )
+    wa_connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Soniox catalog voice for this clinic's agent. NULL or a legacy provider ID
+    # resolves to the configured Soniox default without breaking existing rows.
+    tts_voice: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Deprecated legacy clone metadata. Kept only for schema compatibility;
+    # Soniox-only TTS never reads or exposes it.
+    cloned_voices: Mapped[list] = mapped_column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    # Clinic FAQ answered by the voice agent on calls: list of {"q","a"} in the
+    # clinic's own words (fees, timings, parking, insurance, reports...). NULL/
+    # empty → agent keeps the old "please confirm at the clinic" fallback.
+    # Injected into the system prompt sanitized + capped (RULE 6).
+    faq: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # Spoken language for this clinic's voice agent (clinic-selectable). Drives
+    # the Sarvam STT/TTS language codes AND the per-language spoken lines +
+    # system-prompt directive. Short code (te/hi/ta/kn/ml/mr/bn/or); see
+    # agent/i18n/languages.py. Default Telugu — the launch market.
+    language: Mapped[str] = mapped_column(String(8), default="te", server_default="te", nullable=False)
+    timezone: Mapped[str] = mapped_column(String(50), default="Asia/Kolkata")
+    status: Mapped[str] = mapped_column(
+        Enum("active", "inactive", name="branch_status"),
+        default="active",
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # No two clinics may share a DID — the voice agent resolves tenant identity
+    # from the dialed number. Partial unique (NULL DIDs allowed for un-provisioned
+    # branches). Matches alembic e1diduniq2026.
+    __table_args__ = (
+        Index(
+            "uq_branches_did_number",
+            "did_number",
+            unique=True,
+            postgresql_where=text("did_number IS NOT NULL"),
+        ),
+    )
+
+    organization: Mapped["Organization"] = relationship(back_populates="branches")
+    doctors: Mapped[list["Doctor"]] = relationship(back_populates="branch")
+    patients: Mapped[list["Patient"]] = relationship(back_populates="branch")
+    tokens: Mapped[list["Token"]] = relationship(back_populates="branch")
+    calls: Mapped[list["Call"]] = relationship(back_populates="branch")
+    whatsapp_sessions: Mapped[list["WhatsAppSession"]] = relationship(back_populates="branch")
+
+
+class Doctor(Base):
+    __tablename__ = "doctors"
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_doctors_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: patients/tokens must be deleted before a branch can be removed
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    specialization: Mapped[str | None] = mapped_column(String(100))
+    routing_keywords: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    is_default_doctor: Mapped[bool] = mapped_column(Boolean, default=False)
+    booking_type: Mapped[str] = mapped_column(
+        Enum("token", "appointment", name="booking_type"),
+        nullable=False,
+    )
+    working_hours_start: Mapped[time | None] = mapped_column(Time)
+    working_hours_end: Mapped[time | None] = mapped_column(Time)
+    slot_duration_minutes: Mapped[int | None] = mapped_column(Integer)
+    max_concurrent_per_slot: Mapped[int | None] = mapped_column(Integer)
+    pre_appointment_reminder: Mapped[bool] = mapped_column(Boolean, default=False)
+    daily_token_limit: Mapped[int | None] = mapped_column(Integer)
+    # whatsapp_number: doctor's personal WhatsApp for receiving commands and EOD summaries
+    whatsapp_number: Mapped[str | None] = mapped_column(String(20))
+    # RETIRED 2026-08-03 (Vinay): doctor-level Google Calendars are no longer
+    # used anywhere in resolution — every clinic has exactly ONE calendar
+    # (Branch.google_calendar_id) and doctors see their bookings in the web
+    # dashboard instead. Column is kept (unused) so this stays reversible
+    # without a migration; do not read or write it in new code.
+    google_calendar_id: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(
+        Enum("active", "inactive", name="doctor_status"),
+        default="active",
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # --- Sub-spec A additions (migration fd4a95d354fa) ---
+    # available_weekdays: ISO int array 0-6 (0=Mon). All listed days share working_hours range.
+    # DPDP: aggregate metadata — no PII.
+    available_weekdays: Mapped[list] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=text("'[0,1,2,3,4,5,6]'::jsonb"),
+        comment="ISO weekday ints 0-6 (0=Mon). All listed days share the same working_hours range.",
+    )
+    # Authoritative scheduling model (2026-07-28):
+    # recurring uses recurring_schedule unless a date override exists;
+    # date_specific requires an explicitly published row for every date.
+    # Missing date-specific data is UNKNOWN, never inferred as available.
+    schedule_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="recurring", default="recurring"
+    )
+    # Shape: {"0": [{"start": "09:00", "end": "12:00"}, ...], ...}
+    recurring_schedule: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"), default=dict
+    )
+    # post_treatment_followup: auto-set TRUE for booking_type='appointment' at creation.
+    post_treatment_followup: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=false(),
+        comment="Auto-defaults TRUE for booking_type=appointment at doctor creation.",
+    )
+    # walkins_closed_today_date: receptionist sets to CURRENT_DATE to stop walk-ins.
+    # Auto-clears next day via date comparison in preflight check.
+    walkins_closed_today_date: Mapped[date | None] = mapped_column(
+        Date,
+        nullable=True,
+        comment="Set to CURRENT_DATE when receptionist stops walk-ins. Auto-clears next day by date comparison.",
+    )
+    # calendar_event_id_recurring: token-doctor only — Google Cal recurring clinic-hours event ID.
+    calendar_event_id_recurring: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Token-doctor only: Google Cal event ID for recurring clinic-hours event.",
+    )
+    # One event id per SESSION WINDOW. A doctor sitting 9-12 and again 5-9 is
+    # two recurring events, and a single String column could hold only one —
+    # which is why split-session doctors had their hours deleted from the
+    # calendar instead of published (Vinay 2026-08-04).
+    calendar_event_ids_recurring: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Google Cal event IDs, one per recurring session window.",
+    )
+    # user_id: links Doctor row to User account for doctor-role login.
+    # SET NULL on user deletion — preserves the Doctor row.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        comment="Links Doctor row to User account (doctor-role login). Nullable: exists before first sign-in.",
+    )
+    # invited_email: org_admin enters doctor's Google email. Cleared after first sign-in.
+    invited_email: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Google email the org_admin types at Doctor creation. Cleared after first sign-in links google_sub.",
+    )
+
+    branch: Mapped["Branch"] = relationship(back_populates="doctors")
+    tokens: Mapped[list["Token"]] = relationship(back_populates="doctor")
+    followup_tasks: Mapped[list["FollowupTask"]] = relationship(back_populates="doctor")
+    unavailabilities: Mapped[list["DoctorUnavailability"]] = relationship(back_populates="doctor")
+    date_schedules: Mapped[list["DoctorDateSchedule"]] = relationship(
+        back_populates="doctor", cascade="all, delete-orphan"
+    )
+
+
+class Patient(Base):
+    __tablename__ = "patients"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: patient rows carry PII; must be explicitly deleted before branch removal (DPDP)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(20))
+    # Family bookings: caller != patient, several patients can share one phone.
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    followup_consent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Exactly one patient per phone is the owner (is_primary). Family members
+    # sharing the phone are is_primary=False. NULL-phone rows: each its own primary.
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Per-caller spoken-language mapping (2026-07-03): set when the caller
+    # explicitly asks the agent to switch languages; every later call (inbound
+    # + outbound reminders/follow-ups) to this phone starts in this language.
+    # NULL = clinic's Branch.language. Codes = agent.i18n.LANGUAGES keys.
+    preferred_language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # DPDP s.8(7) retention: set by the data_retention job when this patient's PII
+    # is erased (name/phone/age/gender cleared) after the retention window. NULL =
+    # still live. The booking rows survive (anonymised) for aggregate analytics.
+    anonymized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    branch: Mapped["Branch"] = relationship(back_populates="patients")
+    tokens: Mapped[list["Token"]] = relationship(back_populates="patient")
+    followup_tasks: Mapped[list["FollowupTask"]] = relationship(back_populates="patient")
+
+    __table_args__ = (
+        # No two patients per branch share the same phone AND name (case-
+        # insensitive). Partial: only enforced when a phone is present, so
+        # several NULL-phone walk-ins never collide. Family members = distinct
+        # names on the same phone, so they pass.
+        Index(
+            "uq_patient_branch_phone_name",
+            "branch_id",
+            "phone",
+            func.lower(name),
+            unique=True,
+            postgresql_where=text("phone IS NOT NULL"),
+        ),
+    )
+
+
+class ClinicQuestion(Base):
+    """A clinic-info question a caller asked that the FAQ could NOT answer —
+    logged by the voice agent so the doctor can answer it and (optionally) grow
+    the FAQ (Vinay 2026-07-03; answer + callback loop 2026-08-02).
+
+    RULE 9: question text only — no medical detail is expected on an info
+    question. The caller's identity is stored for ONE purpose: the doctor's
+    answer is delivered by calling them back, so patient_id + caller_phone are
+    the delivery address (same basis as PatientMessage), wiped by patient
+    erasure. The dashboard shows the name/number; logs stay on last-4."""
+    __tablename__ = "clinic_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    question: Mapped[str] = mapped_column(String(300), nullable=False)
+    caller_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # Known caller → linked record so the dashboard can show the name.
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"), nullable=True
+    )
+    caller_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    answer: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    added_to_faq: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # pending (awaiting the doctor) | answered (queued for callback)
+    # | called (dispatched) | unreachable (no phone / attempts exhausted)
+    # | replied (answered ON WHATSAPP — terminal, never dialled)
+    status: Mapped[str] = mapped_column(String(12), default="pending", nullable=False, index=True)
+    call_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # How the patient asked: "voice" (default — the agent took it on a call) or
+    # "whatsapp". Vinay 2026-08-04: "questions asked in whatsapp should get
+    # whatsapp reply after getting confirmation from clinic. not call. because,
+    # those people whatsapp clinic because they don't want to talk." Phoning
+    # someone who deliberately chose to type is the wrong answer, however good
+    # the content.
+    channel: Mapped[str] = mapped_column(String(12), default="voice", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PatientMessage(Base):
+    """A caller's message FOR the doctor/clinic taken by the voice agent
+    (#349 — "I will inform the clinic" must be a real deliverable, not a
+    phrase). Distinct from ClinicQuestion (FAQ growth): a message carries a
+    callback promise, so it stores the FULL caller phone — that number is the
+    delivery address for the promised callback (legitimate purpose; DPDP
+    data-minimisation satisfied by scope: message text + phone only, wiped by
+    patient erasure and pruned by retention). RULE 1: branch-scoped."""
+    __tablename__ = "patient_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Known caller → linked to their record so the dashboard can show the name.
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"), nullable=True
+    )
+    caller_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    urgent: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(10), default="pending")  # pending | done
+    # Seen-in-treatment-thread marker (hh31, Vinay 2026-07-17: WhatsApp-style
+    # unread highlight on the Treatments list). NULL = unread. Independent of
+    # `status` — read is "the doctor saw it in the thread"; pending/done stays
+    # the owner's callback workflow on the dashboard.
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Rating(Base):
+    """Post-visit patient rating collected over WhatsApp (spec 2026-07-13):
+    patient marked Seen → evening rating_ask template → 1-5 button reply lands
+    here. One rating per token (unique). Score only — no free text is ever
+    solicited or stored (RULE 9). RULE 1: branch-scoped."""
+    __tablename__ = "ratings"
+    __table_args__ = (
+        CheckConstraint("score >= 1 AND score <= 5", name="ck_ratings_score_1_5"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tokens.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
+    patient_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("patients.id", ondelete="SET NULL"), nullable=True
+    )
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Consent(Base):
+    """DPDP s.5 demonstrable-notice record. One row per call where the data-
+    processing disclosure (the AI-assistant greeting) was spoken to the caller,
+    so we can prove to the Data Protection Board that notice was served. Tenant-
+    scoped (branch_id). No medical data — only that notice was given, to which
+    number, and which notice version."""
+    __tablename__ = "consents"
+    __table_args__ = (Index("ix_consents_branch_phone", "branch_id", "patient_phone"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(String(64))
+    patient_phone: Mapped[str | None] = mapped_column(String(20))
+    consent_type: Mapped[str] = mapped_column(
+        Enum("data_processing", "followup", "recording", name="consent_type"),
+        default="data_processing", nullable=False,
+    )
+    notice_version: Mapped[str] = mapped_column(String(10), default="1.0", nullable=False)
+    method: Mapped[str] = mapped_column(
+        Enum("verbal", "written", "whatsapp", name="consent_method"),
+        default="verbal", nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Token(Base):
+    __tablename__ = "tokens"
+    # Compound indexes for "today's queue" and "doctor X's tokens today" query patterns (TD-018).
+    # Partial unique index (migration i5tokuniq2026): race-proof token-doctor
+    # queue numbers — a concurrent double-book the TOCTOU re-count races past is
+    # rejected at the DB (bug-bounty T1). Defined here so create_all (tests)
+    # builds it too. Slot doctors are excluded (per-slot number + max_concurrent).
+    __table_args__ = (
+        Index("ix_tokens_branch_date", "branch_id", "date"),
+        Index("ix_tokens_branch_doctor_date", "branch_id", "doctor_id", "date"),
+        Index(
+            "uq_token_number_confirmed",
+            "branch_id", "doctor_id", "date", "token_number",
+            unique=True,
+            postgresql_where=text("status = 'confirmed' AND appointment_time IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: explicit deletion path for booking records (audit trail)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    token_number: Mapped[int | None] = mapped_column(Integer)
+    appointment_time: Mapped[time | None] = mapped_column(Time)
+    source: Mapped[str] = mapped_column(
+        Enum("voice", "whatsapp", "walk_in", name="booking_source"),
+        nullable=False,
+    )
+    # Status lifecycle: confirmed → attended | no_show | cancelled_by_clinic
+    # (clinic cascade / doctor leave) | cancelled_by_patient (self-cancel on call)
+    status: Mapped[str] = mapped_column(
+        Enum(
+            "confirmed", "attended", "no_show",
+            "cancelled_by_clinic", "cancelled_by_patient",
+            name="token_status",
+        ),
+        default="confirmed",
+        nullable=False,
+    )
+    is_urgent: Mapped[bool] = mapped_column(Boolean, default=False)
+    cancellation_reason: Mapped[str | None] = mapped_column(Text)
+    call_duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    google_calendar_event_id: Mapped[str | None] = mapped_column(String(255))
+    # The ~30-minute-before reminder.
+    reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Operational audit for the 30-minute reminder. `reminder_sent` remains
+    # the compatibility/state flag; these fields preserve dispatch timing and
+    # retry state through Redis eviction or process restarts.
+    reminder_30m_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reminder_30m_dial_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # The day-before reminder, sent only when the booking was made ≥24h ahead
+    # (Vinay 2026-08-04). Its own flag: one boolean cannot say "the day-before
+    # call went, the half-hour one has not", and sharing it would mean the
+    # first reminder silently cancels the second.
+    reminder_24h_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    reminder_24h_dispatched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # marked_by_user_id: UUID of User who marked attendance (plain UUID, no FK to avoid circular deps)
+    marked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # --- Sub-spec A additions (migration fd4a95d354fa) ---
+    # cancelled_by_user_id: UUID of User who triggered cascade cancellation (plain UUID, no FK).
+    # Plain UUID pattern consistent with marked_by_user_id — survives user deletion.
+    # DPDP: pseudonymous (UUID only, no name/phone).
+    cancelled_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        comment="UUID of User who triggered cascade cancellation. Plain UUID (no FK) — matches marked_by_user_id pattern.",
+    )
+    # emergency_reason: DELIBERATELY UNUSED (TD-021 closed 2026-07-12). Urgent
+    # walk-ins bypass the daily cap WITHOUT a stated reason — capturing "why
+    # it's urgent" is health information we promise not to store (data
+    # minimisation; no-triage rule). Column kept nullable/empty; drop in a
+    # future migration batch.
+    emergency_reason: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Required when walk-in bypasses daily cap via is_urgent=true.",
+    )
+
+    branch: Mapped["Branch"] = relationship(back_populates="tokens")
+    doctor: Mapped["Doctor"] = relationship(back_populates="tokens")
+    patient: Mapped["Patient"] = relationship(back_populates="tokens")
+
+
+class Call(Base):
+    __tablename__ = "calls"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: call records reference branches; explicit deletion required
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # RESTRICT (conservative): nullable FK — doctor may be deleted later but call record must be retained
+    doctor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), index=True
+    )
+    # RESTRICT: token link; caller must explicitly handle before token deletion
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tokens.id", ondelete="RESTRICT"), index=True
+    )
+    caller_phone: Mapped[str | None] = mapped_column(String(20))
+    direction: Mapped[str] = mapped_column(
+        Enum("inbound", "outbound", name="call_direction"),
+        nullable=False,
+    )
+    call_type: Mapped[str] = mapped_column(
+        Enum("inbound_booking", "followup", "cancellation_notify", name="call_type"),
+        nullable=False,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    session_id: Mapped[str | None] = mapped_column("livekit_room_id", String(255))
+    vobiz_call_id: Mapped[str | None] = mapped_column(String(255))
+    outcome: Mapped[str | None] = mapped_column(
+        Enum(
+            "booked", "no_slot", "emergency", "dropped", "followup_completed",
+            "cancellation_rebooked", "cancellation_declined", "cancellation_unreachable",
+            name="call_outcome",
+        )
+    )
+
+    branch: Mapped["Branch"] = relationship(back_populates="calls")
+
+
+class CallLog(Base):
+    """One row per voice call — analytics + minute metering.
+
+    Rule 9: caller stored as LAST-4 only; no names, no recordings.
+    Written by the voice agent at call end (and on failed outbound dials).
+    """
+    __tablename__ = "call_logs"
+    __table_args__ = (
+        Index("ix_call_logs_branch_started", "branch_id", "started_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    call_type: Mapped[str] = mapped_column(String(20), nullable=False)  # inbound|reminder|cascade_rebook|outbound
+    caller_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    answered: Mapped[bool] = mapped_column(Boolean, default=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    booking_made: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Telephony provider's call UUID (Vobiz). The CDR sync job is the
+    # AUTHORITATIVE source of minutes — independent of the agent process, so a
+    # dropped/crashed/locally-run call is still billed. Unique → idempotent
+    # upsert across repeated syncs. NULL for agent-written rows.
+    provider_call_id: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+
+
+class CallQuality(Base):
+    """One agent-written record per voice call — the foundation of monitoring
+    (answer rate, booking conversion, abandonment, failure breakdown per clinic)
+    AND the feedback loop (eval corpus for LLM-as-judge + human review).
+
+    Written at call end REGARDLESS of agent_call_log_enabled, so it exists even
+    when Vobiz CDR is the billing writer (CallLog stays billing-only). Keyed by
+    session_id + branch_id; loosely linked to the metering row via call_log_id.
+
+    Two data classes, two retention rules:
+      - OUTCOME fields (language, duration, booking_made, fail_reason, turns, ...)
+        are NON-PII aggregates — kept long-term for trend analysis.
+      - `transcript` can hold the caller's spoken name/age/health complaint, so it
+        is PII (text only — NOT audio; RULE 9 keeps prod recording-free). Captured
+        only when settings.transcript_capture_enabled, phone digits MASKED before
+        storage, tenant-scoped (RULE 1), and NULLED by the data_retention job after
+        settings.transcript_retention_days while the outcome row survives."""
+    __tablename__ = "call_quality"
+    __table_args__ = (
+        Index("ix_call_quality_branch_created", "branch_id", "created_at"),
+        Index(
+            "ix_call_quality_unjudged",
+            "created_at",
+            postgresql_where=text("judged_at IS NULL AND transcript IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # Soft link to the billing row; nullable + SET NULL so the quality record
+    # survives independently (CDR may write/replace its CallLog separately).
+    call_log_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("call_logs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    call_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    language: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    turns: Mapped[int] = mapped_column(Integer, default=0)  # patient conversation turns
+    booking_made: Mapped[bool] = mapped_column(Boolean, default=False)
+    booking_abandoned: Mapped[bool] = mapped_column(Boolean, default=False)  # held a slot, never confirmed
+    transfer_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    fail_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)  # None on a booked call
+    # Role-tagged, phone-masked conversation text ("patient: ... / agent: ...").
+    # NULL when capture is disabled or after the transcript-retention prune.
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── LLM-as-judge (feedback loop, written by the call_scoring job) ──────────
+    # DERIVED, non-PII: an automated quality read of the transcript. These survive
+    # the transcript prune (they hold no patient data) so trends outlive the text.
+    judge_score: Mapped[int | None] = mapped_column(Integer, nullable=True)  # overall 1-5
+    judge_tags: Mapped[list | None] = mapped_column(JSON, nullable=True)     # issue-tag vocab
+    judge_summary: Mapped[str | None] = mapped_column(Text, nullable=True)   # 1-line, PII-FREE, INTERNAL only
+    judged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # B21: count judge attempts so a permanently-failing transcript (malformed /
+    # rejected contents) is retired after N tries instead of being re-selected
+    # every run — which otherwise froze scoring for all NEWER calls (head-of-line
+    # blocking) and burned a full batch of failing LLM calls every hour.
+    judge_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class FollowupTask(Base):
+    __tablename__ = "followup_tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: followup tasks reference live patient + doctor data; explicit deletion
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    requested_by_doctor_whatsapp: Mapped[str | None] = mapped_column(String(20))
+    topic: Mapped[str | None] = mapped_column(Text)
+    # what_to_ask: the specific question/instruction to relay to the patient
+    what_to_ask: Mapped[str | None] = mapped_column(Text)
+    # channel: how to reach the patient
+    channel: Mapped[str] = mapped_column(
+        Enum("whatsapp", "voice", "both", name="followup_channel"),
+        default="whatsapp",
+        nullable=False,
+    )
+    response_summary: Mapped[str | None] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    status: Mapped[str] = mapped_column(
+        Enum("pending", "in_progress", "completed", "unreachable", name="followup_status"),
+        default="pending",
+        nullable=False,
+    )
+    # scheduled_date: which day to run the follow-up (compared to date.today() in job)
+    scheduled_date: Mapped[date | None] = mapped_column(Date)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # --- Sub-spec A additions (migration fd4a95d354fa) ---
+    # task_type: app-side enum (VARCHAR not DB ENUM) for zero-DDL growth.
+    # Values: 'post_appt_check' | 'pre_appt_reminder' | 'cascade_rebook'
+    task_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        server_default="post_appt_check",
+        comment="App-side enum: post_appt_check | pre_appt_reminder | cascade_rebook",
+    )
+    # token_id: back-reference to the original Token. Nullable for free-floating follow-ups.
+    # RESTRICT: Token cannot be deleted while a FollowupTask references it.
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tokens.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+        comment="Back-reference to the original Token. Nullable for free-floating follow-ups.",
+    )
+
+    # --- Sub-spec M2 (treatment progress + follow-up loop) additions (migration s16followupthread2026) ---
+    # treatment_note_id: links this follow-up into a treatment thread. Nullable for
+    # free-floating follow-ups (reminders/cascade-rebook). RESTRICT: a TreatmentNote
+    # cannot be deleted while a FollowupTask references it.
+    treatment_note_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("treatment_notes.id", ondelete="RESTRICT"),
+        nullable=True, index=True)
+    # created_by_user_id: doctor/staff who scheduled this follow-up. SET NULL on user
+    # deletion so the thread survives. task_type (VARCHAR) now also carries
+    # 'next_visit_book' | 'doctor_advice' — no DB enum change.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # target_date (migration ss42): the date the DOCTOR asked for ON THIS TASK —
+    # "come tomorrow instead", written when they reply. Distinct from the note's
+    # next_reporting_date on purpose: the dispatcher strips the NOTE's date off
+    # doctor_advice calls (RULE 9), and must still be able to carry a date the
+    # doctor set deliberately. When set on a doctor_advice task it is the date
+    # the patient's existing booking should MOVE to, not a second appointment.
+    target_date: Mapped[date | None] = mapped_column(Date)
+
+    branch: Mapped["Branch"] = relationship()
+    doctor: Mapped["Doctor"] = relationship(back_populates="followup_tasks")
+    patient: Mapped["Patient"] = relationship(back_populates="followup_tasks")
+
+
+class TreatmentNote(Base):
+    """Treatment progress notes: one row per patient visit. Tracks what was done
+    (steps_performed), what comes next (next_steps), when to follow up (next_reporting_date),
+    and whether this is a final visit (is_final). Links back to the Token that triggered
+    this visit (nullable — some notes may be created offline)."""
+    __tablename__ = "treatment_notes"
+    __table_args__ = (
+        Index("ix_treatment_notes_branch_patient_date", "branch_id", "patient_id", "visit_date"),
+        Index("ix_treatment_notes_branch_doctor", "branch_id", "doctor_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: treatment notes reference live patient/doctor/branch; explicit deletion required (DPDP)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    patient_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # Optional back-reference to the Token that triggered this visit
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tokens.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    visit_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Treatment performed during the visit
+    steps_performed: Mapped[str | None] = mapped_column(Text)
+    # Instructions for ongoing care or follow-up actions
+    next_steps: Mapped[str | None] = mapped_column(Text)
+    # Date when the patient should return for follow-up
+    next_reporting_date: Mapped[date | None] = mapped_column(Date)
+    # Indicates if this is the final visit in a treatment cycle
+    is_final: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # User (doctor/staff) who created this note; SET NULL if user deleted
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    branch: Mapped["Branch"] = relationship()
+    doctor: Mapped["Doctor"] = relationship()
+    patient: Mapped["Patient"] = relationship()
+
+
+class AddonPurchase(Base):
+    """A one-off charge that is not a subscription cycle.
+
+    BillingCycle is cycle-shaped (start/end, plan, included minutes) and its
+    razorpay_payment_id is already taken by that cycle's plan payment, so a
+    mid-cycle add-on cannot ride on it. Without a row of its own a paid
+    ₹1,499 existed only in Razorpay and as a boolean on the branch — invisible
+    in the ops Payments list, and unaccountable at tax time (Vinay noticed the
+    gap immediately, 2026-08-03).
+
+    razorpay_payment_id is UNIQUE: Razorpay redelivers, and a webhook replay
+    must not book the same money twice.
+    """
+
+    __tablename__ = "addon_purchases"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Which NUMBER was bought for — WhatsApp is provisioned per branch.
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)  # whatsapp_addon
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)  # rupees, ex-GST
+    gst: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BillingCycle(Base):
+    __tablename__ = "billing_cycles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: billing records must not be silently removed when org is deleted (financial audit trail)
+    org_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    cycle_start: Mapped[date] = mapped_column(Date, nullable=False)
+    cycle_end: Mapped[date] = mapped_column(Date, nullable=False)
+    plan: Mapped[str] = mapped_column(String(20), nullable=False)
+    base_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    included_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    minutes_used: Mapped[int] = mapped_column(Integer, default=0)
+    overage_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    overage_rate: Mapped[int] = mapped_column(Integer, default=0)
+    overage_amount: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(
+        Enum("open", "invoiced", "paid", "failed", name="billing_status"),
+        default="open",
+        nullable=False,
+    )
+    razorpay_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    invoice_number: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    organization: Mapped["Organization"] = relationship(back_populates="billing_cycles")
+
+
+class RazorpayPlanMap(Base):
+    """Reusable provider plan for one exact recurring monthly amount."""
+
+    __tablename__ = "razorpay_plan_maps"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pricing_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
+    plan: Mapped[str] = mapped_column(String(20), nullable=False)
+    amount_paise: Mapped[int] = mapped_column(Integer, nullable=False)
+    razorpay_plan_id: Mapped[str] = mapped_column(
+        String(255), nullable=False, unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class WhatsAppSession(Base):
+    __tablename__ = "whatsapp_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # CASCADE: session has no independent meaning without its branch; safe to cascade delete
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    patient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(
+        Enum(
+            "GREETING", "WAITING_NAME", "WAITING_DOCTOR", "WAITING_SLOT",
+            "CONFIRM", "CONFIRMED", "CANCELLATION_REBOOK",
+            name="wa_session_state",
+        ),
+        default="GREETING",
+        nullable=False,
+    )
+    # session_data: stores context between messages (doctor_id, date_str, token_redis_key, etc.)
+    session_data: Mapped[dict | None] = mapped_column(JSONB)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    branch: Mapped["Branch"] = relationship(back_populates="whatsapp_sessions")
+
+
+class WhatsAppDelivery(Base):
+    """Durable, idempotent outbound patient notification.
+
+    Booking mutations are authoritative even when Meta is temporarily down.
+    The event key prevents a retry, webhook replay, or dual voice/chat path
+    from sending the same successful confirmation twice.
+    """
+
+    __tablename__ = "whatsapp_deliveries"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "event_key", name="uq_wa_delivery_branch_event"),
+        Index("ix_wa_deliveries_status_next", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    event_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(40), nullable=False)
+    recipient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    values_json: Mapped[list] = mapped_column(JSONB, nullable=False)
+    buttons_json: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="pending"
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class User(Base):
+    """Clinic staff: owners, receptionists. Also used for Vachanam platform admin (is_admin=True)."""
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # RESTRICT: user org membership must be explicitly unlinked before org deletion
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    name: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    role: Mapped[str] = mapped_column(
+        # 'doctor' added via ALTER TYPE in migration fd4a95d354fa (sub-spec A).
+        # create_constraint=False prevents Alembic autogenerate from re-creating
+        # the enum type (it already exists in the DB from the initial migration).
+        # 'support' (Vachanam platform support staff) added for the support
+        # system; no Phase-1 route writes it yet. Phase 2 provisioning needs an
+        # ALTER TYPE ADD VALUE 'support' migration before any row uses it.
+        Enum("super_admin", "org_admin", "receptionist", "doctor", "support", name="user_role", create_constraint=False),
+        nullable=False,
+    )
+    # branch_ids: JSONB list of branch UUID strings this user can access
+    branch_ids: Mapped[list | None] = mapped_column(JSONB)
+    # google_sub: Google OAuth subject ID (from JWT "sub" claim) for login matching
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # is_admin: Vachanam platform admin (Vinay only) — gives access to AdminDashboard
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # password_hash: bcrypt hash for email+password login (None for Google-only users)
+    password_hash: Mapped[str | None] = mapped_column(String(255))
+    # Incremented for password/session invalidation. JWTs issued by the app carry
+    # this value and protected requests compare it with the live user row.
+    token_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    organization: Mapped["Organization | None"] = relationship(back_populates="users")
+
+
+class BranchVoice(Base):
+    """A branch-owned Soniox clone; provider inventory is never tenant-visible."""
+
+    __tablename__ = "branch_voices"
+    __table_args__ = (
+        UniqueConstraint("branch_id", "name", name="uq_branch_voice_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_voice_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    provider_name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    model: Mapped[str] = mapped_column(String(50), nullable=False, default="tts-rt-v1")
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="uploading", server_default="uploading"
+    )
+    error_type: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(String(512))
+    # Pseudonymous consent actor. Deliberately no FK: deleting a user account
+    # must not be blocked, while the immutable consent provenance remains.
+    consent_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    consent_text: Mapped[str] = mapped_column(String(255), nullable=False)
+    consent_recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AuditLog(Base):
+    """Append-only security audit trail. No FKs by design — rows survive user/branch deletion.
+
+    DPDP classification: pseudonymous (user_id + branch_id are UUIDs; action strings contain no PII).
+    PII note: ip_address is pseudonymous (links to a person only with ISP records); user_agent is
+    aggregate (browser metadata). metadata_json must NOT store patient name/phone — only IDs.
+
+    Append-only enforcement: vachanam_app DB role is granted only INSERT + SELECT on this table.
+    UPDATE and DELETE are withheld. Set up in Phase 10 prod DB init script (devops-engineer).
+    """
+    __tablename__ = "audit_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # timestamp: indexed for chronological queries and retention scans
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    # user_id, branch_id, org_id: plain UUIDs — intentionally no FK constraints.
+    # Audit rows survive deletion of the referenced user/branch/org.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    branch_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), index=True)
+    # action: dot-notation event name e.g. "user.login.success", "token.attend"
+    action: Mapped[str] = mapped_column(String(100), index=True)
+    resource_type: Mapped[str | None] = mapped_column(String(50))
+    resource_id: Mapped[str | None] = mapped_column(String(100))
+    # ip_address: supports IPv4 (max 15 chars) and IPv6 (max 45 chars)
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(Text)
+    # metadata_json: structured context — branch_ids, error codes, etc. Never raw PII.
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB)
+    # success: false = failure events (login failures, access denials, signature mismatches)
+    # server_default="true" ensures DB-level default; default=True kept for ORM inserts
+    success: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True, index=True)
+
+
+class DoctorUnavailability(Base):
+    """Date-specific doctor absence override.
+
+    A DoctorUnavailability row marks one doctor as absent on one specific date.
+    The UNIQUE(doctor_id, date) constraint prevents double-entries.
+
+    When inserted via POST /availability, the cascade flow:
+      1. INSERT INTO doctor_unavailability (one row per date, ON CONFLICT DO NOTHING)
+      2. Bulk cancel confirmed tokens for that doctor+date
+      3. Enqueue FollowupTask(task_type='cascade_rebook') for each cancelled token
+
+    DPDP classification: pseudonymous — doctor_id is UUID (no name/phone).
+    created_by_user_id is a plain UUID (no FK) — audit trail survives user deletion.
+
+    Added: migration fd4a95d354fa (sub-spec A, 2026-06-09).
+    """
+    __tablename__ = "doctor_unavailability"
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "date", name="uq_doctor_unavailability_doctor_date"),
+        Index("ix_doctor_unavailability_branch_date", "branch_id", "date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # branch_id: first non-PK column (Rule 1 — every multi-tenant table scoped to branch)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("doctors.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # created_by_user_id: plain UUID (no FK) — matches Token.marked_by_user_id pattern.
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=True,
+        comment="Plain UUID — no FK constraint. Matches Token.marked_by_user_id pattern (survives user deletion).",
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    doctor: Mapped["Doctor"] = relationship(back_populates="unavailabilities")
+
+
+class DoctorDateSchedule(Base):
+    """Authoritative sessions published for one doctor on one date.
+
+    Empty sessions means explicitly unavailable. For a date_specific doctor,
+    no row means not yet published. Those states must remain distinct.
+    """
+    __tablename__ = "doctor_date_schedules"
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "date", name="uq_doctor_date_schedule_doctor_date"),
+        Index("ix_doctor_date_schedules_branch_date", "branch_id", "date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("branches.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    doctor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("doctors.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    sessions: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    token_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    doctor: Mapped["Doctor"] = relationship(back_populates="date_schedules")
+
+
+class CalendarWriteTask(Base):
+    """Async Google Calendar write queue.
+
+    Used for the token-doctor path (no per-patient Cal events), and as
+    fallback for slot-doctor when the synchronous inline write exhausts its
+    retry budget (3 attempts: 0s, 2s, 5s).
+
+    Worker: backend/jobs/calendar_writer.py — APScheduler every 30s.
+    Backoff: 5s, 30s, 5min, 60min → failed_permanent after 5 total attempts.
+
+    DPDP classification: pseudonymous — payload_json stores patient_first_name
+    + last-4 digits of phone only (no full phone). Compliant with PII denylist.
+
+    branch_id is the first non-PK column (Rule 1).
+
+    Added: migration fd4a95d354fa (sub-spec A, 2026-06-09).
+    """
+    __tablename__ = "calendar_write_tasks"
+    # Worker poll index: WHERE status='pending' AND next_attempt_at <= NOW()
+    __table_args__ = (
+        Index("ix_calendar_tasks_status_next", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # branch_id: first non-PK column (Rule 1)
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("branches.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    token_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tokens.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    # operation: 'create' | 'update' | 'delete'
+    operation: Mapped[str] = mapped_column(
+        String(20), nullable=False, comment="'create' | 'update' | 'delete'"
+    )
+    # payload_json: JSONB (Rule 8 — never plain JSON).
+    # Contents: {calendar_id, patient_first_name, patient_phone_last4, appointment_dt, duration_minutes, doctor_name}
+    payload_json: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="{calendar_id, patient_first_name, patient_phone_last4, appointment_dt, duration_minutes, doctor_name}",
+    )
+    # google_event_id: populated after successful create; reused for update/delete.
+    google_event_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        comment="Populated after successful create; reused for update/delete operations.",
+    )
+    # status: 'pending' | 'in_progress' | 'done' | 'failed_permanent'
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default="pending",
+        comment="'pending' | 'in_progress' | 'done' | 'failed_permanent'",
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # next_attempt_at: worker polls WHERE status='pending' AND next_attempt_at <= NOW()
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SupportTicket(Base):
+    """A support conversation. NULL org_id = a public lead (contact/demo form,
+    no auth); non-null = a clinic ticket. Org-level only — support is never
+    branch data. Tickets are a SUPPORT data class, distinct from patient PII
+    (super_admin/support staff may read them; RULE 1 patient-PII wall stands)."""
+
+    __tablename__ = "support_tickets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str | None] = mapped_column(String(255))
+    # Demo leads are phone-first (a clinic owner books a callback, not an
+    # email thread). Empty for ordinary tickets.
+    phone: Mapped[str | None] = mapped_column(String(20))
+    # Opaque browser-session owner for unauthenticated chat tickets. A public
+    # ticket UUID is not an authorization secret; this value is.
+    anonymous_session_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    subject: Mapped[str] = mapped_column(String(200), nullable=False)
+    category: Mapped[str] = mapped_column(
+        Enum("billing", "technical", "onboarding", "feature_request", "sales_demo",
+             "other", name="support_category"),
+        nullable=False, default="other",
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("ai_resolved", "open", "pending", "resolved", "closed", name="support_status"),
+        nullable=False, default="open",
+    )
+    priority: Mapped[str] = mapped_column(
+        Enum("low", "normal", "high", "urgent", name="support_priority"),
+        nullable=False, default="normal",
+    )
+    sla_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    csat_score: Mapped[int | None] = mapped_column(Integer)
+    csat_comment: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(
+        Enum("in_app", "public_chat", "public_form", "email", name="support_source"),
+        nullable=False, default="in_app",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_support_tickets_status_sla", "status", "sla_due_at"),)
+
+
+class SupportMessage(Base):
+    """One turn in a support ticket thread (user / staff / bot / system)."""
+
+    __tablename__ = "support_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("support_tickets.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    sender: Mapped[str] = mapped_column(
+        Enum("user", "staff", "bot", "system", name="support_sender"), nullable=False
+    )
+    sender_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_support_messages_ticket_created", "ticket_id", "created_at"),)

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // Manual connect (Vinay, 2026-08-09: "need a way to add number directly from
@@ -26,8 +26,6 @@ vi.mock("../../hooks/useEmbeddedSignup.js", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import WaConnectCard from "../WaConnectCard.jsx";
-// ConfirmProvider mirrors main.jsx: the app mounts it above every page.
-import { ConfirmProvider } from "../../components/ConfirmDialog.jsx";
 
 afterEach(() => {
   cleanup();
@@ -38,10 +36,8 @@ afterEach(() => {
 function renderCard(qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   render(
     <QueryClientProvider client={qc}>
-      <ConfirmProvider>
       <WaConnectCard branchId="b1" />
-    </ConfirmProvider>
-      </QueryClientProvider>,
+    </QueryClientProvider>,
   );
   return qc;
 }
@@ -160,7 +156,7 @@ describe("WaConnectCard — manual connect", () => {
     disconnectWa.mockResolvedValueOnce({
       connected: false, wa_status: "disconnected", conversations_deleted: 2,
     });
-
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     qc.setQueryData(["wa-chats", "b1"], [{ last_text: "private chat" }]);
     qc.setQueryData(["wa-chat", "b1", "+919812345678"], {
@@ -169,10 +165,6 @@ describe("WaConnectCard — manual connect", () => {
 
     renderCard(qc);
     fireEvent.click(await screen.findByRole("button", { name: /^disconnect$/i }));
-    // Confirm through the in-app dialog that replaced window.confirm. Scope to
-    // the dialog: the trigger behind it carries the same label.
-    const dialog = await screen.findByRole("alertdialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: /^Disconnect$/ }));
     await waitFor(() => expect(disconnectWa).toHaveBeenCalledWith("b1"));
 
     expect(qc.getQueryData(["wa-chats", "b1"])).toBeUndefined();

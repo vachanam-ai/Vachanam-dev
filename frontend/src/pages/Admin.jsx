@@ -15,7 +15,6 @@ import {
   startOrgPilot
 } from "../api/client.js";
 import { pulseRow, revealStagger } from "../lib/motion.js";
-import { useConfirm } from "../components/ConfirmDialog.jsx";
 
 const inr = (v) =>
   "₹" + Math.round(v ?? 0).toLocaleString("en-IN");
@@ -162,7 +161,6 @@ function UsageBar({ row }) {
 
 function ClinicRow({ row, onAction }) {
   const ref = useRef(null);
-  const confirm = useConfirm();
   const act = (fn, label) =>
     onAction(fn, label, () => pulseRow(ref.current));
   return (
@@ -202,12 +200,8 @@ function ClinicRow({ row, onAction }) {
               Resume
             </button>
             <button className="rounded border border-hairline px-3 py-1 font-ui text-xs transition-transform active:scale-[0.97]"
-              onClick={async () => {
-                if (!await confirm({
-                  title: `Start a 14-day founding pilot for ${row.name}?`,
-                  body: "Free AI service with a 300-minute hard cap, at Vachanam's cost. Only for hand-picked clinics with a signed pilot agreement.",
-                  confirmLabel: "Start pilot",
-                })) return;
+              onClick={() => {
+                if (!window.confirm(`Start 14-day founding pilot for ${row.name}? Free AI service (300-min hard cap) at Vachanam's cost — only for hand-picked clinics with a signed pilot agreement.`)) return;
                 act(() => startOrgPilot(row.org_id), `${row.name} pilot started`);
               }}>
               Start 14-day pilot
@@ -246,13 +240,8 @@ function ClinicRow({ row, onAction }) {
           Adjust minutes
         </button>
         <button className="rounded border border-danger bg-danger/5 px-3 py-1 font-ui text-xs font-semibold text-danger transition-transform active:scale-[0.97]"
-          onClick={async () => {
-            if (!await confirm({
-              title: `Permanently delete ${row.name}?`,
-              body: "Every patient, booking, note, login and billing record for this clinic is erased. This cannot be undone. The clinic must be paused or cancelled first.",
-              confirmLabel: "Delete permanently",
-              destructive: true,
-            })) return;
+          onClick={() => {
+            if (!window.confirm(`Permanently DELETE ${row.name} and ALL its data? This cannot be undone. (The clinic must be paused/cancelled first.)`)) return;
             act(() => deleteOrg(row.org_id), `${row.name} deleted`);
           }}>
           Delete clinic

@@ -1,0 +1,370 @@
+from pydantic import field_validator
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    # AI
+    # Soniox keys are region-scoped. This application accepts only the Japan
+    # project key so a US credential cannot be paired with the JP endpoints.
+    soniox_jp_api_key: str = ""
+    # #406: Japan measured 4ms from Fly bom vs 230ms to the US endpoint.
+    soniox_jp_stt_ws_url: str = "wss://stt-rt.jp.soniox.com/transcribe-websocket"
+    sarvam_api_key: str = ""      # optional Sarvam Saaras v3 STT fallback
+    smallest_api_key: str = ""    # Pulse STT sandbox; production remains Soniox
+    smallest_model: str = "pulse"
+    smallest_eou_timeout_ms: int = 100
+    # #442: Soniox v5 semantic endpoint latency profile. Level 1 is the
+    # conservative production canary; 0 restores Soniox's default behavior.
+    # Tune one control at a time on real Telugu calls (0..3).
+    soniox_endpoint_latency_level: int = 1
+    # Hard tail ceiling only -- not the median-latency control. Keep the API
+    # default until isolated call evidence justifies lowering it.
+    soniox_max_endpoint_delay_ms: int = 2000
+    # Leave unset for the server default. Sensitivity is deliberately separate
+    # from the latency level so an experiment cannot silently combine knobs.
+    soniox_endpoint_sensitivity: float | None = None
+    # 0 disables client finalization. A value >=200 enables a cancellable
+    # finalize after that much continuing VAD silence. Soniox recommends about
+    # 200ms; values 1..199 are rejected to prevent the inaccurate immediate-
+    # finalize behavior reverted in #399.
+    soniox_manual_finalize_delay_ms: int = 200
+    # auto = Soniox when keyed, otherwise Sarvam; sarvam gives operations a
+    # reversible provider A/B without deleting/rotating the Soniox credential.
+    stt_provider: str = 'auto'
+    openai_api_key: str
+    gemini_api_key: str
+    llm_provider: str = "gemini"
+    livekit_inference_model: str = "google/gemma-4-31b-it"
+    voice_endpointing_min_delay_s: float = 0.05
+    voice_endpointing_max_delay_s: float = 0.30
+    voice_num_idle_processes: int = 4
+
+    # TTS — Soniox tts-rt is the sole provider. The Japan key serves STT + TTS.
+    # Legacy branch voice IDs safely resolve to soniox_tts_default_voice.
+    soniox_tts_model: str = "tts-rt-v1"  # per Soniox RT-TTS docs; sandbox-validated
+    soniox_jp_tts_ws_url: str = "wss://tts-rt.jp.soniox.com/tts-websocket"
+    soniox_jp_api_url: str = "https://api.jp.soniox.com/v1"
+    soniox_jp_tts_http_url: str = "https://tts-rt.jp.soniox.com/tts"
+    soniox_tts_default_voice: str = "Priya"
+
+    # ── TTS sandbox (Vinay 2026-08-07) ────────────────────────────────────
+    # Swap the voice engine WITHOUT touching the tuned Soniox path. Default
+    # is "soniox", so production behaviour is unchanged unless a deployment
+    # explicitly sets TTS_PROVIDER=cartesia (the sandbox Fly app does).
+    tts_provider: str = "soniox"
+    cartesia_api_key: str = ""
+    cartesia_model: str = "sonic-3-2026-01-12"
+    cartesia_voice: str = ""          # Cartesia voice id; blank = plugin default
+    cartesia_sample_rate: int = 24000
+    cartesia_min_sentence_len: int = 4
+    soniox_tts_sample_rate: int = 24000
+
+    # #5 tool prefetch (2026-07-24): on a high-confidence booking turn, run the
+    # doctor-routing call in parallel with the reply LLM on a dedicated session.
+    # Kill switch — set false to disable instantly if it misbehaves.
+    voice_tool_prefetch: bool = True
+    # Successful booking/reschedule/cancel writes have a fully known outcome.
+    # Speak that outcome directly and skip the otherwise redundant second LLM
+    # pass. Set false for an instant rollback to LLM-written confirmations.
+    voice_deterministic_confirm: bool = True
+
+    # WhatsApp (Meta Cloud API — spec 2026-07-13). meta_phone_number_id is the
+    # WABA test number for dev; per-clinic numbers live on Branch.wa_phone_number_id.
+    meta_access_token: str = ""
+    meta_phone_number_id: str = ""
+    meta_waba_id: str = ""
+    meta_webhook_verify_token: str = ""
+    meta_app_secret: str = ""
+    # Embedded Signup / Tech Provider (WA MVP1 Task 9). The Facebook App ID
+    # paired with meta_app_secret for the authorization-code -> business-token
+    # exchange (GET /oauth/access_token). Public (used client-side by Meta's
+    # embedded signup JS SDK too) but kept in settings, never hardcoded.
+    meta_app_id: str = ""
+    # The Embedded Signup CONFIGURATION id, created in the Meta app dashboard
+    # under WhatsApp > Embedded Signup. It encodes which permissions and setup
+    # steps the clinic is walked through, so the browser passes only this id to
+    # FB.login — never a permission list. Public by design (it ships to the
+    # browser); the SECRET half of the pair is meta_app_secret, server-side
+    # only. Unset = the Connect button reports "not configured yet" instead of
+    # opening a popup that Meta would reject.
+    meta_config_id: str = ""
+    # WhatsApp replies come from wa_agent (short prompt + database tools).
+    # False falls back to wa_chat's intent router + canned replies — kept as a
+    # one-flag way back if the tool loop misbehaves on a live clinic number.
+    wa_agent_tools: bool = True
+    # Graph API version used by the browser SDK. Pinned so a Meta default bump
+    # cannot silently change the session_info payload shape the connect flow
+    # parses.
+    meta_graph_version: str = "v21.0"
+
+    # Google
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_application_credentials: str = "./google-service-account.json"
+    google_calendar_service_email: str = ""
+    # Production: base64-encoded service-account JSON (stored in Render env).
+    # Dev: leave empty; google_application_credentials is used instead.
+    google_sa_json_b64: str | None = None
+
+    # Database
+    database_url: str
+    test_database_url: str = "postgresql+asyncpg://vachanam:localdev123@localhost:5432/vachanam_test"  # MUST be a separate DB from database_url; conftest enforces
+
+    # Redis
+    redis_url: str
+
+    # Auth
+    jwt_secret: str
+    # 8h hard expiry — matches the documented auth contract (auth_middleware
+    # docstring) and bounds the blast radius of an XSS-exfiltrated localStorage
+    # token (bounce F7). Was 24h (config drift). Override via env if needed.
+    jwt_expire_hours: int = 8
+
+    # Cloudflare Turnstile (bot protection on public auth endpoints).
+    # Empty = feature OFF (dev/tests); set the secret in prod to enforce.
+    turnstile_secret_key: str = ""
+
+    # Payment
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+    razorpay_plan_solo_id: str = ""
+    razorpay_plan_clinic_id: str = ""
+    razorpay_plan_multi_id: str = ""
+    razorpay_plan_wa_id: str = ""  # WhatsApp-only plan (Vinay 2026-08-02)
+
+    # App
+    app_env: str = "development"
+    base_url: str = "http://localhost:8000"
+    frontend_url: str = "http://localhost:3000"
+    admin_phone: str = ""
+    log_level: str = "debug"
+    # Conservative minute estimate applied to a call whose worker died before
+    # finalizing the CallLog row (TD-027/F6). Near the 4-min call target.
+    stale_call_minutes_estimate: int = 3
+
+    # Rate limiting (spec §6.5)
+    # Comma-separated list of IP addresses that bypass per-endpoint rate limits.
+    # Example: RATE_LIMIT_BYPASS_IPS=127.0.0.1,10.0.0.1,testclient
+    # Used in backend/middleware/rate_limit.py _EndpointRateLimiter.
+    rate_limit_bypass_ips: str = ""
+
+    # Number of TRUSTED reverse-proxy hops in front of the app (iter1 #6). In
+    # prod the chain is Cloudflare -> Render, i.e. 2 hops, so the real client IP
+    # is the LAST entry minus (hops-1) from the right of X-Forwarded-For. We never
+    # trust XFF[0] (fully client-spoofable) nor the bare proxy socket IP. Set to 0
+    # when there is NO proxy (direct connections) to use the socket peer as-is.
+    trusted_proxy_hops: int = 2
+    # SEC #2: origin secret proving a request actually came through OUR Cloudflare
+    # edge. Set a Cloudflare Transform Rule to inject `X-Vachanam-Edge: <value>`
+    # on every proxied request, and put the same value here. When set, the
+    # CF-Connecting-IP / True-Client-IP headers are trusted ONLY if that secret
+    # header matches — so a client hitting the Render origin directly can't forge
+    # their apparent IP to evade rate limits or poison the blocklist. Empty =
+    # fall back to the spoof-resistant hop logic (never blind-trust CF headers).
+    cf_origin_secret: str = ""
+
+    # Voice agent (LiveKit)
+    public_url: str = "http://localhost:7860"
+    # Temporary audio-recording master switch. NEVER read this directly — use
+    # recording_allowed_for(), which only permits the configured ADMIN_PHONE
+    # test participant. Every other call is explicitly unrecorded.
+    recording_enabled: bool = False
+    max_call_duration_seconds: int = 0  # 0 = unlimited; non-zero wraps call at N seconds (Solo plan billing cap)
+
+    # Telephony (Vobiz Partner API + WebSocket). These are the GLOBAL fallback
+    # account; per-clinic Vobiz sub-accounts (concurrency isolation) override them
+    # via Branch.vobiz_* columns when set. See backend/services/telephony.py.
+    vobiz_did_number: str = ""
+    vobiz_auth_id: str = ""
+    vobiz_auth_token: str = ""
+    vobiz_api_base: str = "https://api.vobiz.ai/api/v1"
+    # Fernet key (urlsafe-base64 32 bytes) encrypting secrets at rest — per-branch
+    # SIP passwords. REQUIRED in production; dev/test derive one from jwt_secret.
+    field_encryption_key: str = ""
+    # The Vobiz CDR sync job is the AUTHORITATIVE source of calls + minutes
+    # (agent-independent). The agent's own CallLog writes are OFF by default to
+    # avoid double-counting; flip on only in environments with no Vobiz CDR.
+    agent_call_log_enabled: bool = False
+
+    # LiveKit voice control plane. The agent reads its own local .env, but the
+    # backend's outbound-call jobs (reminders, cascade rebook) also need these;
+    # without them those jobs silently no-op (bug-bounty M15).
+    livekit_url: str = ""
+    livekit_api_key: str = ""
+    livekit_api_secret: str = ""
+    outbound_trunk_id: str = ""
+
+    # OTP verification (signup). When no provider is configured (dev), the code
+    # is logged and returned in the API response so the flow is testable.
+    msg91_auth_key: str = ""          # SMS provider (MSG91) — India default
+    msg91_sender_id: str = "VCHNAM"
+    smtp_host: str = ""               # email OTP — raw SMTP fallback
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "hello@vachanam.in"
+    # Resend (preferred email provider — HTTP API, reliable from cloud hosts).
+    # When resend_api_key is set it is used over SMTP. from-address domain must be
+    # verified in Resend (vachanam.in).
+    resend_api_key: str = ""
+    resend_from: str = "Vachanam <noreply@vachanam.in>"
+    # Vachanam's own GSTIN, printed on payment invoices once GST registration is
+    # done. Empty ⇒ invoices go out as payment RECEIPTS ("GST registration in
+    # progress") — set the env var the day the GSTIN arrives (#342).
+    vachanam_gstin: str = ""
+    # Support desk: notifications to the team go TO support_email; support emails
+    # to clinics are sent FROM support_from (support@vachanam.in — a Zoho alias,
+    # domain verified in Resend). Kept separate from resend_from/alert_email so
+    # support mail is branded + isolated from the watchdog channel.
+    support_email: str = "support@vachanam.in"
+    support_from: str = "Vachanam Support <support@vachanam.in>"
+    # SLA overdue-ticket escalation emails. OFF by default (Vinay 2026-07-12 —
+    # too noisy during early testing). The hourly sweep still runs + logs; set
+    # true to also email support_email a digest of overdue+unanswered tickets.
+    support_sla_email: bool = False
+
+    # Chaos harness (resilience.py): when true, armed chaos injection (latency /
+    # forced failure per dependency) is APPLIED so a drill can watch the circuit
+    # breakers + metrics react to a slow/down dependency. HARD-OFF by default —
+    # a prod deploy following .env.example can never fault-inject into live calls.
+    chaos_enabled: bool = False
+
+    # Watchdog (#306): where change-triggered health alerts go, and the Fly
+    # Machines API token that lets the watchdog RESTART a dead voice agent
+    # (empty ⇒ alert-only, no auto-restart). fly_agent_app matches infra/fly.agent.toml.
+    alert_email: str = "hello@vachanam.in"
+    fly_api_token: str = ""
+    fly_agent_app: str = "vachanam-agent"
+    otp_ttl_seconds: int = 600        # 10 minutes
+    # DPDP s.8(7) retention: erase a patient's PII this many days after their last
+    # appointment (default 2 years, matching the privacy policy's appointments
+    # retention). The anonymised booking rows survive for aggregate analytics.
+    patient_retention_days: int = 730
+    # Feedback-loop capture. Transcripts can hold the caller's name/age/health
+    # complaint, so they are PII: captured only when enabled, phone-masked, tenant-
+    # scoped, and pruned after transcript_retention_days (text only — NOT audio,
+    # RULE 9). Default ON (the loop needs the corpus); set false to disable per
+    # deployment. Retention defaults to 90 days — long enough to score + learn from,
+    # short enough to minimise stored PII.
+    transcript_capture_enabled: bool = True
+    transcript_retention_days: int = 90
+    otp_dev_echo: bool = True         # dev only: return code in response
+
+    @field_validator('soniox_endpoint_latency_level')
+    @classmethod
+    def _valid_soniox_latency_level(cls, value: int) -> int:
+        if not 0 <= value <= 3:
+            raise ValueError('must be between 0 and 3')
+        return value
+
+    @field_validator('soniox_max_endpoint_delay_ms')
+    @classmethod
+    def _valid_soniox_endpoint_cap(cls, value: int) -> int:
+        if not 500 <= value <= 3000:
+            raise ValueError('must be between 500 and 3000 milliseconds')
+        return value
+
+    @field_validator('soniox_endpoint_sensitivity')
+    @classmethod
+    def _valid_soniox_sensitivity(cls, value: float | None) -> float | None:
+        if value is not None and not -1.0 <= value <= 1.0:
+            raise ValueError('must be between -1.0 and 1.0')
+        return value
+
+    @field_validator('soniox_manual_finalize_delay_ms')
+    @classmethod
+    def _valid_soniox_finalize_delay(cls, value: int) -> int:
+        if value != 0 and not 200 <= value <= 3000:
+            raise ValueError('must be 0 (disabled) or between 200 and 3000 milliseconds')
+        return value
+
+    @field_validator('stt_provider')
+    @classmethod
+    def _valid_stt_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized == 'pulse':
+            normalized = 'smallest'
+        if normalized not in {'auto', 'soniox', 'sarvam', 'smallest', 'cartesia'}:
+            raise ValueError('must be auto, soniox, sarvam, smallest, or cartesia')
+        return normalized
+
+    @field_validator('smallest_eou_timeout_ms')
+    @classmethod
+    def _valid_smallest_eou_timeout(cls, value: int) -> int:
+        if not 100 <= value <= 10000:
+            raise ValueError('must be between 100 and 10000 milliseconds')
+        return value
+
+    @field_validator('llm_provider')
+    @classmethod
+    def _valid_llm_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {'gemini', 'livekit'}:
+            raise ValueError('must be gemini or livekit')
+        return normalized
+
+    @field_validator('voice_endpointing_min_delay_s', 'voice_endpointing_max_delay_s')
+    @classmethod
+    def _valid_voice_endpointing_delay(cls, value: float) -> float:
+        if not 0 <= value <= 3:
+            raise ValueError('must be between 0 and 3 seconds')
+        return value
+
+    @field_validator('voice_num_idle_processes')
+    @classmethod
+    def _valid_voice_idle_processes(cls, value: int) -> int:
+        if not 1 <= value <= 16:
+            raise ValueError('must be between 1 and 16')
+        return value
+
+    @field_validator('cartesia_min_sentence_len')
+    @classmethod
+    def _valid_cartesia_min_sentence_len(cls, value: int) -> int:
+        if not 1 <= value <= 24:
+            raise ValueError('must be between 1 and 24')
+        return value
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+
+    @property
+    def otp_echo_enabled(self) -> bool:
+        """OTP code may be echoed in API responses ONLY outside production.
+        otp_dev_echo defaults True and a prod deploy following .env.example
+        could leave it on, turning phone/email 'verification' self-attesting
+        (bug-bounty M8). Production always wins, regardless of the flag."""
+        return self.otp_dev_echo and self.app_env != "production"
+
+    @property
+    def recording_allowed(self) -> bool:
+        """Whether the tightly scoped admin-only test mode is configured."""
+        return self.recording_enabled and bool(self._phone_digits(self.admin_phone))
+
+    @staticmethod
+    def _phone_digits(phone: str | None) -> str:
+        """Compare Indian numbers independent of +91/spacing without logging PII."""
+        digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    def recording_allowed_for(self, participant_phone: str | None) -> bool:
+        """True only for the configured admin test participant.
+
+        This is deliberately valid in production for the temporary testing
+        window, but can never broaden to ordinary patient calls.
+        """
+        participant = self._phone_digits(participant_phone)
+        admin = self._phone_digits(self.admin_phone)
+        return self.recording_allowed and bool(participant) and participant == admin
+
+    @property
+    def voice_plane_configured(self) -> bool:
+        """True when LiveKit creds are present so outbound jobs can dial."""
+        import os
+
+        return bool(
+            (self.livekit_url or os.getenv("LIVEKIT_URL"))
+            and (self.livekit_api_key or os.getenv("LIVEKIT_API_KEY"))
+        )
+
+
+settings = Settings()

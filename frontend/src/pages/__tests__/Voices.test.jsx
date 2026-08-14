@@ -5,8 +5,6 @@ import Voices from "../Voices.jsx";
 import {
   activateVoiceClone, createVoiceClone, fetchBranchSettings, fetchVoiceClones, getBranchVoices, importVoiceClone, setBranchVoice,
 } from "../../api/client.js";
-// ConfirmProvider mirrors main.jsx: the app mounts it above every page.
-import { ConfirmProvider } from "../../components/ConfirmDialog.jsx";
 
 vi.mock("../../hooks/useAuth.jsx", () => ({ useAuth: () => ({ branchId: "branch-a" }) }));
 vi.mock("../../api/client.js", () => ({
@@ -18,9 +16,7 @@ vi.mock("../../api/client.js", () => ({
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}>
-      <ConfirmProvider><Voices /></ConfirmProvider>
-      </QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><Voices /></QueryClientProvider>);
 }
 
 describe("Voices", () => {

@@ -26,21 +26,10 @@ const WA_STATUS_LABEL = {
   error: { label: "Connection error", chip: "chip-danger" }
 };
 
-import GoogleReauth from "../components/GoogleReauth.jsx";
 import WaConnectCard from "../components/WaConnectCard.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { useConfirm } from "../components/ConfirmDialog.jsx";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
-
-// One prompt, both delete paths (password and Google step-up) — the wording of
-// the most destructive action in the product should not drift between them.
-const ERASE_CLINIC_PROMPT = {
-  title: "Erase this entire clinic?",
-  body: "Every patient, booking, treatment note, login and billing record is permanently deleted. This cannot be undone.",
-  confirmLabel: "Erase everything",
-  destructive: true,
-};
 // Runtime deployment flag: build with VITE_WHATSAPP_LIVE=true only after Meta
 // onboarding is available. The backend independently enforces credentials and plan.
 const WHATSAPP_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
@@ -86,7 +75,6 @@ function InfoBox({ title, children }) {
 }
 
 export default function Settings() {
-  const confirm = useConfirm();
   const { branchId, user, logout } = useAuth();
   const qc = useQueryClient();
 
@@ -212,19 +200,11 @@ export default function Settings() {
   });
 
   // DPDP erasure: delete the whole clinic, then sign out to the landing page.
-  //
-  // Two authentication paths, because the API has two. A password account
-  // sends its password. A Google account must send a FRESH Google ID token —
-  // the Jul-25 security review made that mandatory so a stolen session cannot
-  // destroy a clinic, and the typed "DELETE" is only a UI guard. Sending
-  // {confirm:"DELETE"} alone got a 401 every time, which is why the button did
-  // nothing at all for three weeks (Vinay 2026-08-14).
   const [delConfirm, setDelConfirm] = useState("");
-  const wantsGoogleDelete = delConfirm.trim().toUpperCase() === "DELETE";
   const nukeClinic = useMutation({
-    mutationFn: (googleToken) => deleteAccount(
-      wantsGoogleDelete
-        ? { confirm: "DELETE", id_token: googleToken }
+    mutationFn: () => deleteAccount(
+      delConfirm.trim().toUpperCase() === "DELETE"
+        ? { confirm: "DELETE" }
         : { password: delConfirm }
     ),
     onSuccess: () => {
@@ -479,13 +459,9 @@ export default function Settings() {
               {m.role !== "org_admin" && m.user_id !== user?.user_id && (
                 <button type="button" className="ml-2 font-ui text-xs text-danger underline-offset-2 hover:underline"
                   disabled={fireStaff.isPending}
-                  onClick={async () => {
-                    if (await confirm({
-                      title: `Remove ${m.name ?? m.email}'s login?`,
-                      body: "Only the login is deleted — their clinic records stay.",
-                      confirmLabel: "Remove login",
-                      destructive: true,
-                    })) fireStaff.mutate(m.user_id);
+                  onClick={() => {
+                    if (window.confirm(`Remove ${m.name ?? m.email}'s login? Their clinic records stay; only the login is deleted.`))
+                      fireStaff.mutate(m.user_id);
                   }}>
                   Remove
                 </button>
@@ -560,41 +536,17 @@ export default function Settings() {
             <label className="label">Your password (or type DELETE if you sign in with Google)</label>
             <input className="field" type="password" value={delConfirm}
               onChange={(e) => setDelConfirm(e.target.value)} placeholder="Password or DELETE" />
-            {wantsGoogleDelete && (
-              <p className="mt-2 font-ui text-xs text-slate">
-                Confirm with Google to finish — deleting a clinic needs a fresh
-                sign-in, so a stolen session can&apos;t erase your data.
-              </p>
-            )}
           </div>
           <div className="flex items-end">
-            {wantsGoogleDelete ? (
-              /* Google path: the typed DELETE is only a UI guard. The API
-                 requires a fresh ID token, so the Google button IS the delete
-                 action — its callback carries the token straight into the
-                 mutation. */
-              <div className="w-full">
-                <GoogleReauth
-                  disabled={nukeClinic.isPending}
-                  text="continue_with"
-                  onToken={async (token) => {
-                    if (await confirm(ERASE_CLINIC_PROMPT)) nukeClinic.mutate(token);
-                  }}
-                />
-                {nukeClinic.isPending && (
-                  <p className="mt-2 font-ui text-xs text-slate">Deleting…</p>
-                )}
-              </div>
-            ) : (
-              <button type="button"
-                className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
-                disabled={nukeClinic.isPending || !delConfirm.trim()}
-                onClick={async () => {
-                  if (await confirm(ERASE_CLINIC_PROMPT)) nukeClinic.mutate();
-                }}>
-                {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
-              </button>
-            )}
+            <button type="button"
+              className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
+              disabled={nukeClinic.isPending || !delConfirm.trim()}
+              onClick={() => {
+                if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))
+                  nukeClinic.mutate();
+              }}>
+              {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
+            </button>
           </div>
         </div>
       </Section>

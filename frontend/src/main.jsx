@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "sonner";
 import App from "./App.jsx";
 import { AuthProvider } from "./hooks/useAuth.jsx";
-import { ConfirmProvider } from "./components/ConfirmDialog.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import "./index.css";
 
@@ -21,7 +20,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <AuthProvider>
-            <ConfirmProvider>
             <App />
             <Toaster
               position="top-center"
@@ -36,7 +34,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(
                 }
               }}
             />
-            </ConfirmProvider>
           </AuthProvider>
         </BrowserRouter>
       </QueryClientProvider>

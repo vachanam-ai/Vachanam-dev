@@ -1,0 +1,112 @@
+"""DPDP s.8(7) data-retention / erasure job.
+
+Personal data must not be kept longer than needed for its purpose. Once a
+patient has had no appointment for `patient_retention_days` (default 2 years,
+matching the privacy policy), their PII is ERASED — name/phone/age/gender
+cleared, `anonymized_at` stamped. The booking rows survive (they hold no PII
+beyond patient_id) so the clinic keeps aggregate analytics.
+
+Also prunes `consents` rows older than the same window (the demonstrable-notice
+record is only useful while the patient's data is live).
+
+Runs daily from the APScheduler leader (see backend/main.py). Idempotent —
+already-anonymised patients are skipped via `anonymized_at IS NULL`.
+
+Per CLAUDE.md: Rule 1 (every row keeps branch_id), Rule 9 (PII discipline —
+this job REMOVES PII), Rule 10 (structlog on the erasure event, IDs not names).
+"""
+from datetime import date, datetime, timedelta, timezone
+
+import structlog
+from sqlalchemy import select
+
+import backend.database as _db_module
+from backend.config import settings
+from backend.models.schema import (
+    CallQuality,
+    Consent,
+    Patient,
+    Token,
+    WhatsAppSession,
+)
+from backend.services.patient_erasure import erase_patient_pii
+from backend.services.wa_session import WA_SESSION_IDLE_DAYS
+
+logger = structlog.get_logger()
+
+
+async def run_data_retention() -> None:
+    days = max(1, int(settings.patient_retention_days))
+    now = datetime.now(timezone.utc)
+    cutoff_date = date.today() - timedelta(days=days)
+    cutoff_dt = now - timedelta(days=days)
+
+    async with _db_module.AsyncSessionLocal() as db:
+        # Patients with any appointment on/after the cutoff are still "active" —
+        # never erase them. (A single recent booking keeps the whole record.)
+        recent = select(Token.patient_id).where(Token.date >= cutoff_date)
+
+        stale = (
+            await db.execute(
+                select(Patient).where(
+                    Patient.anonymized_at.is_(None),
+                    Patient.created_at < cutoff_dt,
+                    Patient.id.notin_(recent),
+                )
+            )
+        ).scalars().all()
+
+        for p in stale:
+            # Shared erasure path (services/patient_erasure.py) — same code the
+            # clinic-initiated "end treatment & delete data" action uses.
+            await erase_patient_pii(db, p)
+
+        # Prune the demonstrable-notice records past the same window.
+        pruned = await db.execute(
+            Consent.__table__.delete().where(Consent.created_at < cutoff_dt)
+        )
+
+        # Transcripts are PII on a SHORTER clock (transcript_retention_days, default
+        # 90): NULL the text but KEEP the outcome row (non-PII) for long-term trend
+        # analysis. Only rows that still have a transcript are touched (idempotent).
+        t_days = max(1, int(settings.transcript_retention_days))
+        t_cutoff = now - timedelta(days=t_days)
+        transcripts_pruned = await db.execute(
+            CallQuality.__table__.update()
+            .where(CallQuality.created_at < t_cutoff, CallQuality.transcript.is_not(None))
+            .values(transcript=None)
+        )
+
+        # Caller messages (#349) hold full phone + free text on the SAME short
+        # clock as transcripts: once past it, the callback moment is long gone.
+        from backend.models.schema import PatientMessage
+
+        messages_pruned = await db.execute(
+            PatientMessage.__table__.delete().where(PatientMessage.created_at < t_cutoff)
+        )
+
+        # WhatsApp conversation state (WA MVP1 Task 3) is idle-pruned on its
+        # own fixed clock — WA_SESSION_IDLE_DAYS (backend/services/wa_session.py,
+        # also the number quoted in docs/legal/*.md), independent of the
+        # transcript/message clock above.
+        wa_cutoff = now - timedelta(days=WA_SESSION_IDLE_DAYS)
+        wa_sessions_pruned = await db.execute(
+            WhatsAppSession.__table__.delete().where(WhatsAppSession.updated_at < wa_cutoff)
+        )
+
+        if (
+            stale or pruned.rowcount or transcripts_pruned.rowcount
+            or messages_pruned.rowcount or wa_sessions_pruned.rowcount
+        ):
+            await db.commit()
+            logger.info(
+                "data_retention_run",
+                patients_erased=len(stale),
+                consents_pruned=int(pruned.rowcount or 0),
+                transcripts_pruned=int(transcripts_pruned.rowcount or 0),
+                messages_pruned=int(messages_pruned.rowcount or 0),
+                wa_sessions_pruned=int(wa_sessions_pruned.rowcount or 0),
+                retention_days=days,
+                transcript_retention_days=t_days,
+                wa_session_idle_days=WA_SESSION_IDLE_DAYS,
+            )

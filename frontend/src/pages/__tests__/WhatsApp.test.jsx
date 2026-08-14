@@ -29,8 +29,6 @@ vi.mock("../../hooks/useAuth.jsx", () => ({
 
 import WhatsApp from "../WhatsApp.jsx";
 import TemplateEditor from "../../components/TemplateEditor.jsx";
-// ConfirmProvider mirrors main.jsx: the app mounts it above every page.
-import { ConfirmProvider } from "../../components/ConfirmDialog.jsx";
 
 afterEach(() => {
   cleanup();
@@ -43,9 +41,7 @@ function renderWithQuery(ui) {
   // through the URL), so it needs a router even though it renders no <Link>.
   return render(
     <MemoryRouter initialEntries={["/whatsapp"]}>
-      <QueryClientProvider client={qc}>
-      <ConfirmProvider>{ui}</ConfirmProvider>
-      </QueryClientProvider>
+      <QueryClientProvider client={qc}>{ui}</QueryClientProvider>
     </MemoryRouter>,
   );
 }

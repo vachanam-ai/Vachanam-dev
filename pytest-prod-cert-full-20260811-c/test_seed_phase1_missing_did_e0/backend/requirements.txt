@@ -1,0 +1,40 @@
+# Pinned exactly (#346): the >=0.110 float let CI/prod drift onto new
+# releases with behavior changes (0.139 made include_router lazy and broke
+# route introspection). Bump deliberately, full suite green on the new pin.
+fastapi==0.139.0
+uvicorn[standard]>=0.29.0
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+alembic>=1.13.0
+pydantic-settings>=2.0.0
+redis>=5.0.0
+httpx>=0.27.0
+structlog>=24.0.0
+tenacity>=8.2.0
+PyJWT>=2.8.0  # TD-037: replaced python-jose (dragged vulnerable ecdsa dep; HS256 only needs PyJWT)
+google-auth>=2.0.0
+google-api-python-client>=2.0.0
+apscheduler>=3.10.0
+pytz>=2024.1
+openai>=1.30.0
+# NEW Gemini SDK (`from google import genai`) — used by support_bot +
+# call_scoring. #330: the OLD google-generativeai pin satisfied nothing (code
+# never imports it) while the real dependency was missing in prod, so every
+# prod bot answer fell back and hourly call-scoring silently no-opped.
+google-genai>=1.0.0
+razorpay>=1.4.0
+python-multipart>=0.0.27
+fastapi-limiter==0.2.0
+markdown>=3.6
+# PDF invoices attached to payment mails (#357). Pure Python, no system deps.
+fpdf2>=2.8,<3
+bcrypt>=5.0.0
+
+# LiveKit dispatch SDK — the reminder / cascade-rebook / follow-up jobs create
+# outbound agent dispatches via `from livekit import api`. Without this the
+# backend threw "No module named 'livekit'" on every scheduled dispatch and
+# reminders silently never fired (FIXLOG #152). Only the API client is needed
+# (no rtc/audio in the backend).
+# >=1.1.1: livekit-agents 1.6.5 (pulled in by livekit-plugins-soniox, #300)
+# requires livekit-api>=1.1.1 — the old ==1.1.0 pin broke the agent image build.
+livekit-api>=1.1.1,<2
