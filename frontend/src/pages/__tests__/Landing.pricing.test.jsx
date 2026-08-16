@@ -40,12 +40,16 @@ describe("landing pricing", () => {
     expect(screen.getByText("₹4,999")).toBeInTheDocument();
   });
 
-  it("keeps the WhatsApp add-on distinct from the standalone plan", () => {
+  it("recommends the Voice add-on bundle without hiding the chat-only tradeoff", () => {
     renderPricing();
 
-    expect(screen.getByRole("heading", { name: "WhatsApp add-on" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Voice + WhatsApp" })).toBeInTheDocument();
+    expect(screen.getByText("₹3,498")).toBeInTheDocument();
+    expect(screen.getByText("₹1,999 Voice + ₹1,499 WhatsApp add-on")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /start voice \+ whatsapp setup/i })).toHaveAttribute("href", "/register?plan=solo");
     expect(screen.getByRole("heading", { name: "WhatsApp only" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /choose whatsapp/i })).toHaveAttribute("href", "/register?plan=wa");
+    expect(screen.getByText("No phone line or call handling")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /choose whatsapp only/i })).toHaveAttribute("href", "/register?plan=wa");
     expect(screen.getByText(/meta message fees are paid directly by the clinic/i)).toBeInTheDocument();
   });
 });

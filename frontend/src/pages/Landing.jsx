@@ -64,6 +64,7 @@ export function PricingSection({ foundingOfferOn = false, slotsLeft = null }) {
   const whatsappPlan = PLAN_CATALOG.wa;
   const usageCost = voiceMinutes * OVERAGE_RUPEES;
   const estimatedTotal = voicePlan.price + usageCost;
+  const voiceWhatsappTotal = voicePlan.price + WHATSAPP_ADDON_RUPEES;
 
   return (
     <section id="pricing" data-motion-section className="pricing-section">
@@ -155,20 +156,47 @@ export function PricingSection({ foundingOfferOn = false, slotsLeft = null }) {
       </div>
 
       <div className="pricing-channels" data-motion-item>
-        <div className="pricing-channels-intro">
-          <WhatsappLogo size={28} weight="duotone" />
-          <div><h3>Add WhatsApp, or use it on its own.</h3><p>Choose the channel mix that matches how your patients contact the clinic.</p></div>
+        <header className="pricing-channels-intro">
+          <div><WhatsappLogo size={29} weight="duotone" /><span>Choose your patient channels</span></div>
+          <h3>Add WhatsApp to Voice, or choose chat only.</h3>
+          <p>Most clinics receive both calls and messages. Voice + WhatsApp keeps both patient journeys on the same verified booking workflow.</p>
+        </header>
+
+        <div className="pricing-channel-choices">
+          <article className="pricing-bundle-choice">
+            <header>
+              <span className="pricing-channel-pair"><PhoneCall size={18} weight="fill" /><b aria-hidden>+</b><WhatsappLogo size={19} weight="fill" /></span>
+              <span className="pricing-bundle-badge">Best patient coverage</span>
+            </header>
+            <h4>Voice + WhatsApp</h4>
+            <p className="pricing-choice-copy">Answer the call, complete the appointment, then keep confirmations, reminders and follow-ups in the patient’s WhatsApp.</p>
+            <p className="pricing-bundle-price"><strong>{formatRupees(voiceWhatsappTotal)}</strong><span>/month + {formatRupees(OVERAGE_RUPEES)}/voice minute</span></p>
+            <p className="pricing-bundle-math">{formatRupees(voicePlan.price)} Voice + {formatRupees(WHATSAPP_ADDON_RUPEES)} WhatsApp add-on</p>
+            <ul className="pricing-option-list">
+              <CheckItem>Handle patients who call and patients who message</CheckItem>
+              <CheckItem>Send WhatsApp updates after a voice booking</CheckItem>
+              <CheckItem>Use one booking record across both channels</CheckItem>
+              <CheckItem>Keep the phone line covered when reception is busy</CheckItem>
+            </ul>
+            <div className="pricing-option-action">
+              <Link to="/register?plan=solo" className="btn-primary">Start Voice + WhatsApp setup <ArrowRight size={17} /></Link>
+              <small>WhatsApp is added during clinic setup.</small>
+            </div>
+          </article>
+
+          <article className="pricing-chat-choice">
+            <header><WhatsappLogo size={21} weight="duotone" /><span>Chat-only option</span></header>
+            <h4>WhatsApp only</h4>
+            <p className="pricing-choice-copy">For clinics that want booking and patient support in WhatsApp, without Vachanam answering phone calls.</p>
+            <p className="pricing-option-price"><strong>{formatRupees(whatsappPlan.price)}</strong><span>/month</span></p>
+            <ul className="pricing-option-list compact">
+              <CheckItem>Booking and support in WhatsApp</CheckItem>
+              <CheckItem>No phone line or call handling</CheckItem>
+              <CheckItem>No voice-minute charges</CheckItem>
+            </ul>
+            <Link to="/register?plan=wa" className="btn-ghost">Choose WhatsApp only <ArrowRight size={16} /></Link>
+          </article>
         </div>
-        <article>
-          <div><span className="pricing-option-tag">With Voice</span><h4>WhatsApp add-on</h4><p>Booking confirmations, reminders, follow-ups and patient chat.</p></div>
-          <p className="pricing-option-price"><strong>{formatRupees(WHATSAPP_ADDON_RUPEES)}</strong><span>/month</span></p>
-          <small>Add it during clinic setup.</small>
-        </article>
-        <article>
-          <div><span className="pricing-option-tag">No phone line</span><h4>WhatsApp only</h4><p>Patient booking and support in chat, without voice usage.</p></div>
-          <p className="pricing-option-price"><strong>{formatRupees(whatsappPlan.price)}</strong><span>/month</span></p>
-          <Link to="/register?plan=wa">Choose WhatsApp <ArrowRight size={15} /></Link>
-        </article>
       </div>
 
       <p className="pricing-footnote" data-motion-item>
