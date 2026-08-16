@@ -270,6 +270,8 @@ export const fetchOwners = () => api.get("/admin/owners").then((r) => r.data);
 export const addOwner = (payload) => api.post("/admin/owners", payload).then((r) => r.data);
 export const fetchClients = () => api.get("/admin/clients").then((r) => r.data);
 export const fetchAdminOverview = () => api.get("/admin/overview").then((r) => r.data);
+export const fetchAdminCostControl = () => api.get("/admin/cost-control").then((r) => r.data);
+export const refreshAdminCostControl = () => api.post("/admin/cost-control/refresh").then((r) => r.data);
 export const fetchAdminMonitoring = (days = 14) =>
   api.get("/admin/monitoring", { params: { days } }).then((r) => r.data);
 export const fetchHealthBoard = () =>

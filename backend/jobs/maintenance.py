@@ -23,6 +23,7 @@ async def run_hourly_maintenance() -> None:
     from backend.jobs.spend_watch import run_spend_watch
     from backend.jobs.support_sla import run_sla_escalation
     from backend.jobs.telephony_reconcile import run_telephony_reconcile
+    from backend.services.cost_control import run_infrastructure_usage_sync
 
     steps = [
         ("requeue_stale_in_progress", requeue_stale_in_progress),
@@ -45,6 +46,9 @@ async def run_hourly_maintenance() -> None:
         # exact DB->provider reconciliation self-heals both missing and stale
         # identities on the next existing hourly wake.
         ("telephony_reconcile", run_telephony_reconcile),
+        # Product-owner cost/limit telemetry. Provider APIs are fail-open and
+        # persist snapshots here so the dashboard never polls them directly.
+        ("infrastructure_usage_sync", run_infrastructure_usage_sync),
     ]
 
     # Same guard main.py used: CDR sync only runs when Vobiz creds exist.

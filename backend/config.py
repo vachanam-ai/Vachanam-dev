@@ -13,11 +13,9 @@ class Settings(BaseSettings):
     smallest_api_key: str = ""    # Pulse STT sandbox; production remains Soniox
     smallest_model: str = "pulse"
     smallest_eou_timeout_ms: int = 100
-    # Vertex explicit context caching. Measured 2026-08-11 over 1,529 turns it
-    # buys NO latency (llm_ttft p50 556ms cached vs 563ms uncached) while
-    # storage runs ~Rs650/mo per clinic-language, so it only pays for itself
-    # above ~660 talk-minutes/month. Off = the plain prompt path, which is the
-    # same path every cache miss already takes.
+    # Vertex explicit context caching is demand-created by the first matching
+    # clinic-language call from 09:00-21:00 IST and expires at 21:00. Outside
+    # that window calls use the identical uncached path.
     voice_prompt_cache: bool = True
     # One throwaway Vertex generation per job subprocess at prewarm. The first
     # request to asia-south1 costs +567 to +668ms over a warm one (measured
@@ -249,6 +247,27 @@ class Settings(BaseSettings):
     alert_email: str = "hello@vachanam.in"
     fly_api_token: str = ""
     fly_agent_app: str = "vachanam-agent"
+    # Product-owner cost control.  Every provider credential is optional: a
+    # missing/expired credential produces a visible "not connected" card and
+    # never affects clinic traffic.  Rates are versioned in cost_control.py;
+    # these settings describe this deployment's plans and fixed commitments.
+    render_api_key: str = ""
+    render_service_id: str = ""
+    upstash_email: str = ""
+    upstash_api_key: str = ""
+    upstash_database_id: str = ""
+    cloudflare_api_token: str = ""
+    cloudflare_account_id: str = ""
+    cloudflare_zone_id: str = ""
+    livekit_plan: str = "build"  # build (1,000 SIP min) or ship (5,000 min)
+    cost_usd_inr: float = 96.0
+    cost_vobiz_per_billed_min_inr: float = 0.65
+    cost_vobiz_did_month_inr: float = 1000.0
+    cost_fly_month_inr: float = 1350.0
+    cost_render_month_inr: float = 0.0
+    cost_supabase_month_inr: float = 0.0
+    cost_upstash_month_inr: float = 0.0
+    cost_cloudflare_month_inr: float = 0.0
     otp_ttl_seconds: int = 600        # 10 minutes
     # DPDP s.8(7) retention: erase a patient's PII this many days after their last
     # appointment (default 2 years, matching the privacy policy's appointments
@@ -337,6 +356,14 @@ class Settings(BaseSettings):
         if not 1 <= value <= 24:
             raise ValueError('must be between 1 and 24')
         return value
+
+    @field_validator('livekit_plan')
+    @classmethod
+    def _valid_livekit_plan(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {'build', 'ship'}:
+            raise ValueError('must be build or ship')
+        return normalized
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

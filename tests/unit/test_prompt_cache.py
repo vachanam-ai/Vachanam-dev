@@ -10,6 +10,8 @@ miss/mismatch/no-creds returns None (plain path)."""
 import inspect
 import asyncio
 
+import pytest
+
 import agent.livekit_minimal.agent as agent_mod
 from agent.livekit_minimal.agent import (
     _PROMPT_CACHE,
@@ -24,6 +26,13 @@ from agent.livekit_minimal.agent import (
 
 def setup_function(_):
     _PROMPT_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
+def _inside_cache_window(monkeypatch):
+    monkeypatch.setattr(
+        agent_mod, "_prompt_cache_ttl_seconds", lambda now=None: 3600
+    )
 
 
 def test_key_is_branch_lang_ist_day_and_exact_prompt_digest():
@@ -135,17 +144,15 @@ def test_cached_content_tool_normalizer_accepts_nested_plugin_shape():
     ]
 
 
-def test_proactive_warmer_covers_active_clinics_and_saved_languages():
+def test_proactive_warmer_only_warms_shared_audio():
     src = inspect.getsource(agent_mod._warm_all_clinic_prompt_caches)
     assert "b.status = 'active'" in src
     assert "preferred_language" in src
     assert "supported_codes" in src
-    assert "recording_variants" in src
-    assert "_create_prompt_cache" in src
     assert "warm_greeting_cache" in src
     assert "tts_voice" in src
-    assert 'compose_clinic_instructions(' in src
-    assert 'build_system_prompt(' not in src
+    assert "_create_prompt_cache" not in src
+    assert "compose_clinic_instructions" not in src
 
 
 def test_raw_database_faq_is_normalized_without_breaking_warmup():

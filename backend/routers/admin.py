@@ -602,6 +602,38 @@ async def admin_overview(
         )
 
 
+@router.get("/cost-control")
+async def admin_cost_control(
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> dict:
+    """Measured platform/clinic costs and provider capacity, without PII."""
+    from backend.services.cost_control import build_cost_control_payload
+
+    async with AsyncSessionLocal() as db:
+        return await build_cost_control_payload(db)
+
+
+@router.post("/cost-control/refresh")
+async def refresh_admin_cost_control(
+    request: Request,
+    current_user: CurrentUser = Depends(require_admin),
+    _rate_limit: None = Depends(default_limit),
+) -> dict:
+    """Refresh official provider totals now; failures stay isolated per card."""
+    from backend.services.cost_control import (
+        build_cost_control_payload,
+        run_infrastructure_usage_sync,
+    )
+
+    await run_infrastructure_usage_sync()
+    async with AsyncSessionLocal() as db:
+        payload = await build_cost_control_payload(db)
+    logger.info("admin_cost_control_refreshed", user_id=current_user.user_id)
+    return payload
+
+
 class StatusBody(BaseModel):
     status: str  # active | paused | cancelled
 

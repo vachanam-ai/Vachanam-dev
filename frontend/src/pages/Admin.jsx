@@ -6,8 +6,10 @@ import {
   addOwner,
   adminPing,
   deleteOrg,
+  fetchAdminCostControl,
   fetchAdminOverview,
   fetchOwners,
+  refreshAdminCostControl,
   setOrgHardBlock,
   setOrgMinutes,
   setOrgPlan,
@@ -18,6 +20,51 @@ import { pulseRow, revealStagger } from "../lib/motion.js";
 
 const inr = (v) =>
   "₹" + Math.round(v ?? 0).toLocaleString("en-IN");
+
+const compact = (v) =>
+  new Intl.NumberFormat("en-IN", { notation: "compact", maximumFractionDigits: 1 }).format(v ?? 0);
+
+function usageLabel(provider) {
+  if (provider.used == null) return "Awaiting data";
+  if (provider.unit === "bytes") return `${(provider.used / 1024 / 1024).toFixed(1)} MB`;
+  return `${compact(provider.used)} ${provider.unit ?? ""}`.trim();
+}
+
+function ProviderCard({ provider }) {
+  const tone = provider.status === "live"
+    ? "bg-teal-deep"
+    : provider.status === "estimated" || provider.status === "pending"
+      ? "bg-gold-ink"
+      : "bg-danger";
+  return (
+    <article className="rounded-2xl border border-hairline bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-ui text-xs font-semibold uppercase tracking-[0.12em] text-slate">{provider.name}</p>
+          <p className="mt-1 font-display text-xl font-semibold text-ink">{usageLabel(provider)}</p>
+        </div>
+        <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${tone}`} title={provider.status} />
+      </div>
+      {provider.limit != null && (
+        <div className="mt-3">
+          <div className="h-1.5 overflow-hidden rounded-full bg-hairline">
+            <div className={`h-full rounded-full ${tone}`} style={{ width: `${Math.min(provider.pct_used ?? 0, 100)}%` }} />
+          </div>
+          <p className="mt-1 font-ui text-[11px] text-slate">
+            {provider.pct_used ?? 0}% of {provider.unit === "bytes" ? `${(provider.limit / 1024 / 1024).toFixed(0)} MB` : compact(provider.limit)}
+          </p>
+        </div>
+      )}
+      <div className="mt-3 flex items-end justify-between gap-3 border-t border-hairline pt-3">
+        <div className="min-w-0">
+          <p className="truncate font-ui text-[11px] capitalize text-slate">{provider.status.replaceAll("_", " ")} · {provider.source}</p>
+          {provider.action && <p className="mt-0.5 font-ui text-[11px] text-gold-ink">{provider.action}</p>}
+        </div>
+        <p className="shrink-0 font-ui text-sm font-semibold">{provider.cost_month_inr == null ? "—" : inr(provider.cost_month_inr)}</p>
+      </div>
+    </article>
+  );
+}
 
 /* Animated numeral — counts up once data lands; respects reduced motion. */
 function Numeral({ value, format = (v) => Math.round(v).toLocaleString("en-IN"), className = "" }) {
@@ -159,8 +206,10 @@ function UsageBar({ row }) {
   );
 }
 
-function ClinicRow({ row, onAction }) {
+function ClinicRow({ row, costRow, onAction }) {
   const ref = useRef(null);
+  const expense = costRow?.total_cost_inr ?? row.expense_month;
+  const profit = costRow?.gross_profit_inr ?? row.profit_month;
   const act = (fn, label) =>
     onAction(fn, label, () => pulseRow(ref.current));
   return (
@@ -183,10 +232,11 @@ function ClinicRow({ row, onAction }) {
       <UsageBar row={row} />
       <div className="font-ui text-sm">
         <p>rev <span className="font-semibold text-teal-deep">{inr(row.revenue_month)}</span></p>
-        <p>exp <span className="font-semibold text-gold-ink">{inr(row.expense_month)}</span></p>
-        <p className={row.profit_month >= 0 ? "text-teal-deep" : "text-danger"}>
-          profit <span className="font-semibold">{inr(row.profit_month)}</span>
+        <p>cost <span className="font-semibold text-gold-ink">{inr(expense)}</span></p>
+        <p className={profit >= 0 ? "text-teal-deep" : "text-danger"}>
+          profit <span className="font-semibold">{inr(profit)}</span>
         </p>
+        {costRow && <p className="text-[11px] text-slate">{costRow.telemetry_coverage_pct}% measured coverage</p>}
       </div>
       <div className="font-ui text-sm">
         <p><span className="font-semibold">{row.calls_month}</span> calls</p>
@@ -263,6 +313,18 @@ export default function Admin() {
   const { data: ov } = useQuery({
     queryKey: ["admin-overview"], queryFn: fetchAdminOverview, refetchInterval: 60_000
   });
+  const { data: costs } = useQuery({
+    queryKey: ["admin-cost-control"], queryFn: fetchAdminCostControl, refetchInterval: 300_000
+  });
+
+  const refreshCosts = useMutation({
+    mutationFn: refreshAdminCostControl,
+    onSuccess: (data) => {
+      qc.setQueryData(["admin-cost-control"], data);
+      toast.success("Provider usage refreshed");
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not refresh providers")
+  });
 
   const orgAction = useMutation({
     mutationFn: ({ fn }) => fn(),
@@ -294,6 +356,12 @@ export default function Admin() {
     () => (ov?.clients ?? []).filter((c) => c.approaching_limit || c.exhausted),
     [ov]
   );
+  const clinicCosts = useMemo(
+    () => new Map((costs?.clinics ?? []).map((row) => [row.org_id, row])),
+    [costs]
+  );
+  const ownerExpense = costs?.platform?.estimated_total_month_inr ?? ov?.expense_month ?? 0;
+  const ownerProfit = (ov?.revenue_month ?? 0) - ownerExpense;
 
   return (
     <div ref={pageRef} className="space-y-6">
@@ -328,15 +396,15 @@ export default function Admin() {
           </p>
         </div>
         <div data-reveal className="card p-5">
-          <p className="eyebrow">Expense · month</p>
+          <p className="eyebrow">Measured cost · month</p>
           <p className="numeral mt-2 text-4xl text-gold-ink">
-            <Numeral value={ov?.expense_month} format={(v) => inr(v)} />
+            <Numeral value={ownerExpense} format={(v) => inr(v)} />
           </p>
         </div>
         <div data-reveal className="card p-5">
           <p className="eyebrow">Profit · month</p>
-          <p className={`numeral mt-2 text-4xl ${(ov?.profit_month ?? 0) >= 0 ? "text-teal-deep" : "text-danger"}`}>
-            <Numeral value={ov?.profit_month} format={(v) => inr(v)} />
+          <p className={`numeral mt-2 text-4xl ${ownerProfit >= 0 ? "text-teal-deep" : "text-danger"}`}>
+            <Numeral value={ownerProfit} format={(v) => inr(v)} />
           </p>
         </div>
         <div data-reveal className="card p-5">
@@ -350,6 +418,69 @@ export default function Admin() {
           </p>
         </div>
       </div>
+
+      {/* Owner cost control — measured usage, provider limits, no clinic PII. */}
+      <section data-reveal className="card overflow-hidden">
+        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-hairline bg-pill px-5 py-4">
+          <div>
+            <p className="eyebrow">Cost control · rate card {costs?.rate_version ?? "—"}</p>
+            <h2 className="font-display text-xl font-semibold">Infrastructure, limits and unit economics</h2>
+            <p className="mt-1 font-ui text-xs text-slate">
+              Measured SDK/CDR units are separated from estimates. Official provider totals reconcile hourly.
+            </p>
+          </div>
+          <button className="btn-primary !px-4 !py-2 text-sm" disabled={refreshCosts.isPending}
+            onClick={() => refreshCosts.mutate()}>
+            {refreshCosts.isPending ? "Refreshing…" : "Refresh providers"}
+          </button>
+        </header>
+        {!costs ? (
+          <p className="px-5 py-6 font-ui text-sm text-slate">Loading cost ledger…</p>
+        ) : (
+          <div className="space-y-5 p-5">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-2xl bg-teal-deep p-4 text-white">
+                <p className="font-ui text-xs uppercase tracking-[0.14em] text-white/65">Estimated month to date</p>
+                <p className="mt-1 font-display text-3xl font-semibold">{inr(costs.platform.estimated_total_month_inr)}</p>
+                <p className="mt-2 font-ui text-xs text-white/70">{costs.platform.telemetry_coverage_pct}% of call time has raw SDK telemetry</p>
+              </div>
+              <div className="rounded-2xl bg-ink p-4 text-white">
+                <p className="font-ui text-xs uppercase tracking-[0.14em] text-white/65">Projected month end</p>
+                <p className="mt-1 font-display text-3xl font-semibold">{inr(costs.platform.projected_month_end_inr)}</p>
+                <p className="mt-2 font-ui text-xs text-white/70">Variable spend projected; monthly commitments counted once</p>
+              </div>
+              <div className="rounded-2xl border border-hairline bg-white p-4">
+                <p className="font-ui text-xs uppercase tracking-[0.14em] text-slate">Provider-reconciled</p>
+                <p className="mt-1 font-display text-3xl font-semibold text-ink">
+                  {costs.platform.reconciled_total_month_inr == null ? "Pending" : inr(costs.platform.reconciled_total_month_inr)}
+                </p>
+                <p className="mt-2 font-ui text-xs text-slate">Uses official Soniox totals when connected; Gemini remains token-priced</p>
+              </div>
+              <div className="rounded-2xl border border-hairline bg-white p-4">
+                <p className="font-ui text-xs uppercase tracking-[0.14em] text-slate">Billing units</p>
+                <p className="mt-1 font-display text-3xl font-semibold text-ink">{costs.platform.billed_minutes}</p>
+                <p className="mt-2 font-ui text-xs text-slate">billed min from {costs.platform.cdr_minutes} real min · {costs.platform.calls} calls</p>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {costs.providers.map((provider) => <ProviderCard key={provider.key} provider={provider} />)}
+            </div>
+            <details className="rounded-xl border border-hairline bg-pill px-4 py-3">
+              <summary className="cursor-pointer font-ui text-sm font-semibold">Rate card and calculation policy</summary>
+              <div className="mt-3 grid gap-x-6 gap-y-2 md:grid-cols-2">
+                {costs.rates.map((row) => (
+                  <div key={row.component} className="flex justify-between gap-4 border-b border-hairline py-1 font-ui text-xs">
+                    <span className="text-slate">{row.component}</span><span className="font-medium">{row.rate}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-3 font-ui text-xs leading-5 text-slate">
+                {costs.method.measured}. Historical gap: {costs.method.estimated}. Shared allocation: {costs.method.allocated}.
+              </p>
+            </details>
+          </div>
+        )}
+      </section>
 
       {/* Money trend */}
       <section data-reveal className="card p-5">
@@ -395,7 +526,7 @@ export default function Admin() {
         ) : (
           <div className="divide-y divide-hairline">
             {ov.clients.map((row) => (
-              <ClinicRow key={row.org_id} row={row} onAction={onAction} />
+              <ClinicRow key={row.org_id} row={row} costRow={clinicCosts.get(row.org_id)} onAction={onAction} />
             ))}
           </div>
         )}

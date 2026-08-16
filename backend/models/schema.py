@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, date, time
 from sqlalchemy import (
-    String, Boolean, Integer, Text, DateTime, Date, Time, LargeBinary,
+    String, Boolean, Integer, BigInteger, Float, Numeric, Text, DateTime, Date, Time, LargeBinary,
     ForeignKey, Enum, ARRAY, JSON, func, text, false, Index, UniqueConstraint,
     CheckConstraint,
 )
@@ -716,6 +716,27 @@ class CallQuality(Base):
     booking_abandoned: Mapped[bool] = mapped_column(Boolean, default=False)  # held a slot, never confirmed
     transfer_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     fail_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)  # None on a booked call
+    # Provider usage emitted by the LiveKit Agents SDK.  These are raw units,
+    # not a mutable rupee estimate, so old calls can be re-priced when a vendor
+    # changes its tariff.  No transcript, phone number or other patient data is
+    # present in this ledger.
+    stt_audio_seconds: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    tts_audio_seconds: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0"
+    )
+    llm_prompt_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    llm_cached_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    llm_completion_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    usage_rate_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    measured_ai_cost_inr: Mapped[float | None] = mapped_column(Numeric(14, 6), nullable=True)
     # Role-tagged, phone-masked conversation text ("patient: ... / agent: ...").
     # NULL when capture is disabled or after the transcript-retention prune.
     transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -735,6 +756,37 @@ class CallQuality(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class InfrastructureUsageSnapshot(Base):
+    """Hourly, non-PII provider totals used by the product-owner cost console.
+
+    Provider APIs are not queried on page loads.  The existing hourly
+    maintenance wake records their latest totals here; a provider outage thus
+    makes data stale rather than slowing or breaking clinic traffic.
+    """
+
+    __tablename__ = "infrastructure_usage_snapshots"
+    __table_args__ = (
+        Index("ix_infra_usage_provider_captured", "provider", "captured_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    used: Mapped[float | None] = mapped_column(Numeric(20, 4), nullable=True)
+    limit: Mapped[float | None] = mapped_column(Numeric(20, 4), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    cost_inr: Mapped[float | None] = mapped_column(Numeric(14, 4), nullable=True)
+    details: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 

@@ -151,11 +151,10 @@ def test_the_composer_carries_the_date_table_and_brevity():
     assert "brevity" in src
 
 
-def test_both_sides_log_an_input_fingerprint():
-    """So the next cache miss names the field that differs, instead of costing
-    another live call to guess."""
+def test_live_path_logs_an_input_fingerprint():
+    """A demand-created cache logs its exact live input fingerprint."""
     assert 'prompt_inputs live' in SRC
-    assert 'prompt_inputs warm' in SRC
+    assert 'prompt_inputs warm' not in SRC
 
 
 def test_the_fingerprint_leaks_no_clinic_text():

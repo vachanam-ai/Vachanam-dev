@@ -1,4 +1,4 @@
-"""The cache warmer must compose the SAME instructions a call composes.
+"""Clinic prompts have one composer and are cached only after live demand.
 
 Vinay 2026-08-08: "reading date very wrongly. saying monday is august 11, but
 its august 10. why?"
@@ -47,11 +47,11 @@ def _warmer_src() -> str:
 # delegate to compose_clinic_instructions, so the pieces live in ONE place and
 # the assertions move with them.
 
-def test_the_warmer_delegates_to_the_shared_composer():
-    assert "compose_clinic_instructions" in _warmer_src(), (
-        "the warmer builds instructions itself again — that is how the digest "
-        "drifted twice, and every call then runs uncached"
-    )
+def test_the_audio_warmer_never_creates_a_vertex_prompt_cache():
+    warm = _warmer_src()
+    assert "compose_clinic_instructions" not in warm
+    assert "_create_prompt_cache" not in warm
+    assert "warm_greeting_cache" in warm
 
 
 def test_the_live_path_delegates_to_the_shared_composer():
@@ -82,15 +82,5 @@ def test_the_cache_key_carries_the_date():
     assert "Asia/Kolkata" in inspect.getsource(agent_mod._prompt_cache_key)
 
 
-def test_the_warmer_dates_in_the_same_timezone_as_the_key():
-    """A warmer on UTC would disagree with the key's IST date for 5.5 hours
-    every night, re-breaking the match after midnight."""
-    assert "Asia/Kolkata" in _warmer_src()
-
-
-def test_the_warmer_imports_what_it_uses():
-    """ZoneInfo is not module-level here; a missing local import would raise
-    inside the warmer's own try/except and look like an ordinary warm failure."""
-    warm = _warmer_src()
-    if "ZoneInfo" in warm:
-        assert "from zoneinfo import ZoneInfo" in warm
+def test_the_cache_window_uses_india_time():
+    assert "Asia/Kolkata" in inspect.getsource(agent_mod._prompt_cache_ttl_seconds)

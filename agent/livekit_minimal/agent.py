@@ -1824,7 +1824,24 @@ def _build_fallback_llm() -> lk_llm.LLM:
 # Any miss/mismatch/create failure rides the plain path unchanged (RULE 8).
 _PROMPT_CACHE: dict[tuple[str, str, str, str], tuple[str, str]] = {}
 _PROMPT_CACHE_PENDING: set[tuple[str, str, str, str]] = set()
-_PROMPT_CACHE_REDIS_TTL_S = 25 * 60 * 60
+
+
+def _prompt_cache_ttl_seconds(now: datetime_cls | None = None) -> int:
+    """Seconds left in today's 09:00-21:00 IST clinic cache window."""
+    from zoneinfo import ZoneInfo
+
+    india = ZoneInfo("Asia/Kolkata")
+    current = now or datetime_cls.now(india)
+    current = (
+        current.replace(tzinfo=india)
+        if current.tzinfo is None
+        else current.astimezone(india)
+    )
+    opens = current.replace(hour=9, minute=0, second=0, microsecond=0)
+    closes = current.replace(hour=21, minute=0, second=0, microsecond=0)
+    if not opens <= current < closes:
+        return 0
+    return max(0, int((closes - current).total_seconds()))
 
 
 def _flatten_cached_content_tools(configured) -> list[dict]:
@@ -1982,7 +1999,7 @@ async def _load_shared_prompt_cache(key, instructions: str) -> bool:
     patient data. The key already contains branch, language, day and the exact
     static-prompt digest, so a cache can never cross clinic boundaries.
     """
-    if not settings.voice_prompt_cache:
+    if not settings.voice_prompt_cache or not _prompt_cache_ttl_seconds():
         return False
     try:
         from backend.redis_client import get_redis
@@ -2005,7 +2022,12 @@ async def _create_prompt_cache(key, instructions: str, tools) -> bool:
     """Background: bake instructions + tool declarations into a CachedContent
     for FUTURE calls of this branch+lang today. Best-effort — failure only
     means calls keep the plain path."""
-    if settings.llm_provider != 'gemini' or not settings.voice_prompt_cache:
+    ttl_seconds = _prompt_cache_ttl_seconds()
+    if (
+        settings.llm_provider != 'gemini'
+        or not settings.voice_prompt_cache
+        or not ttl_seconds
+    ):
         _PROMPT_CACHE_PENDING.discard(key)
         return False
     lock_redis = None
@@ -2041,7 +2063,7 @@ async def _create_prompt_cache(key, instructions: str, tools) -> bool:
             config=gt.CreateCachedContentConfig(
                 system_instruction=instructions,
                 tools=tools_cfg,
-                ttl="93600s",  # 26h — outlives the IST day key that retires it
+                ttl=f"{ttl_seconds}s",
                 display_name=f"vachanam-{key[0][:8]}-{key[1]}-{key[2]}-{key[3]}",
             ),
         )
@@ -2050,7 +2072,7 @@ async def _create_prompt_cache(key, instructions: str, tools) -> bool:
             await lock_redis.set(
                 _prompt_cache_redis_key(key),
                 cache.name,
-                ex=_PROMPT_CACHE_REDIS_TTL_S,
+                ex=ttl_seconds,
             )
         logger.info("prompt_cache_created key=%s tokens=%s", key,
                     cache.usage_metadata.total_token_count)
@@ -2076,7 +2098,11 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
     None when the cache isn't ready / doesn't byte-match (plain path). The
     global-API fallbacks are the same as _build_fallback_llm — they receive
     the full system prompt + tools per request as always."""
-    if settings.llm_provider != 'gemini' or not settings.voice_prompt_cache:
+    if (
+        settings.llm_provider != 'gemini'
+        or not settings.voice_prompt_cache
+        or not _prompt_cache_ttl_seconds()
+    ):
         return None
     entry = _PROMPT_CACHE.get(key)
     if entry is None or entry[1] != instructions:
@@ -2113,7 +2139,11 @@ def _cached_primary_llm(key, instructions: str) -> lk_llm.FallbackAdapter | None
 async def _resolve_cached_primary_llm(
     key, instructions: str
 ) -> lk_llm.FallbackAdapter | None:
-    if settings.llm_provider != 'gemini' or not settings.voice_prompt_cache:
+    if (
+        settings.llm_provider != 'gemini'
+        or not settings.voice_prompt_cache
+        or not _prompt_cache_ttl_seconds()
+    ):
         return None
     cached = _cached_primary_llm(key, instructions)
     if cached is not None:
@@ -8565,6 +8595,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # gap is attributable to a stage (STT finalize / LLM TTFT / TTS TTFB /
         # end-of-utterance delay) instead of guessed. log_metrics keeps the
         # existing structured line; the extra line surfaces the key numbers.
+        # Per-call raw provider units.  The SDK emits these after every model
+        # request; keeping one tiny accumulator avoids storing turn text or
+        # making any network call on the latency-critical response path.
+        _provider_usage = {
+            "stt_audio_seconds": 0.0,
+            "tts_audio_seconds": 0.0,
+            "llm_prompt_tokens": 0,
+            "llm_cached_tokens": 0,
+            "llm_completion_tokens": 0,
+        }
+
         @session.on("metrics_collected")
         def _on_metrics(ev: MetricsCollectedEvent) -> None:
             metrics.log_metrics(ev.metrics)
@@ -8586,6 +8627,15 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     transcription_delay=getattr(m, "transcription_delay", None),
                 )
             elif tn == "LLMMetrics":
+                _provider_usage["llm_prompt_tokens"] += max(
+                    0, int(getattr(m, "prompt_tokens", 0) or 0)
+                )
+                _provider_usage["llm_cached_tokens"] += max(
+                    0, int(getattr(m, "prompt_cached_tokens", 0) or 0)
+                )
+                _provider_usage["llm_completion_tokens"] += max(
+                    0, int(getattr(m, "completion_tokens", 0) or 0)
+                )
                 logger.info("lat_llm ttft=%.2fs", getattr(m, "ttft", 0.0))
                 _turn_trace.mark_llm_run(
                     getattr(m, "speech_id", "") or "",
@@ -8593,6 +8643,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     duration=getattr(m, "duration", None),
                 )
             elif tn == "TTSMetrics":
+                _provider_usage["tts_audio_seconds"] += max(
+                    0.0, float(getattr(m, "audio_duration", 0.0) or 0.0)
+                )
                 logger.info(
                     "lat_tts ttfb=%.2fs acquire=%.2fs reused=%s cancelled=%s",
                     getattr(m, "ttfb", 0.0),
@@ -8605,6 +8658,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     ttfb=getattr(m, "ttfb", 0.0),
                 )
             elif tn == "STTMetrics":
+                _provider_usage["stt_audio_seconds"] += max(
+                    0.0, float(getattr(m, "audio_duration", 0.0) or 0.0)
+                )
                 logger.info("lat_stt duration=%.2fs", getattr(m, "duration", 0.0))
 
         # RULE 3: release a held-but-unconfirmed token when the call ends.
@@ -8721,6 +8777,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 # teardown or the RULE-3 token release above.
                 try:
                     from backend.models.schema import CallQuality
+                    from backend.services.cost_control import (
+                        RATE_VERSION as _USAGE_RATE_VERSION,
+                    )
+                    from backend.services.cost_control import (
+                        measured_ai_cost_inr as _measured_ai_cost_inr,
+                    )
 
                     turns, transcript = _extract_call_record(session)
                     _patient_turns_seen = turns
@@ -8751,6 +8813,13 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             booking_abandoned=abandoned,
                             transfer_requested=state.transfer_requested,
                             fail_reason=fail_reason,
+                            stt_audio_seconds=_provider_usage["stt_audio_seconds"],
+                            tts_audio_seconds=_provider_usage["tts_audio_seconds"],
+                            llm_prompt_tokens=_provider_usage["llm_prompt_tokens"],
+                            llm_cached_tokens=_provider_usage["llm_cached_tokens"],
+                            llm_completion_tokens=_provider_usage["llm_completion_tokens"],
+                            usage_rate_version=_USAGE_RATE_VERSION,
+                            measured_ai_cost_inr=_measured_ai_cost_inr(**_provider_usage),
                             transcript=transcript,
                         )
                     )
@@ -9565,73 +9634,23 @@ def _decode_branch_faq(value) -> list[dict]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _decode_jsonb(value, fallback):
-    """JSONB over raw asyncpg arrives as TEXT (no codec is registered — see
-    _decode_branch_faq). list("[0,1,2]") silently yields characters, so every
-    JSONB column read on this path must go through here."""
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            return fallback
-    return value if isinstance(value, type(fallback)) else fallback
-
-
-def _effective_schedule(row) -> dict:
-    """recurring_schedule, or the legacy single range widened to the shape the
-    prompt renders. Mirrors backend.services.doctor_schedule.effective_* — this
-    path speaks raw asyncpg, not ORM rows, so it cannot call it directly."""
-    configured = _decode_jsonb(row["recurring_schedule"], {})
-    if configured:
-        return configured
-    start, end = row["working_hours_start"], row["working_hours_end"]
-    if not start or not end or start >= end:
-        return {}
-    session = {"start": start.strftime("%H:%M"), "end": end.strftime("%H:%M")}
-    return {
-        str(day): [session]
-        for day in _decode_jsonb(row["available_weekdays"], [])
-        if isinstance(day, int) and 0 <= day <= 6
-    }
-
-
 async def _warm_all_clinic_prompt_caches() -> None:
-    """Build shared Vertex caches before a real caller needs one.
+    """Warm shared greeting/filler audio, never billable Vertex prompts.
 
-    The cached object contains clinic facts, the grounded prompt, and tool
-    declarations only. Patient identity, current bookings, date/time, and
-    outbound metadata remain per-call chat context and are never stored here.
-    Languages are limited to each branch default plus languages actually saved
-    as patient preferences, avoiding speculative caches nobody uses.
-
-    The date table IS part of the cached instructions (see the call site
-    below): it is stable for a whole calendar day, and the cache key carries
-    the date, so the entry rolls over at midnight instead of serving a stale
-    "today" — which is the property that lets it be cached at all.
+    Prompt caches are demand-created by calls from 09:00-21:00 IST. The legacy
+    function name keeps the existing worker startup path and scheduler intact.
     """
     import asyncpg
-    from zoneinfo import ZoneInfo
 
     dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
     conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl="require")
     try:
         branches = await conn.fetch(
             """
-            SELECT b.id::text, b.name, b.name_spoken, b.language, b.tts_voice, b.address,
-                   b.faq, b.emergency_contact, COALESCE(o.plan, 'clinic') AS plan
+            SELECT b.id::text, b.name, b.name_spoken, b.language, b.tts_voice
             FROM branches b
             JOIN organizations o ON o.id = b.org_id
             WHERE b.did_number IS NOT NULL AND b.status = 'active'
-            """
-        )
-        doctors = await conn.fetch(
-            """
-            SELECT id::text, branch_id::text, name, specialization,
-                   routing_keywords, booking_type::text, is_default_doctor,
-                   working_hours_start, working_hours_end, available_weekdays,
-                   recurring_schedule, schedule_mode
-            FROM doctors
-            WHERE status = 'active'
             """
         )
         preferences = await conn.fetch(
@@ -9644,29 +9663,6 @@ async def _warm_all_clinic_prompt_caches() -> None:
     finally:
         await conn.close()
 
-    doctors_by_branch: dict[str, list[DoctorContext]] = {}
-    for row in doctors:
-        branch_doctors = doctors_by_branch.setdefault(row["branch_id"], [])
-        start = row["working_hours_start"]
-        end = row["working_hours_end"]
-        branch_doctors.append(
-            DoctorContext(
-                id=row["id"],
-                name=row["name"],
-                specialization=row["specialization"] or "",
-                routing_keywords=list(row["routing_keywords"] or []),
-                booking_type=row["booking_type"],
-                is_default=bool(row["is_default_doctor"]),
-                working_hours_start=start.strftime("%H:%M") if start else "",
-                working_hours_end=end.strftime("%H:%M") if end else "",
-                available_weekdays=_decode_jsonb(row["available_weekdays"], []),
-                # Same sitting hours the call path uses — a prompt cached here
-                # with different schedule text would never be hit at call time.
-                schedule=_effective_schedule(row),
-                schedule_mode=row["schedule_mode"] or "recurring",
-            )
-        )
-
     serviceable = set(supported_codes())
     languages_by_branch: dict[str, set[str]] = {}
     for row in preferences:
@@ -9674,25 +9670,13 @@ async def _warm_all_clinic_prompt_caches() -> None:
         if code in serviceable:
             languages_by_branch.setdefault(row["branch_id"], set()).add(code)
 
-    # ENGLISH IS ALWAYS WARMED. Vinay's 08-09 call, turn 9: he asked the agent
-    # to switch to English and the very next turn logged `cache_hit=False`
-    # alongside a fresh `prompt_cache_created key=(…,'en',…)`. The switch itself
-    # is fast (`lat_switch total=0.08s`) — what costs is landing on a prompt
-    # cache that does not exist yet, which inflated that turn's TTFT to 772ms
-    # against a warm ~400-500ms.
-    #
-    # The warmer only knew each branch's default plus languages some patient had
-    # already saved, so the FIRST caller ever to ask for English at a clinic
-    # always paid for it — and running uncached is the same degraded state that
-    # produced the wrong-date and formal-Telugu answers. English is the one
-    # language every clinic's callers reach for regardless of the default, so it
-    # is warmed unconditionally. Two entries per clinic, not eight: the other
-    # six stay demand-warmed because nobody asks for them cold.
+    # English greeting/filler AUDIO is always warm so a language switch never
+    # waits for live TTS. Vertex prompt caches remain strictly demand-created.
     for row in branches:
         languages_by_branch.setdefault(row["id"], set()).add("en")
 
-    # First-audio cache has priority over the larger Vertex prompt warm. A new
-    # deployment may accept a call while this background loop is still running.
+    # First-audio warming is best effort. A new deployment may accept a call
+    # while this background loop is still running.
     greeting_requested = 0
     greeting_ready = 0
     for row in branches:
@@ -9790,60 +9774,9 @@ async def _warm_all_clinic_prompt_caches() -> None:
         greeting_ready,
     )
 
-    schema_agent = VachanamAgent(
-        instructions="prompt-cache tool schema",
-        state=SessionState(),
-        db=None,
-        room=None,
-        calendar_service=None,
-        meta_service=MetaService(),
-        transfer_to="",
-    )
-    tool_schema = schema_agent.tools
-    requested = 0
-    ready = 0
-    for row in branches:
-        branch_id = row["id"]
-        clinic_name = (row["name_spoken"] or row["name"] or "").strip()
-        languages = languages_by_branch.setdefault(branch_id, set())
-        languages.add(row["language"] if row["language"] in serviceable else DEFAULT_LANG)
-        recording_variants = (False, True) if settings.recording_allowed else (False,)
-        for language in sorted(languages):
-            for recording_active in recording_variants:
-                _faq = _decode_branch_faq(row["faq"])
-                _docs = doctors_by_branch.get(branch_id, [])
-                _fp = _prompt_inputs_fingerprint(
-                    clinic_name, _docs, _faq, row["plan"], recording_active
-                )
-                # SAME function as the live call. They were two call sites that
-                # had to agree by discipline, and they drifted twice.
-                instructions = compose_clinic_instructions(
-                    clinic_name=clinic_name,
-                    doctors=_docs,
-                    emergency_contact=row["emergency_contact"],
-                    plan=row["plan"],
-                    language=language,
-                    clinic_address=row["address"],
-                    faq=_faq,
-                    recording_active=recording_active,
-                    today=datetime_cls.now(ZoneInfo("Asia/Kolkata")).date(),
-                )
-                _dg = hashlib_mod.sha256(instructions.encode("utf-8")).hexdigest()[:12]
-                logger.info("prompt_inputs warm lang=%s digest=%s %s", language, _dg, _fp)
-                _stash_prompt_fingerprint("warm", language, _dg, _fp)
-                key = _prompt_cache_key(branch_id, language, instructions)
-                requested += 1
-                if await _create_prompt_cache(key, instructions, tool_schema):
-                    ready += 1
-    logger.info(
-        "prompt_cache_warm_complete clinics=%d requested=%d ready=%d",
-        len(branches),
-        requested,
-        ready,
-    )
 
 def _start_prompt_cache_warmer() -> None:
-    """Warm immediately and refresh before the daily/digest cache rolls over."""
+    """Keep static audio warm; prompt caches are first-call demand-created."""
     import threading
     import time as _time
 
@@ -9860,13 +9793,13 @@ def _start_prompt_cache_warmer() -> None:
             try:
                 asyncio.run(_warm_with_http_context())
             except Exception as exc:  # noqa: BLE001 — calls retain plain fallback
-                logger.warning("prompt_cache_warm_failed: %s", str(exc)[:180])
+                logger.warning("audio_cache_warm_failed: %s", str(exc)[:180])
             _time.sleep(6 * 60 * 60)
 
     threading.Thread(
-        target=_loop, name="prompt-cache-warmer", daemon=True
+        target=_loop, name="audio-cache-warmer", daemon=True
     ).start()
-    logger.info("prompt_cache_warmer_started interval=6h")
+    logger.info("audio_cache_warmer_started interval=6h")
 
 
 

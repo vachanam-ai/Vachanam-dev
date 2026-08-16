@@ -27,6 +27,30 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      # Product-owner cost reconciliation. Missing credentials only render a
+      # "not connected" provider card; they never affect clinic traffic.
+      - key: SONIOX_JP_API_KEY
+        sync: false
+      - key: RENDER_API_KEY
+        sync: false
+      - key: RENDER_SERVICE_ID
+        sync: false
+      - key: FLY_API_TOKEN
+        sync: false
+      - key: UPSTASH_EMAIL
+        sync: false
+      - key: UPSTASH_API_KEY
+        sync: false
+      - key: UPSTASH_DATABASE_ID
+        sync: false
+      - key: CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_ZONE_ID
+        sync: false
+      - key: LIVEKIT_PLAN
+        value: build
       - key: LIVEKIT_URL
         sync: false
       - key: LIVEKIT_API_KEY
