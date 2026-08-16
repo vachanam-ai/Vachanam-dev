@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PlanAndPayment from "../PlanAndPayment.jsx";
 import { cancelPlanChange, changePlan, fetchPlan } from "../../api/client.js";
@@ -29,28 +29,22 @@ describe("PlanAndPayment legacy-plan guard", () => {
       autopay_enabled: false, whatsapp_included: false, whatsapp_addon: false,
     });
     renderPayment();
-    expect(await screen.findByText(/Lite is a retired plan/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Enable autopay.*5,999/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Enable autopay.*1,999/i })).not.toBeInTheDocument();
+    expect(await screen.findByText(/This is a retired plan/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Move to Vachanam Voice/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Enable autopay.*1,999/i })).toBeInTheDocument();
   });
 
-  it("does not change a paid plan when the owner only changes the selector", async () => {
+  it("shows both public plans and the current price", async () => {
     fetchPlan.mockResolvedValue({
-      plan: "solo", status: "active", next_base_rupees: 5999,
+      plan: "solo", status: "active", next_base_rupees: 1999,
       autopay_enabled: false, whatsapp_included: false, whatsapp_addon: true,
     });
-    changePlan.mockResolvedValue({
-      plan: "solo", pending_plan: "wa", pending_plan_effective: "2026-09-11",
-      status: "active", whatsapp_addon: true,
-    });
     renderPayment();
-    const select = await screen.findByRole("combobox", { name: /Plan/i });
-    await act(async () => { await Promise.resolve(); });
-    fireEvent.change(select, { target: { value: "wa" } });
-    expect(select).toHaveValue("wa");
+    const plan = await screen.findByRole("combobox", { name: /Plan/i });
+    expect(plan).toHaveValue("solo");
+    expect(screen.getByRole("option", { name: /WhatsApp.*1,999/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Change plan/i })).toBeDisabled();
     expect(changePlan).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /Schedule plan change/i }));
-    await waitFor(() => expect(changePlan).toHaveBeenCalledWith("wa"));
   });
 
   it("can cancel a scheduled change while the current plan is retired", async () => {

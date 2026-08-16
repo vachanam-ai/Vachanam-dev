@@ -121,7 +121,7 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
 
 
 async def _next_due_epoch(db, now_ist: datetime) -> float | None:
-    """When the earliest pending voice follow-up becomes dialable, or None when
+    """When the earliest pending follow-up becomes deliverable, or None when
     none are pending. A task is due once scheduled_date has arrived and we are
     inside calling hours — so a future task's due moment is CALL_START_H on its
     scheduled day (#299)."""
@@ -130,7 +130,6 @@ async def _next_due_epoch(db, now_ist: datetime) -> float | None:
             select(FollowupTask.scheduled_date)
             .where(
                 FollowupTask.status == "pending",
-                FollowupTask.channel == "voice",
                 FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"]),
             )
             .order_by(FollowupTask.scheduled_date.asc())
@@ -162,7 +161,7 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
     dispatched = 0
     async with AsyncSessionLocal() as db:
         tasks = (await db.execute(select(FollowupTask).where(
-            FollowupTask.status == "pending", FollowupTask.channel == "voice",
+            FollowupTask.status == "pending",
             FollowupTask.task_type.in_(["next_visit_book", "doctor_advice"])))).scalars().all()
         for t in tasks:
             if not _is_due(t, now_ist):
@@ -191,7 +190,7 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
             # minutes). FOLLOWUP_PLANS lists them all — the gate stays as the
             # seam in case a future plan drops the loop.
             from backend.models.schema import Organization
-            from backend.services.billing_math import FOLLOWUP_PLANS
+            from backend.services.billing_math import FOLLOWUP_PLANS, PLANS
 
             org = (await db.execute(select(Organization).where(
                 Organization.id == branch.org_id))).scalar_one_or_none()
@@ -210,12 +209,40 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
                     continue
                 if tn and tn.next_reporting_date:
                     target_date = tn.next_reporting_date.isoformat()
+            plan = org.plan if org is not None else None
+            from backend.services.wa_readiness import purpose_readiness
+
+            wa_ready = (await purpose_readiness(branch, plan, ("followup",)))["followup"]
+            wa_accepted = False
+            if wa_ready:
+                from backend.services.meta_service import MetaService
+
+                message = t.what_to_ask or (
+                    f"Please arrange your next visit around {target_date}"
+                    if target_date else "Please contact the clinic about your follow-up"
+                )
+                wa_accepted = await MetaService().send_followup(
+                    patient.phone,
+                    branch_id=branch.id,
+                    task_id=str(t.id),
+                    patient_name=patient.name,
+                    doctor_name=doctor.name,
+                    message=message,
+                )
+            plan_config = PLANS.get(plan)
+            voice_capable = plan_config is None or plan_config.has_voice
+            voice_requested = voice_capable and (
+                bool(getattr(branch, "followup_calls_enabled", True)) or not wa_ready
+            )
             # DISPATCH-THEN-MUTATE (FIXLOG #160, mirrors #151): do NOT flip in_progress
             # before dialing — the run query only pulls 'pending' and NO job requeues a
             # stranded 'in_progress' FollowupTask, so a flip-before-dispatch crash strands
             # the task forever (permanent miss). Dispatch first; mutate on the result.
             t.attempt_count = (t.attempt_count or 0) + 1
-            ok = await _dispatch(t, branch, doctor, patient, target_date)
+            ok = (
+                await _dispatch(t, branch, doctor, patient, target_date)
+                if voice_requested else wa_accepted
+            )
             if ok:
                 # Call dispatched. The agent enriches response_summary on call-end
                 # (later task); the task is now non-pending so the next 15-min tick

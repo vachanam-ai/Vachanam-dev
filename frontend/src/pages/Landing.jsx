@@ -14,8 +14,8 @@ import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import { submitContact } from "../api/support";
 import { API_BASE } from "../api/client.js";
 import {
-  PLAN_CATALOG, VOICE_PLAN_KEYS, OVERAGE_RUPEES, WHATSAPP_ADDON_RUPEES,
-  ADDITIONAL_BRANCH_RUPEES, ADDITIONAL_NUMBER_RUPEES, TRIAL_MINUTES,
+  PLAN_CATALOG, PUBLIC_PLAN_KEYS, OVERAGE_RUPEES, WHATSAPP_ADDON_RUPEES,
+  ADDITIONAL_BRANCH_RUPEES, ADDITIONAL_NUMBER_RUPEES, FOUNDING_CREDIT_MINUTES,
 } from "../lib/plans.js";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
@@ -39,7 +39,7 @@ const FAQ = [
   ["Can it handle changing doctor schedules?", "Yes. Each doctor can have multiple time windows and date-specific availability. The agent checks the configured date before answering."],
   ["What happens when it does not know an answer?", "It tells the caller the clinic will check, records the question with their name and number, and surfaces it for staff or the doctor."],
   ["Does it provide medical advice?", "No. It can relay clinic-approved information and doctor instructions, but it does not diagnose or prescribe."],
-  ["What happens after the included minutes?", `Voice plans continue at ₹${OVERAGE_RUPEES} per minute. Usage and remaining minutes are visible in the clinic workspace.`],
+  ["How is voice usage billed?", `Each plan has a fixed monthly platform fee, then voice usage is ₹${OVERAGE_RUPEES} per minute from the first minute. Usage stays visible in the clinic workspace.`],
   ["How quickly can we start?", "We configure the clinic, doctors, schedules and call routing with your team. A demo lets you validate the real flow before going live."],
 ];
 
@@ -59,7 +59,6 @@ function CheckItem({ children }) {
 export default function Landing() {
   const rootRef = useRef(null);
   const [slotsLeft, setSlotsLeft] = useState(null);
-  const [trialForAll, setTrialForAll] = useState(false);
   const [demo, setDemo] = useState({ clinic: "", name: "", phone: "", body: "" });
   const [demoSent, setDemoSent] = useState(false);
   const [demoBusy, setDemoBusy] = useState(false);
@@ -73,11 +72,10 @@ export default function Landing() {
       .then((data) => {
         if (!data) return;
         setSlotsLeft(data.slots_left);
-        setTrialForAll(Boolean(data.trial_for_all));
       })
       .catch(() => {});
   }, []);
-  const trialOn = trialForAll || slotsLeft > 0;
+  const foundingOfferOn = slotsLeft > 0;
 
   useGSAP(() => {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -142,7 +140,7 @@ export default function Landing() {
               <span><CheckCircle size={18} weight="fill" />Date-specific doctor schedules</span>
               <span><CheckCircle size={18} weight="fill" />Atomic appointment actions</span>
             </div>
-            {trialOn && <p className="marketing-trial">14 days or {TRIAL_MINUTES} voice minutes, whichever comes first{!trialForAll && slotsLeft != null ? ` · ${slotsLeft} pilot slots left` : ""}</p>}
+            {foundingOfferOn && <p className="marketing-trial">Founding 100 clinics: first {FOUNDING_CREDIT_MINUTES} voice minutes free after activation{slotsLeft != null ? ` · ${slotsLeft} places left` : ""}</p>}
           </div>
 
           <figure data-hero-visual className="marketing-hero-visual">
@@ -210,20 +208,24 @@ export default function Landing() {
         </section>
 
         <section id="pricing" data-motion-section className="pricing-section">
-          <div className="marketing-section-heading" data-motion-item><span className="marketing-kicker">Clear monthly plans</span><h2>Choose capacity, not a stripped-down receptionist.</h2><p>Every voice plan includes the core booking workflow and supported languages. Plans scale by minutes, doctors, branches and WhatsApp.</p></div>
+          <div className="marketing-section-heading" data-motion-item><span className="marketing-kicker">Simple, usage-based pricing</span><h2>Choose voice, WhatsApp, or both.</h2><p>Each monthly fee covers one clinic branch and the platform. The voice plan includes a clinic phone number and meters calls separately.</p></div>
           <div className="pricing-grid">
-            {VOICE_PLAN_KEYS.map((key) => {
+            {PUBLIC_PLAN_KEYS.map((key) => {
               const plan = PLAN_CATALOG[key];
-              const whatsapp = key !== "solo";
+              const whatsappOnly = key === "wa";
               return (
                 <article key={key} data-motion-item className={`pricing-card ${plan.popular ? "is-popular" : ""}`}>
                   {plan.popular && <span className="popular-label">Most popular</span>}
                   <div className="pricing-card-head"><h3>{plan.name}</h3><p>{plan.tagline}</p></div>
                   <p className="price"><sup>₹</sup>{plan.price.toLocaleString("en-IN")}<span>/month</span></p>
                   <ul>
-                    <CheckItem>{plan.minutes.toLocaleString("en-IN")} voice minutes</CheckItem>
+                    {whatsappOnly
+                      ? <CheckItem>WhatsApp booking and patient support</CheckItem>
+                      : <CheckItem>Voice usage at ₹{OVERAGE_RUPEES}/minute</CheckItem>}
                     <CheckItem>{plan.doctors}</CheckItem><CheckItem>{plan.branches}</CheckItem>
-                    <CheckItem>{whatsapp ? "WhatsApp included" : `WhatsApp add-on ₹${WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}`}</CheckItem>
+                    <CheckItem>{whatsappOnly
+                      ? "No phone line or voice usage"
+                      : `WhatsApp add-on ₹${WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}/branch`}</CheckItem>
                     <CheckItem>Booking, cancellations and reschedules</CheckItem><CheckItem>All supported languages</CheckItem>
                   </ul>
                   <Link to={`/register?plan=${key}`} className={plan.popular ? "btn-primary" : "btn-ghost"}>Choose {plan.name}<ArrowRight size={17} /></Link>
@@ -232,8 +234,8 @@ export default function Landing() {
             })}
           </div>
           <div data-motion-item className="pricing-notes">
-            <div><WhatsappLogo size={22} weight="duotone" /><span><strong>WhatsApp only</strong><small>₹1,499/month · 3 doctors · 1 branch · no voice line</small></span><Link to="/register?plan=wa">Choose WhatsApp</Link></div>
-            <p>Overage ₹{OVERAGE_RUPEES}/minute · Additional branch ₹{ADDITIONAL_BRANCH_RUPEES.toLocaleString("en-IN")}/month · Additional number ₹{ADDITIONAL_NUMBER_RUPEES.toLocaleString("en-IN")}/month</p>
+            <div><WhatsappLogo size={22} weight="duotone" /><span><strong>WhatsApp options</strong><small>₹{PLAN_CATALOG.wa.price.toLocaleString("en-IN")}/month standalone or ₹{WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}/month with Voice · Meta message fees are paid directly by the clinic</small></span></div>
+            <p>Voice usage ₹{OVERAGE_RUPEES}/minute · Additional branch ₹{ADDITIONAL_BRANCH_RUPEES.toLocaleString("en-IN")}/month · Additional number ₹{ADDITIONAL_NUMBER_RUPEES.toLocaleString("en-IN")}/month</p>
           </div>
         </section>
 

@@ -111,24 +111,23 @@ When you cancel your subscription (see Section 4.4):
 
 ### 4.1 Plans
 
-Vachanam offers three voice plans and one WhatsApp-only plan. GST is currently waived. If GST is restored, 18% GST will be shown separately on the invoice.
+Vachanam offers a metered voice plan and a WhatsApp-only plan. GST is currently waived. If GST is restored, 18% GST will be shown separately on the invoice.
 
-| Plan | Monthly price | Included minutes | Doctors | Branches |
+| Plan | Monthly platform fee | Voice usage | Doctors | Branches |
 |---|---|---|---|---|
-| **WhatsApp** | INR 1,499/month | No voice minutes, WhatsApp only, no phone line | up to 3 | 1 |
-| **Basic** | INR 5,999/month | 400 minutes (about 140 calls) | up to 3 | 1 |
-| **Growth** | INR 10,999/month | 1,500 minutes (about 540 calls) | up to 10 | 1 |
-| **Scale** | INR 21,999/month | 3,000 minutes (about 1,080 calls) | unlimited | 2 |
+| **Vachanam Voice** | INR 1,999/month | INR 6 per voice minute | unlimited | 1 |
+| **WhatsApp** | INR 1,999/month | no voice minutes | 3 | 1 |
 
-- Overage on every plan with included minutes: INR 6 per minute beyond the included minutes, billed with the next invoice. Included minutes reset monthly and do not carry over. The WhatsApp plan includes no voice service and therefore has no minute overage.
+- Voice usage is INR 6 per minute from the first minute and is billed with the next invoice.
+- WhatsApp is an optional INR 1,499/month add-on per Voice branch. Meta message fees are paid directly by the clinic.
 - **WhatsApp message costs are billed to you by Meta, not by Vachanam.** On any plan that uses WhatsApp, your clinic holds its own WhatsApp Business Account and its own payment method with Meta. Vachanam's fee covers the software only and adds no per-message markup.
-- Optional add-ons: additional phone number INR 2,499/month; additional branch INR 6,999/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
+- Optional add-ons: WhatsApp INR 1,499/month per Voice branch; additional phone number or branch INR 1,499/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
 
 Current pricing and what each plan includes are always published at vachanam.in; if this table and the website ever differ, the website's published pricing at the time of purchase governs.
 
-### 4.2 Free trial
+### 4.2 Founding-clinic credit
 
-Every new clinic gets a 14-day free trial with up to 30 minutes of AI call handling (about 10 calls). No credit card is required to start the trial. When the included trial minutes are used up or the 14 days end, whichever comes first, the service pauses until a plan is activated. Around day 12, we will send a payment link to your registered email. Nothing is ever charged for the trial.
+The first 100 eligible clinics receive a one-time credit for 500 voice minutes on their first paid billing cycle. The monthly platform fee remains payable. The credit does not renew, has no cash value, and unused minutes expire at the end of that first paid cycle.
 
 ### 4.3 Payment
 

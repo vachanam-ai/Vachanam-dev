@@ -135,6 +135,34 @@ def sessions_as_text(sessions: tuple[SessionWindow, ...] | list[SessionWindow]) 
     )
 
 
+def bookable_starts_as_text(slots: list[time], duration_minutes: int) -> str:
+    """Compactly describe valid appointment *start* times.
+
+    A 09:00–12:00 sitting with 30-minute appointments has a last valid start
+    at 11:30. Advertising "until 12" invites a 12:00 request that cannot fit.
+    """
+    if not slots:
+        return ""
+    step = timedelta(minutes=duration_minutes)
+    runs: list[tuple[time, time]] = []
+    first = previous = slots[0]
+    for slot in slots[1:]:
+        if datetime.combine(date.min, slot) == datetime.combine(date.min, previous) + step:
+            previous = slot
+            continue
+        runs.append((first, previous))
+        first = previous = slot
+    runs.append((first, previous))
+
+    def clock(value: time) -> str:
+        return value.strftime("%I:%M %p").lstrip("0")
+
+    return " and ".join(
+        clock(start) if start == end else f"{clock(start)} to {clock(end)}"
+        for start, end in runs
+    )
+
+
 async def resolve_doctor_schedule(
     doctor: Doctor,
     branch_id: UUID,

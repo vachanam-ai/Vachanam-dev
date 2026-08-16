@@ -50,7 +50,7 @@ def test_text_receipt_numbers_and_no_gstin():
     assert _inr(bd["total"]) in text          # amount paid
     if bd["gst"]:
         assert _inr(bd["gst"]) in text        # GST line (only when charged)
-    assert "Extra usage" in text and "50 min" in text
+    assert "Voice usage" in text and "50 min" in text
     assert "pay_ABC123xyz" in text
     assert "GSTIN" not in text      # #358: removed everywhere
     assert "registration" not in text

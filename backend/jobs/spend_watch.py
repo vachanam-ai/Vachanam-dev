@@ -16,9 +16,9 @@ A bad night, not an extinction event. If that ever stops being survivable, the
 per-org `hard_block_on_exhaust` switch already exists in the schema and in
 `billing_math.call_blocked` — turning it on is a config change, not a build.
 
-Thresholds are multiples of the plan's INCLUDED minutes, so they scale with
-what the clinic already bought instead of a flat number that means something
-different on Basic than on Scale.
+Thresholds use the realistic monthly voice volume that the autopay mandate was
+designed to cover. This works for the current fixed-plus-usage plans, whose
+included-minute bucket is intentionally zero.
 """
 from __future__ import annotations
 
@@ -29,11 +29,11 @@ from sqlalchemy import func, select
 
 import backend.database as _db_module
 from backend.models.schema import Branch, BillingCycle, CallLog, Organization
-from backend.services.billing_math import included_minutes_for
+from backend.services.billing_math import mandate_worst_overage_minutes
 
 logger = structlog.get_logger()
 
-# Multiples of included minutes. WARN is "look at this today"; RUNAWAY is
+# Multiples of the plan's safety volume. WARN is "look at this today"; RUNAWAY is
 # "something is wrong right now". Both only notify.
 WARN_MULTIPLE = 1.5
 RUNAWAY_MULTIPLE = 3.0
@@ -65,13 +65,13 @@ async def _cycle_minutes(db, org_id, start: date, end: date) -> float:
     return float(seconds or 0) / 60.0
 
 
-def _breach(used: float, included: int) -> str | None:
+def _breach(used: float, expected: int) -> str | None:
     """Which threshold this usage has crossed, worst first."""
-    if included <= 0:
-        return None  # a no-voice plan has no bucket to exceed
-    if used >= included * RUNAWAY_MULTIPLE:
+    if expected <= 0:
+        return None  # a no-voice plan cannot accrue voice usage legitimately
+    if used >= expected * RUNAWAY_MULTIPLE:
         return "runaway"
-    if used >= included * WARN_MULTIPLE:
+    if used >= expected * WARN_MULTIPLE:
         return "warn"
     return None
 
@@ -98,10 +98,8 @@ async def run_spend_watch() -> None:
                     continue  # nothing billed yet — no cycle window to measure
 
                 used = await _cycle_minutes(db, org.id, cycle.cycle_start, cycle.cycle_end)
-                included = included_minutes_for(
-                    org.plan, org.status, int(getattr(org, "minutes_adjustment", 0) or 0)
-                )
-                level = _breach(used, included)
+                expected = mandate_worst_overage_minutes(org.plan)
+                level = _breach(used, expected)
                 if level is None:
                     continue
 
@@ -115,14 +113,14 @@ async def run_spend_watch() -> None:
                     dedupe_key=f"spend:{org.id}:{cycle.cycle_start}:{level}",
                     subject=(
                         f"[Vachanam] {org.name} used {used:,.0f} voice minutes "
-                        f"({multiple:g}x its {included:,} included)"
+                        f"({multiple:g}x its {expected:,}-minute safety baseline)"
                     ),
                     body=(
                         f"Organisation : {org.name}\n"
                         f"Plan         : {org.plan} ({org.status})\n"
                         f"Cycle        : {cycle.cycle_start} to {cycle.cycle_end}\n"
-                        f"Included     : {included:,} minutes\n"
-                        f"Used         : {used:,.0f} minutes ({used / included:.1f}x)\n"
+                        f"Safety base  : {expected:,} minutes\n"
+                        f"Used         : {used:,.0f} minutes ({used / expected:.1f}x)\n"
                         f"\n"
                         f"No call has been blocked — this is notification only.\n"
                         f"If this is not real clinic traffic, check the branch's DID "
@@ -135,7 +133,7 @@ async def run_spend_watch() -> None:
                     org_id=str(org.id),
                     level=level,
                     used_minutes=round(used),
-                    included_minutes=included,
+                    safety_baseline_minutes=expected,
                 )
             except Exception as exc:  # noqa: BLE001 — one org must not stop the rest
                 logger.warning(

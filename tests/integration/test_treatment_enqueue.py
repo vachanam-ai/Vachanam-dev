@@ -59,7 +59,7 @@ async def test_enqueue_creates_next_visit_book(db):
     tomorrow_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1)
     assert tasks[0].scheduled_date == tomorrow_ist
     assert tasks[0].what_to_ask == "how is the pain?"
-    assert tasks[0].status == "pending" and tasks[0].channel == "voice"
+    assert tasks[0].status == "pending" and tasks[0].channel == "both"
 
 
 @pytest.mark.asyncio

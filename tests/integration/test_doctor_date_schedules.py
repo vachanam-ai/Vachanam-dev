@@ -70,8 +70,8 @@ async def test_exact_date_override_supports_two_sessions_and_gap_is_closed(db):
     ))
     await db.commit()
     answer = await check_availability(doctor.id, branch.id, target, db)
-    assert "9:00 AM to 12:00 PM" in answer
-    assert "5:00 PM to 9:00 PM" in answer
+    assert "9:00 AM to 11:30 AM" in answer
+    assert "5:00 PM to 8:30 PM" in answer
     assert "12:00 PM to 5:00 PM" not in answer
 
 

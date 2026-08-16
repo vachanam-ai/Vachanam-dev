@@ -130,6 +130,13 @@ def _autopay_enabled(org: Organization) -> bool:
     )
 
 
+def _minute_allowance_adjustment(org: Organization) -> int:
+    """Admin goodwill plus the one-time unconsumed Founding 100 credit."""
+    return int(getattr(org, "minutes_adjustment", 0) or 0) + int(
+        getattr(org, "founding_credit_minutes", 0) or 0
+    )
+
+
 def _remember_autopay_plan(org: Organization, plan: str, last_cycle) -> None:
     """Keep a future provider mandate and local plan state identical."""
     if last_cycle is None or last_cycle.cycle_end <= date.today():
@@ -202,11 +209,13 @@ async def create_autopay_subscription(
     """Create a real recurring mandate, not a one-time order labelled renewal."""
     if current_user.role != "org_admin" or not current_user.org_id:
         raise HTTPException(status_code=403, detail="Only a clinic owner can enable autopay")
-    plan = req.plan.strip().lower()
-    if plan not in SELLABLE_PLANS:
-        raise HTTPException(status_code=422, detail="Unknown plan")
-
     org = await _load_my_org(current_user, db)
+    plan = req.plan.strip().lower()
+    # New clinics can buy only the public plan. An existing legacy clinic may
+    # still renew its current plan until it explicitly migrates; rejecting that
+    # payment would interrupt a service it already has.
+    if plan not in SELLABLE_PLANS and not (plan == org.plan and plan in PLANS):
+        raise HTTPException(status_code=422, detail="Unknown plan")
     last = await _latest_cycle(db, org.id)
     if _autopay_enabled(org):
         raise HTTPException(status_code=409, detail="Autopay is already enabled")
@@ -368,13 +377,15 @@ async def create_order(
     if current_user.role != "org_admin" or not current_user.org_id:
         raise HTTPException(status_code=403, detail="Only a clinic owner can subscribe")
 
+    org = await _load_my_org(current_user, db)
     plan = req.plan.strip().lower()
     plan_def = PLANS.get(plan)
-    if plan_def is None:
-        raise HTTPException(status_code=422, detail="plan must be lite, solo, clinic or multi")
+    if plan_def is None or (
+        plan not in SELLABLE_PLANS and plan != org.plan
+    ):
+        raise HTTPException(status_code=422, detail="plan must be solo or wa")
 
     # Renewal? Bill the ending cycle's extra usage along with the next cycle.
-    org = await _load_my_org(current_user, db)
     used = 0.0
     from backend.models.schema import BillingCycle
 
@@ -402,8 +413,17 @@ async def create_order(
         )
     if last is not None:
         used = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
+    # The paid cycle is the entitlement ledger. It may contain a historical
+    # bundle, a Founding 100 credit, or an admin adjustment that no longer
+    # matches today's plan definition. Bill only above the allowance actually
+    # stamped onto that cycle.
+    allowance_adjustment = (
+        int(last.included_minutes) - int(plan_def.included_minutes)
+        if last is not None
+        else _minute_allowance_adjustment(org)
+    )
     bd = subscription_order_breakdown(
-        plan, used, int(getattr(org, "minutes_adjustment", 0) or 0),
+        plan, used, allowance_adjustment,
         subscription_started_at=getattr(org, "subscription_started_at", None),
         # Bought WhatsApp mid-cycle? From this renewal on it is ONE invoice
         # (Vinay: "entire billing should come together"), so the renewal order
@@ -467,7 +487,7 @@ class PlanInfo(BaseModel):
     # whether it is the first-3-months offer price — UI shows exact numbers.
     next_base_rupees: int = 0
     is_offer: bool = False
-    # WhatsApp: bundled by the plan, bought as the ₹1,499 add-on, or arriving
+    # WhatsApp: bundled by the WhatsApp plan, bought as the Rs1,499 add-on, or arriving
     # with a scheduled plan change. The Settings card renders one of the three.
     whatsapp_included: bool = False
     whatsapp_addon: bool = False
@@ -722,7 +742,12 @@ async def billing_summary(
         period_start, period_end = _metering_period(org, date.today())
     used = await _cycle_minutes_used(db, org.id, period_start, period_end)
     used_min = int(round(used))
-    included = plan_def.included_minutes if plan_def else 0
+    included = (
+        current.included_minutes
+        if current is not None
+        else (plan_def.included_minutes if plan_def else 0)
+        + _minute_allowance_adjustment(org)
+    )
     over_min = max(0, used_min - included)
     rate = plan_def.overage_per_min if plan_def else 0.0
     over_amt = int(round(over_min * rate))
@@ -927,7 +952,7 @@ async def create_whatsapp_addon_order(
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> CreateOrderResponse:
-    """One-off ₹1,499 that switches WhatsApp on for the rest of this cycle.
+    """One-off Rs1,499 that switches WhatsApp on for the rest of this cycle.
 
     From the NEXT renewal the amount is folded into the plan invoice by
     subscription_order_breakdown, so a clinic never manages two subscriptions
@@ -1060,7 +1085,7 @@ async def change_plan(
     if plan not in SELLABLE_PLANS:
         raise HTTPException(
             status_code=422,
-            detail="plan must be solo, clinic, multi or wa",
+            detail="plan must be solo or wa",
         )
 
     org = await _load_my_org(current_user, db)
@@ -1522,13 +1547,22 @@ async def activate_subscription(
             org.pending_plan = None
             org.pending_plan_effective = None
     used_closing = 0.0
+    closing_plan = PLANS.get(last.plan) if last is not None else None
+    closing_allowance_adjustment = (
+        int(last.included_minutes) - int(closing_plan.included_minutes)
+        if last is not None and closing_plan is not None
+        else _minute_allowance_adjustment(org)
+    )
+    new_cycle_allowance = plan_def.included_minutes + int(
+        getattr(org, "minutes_adjustment", 0) or 0
+    ) + (int(getattr(org, "founding_credit_minutes", 0) or 0) if last is None else 0)
     if last is not None:
         # Close out the ending cycle's meter (#341): its extra usage was billed
         # inside this payment (subscription_order_breakdown at order time).
         used_closing = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
         last_plan = PLANS.get(last.plan)
         if last_plan is not None:
-            over_min = max(0, int(round(used_closing)) - last_plan.included_minutes)
+            over_min = max(0, int(round(used_closing)) - last.included_minutes)
             last.minutes_used = int(round(used_closing))
             last.overage_minutes = over_min
             last.overage_amount = int(round(over_min * last_plan.overage_per_min))
@@ -1537,6 +1571,9 @@ async def activate_subscription(
             # it paid by a debit that did not include it.
             if not billed_usage and over_min:
                 last.status = "invoiced"
+        # The Founding 100 credit is for the first paid cycle only. Membership
+        # remains true so its slot can never be granted again.
+        org.founding_credit_minutes = 0
     db.add(
         BillingCycle(
             org_id=org.id,
@@ -1545,7 +1582,7 @@ async def activate_subscription(
             plan=chosen_plan,
             # #391: record the base actually charged (launch-offer aware).
             base_amount=effective_price(chosen_plan, org.subscription_started_at)[0],
-            included_minutes=plan_def.included_minutes,
+            included_minutes=max(0, new_cycle_allowance),
             minutes_used=0,
             overage_minutes=0,
             overage_rate=int(plan_def.overage_per_min),
@@ -1566,7 +1603,7 @@ async def activate_subscription(
         bd = subscription_order_breakdown(
             chosen_plan,
             used_closing if billed_usage else 0,
-            int(getattr(org, "minutes_adjustment", 0) or 0),
+            closing_allowance_adjustment,
             subscription_started_at=org.subscription_started_at,
             # The receipt must show the SAME numbers the order charged.
             whatsapp_addon=await _org_wa_addon(db, org.id),

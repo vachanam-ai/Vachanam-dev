@@ -7,7 +7,7 @@ no I/O — unit-tested in tests/unit/test_billing_math.py.
 All amounts in WHOLE RUPEES (floats only where overage rates demand it).
 """
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
 
 @dataclass(frozen=True)
@@ -18,39 +18,39 @@ class Plan:
     max_doctors: int | None  # None = unlimited
     display_name: str
     included_branches: int = 1
+    has_voice: bool = True
 
 
-# Final public pricing, 2026-08-10. Internal keys remain stable for database,
-# webhook and agent compatibility. Lite is retained only for legacy rows and
-# is deliberately excluded from SELLABLE_PLANS. WhatsApp has no DID or voice
-# allowance; an inbound call on that plan is a configuration error.
+# Public pricing, 2026-08-16: one transparent branch platform fee plus metered
+# voice. Internal keys remain stable for database/webhook compatibility; old
+# tier rows are supported but cannot be sold to new clinics.
 PLANS: dict[str, Plan] = {
-    "wa": Plan(1_499, 0, 0.0, 3, "WhatsApp"),
+    "wa": Plan(1_999, 0, 0.0, 3, "WhatsApp", has_voice=False),
     "lite": Plan(1_999, 150, 6.0, 3, "Lite (legacy)"),
-    "solo": Plan(5_999, 400, 6.0, 3, "Basic"),
-    "clinic": Plan(10_999, 1_500, 6.0, 10, "Growth"),
-    "multi": Plan(21_999, 3_000, 6.0, None, "Scale", included_branches=2),
+    "solo": Plan(1_999, 0, 6.0, None, "Vachanam Voice"),
+    "clinic": Plan(4_999, 0, 6.0, 10, "Growth (legacy)"),
+    "multi": Plan(6_999, 0, 6.0, None, "Scale (legacy)", included_branches=2),
 }
 
 # New clinics can choose only these plans. Lite remains runtime-compatible for
 # old rows but is retired from signup and self-serve plan changes.
-SELLABLE_PLANS = frozenset({"wa", "solo", "clinic", "multi"})
+SELLABLE_PLANS = frozenset({"solo", "wa"})
 
-ADDITIONAL_BRANCH_RUPEES = 6_999
-ADDITIONAL_NUMBER_RUPEES = 2_499
+ADDITIONAL_BRANCH_RUPEES = 1_499
+ADDITIONAL_NUMBER_RUPEES = 1_499
 
 # Fixed monthly cost per clinic, split by whether the plan buys a phone number.
 # Until 2026-08-02 this was one flat Rs1,500 constant with the DID folded in —
 # which charged a WhatsApp-only clinic for a line it never gets (0*3 + 1500 vs
 # a Rs1,499 price = a NEGATIVE margin on our most profitable plan).
 DID_RUPEES = 1_200.0  # per-clinic DID; voice plans only
-BASE_INFRA = 300.0    # hosting/support share; every plan
+BASE_INFRA = 299.0    # hosting/support allocation per branch
 
 
 def fixed_cost_for(plan: str) -> float:
     """Vachanam's own fixed monthly cost to serve one clinic on this plan."""
     p = PLANS.get(plan)
-    has_voice = bool(p and p.included_minutes > 0)
+    has_voice = bool(p and p.has_voice)
     # Scale includes two branches, and each branch needs its own DID plus its
     # share of infrastructure. Counting only one made the pricing guard report
     # an imaginary extra Rs1,500 of monthly margin on that plan.
@@ -123,20 +123,20 @@ PLAN_LANGUAGES: dict[str, list[str] | None] = {
 # part to retain patients, include it"). Available on EVERY plan: it is just
 # metered outbound minutes (revenue, not a cost sink), so gating retention
 # behind premium made no economic sense.
-FOLLOWUP_PLANS = ("lite", "solo", "clinic", "multi")
+FOLLOWUP_PLANS = ("lite", "solo", "clinic", "multi", "wa")
 
 # Plans that INCLUDE WhatsApp (confirmations, reminders, rating asks, chat).
 # 2026-08-02: "wa" joins clinic/multi — WhatsApp IS that plan. The old note
 # "message cost ~Rs0.40/booking, absorbed" is obsolete: under the clinic-owned
 # WABA model (spec 2026-08-02-whatsapp-tech-provider) the CLINIC pays Meta
 # directly, so our marginal message cost is zero and unmeterable.
-WHATSAPP_PLANS = frozenset({"clinic", "multi", "wa"})
+WHATSAPP_PLANS = frozenset({"wa"})
 
-# Legacy Lite and Basic may buy WhatsApp for the same Rs1,499 the standalone
-# plan costs. Basic + add-on remains below Growth, which adds 1,100 voice
-# minutes and seven doctor seats.
+# Voice plans may buy WhatsApp for Rs1,499/month per branch. The clinic owns its
+# WABA and pays Meta's message charges directly; this is Vachanam's bot,
+# automation and support fee, not a resale of Meta messages.
 WHATSAPP_ADDON_RUPEES = 1_499
-WHATSAPP_ADDON_PLANS = frozenset({"lite", "solo"})
+WHATSAPP_ADDON_PLANS = frozenset({"lite", "solo", "clinic", "multi"})
 
 
 def whatsapp_enabled(plan: str, addon: bool = False) -> bool:
@@ -147,6 +147,12 @@ def whatsapp_enabled(plan: str, addon: bool = False) -> bool:
 # The cap is hard-enforced because trial usage is paid by Vachanam.
 TRIAL_MINUTES = 30
 
+# Founding 100: a one-time credit on the first PAID cycle. It is deliberately
+# not a trial: the platform fee first covers the DID/cloud cost, then these
+# clinics can use 500 voice minutes without a usage charge.
+FOUNDING_CLINIC_SLOTS = 100
+FOUNDING_CREDIT_MINUTES = 500
+
 # FOUNDING-CLINIC PILOT (Vinay 2026-07-19). Self-serve free trial stays
 # REMOVED (signups start paused, 2026-07-17); instead Vinay hand-picks
 # clinics and starts a 14-day pilot from the super-admin console. Reuses the
@@ -156,26 +162,6 @@ TRIAL_MINUTES = 30
 # price) activates as usual. Pilot terms (success criteria, auto-convert)
 # live on paper, not in code.
 PILOT_DAYS = 14
-
-# FOUNDING FREE TRIAL (Vinay 2026-07-20: "add free trail for 14 days for
-# first 10 customers. then we can remove."). Self-serve signups get the
-# classic 14-day / TRIAL_MINUTES trial back — but only while fewer than
-# FOUNDING_TRIAL_SLOTS orgs created on/after FOUNDING_TRIAL_START have ever
-# held a trial (trial_ends_at set — admin-granted pilots consume slots too).
-# Reuses the whole trial machinery: minute cap in call_blocked, expiry via
-# the trial_pause job, first payment activates.
-# TO REMOVE THE OFFER: set FOUNDING_TRIAL_SLOTS = 0. Tests then force the
-# landing/static free-trial copy to come down too (test_launch_offer).
-FOUNDING_TRIAL_SLOTS = 10
-FOUNDING_TRIAL_START = datetime(2026, 7, 20, tzinfo=timezone.utc)
-
-# TRIAL FOR ALL (Vinay 2026-07-20: "make 14days free trail common across").
-# The founding trial was capped at the first FOUNDING_TRIAL_SLOTS signups;
-# now EVERY new clinic gets the 14-day / TRIAL_MINUTES trial. When True, the
-# slot count is irrelevant (register grants unconditionally) and the landing
-# page advertises the trial to everyone with no scarcity counter. Flip to
-# False to fall back to the capped founding-slots behaviour.
-TRIAL_FOR_ALL = True
 
 # CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
 # charge) adds GST on top; B2B clinics reclaim it via input credit.
@@ -193,15 +179,18 @@ def _gst_on(amount: float) -> float:
 # minute (Vobiz + speech services + Gemini + LiveKit) + DID rent.
 # NOTE: this is VARIABLE only — it excludes fixed overhead (servers, salaries,
 # misc), which is amortised across total minutes and dominates at low volume.
-VARIABLE_COST_PER_MIN = 2.0
-DID_COST_PER_MONTH = 1_000
+AI_MEDIA_COST_PER_MIN = 2.25
+VOBIZ_USAGE_COST_PER_MIN = 0.65
+VARIABLE_COST_PER_MIN = AI_MEDIA_COST_PER_MIN + VOBIZ_USAGE_COST_PER_MIN
+DID_COST_PER_MONTH = DID_RUPEES
 
 
 def month_revenue(plan: str, status: str, minutes_used: float) -> float:
     """Revenue Vachanam earns from this org this month.
 
     Only ACTIVE orgs pay. Trial = free (cost absorbed); paused/cancelled = no
-    billing. Overage charged on minutes beyond the plan's included bucket.
+    billing. Current plans have no bundled minutes, so every voice minute is
+    billed at the plan's per-minute rate. Legacy plans keep their old bucket.
     """
     if status != "active":
         return 0.0
@@ -322,8 +311,8 @@ def subscription_order_breakdown(
 def whatsapp_addon_order_breakdown() -> dict:
     """The one-off charge that switches WhatsApp on mid-cycle.
 
-    Full ₹1,499 for the remainder of the current cycle, not pro-rated (Vinay's
-    call): pro-rating a ₹1,499 line adds cycle-boundary and refund edge cases to
+    Full ₹99 for the remainder of the current cycle, not pro-rated. Pro-rating
+    this line adds cycle-boundary and refund edge cases to
     a money path for a few rupees. From the next renewal the amount is folded
     into subscription_order_breakdown instead, so this is charged exactly once.
     """
@@ -455,7 +444,7 @@ def call_blocked(
     # only fires once none of those apply — e.g. an active `wa` org somehow
     # dialed at all (should never happen; the DID was never provisioned).
     p = PLANS.get(plan)
-    if p is not None and p.included_minutes == 0:
+    if p is not None and not p.has_voice:
         return "no_voice_plan"
     return None
 
@@ -496,9 +485,9 @@ MANDATE_GST_HEADROOM = 1.18   # applied even while GST_WAIVED (see above)
 def mandate_worst_overage_minutes(plan: str) -> int:
     """Overage minutes a mandate ceiling should still cover for this plan."""
     p = PLANS.get(plan)
-    if not p or p.included_minutes <= 0:
+    if not p or not p.has_voice:
         return 0  # WhatsApp-only buys no telephony — no overage exists
-    return min(p.included_minutes * OVERAGE_MULTIPLE, OVERAGE_CEILING_MINUTES)
+    return {"lite": 300, "solo": 500, "clinic": 1_500, "multi": 2_000}.get(plan, 500)
 
 
 def mandate_max_amount(plan: str, whatsapp_addon: bool = False) -> int:

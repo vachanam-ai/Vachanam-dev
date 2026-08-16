@@ -1,9 +1,9 @@
-"""Per-clinic telephony resolution (Vobiz sub-accounts, Vinay 2026-06-15).
+"""Telephony resolution with one shared LiveKit outbound trunk.
 
-Each clinic can have its OWN Vobiz sub-account (isolated channel pool, CDRs and
-billing) instead of sharing one global account. Credentials may use the legacy
-global account, but caller identity may not: every outbound dispatch must name
-an outbound trunk explicitly assigned to that branch.
+Caller identity is not selected by choosing a clinic-specific trunk. Every
+dispatch uses the single configured ``OUTBOUND_TRUNK_ID`` and explicitly
+presents the branch's database-owned DID as ``sip_number``. This removes trunk
+selection as a tenant-routing input.
 
 The SIP password is stored encrypted (Branch.vobiz_sip_password_enc); decrypt
 only here, at the point of use.
@@ -29,7 +29,23 @@ class BranchTelephony:
     sip_username: str
     sip_password: str               # decrypted; "" when not set
     sip_domain: str
-    outbound_trunk_id: str          # LiveKit outbound trunk for this clinic
+    outbound_trunk_id: str          # the one shared LiveKit outbound trunk
+
+
+def shared_outbound_trunk_id() -> str:
+    """Return the sole outbound trunk or fail closed.
+
+    Branch.outbound_trunk_id is deliberately ignored. It remains in the schema
+    only so an older deployment can be rolled forward without a destructive
+    migration; accepting it here would reintroduce the exact cross-clinic
+    selection seam the shared-trunk design removes.
+    """
+    trunk_id = str(
+        settings.outbound_trunk_id or os.getenv("OUTBOUND_TRUNK_ID", "") or ""
+    ).strip()
+    if not trunk_id:
+        raise OutboundTrunkIsolationError("the shared outbound trunk is not configured")
+    return trunk_id
 
 
 def resolve_branch_telephony(branch) -> BranchTelephony:
@@ -49,11 +65,7 @@ def resolve_branch_telephony(branch) -> BranchTelephony:
             sip_username=getattr(branch, "vobiz_sip_username", "") or "",
             sip_password=pw,
             sip_domain=getattr(branch, "vobiz_sip_domain", "") or "",
-            outbound_trunk_id=(
-                getattr(branch, "outbound_trunk_id", "")
-                or settings.outbound_trunk_id
-                or os.getenv("OUTBOUND_TRUNK_ID", "")
-            ),
+            outbound_trunk_id=shared_outbound_trunk_id(),
         )
     # Global / shared account fallback.
     return BranchTelephony(
@@ -61,30 +73,30 @@ def resolve_branch_telephony(branch) -> BranchTelephony:
         sip_username=settings.vobiz_auth_id,
         sip_password=settings.vobiz_auth_token,
         sip_domain="",
-        outbound_trunk_id=settings.outbound_trunk_id or os.getenv("OUTBOUND_TRUNK_ID", ""),
+        outbound_trunk_id=shared_outbound_trunk_id(),
     )
 
 
 def branch_outbound_trunk_id(branch) -> str:
-    """Return only the trunk explicitly assigned to this clinic.
+    """Return the one configured shared trunk.
 
-    Never fall back to the platform trunk: doing so makes one clinic's call
-    appear to come from another clinic's number.
+    Caller identity no longer comes from trunk selection. The worker verifies
+    this branch's DID is on the shared trunk and states that DID as
+    ``sip_number`` on every dial. ``branch`` is accepted so call sites cannot
+    accidentally lose their tenant context, but it does not select the trunk.
     """
-    trunk_id = str(getattr(branch, "outbound_trunk_id", "") or "").strip()
-    if not trunk_id:
+    try:
+        return shared_outbound_trunk_id()
+    except OutboundTrunkIsolationError:
         logger.error(
-            "outbound_blocked_missing_branch_trunk",
+            "outbound_blocked_missing_shared_trunk",
             branch_id=str(getattr(branch, "id", "")),
         )
-        raise OutboundTrunkIsolationError(
-            "branch has no explicitly assigned outbound trunk"
-        )
-    return trunk_id
+        raise
 
 
 def validate_branch_outbound_trunk(branch, supplied_trunk_id: str | None) -> str:
-    """Require dispatch metadata to match the branch's stored trunk exactly."""
+    """Require dispatch metadata to match the sole shared trunk exactly."""
     expected = branch_outbound_trunk_id(branch)
     supplied = str(supplied_trunk_id or "").strip()
     if supplied != expected:

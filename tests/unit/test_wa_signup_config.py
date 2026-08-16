@@ -71,6 +71,9 @@ async def test_owner_gets_what_the_popup_needs(client, db, monkeypatch):
     org, branch = await _clinic(db)
     monkeypatch.setattr(settings, "meta_app_id", "1234567890")
     monkeypatch.setattr(settings, "meta_config_id", "9876543210")
+    monkeypatch.setattr(settings, "meta_app_secret", "server-only-secret")
+    monkeypatch.setattr(settings, "meta_webhook_verify_token", "verify-token")
+    monkeypatch.setattr(settings, "meta_graph_version", "v25.0")
 
     r = await client.get(_url(branch), headers={
         "Authorization": "Bearer " + _jwt(
@@ -82,7 +85,11 @@ async def test_owner_gets_what_the_popup_needs(client, db, monkeypatch):
     assert body["app_id"] == "1234567890"
     assert body["config_id"] == "9876543210"
     assert body["configured"] is True
-    assert body["graph_version"].startswith("v")
+    assert body["graph_version"] == "v25.0"
+    assert body["feature_type"] == "whatsapp_business_app_onboarding"
+    assert set(body["required_permissions"]) == {
+        "whatsapp_business_management", "whatsapp_business_messaging",
+    }
 
 
 @pytest.mark.asyncio

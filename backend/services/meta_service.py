@@ -46,6 +46,7 @@ _ORDER: dict[str, tuple[str, ...]] = {
     "feedback": ("review_link",),
     "location": ("clinic", "address", "maps"),
     "reminder": ("patient", "doctor", "on_date", "at_time"),
+    "followup": ("patient", "doctor", "message"),
     "rating": ("clinic",),
     "leave_rebook": ("doctor", "on_date"),
 }
@@ -126,6 +127,7 @@ async def send_purpose(
 async def _queue_or_send(
     branch_id, to: str, purpose: str, values: list[str], *,
     event_key: str | None = None, buttons: list[dict] | None = None,
+    accept_when_queued: bool = False,
 ) -> bool:
     try:
         if event_key:
@@ -134,6 +136,7 @@ async def _queue_or_send(
             return await enqueue(
                 branch_id, to, purpose, values,
                 event_key=event_key, buttons=buttons,
+                accept_when_queued=accept_when_queued,
             )
         return await send_purpose(branch_id, to, purpose, values, buttons)
     except Exception as exc:  # noqa: BLE001
@@ -189,12 +192,12 @@ class MetaService:
         self, to: str, *, branch_id=None, token_id: str = "",
         reminder_kind: str = "30m", patient_name: str = "",
         doctor_name: str = "", on_date: str = "", at_time: str = "",
-    ) -> None:
+    ) -> bool:
         buttons = [
             {"id": f"rs:{token_id}", "title": "Reschedule"},
             {"id": f"cx:{token_id}", "title": "Cancel"},
         ] if token_id else []
-        await _queue_or_send(
+        return await _queue_or_send(
             branch_id, to, "reminder",
             _values(
                 "reminder", patient=patient_name, doctor=doctor_name,
@@ -204,6 +207,23 @@ class MetaService:
                 f"reminder:{reminder_kind}:{token_id}" if token_id else None
             ),
             buttons=buttons,
+            accept_when_queued=True,
+        )
+
+    async def send_followup(
+        self, to: str, *, branch_id=None, task_id: str = "",
+        patient_name: str = "", doctor_name: str = "", message: str = "",
+    ) -> bool:
+        return await _queue_or_send(
+            branch_id,
+            to,
+            "followup",
+            _values(
+                "followup", patient=patient_name, doctor=doctor_name,
+                message=message or "Please contact the clinic about your follow-up",
+            ),
+            event_key=(f"followup:{task_id}" if task_id else None),
+            accept_when_queued=True,
         )
 
     async def send_rating_request(

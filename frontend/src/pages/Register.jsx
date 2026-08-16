@@ -44,7 +44,7 @@ export default function Register() {
     owner_name: "",
     email: "",
     password: "",
-    plan: PLANS[planParam] ? planParam : "clinic"
+    plan: PLANS[planParam] ? planParam : "solo"
   });
   const [touched, setTouched] = useState({});
   const [step, setStep] = useState("details"); // details | otp
@@ -260,12 +260,11 @@ export default function Register() {
                   </button>
                 ))}
               </div>
-              {form.plan === "wa" && (
-                <p className="mt-1.5 font-ui text-xs text-slate">
-                  WhatsApp only, no phone line. ₹1,499/month. Patients book, reschedule and
-                  cancel entirely in chat. No AI voice calls on this plan.
-                </p>
-              )}
+              <p className="mt-1.5 font-ui text-xs text-slate">
+                {form.plan === "wa"
+                  ? "WhatsApp-only has no phone line or voice usage. Meta message fees are paid directly by the clinic."
+                  : "Voice usage is billed at ₹6/minute. WhatsApp is an optional ₹1,499/month add-on per connected clinic number."}
+              </p>
             </div>
             {/* DPDP consent — the clinic is the Data Fiduciary; Vachanam is the
                 Data Processor acting on its instructions. Server enforces too. */}

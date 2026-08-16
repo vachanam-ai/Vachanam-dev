@@ -116,6 +116,25 @@ async def test_reminder_dial_guard_rejects_expired_or_early_dispatches(db, redis
     assert (await _reminder_dial_state(meta))[0] == "too_early"
 
 
+@pytest.mark.asyncio
+async def test_24h_reminder_guard_uses_its_own_window(db, redis):
+    """The old universal 31-minute guard silently rejected every 24h call."""
+    from agent.livekit_minimal.agent import _reminder_dial_state
+
+    tok = await _seed_in_window(db)
+    appointment = datetime.now(IST) + timedelta(hours=24)
+    tok.date = appointment.date()
+    tok.appointment_time = appointment.time().replace(microsecond=0)
+    await db.commit()
+    meta = {
+        "call_type": "reminder", "reminder_kind": "24h",
+        "token_id": str(tok.id), "branch_id": str(tok.branch_id),
+    }
+    state, lead = await _reminder_dial_state(meta)
+    assert state == "ready"
+    assert 23 * 3600 <= lead <= 25 * 3600
+
+
 # ── prod 2026-07-27: a reminder marked sent on agent-JOIN but whose outbound
 #    DIAL then failed (callee BUSY on another clinic's simultaneous reminder to
 #    the same number) was never retried. On dial failure we now reset

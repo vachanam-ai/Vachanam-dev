@@ -274,7 +274,7 @@ def test_invoice_html_escapes_tenant_values():
 @known("AUDIT-026", "invoice label map omits Lite")
 def test_lite_invoice_uses_display_label():
     from backend.services.invoice_email import _rows
-    assert _rows("lite", {"base": 100, "overage_minutes": 0, "overage_amount": 0})[0][0] == "Lite plan"
+    assert _rows("lite", {"base": 100, "overage_minutes": 0, "overage_amount": 0})[0][0] == "Lite (legacy) plan"
 
 
 @known("AUDIT-027", "GST-waived receipts still claim an 18% tax line")
@@ -358,10 +358,10 @@ def test_frontend_has_branch_selection_state():
 # Product truth/documentation
 
 @known("AUDIT-038", "landing trial copy must match the 30-minute bucket")
-def test_trial_marketing_uses_actual_minute_bucket():
+def test_founding_marketing_uses_actual_minute_credit():
     text = source("frontend/src/pages/Landing.jsx")
     assert "≈100 call minutes included" not in text
-    assert "{TRIAL_MINUTES} voice minutes" in text
+    assert "{FOUNDING_CREDIT_MINUTES} voice minutes" in text
 
 
 @known("AUDIT-039", "login advertises trial after founding slots are exhausted")
@@ -381,7 +381,7 @@ def test_marketed_csv_export_has_implementation():
 def test_support_kb_does_not_market_legacy_lite():
     text = source("docs/support/KNOWLEDGE.md")
     assert "| Lite |" not in text
-    assert "| Basic | ₹5,999/month | 400 minutes (≈140 calls) | up to 3 |" in text
+    assert "| Vachanam Voice | ₹1,999/month | ₹6 per voice minute | unlimited |" in text
 
 
 @known("AUDIT-042", "support KB says 4-minute cap after runtime moved to 10")
@@ -399,17 +399,14 @@ def test_support_kb_matches_current_gst_policy():
 
 def test_plan_source_of_truth_has_current_doctor_caps():
     from backend.services.billing_math import PLANS
-    assert [PLANS[p].max_doctors for p in ("lite", "solo", "clinic", "multi")] == [3, 3, 10, None]
+    assert [PLANS[p].max_doctors for p in ("lite", "solo", "clinic", "multi")] == [3, None, 10, None]
 
 
-def test_whatsapp_entitlement_is_not_free_on_the_cheap_voice_plans():
-    """WhatsApp is bundled on Clinic/Multi and IS the "wa" plan (Vinay
-    2026-08-02). It must never become free on Lite/Starter — those buy the
-    Rs1,499 add-on, which is why the real gate is whatsapp_enabled()."""
+def test_whatsapp_entitlement_requires_an_addon_on_current_voice_plans():
     from backend.services.billing_math import WHATSAPP_PLANS, whatsapp_enabled
 
-    assert WHATSAPP_PLANS == frozenset({"clinic", "multi", "wa"})
-    for key in ("lite", "solo"):
+    assert WHATSAPP_PLANS == frozenset({"wa"})
+    for key in ("lite", "solo", "clinic", "multi"):
         assert whatsapp_enabled(key) is False
 
 

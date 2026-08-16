@@ -5,6 +5,7 @@ Currently: voice selection for the clinic's AI agent.
 """
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -112,6 +113,10 @@ class BranchSettings(BaseModel):
     # wa_token_enc or any token here — masked number only (RULE 9).
     whatsapp_status: str = "none"
     whatsapp_masked_number: str | None = None
+    reminder_calls_enabled: bool = True
+    followup_calls_enabled: bool = True
+    whatsapp_reminder_ready: bool = False
+    whatsapp_followup_ready: bool = False
 
 
 
@@ -152,6 +157,9 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         LANGUAGE_OPTIONS if plan_langs is None
         else [o for o in LANGUAGE_OPTIONS if o["code"] in plan_langs]
     )
+    from backend.services.wa_readiness import purpose_readiness
+
+    wa_ready = await purpose_readiness(branch, plan, ("reminder", "followup"))
     return BranchSettings(
         branch_id=branch_id,
         name=branch.name,
@@ -170,6 +178,10 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         whatsapp_linked=bool(getattr(branch, "wa_phone_number_id", None)),
         whatsapp_status=getattr(branch, "wa_status", None) or "none",
         whatsapp_masked_number=_masked_whatsapp_number(branch),
+        reminder_calls_enabled=bool(getattr(branch, "reminder_calls_enabled", True)),
+        followup_calls_enabled=bool(getattr(branch, "followup_calls_enabled", True)),
+        whatsapp_reminder_ready=wa_ready["reminder"],
+        whatsapp_followup_ready=wa_ready["followup"],
     )
 
 
@@ -815,7 +827,6 @@ class TelephonyUpdate(BaseModel):
     vobiz_sip_username: str | None = None
     vobiz_sip_password: str | None = None  # plaintext IN; stored encrypted at rest
     vobiz_sip_domain: str | None = None
-    outbound_trunk_id: str | None = None
 
 
 class TelephonySettings(BaseModel):
@@ -824,16 +835,26 @@ class TelephonySettings(BaseModel):
     vobiz_subaccount_id: str | None = None
     vobiz_sip_username: str | None = None
     vobiz_sip_domain: str | None = None
-    outbound_trunk_id: str | None = None
+    shared_outbound_trunk_configured: bool = False
     has_sip_password: bool = False
 
 
 def _telephony_payload(branch: Branch) -> TelephonySettings:
+    from backend.services.telephony import (
+        OutboundTrunkIsolationError,
+        shared_outbound_trunk_id,
+    )
+
+    try:
+        shared_configured = bool(shared_outbound_trunk_id())
+    except OutboundTrunkIsolationError:
+        shared_configured = False
+
     return TelephonySettings(
         vobiz_subaccount_id=getattr(branch, "vobiz_subaccount_id", None),
         vobiz_sip_username=getattr(branch, "vobiz_sip_username", None),
         vobiz_sip_domain=getattr(branch, "vobiz_sip_domain", None),
-        outbound_trunk_id=getattr(branch, "outbound_trunk_id", None),
+        shared_outbound_trunk_configured=shared_configured,
         has_sip_password=bool(getattr(branch, "vobiz_sip_password_enc", None)),
     )
 
@@ -889,7 +910,7 @@ async def update_branch_telephony(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
-    for field in ("vobiz_subaccount_id", "vobiz_sip_username", "vobiz_sip_domain", "outbound_trunk_id"):
+    for field in ("vobiz_subaccount_id", "vobiz_sip_username", "vobiz_sip_domain"):
         val = getattr(body, field)
         if val is not None:
             setattr(branch, field, val.strip() or None)
@@ -924,6 +945,8 @@ class BranchDetailsUpdate(BaseModel):
     emergency_contact: str | None = Field(default=None, max_length=20)
     google_calendar_id: str | None = Field(default=None, max_length=255)
     did_number: str | None = Field(default=None, max_length=20)
+    reminder_calls_enabled: bool | None = None
+    followup_calls_enabled: bool | None = None
 
     @field_validator("clinic_phone", "emergency_contact")
     @classmethod
@@ -995,6 +1018,13 @@ async def update_branch_settings(
 
         new_did = normalize_did(body.did_number)  # M11: canonical E.164
         body.did_number = new_did  # so the setattr loop below stores the clean form
+        # Serialize the check with any concurrent onboarding transaction. The
+        # unique index remains the last line of defence, but this lock turns a
+        # race from an IntegrityError/500 into the intended 409 response.
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"did:{new_did}"},
+        )
         clash = (
             await db.execute(
                 select(Branch).where(
@@ -1044,6 +1074,28 @@ async def update_branch_settings(
                 detail="This Google Calendar is already linked to another clinic.",
             )
 
+    requested_channels = {
+        "reminder": body.reminder_calls_enabled,
+        "followup": body.followup_calls_enabled,
+    }
+    if any(value is False for value in requested_channels.values()):
+        plan, _ = await _org_plan_and_start(db, branch)
+        from backend.services.wa_readiness import purpose_readiness
+
+        readiness = await purpose_readiness(branch, plan, tuple(requested_channels))
+        unavailable = [
+            purpose for purpose, enabled in requested_channels.items()
+            if enabled is False and not readiness[purpose]
+        ]
+        if unavailable:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "WhatsApp must be connected, entitled, and have an approved "
+                    f"{', '.join(unavailable)} template before phone calls can be disabled."
+                ),
+            )
+
     old_did = branch.did_number  # capture before mutate (G9 trunk cleanup)
     for field in (
         "name", "address", "city", "clinic_phone",
@@ -1052,6 +1104,10 @@ async def update_branch_settings(
         value = getattr(body, field)
         if value is not None:
             setattr(branch, field, value.strip() or None)
+    if body.reminder_calls_enabled is not None:
+        branch.reminder_calls_enabled = body.reminder_calls_enabled
+    if body.followup_calls_enabled is not None:
+        branch.followup_calls_enabled = body.followup_calls_enabled
     # LOOP GUARD (Vinay 2026-07-17): the escalation/emergency number is where
     # we SEND callers when the AI line is blocked or a human handover is
     # needed. The clinic's own number forwards INTO the AI line — pointing the
@@ -1072,21 +1128,38 @@ async def update_branch_settings(
     # DID changed -> wire it into the LiveKit inbound trunk so calls route
     # immediately. Failure is reported in the response, never fails the save.
     did_wired: bool | None = None
-    if body.did_number is not None and branch.did_number:
+    if body.did_number is not None:
         from backend.services.livekit_sip import (
             remove_did_from_inbound_trunk,
+            remove_did_from_outbound_trunk,
             sync_did_to_inbound_trunk,
+            sync_did_to_outbound_trunk,
         )
 
         # G9: if the DID actually changed, pull the OLD number off the trunk
         # first so a future reassignment of it can't route into our system.
+        removal_ok = True
         if old_did and old_did != branch.did_number:
-            await remove_did_from_inbound_trunk(old_did)
+            old_inbound = await remove_did_from_inbound_trunk(old_did)
+            old_outbound = await remove_did_from_outbound_trunk(old_did)
+            removal_ok = old_inbound["ok"] and old_outbound["ok"]
 
-        sync = await sync_did_to_inbound_trunk(branch.did_number)
-        did_wired = sync["ok"]
-        if not sync["ok"]:
-            logger.warning("did_wire_pending", branch_id=branch_id, detail=sync["detail"])
+        if branch.did_number:
+            inbound_sync = await sync_did_to_inbound_trunk(branch.did_number)
+            outbound_sync = await sync_did_to_outbound_trunk(branch.did_number)
+            did_wired = removal_ok and inbound_sync["ok"] and outbound_sync["ok"]
+        else:
+            # Clearing a DID is a successful unwire operation. The hourly exact
+            # reconciliation is the retry path if either best-effort removal
+            # above failed.
+            inbound_sync = {"ok": True, "detail": "cleared"}
+            outbound_sync = {"ok": True, "detail": "cleared"}
+            did_wired = removal_ok
+        if not did_wired:
+            logger.warning(
+                "did_wire_pending", branch_id=branch_id,
+                inbound=inbound_sync["detail"], outbound=outbound_sync["detail"],
+            )
 
     request.state.audit_resource_id = branch_id
     request.state.audit_user_id = current_user.user_id
@@ -1318,42 +1391,18 @@ class WaConnectBody(BaseModel):
     code: str = Field(..., min_length=10, max_length=4000)
     waba_id: str = Field(..., min_length=1, max_length=32)
     phone_number_id: str = Field(..., min_length=1, max_length=32)
+    flow_event: Literal["FINISH", "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"]
+    business_id: str | None = Field(default=None, max_length=32)
 
-    @field_validator("waba_id", "phone_number_id")
+    @field_validator("waba_id", "phone_number_id", "business_id")
     @classmethod
-    def _numeric_meta_id(cls, value: str) -> str:
+    def _numeric_meta_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = (value or "").strip()
         if not value.isdigit():
             raise ValueError("Must be a numeric Meta id")
         return value
-
-
-class WaConnectManualBody(BaseModel):
-    """The three values Meta's own API Setup screen shows, typed in by the
-    owner. `access_token` is REQUIRED, not optional: without it the branch
-    would fall back to the platform token (bridge mode), which would let any
-    clinic owner type Vachanam's WABA id and send from the platform account
-    (RULE 1). Bridge mode stays super_admin-only, on the admin route."""
-
-    waba_id: str = Field(..., min_length=1, max_length=32)
-    phone_number_id: str = Field(..., min_length=1, max_length=32)
-    access_token: str = Field(..., min_length=20, max_length=4000)
-
-    @field_validator("waba_id", "phone_number_id")
-    @classmethod
-    def _numeric_meta_id(cls, value: str) -> str:
-        value = (value or "").strip()
-        if not value.isdigit():
-            raise ValueError("Must be a numeric Meta id")
-        return value
-
-    @field_validator("access_token")
-    @classmethod
-    def _stripped_token(cls, value: str) -> str:
-        # Copy-paste from Meta's dashboard drags whitespace and the odd
-        # newline along; a token with a trailing \n fails Graph auth with an
-        # error the owner cannot possibly diagnose.
-        return (value or "").strip()
 
 
 # ── WhatsApp chats — read-only view of what the bot said to patients ────────
@@ -1483,7 +1532,19 @@ async def get_whatsapp_signup_config(
         "app_id": settings.meta_app_id,
         "config_id": settings.meta_config_id,
         "graph_version": settings.meta_graph_version,
-        "configured": bool(settings.meta_app_id and settings.meta_config_id),
+        "embedded_signup_version": 4,
+        "feature_type": "whatsapp_business_app_onboarding",
+        "required_permissions": [
+            "whatsapp_business_management",
+            "whatsapp_business_messaging",
+        ],
+        "configured": bool(
+            settings.meta_app_id
+            and settings.meta_app_secret
+            and settings.meta_config_id
+            and settings.meta_webhook_verify_token
+            and (settings.meta_graph_version or "").startswith("v")
+        ),
     }
 
 
@@ -1503,6 +1564,8 @@ async def get_whatsapp_connection(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
     connected_at = getattr(branch, "wa_connected_at", None)
+    from backend.services.wa_connect import public_onboarding
+
     return {
         "branch_id": branch_id,
         "connected": whatsapp_is_connected(branch),
@@ -1511,6 +1574,7 @@ async def get_whatsapp_connection(
         "wa_verified_name": getattr(branch, "wa_verified_name", None),
         "wa_phone_number_id": getattr(branch, "wa_phone_number_id", None),
         "wa_connected_at": connected_at.isoformat() if connected_at else None,
+        "onboarding": public_onboarding(branch),
     }
 
 
@@ -1588,6 +1652,7 @@ async def connect_whatsapp(
         result = await wa_connect.connect_branch(
             branch, code=body.code, waba_id=body.waba_id,
             phone_number_id=body.phone_number_id,
+            flow_event=body.flow_event, business_id=body.business_id,
         )
     except wa_connect.WaConnectError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail)
@@ -1623,15 +1688,16 @@ async def connect_whatsapp(
         "wa_verified_name": branch.wa_verified_name,
         "wa_connected_at": branch.wa_connected_at.isoformat() if branch.wa_connected_at else None,
         "phone_registered": result.get("registered"),
+        "onboarding": result.get("onboarding"),
         "templates": result.get("templates"),
     }
 
 
-@router.post("/{branch_id}/whatsapp/connect/manual", status_code=201)
+@router.post("/{branch_id}/whatsapp/connect/manual", status_code=410, include_in_schema=False)
 @audit("branch.wa_connected_manual", resource_type="branch")
 async def connect_whatsapp_manual(
     branch_id: str,
-    body: WaConnectManualBody,
+    body: dict,
     request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -1650,74 +1716,66 @@ async def connect_whatsapp_manual(
     Fernet-encrypted onto the branch by wa_connect and only branch_id /
     waba_id / status appear in any log line or audit row.
     """
+    raise HTTPException(
+        status_code=410,
+        detail="Manual access-token entry has been retired. Use Meta Embedded Signup v4.",
+    )
+
+
+@router.post("/{branch_id}/whatsapp/connect/sync")
+@audit("branch.wa_sync_retried", resource_type="branch")
+async def retry_whatsapp_sync(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     await assert_branch_access(current_user, branch_id, db)
     _require_org_admin(current_user)
-
     branch = (
         await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
     ).scalar_one_or_none()
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
-
-    clash = (
-        await db.execute(
-            select(Branch).where(
-                Branch.wa_waba_id == body.waba_id, Branch.id != branch.id,
-            )
-        )
-    ).scalar_one_or_none()
-    if clash is not None:
-        logger.warning(
-            "wa_waba_already_linked", branch_id=branch_id, waba_id=body.waba_id,
-        )
-        raise HTTPException(
-            status_code=409,
-            detail="This WhatsApp Business Account is already connected to another clinic.",
-        )
-
     from backend.services import wa_connect
 
     try:
-        result = await wa_connect.connect_branch_manual(
-            branch, token=body.access_token, waba_id=body.waba_id,
-            phone_number_id=body.phone_number_id,
-        )
-    except wa_connect.WaConnectError as e:
-        raise HTTPException(status_code=e.status_code, detail=e.detail)
-
-    from sqlalchemy.exc import IntegrityError
-
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        logger.warning(
-            "wa_waba_already_linked", branch_id=branch_id, waba_id=body.waba_id,
-        )
-        raise HTTPException(
-            status_code=409,
-            detail="This WhatsApp Business Account is already connected to another clinic.",
-        )
-
+        onboarding = await wa_connect.retry_coexistence_sync(branch)
+    except wa_connect.WaConnectError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    await db.commit()
     request.state.audit_resource_id = branch_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id
-    request.state.audit_metadata = {"waba_id": body.waba_id, "status": branch.wa_status}
+    return {"branch_id": branch_id, "onboarding": onboarding}
 
-    result["templates"] = await _auto_install_wa_system_templates(branch)
-    logger.info(
-        "wa_branch_connected_manual", branch_id=branch_id, waba_id=body.waba_id,
-        status=branch.wa_status, phone_registered=result.get("registered"),
-    )
-    return {
-        "branch_id": branch_id,
-        "wa_status": branch.wa_status,
-        "wa_waba_id": branch.wa_waba_id,
-        "wa_verified_name": branch.wa_verified_name,
-        "wa_connected_at": branch.wa_connected_at.isoformat() if branch.wa_connected_at else None,
-        "phone_registered": result.get("registered"),
-        "templates": result.get("templates"),
-    }
+
+@router.post("/{branch_id}/whatsapp/connect/payment-confirmed")
+@audit("branch.wa_payment_confirmed", resource_type="branch")
+async def confirm_whatsapp_payment(
+    branch_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Record the clinic owner's confirmation of Meta's required payment step."""
+    await assert_branch_access(current_user, branch_id, db)
+    _require_org_admin(current_user)
+    branch = (
+        await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
+    ).scalar_one_or_none()
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found")
+    if not whatsapp_is_connected(branch):
+        raise HTTPException(status_code=409, detail="Connect WhatsApp before confirming payment.")
+    from backend.services.wa_connect import confirm_payment_method
+
+    onboarding = confirm_payment_method(branch)
+    await db.commit()
+    request.state.audit_resource_id = branch_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    return {"branch_id": branch_id, "onboarding": onboarding}
 
 
 @router.delete("/{branch_id}/whatsapp/connect")
@@ -1758,11 +1816,13 @@ async def disconnect_whatsapp(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
 
+    from backend.services import wa_connect
     from backend.services.wa_lifecycle import (
         disconnect_branch,
         invalidate_connection_caches,
     )
 
+    meta_unsubscribed = await wa_connect.unsubscribe_branch(branch)
     result = await disconnect_branch(db, branch)
     await db.commit()
     await invalidate_connection_caches(branch.id)
@@ -1774,6 +1834,7 @@ async def disconnect_whatsapp(
     request.state.audit_metadata = {
         "sessions_purged": result.conversations_deleted,
         "deliveries_cancelled": result.deliveries_cancelled,
+        "meta_unsubscribed": meta_unsubscribed,
     }
 
     logger.info(
@@ -1792,6 +1853,7 @@ async def disconnect_whatsapp(
         "wa_connected_at": None,
         "conversations_deleted": result.conversations_deleted,
         "deliveries_cancelled": result.deliveries_cancelled,
+        "meta_unsubscribed": meta_unsubscribed,
     }
 
 

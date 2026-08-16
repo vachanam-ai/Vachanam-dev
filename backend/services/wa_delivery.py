@@ -68,6 +68,7 @@ async def enqueue(
     event_key: str,
     buttons: list[dict] | None = None,
     send_now: bool = True,
+    accept_when_queued: bool = False,
 ) -> bool:
     """Persist one clinic event, then attempt it immediately.
 
@@ -124,7 +125,13 @@ async def enqueue(
         await wake_gate.clear_next_at("wa_notifications")
     except Exception as exc:  # noqa: BLE001
         logger.debug("wa_delivery_gate_clear_failed", error=str(exc)[:120])
-    return await deliver(task_id) if send_now else True
+    if not send_now:
+        return True
+    delivered = await deliver(task_id)
+    # Reminder/follow-up schedulers need to know whether responsibility was
+    # durably handed to the retrying outbox, not whether Meta answered on this
+    # exact millisecond. Confirmations keep the historical immediate-send bool.
+    return bool(task_id) if accept_when_queued else delivered
 
 
 async def deliver(task_id) -> bool:

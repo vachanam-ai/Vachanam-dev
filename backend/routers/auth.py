@@ -232,7 +232,7 @@ async def delete_account(
     typed word DELETE for Google-only accounts). Reuses the FK-safe admin
     cascade; audited (no-FK audit table survives the deletion)."""
     from backend.models.schema import Organization as _Org
-    from backend.routers.admin import _hard_delete_org
+    from backend.routers.admin import _hard_delete_org, _unwire_deleted_dids
 
     if current_user.role != "org_admin":
         raise HTTPException(status_code=403, detail="Only the clinic owner can delete the clinic")
@@ -282,8 +282,9 @@ async def delete_account(
         if org is None:
             raise HTTPException(status_code=404, detail="Clinic not found")
         org_id = str(org.id)
-        await _hard_delete_org(db, org)
+        deleted_dids = await _hard_delete_org(db, org)
         await db.commit()
+        await _unwire_deleted_dids(deleted_dids)
 
     # Kill the session; audit AFTER the commit (audit table has no tenant FKs).
     import time as _time
@@ -316,8 +317,8 @@ class RegisterRequest(BaseModel):
     # SEC: validated at the boundary — a junk plan used to hit the DB enum and
     # 500; an out-of-enum string is now a clean 422. Keys are the internal plan
     # ids (billing_math.PLANS); "Starter" is the DISPLAY name for solo.
-    # "wa" added WA MVP1 Task 8: WhatsApp-only signup at ₹1,499, no phone line.
-    plan: Literal["solo", "clinic", "multi", "wa"] = "clinic"
+    # "wa" is the public WhatsApp-only signup at ₹1,999, with no phone line.
+    plan: Literal["solo", "wa"] = "solo"
     email_otp: str | None = None  # email-OTP verification (Vinay 2026-06-15)
     # DPDP (Vinay 2026-07-17): the clinic (Data Fiduciary) must explicitly
     # accept the Terms + DPA at signup — Vachanam is the Data Processor acting
@@ -358,12 +359,7 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 
 async def _founding_slots_left(db) -> int:
-    """#426: remaining founding free-trial slots (0 when the offer is off).
-
-    A slot is consumed by any org created on/after FOUNDING_TRIAL_START that
-    ever held a trial (trial_ends_at set) — self-serve grants and admin
-    pilots alike. Flip billing_math.FOUNDING_TRIAL_SLOTS to 0 to end it.
-    """
+    """Remaining one-time Founding 100 voice-credit slots."""
     from sqlalchemy import func as _func
 
     from backend.models.schema import Organization
@@ -371,36 +367,31 @@ async def _founding_slots_left(db) -> int:
 
     # Trial-for-all (#433 pricing change): the trial is unlimited, so there is
     # always a slot. -1 signals "unlimited" to the public endpoint.
-    if getattr(_bm, "TRIAL_FOR_ALL", False):
-        return -1
-    if _bm.FOUNDING_TRIAL_SLOTS <= 0:
+    if _bm.FOUNDING_CLINIC_SLOTS <= 0:
         return 0
     used = (
         await db.execute(
             select(_func.count())
             .select_from(Organization)
-            .where(
-                Organization.trial_ends_at.is_not(None),
-                Organization.created_at >= _bm.FOUNDING_TRIAL_START,
-            )
+            .where(Organization.founding_member.is_(True))
         )
     ).scalar_one()
-    return max(0, _bm.FOUNDING_TRIAL_SLOTS - used)
+    return max(0, _bm.FOUNDING_CLINIC_SLOTS - used)
 
 
 @router.get("/founding-slots", dependencies=[Depends(default_limit)])
 async def founding_slots():
-    """Public: landing-page trial state. trial_for_all=true → every clinic gets
-    the 14-day trial (no scarcity counter); else slots_left is the remaining
-    founding-slot count and 0 hides the trial claim."""
+    """Public Founding 100 counter used by registration and marketing."""
     from backend.services import billing_math as _bm
 
-    if getattr(_bm, "TRIAL_FOR_ALL", False):
-        return {"trial_for_all": True, "slots_total": -1, "slots_left": -1}
     async with AsyncSessionLocal() as db:
         left = await _founding_slots_left(db)
-    return {"trial_for_all": False, "slots_total": _bm.FOUNDING_TRIAL_SLOTS,
-            "slots_left": left}
+    return {
+        "trial_for_all": False,
+        "slots_total": _bm.FOUNDING_CLINIC_SLOTS,
+        "slots_left": left,
+        "credit_minutes": _bm.FOUNDING_CREDIT_MINUTES,
+    }
 
 
 @router.post(
@@ -416,9 +407,8 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
     Identity: either email+password (bcrypt) or a Google ID token.
     """
     import uuid as _uuid
-    from datetime import datetime, timedelta, timezone as _tz
-
-    from backend.services.billing_math import PILOT_DAYS
+    from backend.services import billing_math as _bm
+    from backend.services.billing_math import SELLABLE_PLANS
 
     from backend.models.schema import Branch, Organization
 
@@ -436,7 +426,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         raise HTTPException(status_code=422, detail="Clinic name is required")
     if not body.owner_name.strip():
         raise HTTPException(status_code=422, detail="Your name is required")
-    if body.plan not in ("solo", "clinic", "multi", "wa"):
+    if body.plan not in SELLABLE_PLANS:
         raise HTTPException(status_code=422, detail="Invalid plan")
     # DPDP consent gate: the clinic is the Data Fiduciary; Vachanam processes
     # patient data only on its instructions. No consent, no account.
@@ -499,17 +489,14 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
                 status_code=409, detail="Account already exists — sign in instead"
             )
 
-        # #426 founding trial (Vinay 2026-07-20): the first
-        # FOUNDING_TRIAL_SLOTS signups get the 14-day trial back; everyone
-        # after starts paused as per #392 (first payment activates).
-        # ponytail: count-then-insert — two simultaneous signups could
-        # over-grant one slot; acceptable for a capped goodwill offer.
-        # -1 = unlimited (TRIAL_FOR_ALL), >0 = slots remain — both grant it.
+        # Founding 100 allocation is serialized across app instances. A member
+        # starts paused like every other clinic, then receives the credit in
+        # its first paid cycle; the platform fee is never waived.
         await db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext('vachanam_founding_trial'))")
+            text("SELECT pg_advisory_xact_lock(hashtext('vachanam_founding_100'))")
         )
         _slots = await _founding_slots_left(db)
-        founding = _slots != 0
+        founding = _slots > 0
         org = Organization(
             name=body.clinic_name.strip(),
             # Mobile is no longer collected at signup (email-only, Vinay
@@ -518,18 +505,23 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             owner_phone="",
             owner_email=email,
             plan=body.plan,
-            # #392 (Vinay 2026-07-17: "remove 14-day trial"): no free window
-            # outside the founding slots. Paused orgs get the dashboard but
-            # the AI line answers with the polite blocked line until the
-            # first payment activates. Trial orgs ride the existing trial
-            # machinery (TRIAL_MINUTES cap, trial_pause expiry job).
-            status="trial" if founding else "paused",
-            trial_ends_at=(datetime.now(_tz.utc) + timedelta(days=PILOT_DAYS)) if founding else None,
+            # First payment activates the line. The founding offer is a minute
+            # credit, never a free service window.
+            status="paused",
+            trial_ends_at=None,
+            founding_member=founding,
+            founding_credit_minutes=(
+                _bm.FOUNDING_CREDIT_MINUTES if founding else 0
+            ),
         )
         db.add(org)
         await db.flush()
         if founding:
-            logger.info("founding_trial_granted", org_id=str(org.id))
+            logger.info(
+                "founding_voice_credit_granted",
+                org_id=str(org.id),
+                minutes=_bm.FOUNDING_CREDIT_MINUTES,
+            )
 
         branch = Branch(
             org_id=org.id,

@@ -138,7 +138,7 @@ def _plan_has_voice(plan: str | None) -> bool:
     exists to stop the `wa` plan from being dialed (no DID was ever
     provisioned for it), not to change behavior for anything else."""
     p = PLANS.get(plan)
-    return p is None or p.included_minutes > 0
+    return p is None or p.has_voice
 
 
 async def _next_due_epoch(db, branches) -> float | None:
@@ -265,32 +265,12 @@ async def run_pre_appt_reminders() -> None:
                 # (dispatch ok but the commit below fails) is acceptable — the
                 # call itself re-confirms with the patient — and far better than a
                 # silently dropped reminder.
-                await _send_wa_reminder(
-                    db, branch, token, doctor, patient, reminder_kind="30m"
-                )
                 plan = plan_by_branch_id.get(branch.id)
-                if _plan_has_voice(plan) and _settings.voice_plane_configured:
-                    ok = await _dispatch_reminder_call(branch, token, doctor, patient)
-                elif _plan_has_voice(plan):
-                    ok = False
-                    logger.warning(
-                        "reminder_call_skipped_no_voice_plane",
-                        branch_id=str(branch.id), token_id=str(token.id),
-                    )
-                else:
-                    # WA MVP1 Task 7: `settings.voice_plane_configured` describes
-                    # OUR platform, not this clinic's plan — without this branch
-                    # a `wa` clinic (no DID, no minutes) would still get dialed.
-                    # There is nothing to retry (no line was ever attempted), so
-                    # treat it as "sent" and let the WhatsApp reminder below carry
-                    # the notification instead (RULE 4/8: never a dead end).
-                    ok = True
-                    logger.info(
-                        "reminder_call_skipped_no_voice_plan",
-                        branch_id=str(branch.id),
-                        token_id=str(token.id),
-                        plan=plan,
-                    )
+                ok = await _deliver_reminder(
+                    branch, plan, token, doctor, patient,
+                    reminder_kind="30m",
+                    voice_plane_configured=_settings.voice_plane_configured,
+                )
                 if ok:
                     token.reminder_sent = True
                     token.reminder_30m_dispatched_at = datetime.now(timezone.utc)
@@ -344,19 +324,12 @@ async def run_pre_appt_reminders() -> None:
                     await db.commit()
                     continue
 
-                await _send_wa_reminder(
-                    db, branch, token, doctor, patient, reminder_kind="24h"
-                )
                 plan = plan_by_branch_id.get(branch.id)
-                if _plan_has_voice(plan) and _settings.voice_plane_configured:
-                    # Same flip-AFTER-dispatch discipline as the 30-minute pass:
-                    # a failed dispatch must retry on the next tick, not be
-                    # silently swallowed by an eagerly-set flag.
-                    ok = await _dispatch_reminder_call(branch, token, doctor, patient)
-                elif not _plan_has_voice(plan):
-                    ok = True
-                else:
-                    ok = False
+                ok = await _deliver_reminder(
+                    branch, plan, token, doctor, patient,
+                    reminder_kind="24h",
+                    voice_plane_configured=_settings.voice_plane_configured,
+                )
                 if ok:
                     token.reminder_24h_sent = True
                     token.reminder_24h_dispatched_at = datetime.now(timezone.utc)
@@ -371,7 +344,7 @@ async def run_pre_appt_reminders() -> None:
 async def _send_wa_reminder(
     db, branch: Branch, token: Token, doctor: Doctor, patient: Patient,
     *, reminder_kind: str = "30m",
-) -> None:
+) -> bool:
     """Queue the written reminder independently from the outbound call."""
     from backend.services.meta_service import MetaService
 
@@ -379,7 +352,7 @@ async def _send_wa_reminder(
         token.appointment_time.strftime("%I:%M %p").lstrip("0")
         if token.appointment_time else f"token {token.token_number}"
     )
-    await MetaService().send_appointment_reminder(
+    return await MetaService().send_appointment_reminder(
         patient.phone,
         branch_id=branch.id,
         token_id=str(token.id),
@@ -391,7 +364,52 @@ async def _send_wa_reminder(
     )
 
 
-async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, patient: Patient) -> bool:
+async def _deliver_reminder(
+    branch: Branch,
+    plan: str | None,
+    token: Token,
+    doctor: Doctor,
+    patient: Patient,
+    *,
+    reminder_kind: str,
+    voice_plane_configured: bool,
+) -> bool:
+    """Hand the reminder to every selected channel, with a safe fallback.
+
+    WhatsApp-only is permitted only while the approved reminder template is
+    ready. If entitlement, credentials, connection or template later vanish,
+    voice automatically resumes so a stale preference cannot lose reminders.
+    """
+    from backend.services.wa_readiness import purpose_readiness
+
+    wa_ready = (await purpose_readiness(branch, plan, ("reminder",)))["reminder"]
+    wa_accepted = await _send_wa_reminder(
+        None, branch, token, doctor, patient, reminder_kind=reminder_kind
+    ) if wa_ready else False
+
+    voice_capable = _plan_has_voice(plan)
+    voice_requested = voice_capable and (
+        bool(getattr(branch, "reminder_calls_enabled", True)) or not wa_ready
+    )
+    if not voice_requested:
+        return wa_accepted
+    if not voice_plane_configured:
+        logger.warning(
+            "reminder_call_skipped_no_voice_plane",
+            branch_id=str(branch.id), token_id=str(token.id),
+        )
+        return False
+    if reminder_kind == "30m":
+        return await _dispatch_reminder_call(branch, token, doctor, patient)
+    return await _dispatch_reminder_call(
+        branch, token, doctor, patient, reminder_kind=reminder_kind
+    )
+
+
+async def _dispatch_reminder_call(
+    branch: Branch, token: Token, doctor: Doctor, patient: Patient, *,
+    reminder_kind: str = "30m",
+) -> bool:
     """Create an explicit agent dispatch; the agent dials the patient. Returns
     True only when the dispatch was created (the caller marks reminder_sent on
     True, and retries next tick on False)."""
@@ -414,7 +432,7 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(patient.phone, "reminder"):
+    if not await claim_outbound_call(patient.phone, f"reminder_{reminder_kind}"):
         return False
     try:
         from livekit import api as lk_api
@@ -429,6 +447,7 @@ async def _dispatch_reminder_call(branch: Branch, token: Token, doctor: Doctor, 
                     metadata=json.dumps(
                         {
                             "call_type": "reminder",
+                            "reminder_kind": reminder_kind,
                             "branch_id": str(branch.id),  # outbound: no dialed DID
                             "outbound_trunk_id": outbound_trunk_id,
                             "phone_number": patient.phone,

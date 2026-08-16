@@ -8,6 +8,7 @@ RULE 4 — a send never raises into a caller; no token → log + return False.
 RULE 9 — never log the token itself.
 """
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -70,6 +71,21 @@ def test_platform_token_used_only_when_branch_has_none(monkeypatch):
 def test_no_platform_token_and_no_branch_token_is_none(monkeypatch):
     monkeypatch.setattr(wa_service.settings, "meta_access_token", "", raising=False)
     assert wa_service.token_for(FakeBranch(wa_token_enc=None)) is None
+
+
+def test_official_branch_never_borrows_platform_token(monkeypatch):
+    monkeypatch.setattr(wa_service.settings, "meta_access_token", "PLATFORM", raising=False)
+    branch = FakeBranch(wa_token_enc=None)
+    branch.wa_onboarding = {"embedded_signup_version": 4}
+    assert wa_service.token_for(branch) is None
+
+
+def test_expired_business_integration_token_fails_closed():
+    branch = FakeBranch(wa_token_enc=encrypt_secret("EXPIRED"))
+    branch.wa_onboarding = {
+        "token_expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+    }
+    assert wa_service.token_for(branch) is None
 
 
 # ── send paths never fall back on a missing token (RULE 4) ─────────────────────

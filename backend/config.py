@@ -105,7 +105,10 @@ class Settings(BaseSettings):
     # Graph API version used by the browser SDK. Pinned so a Meta default bump
     # cannot silently change the session_info payload shape the connect flow
     # parses.
-    meta_graph_version: str = "v21.0"
+    # Embedded Signup v4 documentation currently requires the latest Graph
+    # version. Keep every WhatsApp caller on this one setting so onboarding,
+    # templates and sends cannot silently drift onto different API versions.
+    meta_graph_version: str = "v25.0"
 
     # Google
     google_oauth_client_id: str = ""

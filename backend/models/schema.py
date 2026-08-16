@@ -40,6 +40,14 @@ class Organization(Base):
     minutes_adjustment: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+    # Founding 100 offer. Membership is permanent for audit/counting; the
+    # minute credit is consumed after the first paid billing cycle.
+    founding_member: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    founding_credit_minutes: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     # Clinic's GST number — printed on payment invoices so the clinic can claim
     # input credit (B2B). Optional; set by the owner in Settings.
     gstin: Mapped[str | None] = mapped_column(String(15))
@@ -96,8 +104,9 @@ class Branch(Base):
     vobiz_did_id: Mapped[str | None] = mapped_column(String(255))
     # Per-clinic Vobiz SUB-ACCOUNT (concurrency isolation: each clinic gets its
     # own channel pool + CDRs + billing instead of sharing one global account).
-    # When vobiz_subaccount_id is set, the agent/outbound jobs use these creds +
-    # outbound_trunk_id instead of the global settings.vobiz_*. The SIP password
+    # When vobiz_subaccount_id is set, partner-side administration may use these
+    # credentials. LiveKit calls still use the ONE shared outbound trunk and
+    # state this branch's database DID per call. The SIP password
     # is encrypted at rest (DPDP/RULE 9) — never store it plaintext; use
     # backend/services/crypto.py. All nullable → existing single-account branches
     # keep working unchanged (telephony.py falls back to the global account).
@@ -105,7 +114,8 @@ class Branch(Base):
     vobiz_sip_username: Mapped[str | None] = mapped_column(String(128))
     vobiz_sip_password_enc: Mapped[str | None] = mapped_column(Text)  # Fernet token
     vobiz_sip_domain: Mapped[str | None] = mapped_column(String(255))
-    outbound_trunk_id: Mapped[str | None] = mapped_column(String(255))  # per-clinic LiveKit outbound trunk
+    # Deprecated compatibility column. Runtime trunk selection MUST ignore it.
+    outbound_trunk_id: Mapped[str | None] = mapped_column(String(255))
     emergency_contact: Mapped[str | None] = mapped_column(String(20))
     google_calendar_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     # Meta Cloud API phone_number_id of the clinic's own WhatsApp number
@@ -116,7 +126,7 @@ class Branch(Base):
     wa_phone_number_id: Mapped[str | None] = mapped_column(
         String(32), nullable=True, unique=True
     )
-    # The Rs1,499 WhatsApp add-on (spec 2026-08-02 pricing §1, migration nn37).
+    # Per-branch WhatsApp bot add-on entitlement (currently Rs1,499/month).
     # Lets a Lite/Starter clinic buy WhatsApp without upgrading to Clinic.
     # Per-BRANCH because WhatsApp is provisioned per number: each branch holds
     # its own WABA and its own Meta billing, so an org with three branches
@@ -141,6 +151,20 @@ class Branch(Base):
     )
     wa_connected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    # Non-secret Embedded Signup v4 lifecycle plus the encrypted registration
+    # PIN. Core routing identifiers stay in indexed columns above; the fields
+    # used only by onboarding/sync belong together here so Meta can add states
+    # without a migration per status value.
+    wa_onboarding: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Clinics with a ready WhatsApp channel may suppress metered outbound
+    # calls while keeping the same durable written notifications. If WhatsApp
+    # later becomes unavailable, the jobs fail safe and call regardless.
+    reminder_calls_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    followup_calls_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
     # Soniox catalog voice for this clinic's agent. NULL or a legacy provider ID
     # resolves to the configured Soniox default without breaking existing rows.
@@ -540,6 +564,9 @@ class Token(Base):
     reminder_24h_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     reminder_24h_dispatched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    reminder_24h_dial_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

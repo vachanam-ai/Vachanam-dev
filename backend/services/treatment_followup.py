@@ -51,7 +51,7 @@ async def sync_note_followup(note: TreatmentNote, followup_question: str | None,
         return
     db.add(FollowupTask(
         branch_id=note.branch_id, doctor_id=note.doctor_id, patient_id=note.patient_id,
-        treatment_note_id=note.id, task_type="next_visit_book", channel="voice",
+        treatment_note_id=note.id, task_type="next_visit_book", channel="both",
         what_to_ask=followup_question,
         # Vinay 2026-08-04: "the call for 1st message from doctor should
         # trigger next day". visit_date + 1 alone is only next-day when the

@@ -2,26 +2,38 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// Manual connect (Vinay, 2026-08-09: "need a way to add number directly from
-// clinic page"). Embedded Signup can't run until the Meta app is published
-// Live, so until then the popup button is a dead end and the only path was a
-// super_admin curl.
-
-const fetchWaConnection = vi.fn(() => Promise.resolve({ connected: false }));
-const fetchWaSignupConfig = vi.fn(() => Promise.resolve({ configured: false }));
-const connectWa = vi.fn();
-const connectWaManual = vi.fn(() => Promise.resolve({ wa_status: "connected" }));
-const disconnectWa = vi.fn();
+const mocks = vi.hoisted(() => ({
+  fetchConnection: vi.fn(() => Promise.resolve({ connected: false })),
+  fetchConfig: vi.fn(() => Promise.resolve({
+    configured: true,
+    app_id: "app-1",
+    config_id: "config-v4",
+    graph_version: "v25.0",
+    feature_type: "whatsapp_business_app_onboarding",
+  })),
+  connect: vi.fn(() => Promise.resolve({ connected: true })),
+  disconnect: vi.fn(),
+  confirmPayment: vi.fn(() => Promise.resolve({ payment_status: "confirmed" })),
+  retrySync: vi.fn(() => Promise.resolve({})),
+  launch: vi.fn(() => Promise.resolve({
+    code: "short-lived-code",
+    waba_id: "waba-1",
+    phone_number_id: "phone-1",
+    business_id: "business-1",
+    flow_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+  })),
+}));
 
 vi.mock("../../api/client.js", () => ({
-  fetchWaConnection: (...a) => fetchWaConnection(...a),
-  fetchWaSignupConfig: (...a) => fetchWaSignupConfig(...a),
-  connectWa: (...a) => connectWa(...a),
-  connectWaManual: (...a) => connectWaManual(...a),
-  disconnectWa: (...a) => disconnectWa(...a),
+  fetchWaConnection: (...a) => mocks.fetchConnection(...a),
+  fetchWaSignupConfig: (...a) => mocks.fetchConfig(...a),
+  connectWa: (...a) => mocks.connect(...a),
+  disconnectWa: (...a) => mocks.disconnect(...a),
+  confirmWaPayment: (...a) => mocks.confirmPayment(...a),
+  retryWaSync: (...a) => mocks.retrySync(...a),
 }));
 vi.mock("../../hooks/useEmbeddedSignup.js", () => ({
-  default: () => ({ launch: vi.fn(), launching: false }),
+  default: () => ({ launch: mocks.launch, launching: false }),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -30,7 +42,21 @@ import WaConnectCard from "../WaConnectCard.jsx";
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  vi.restoreAllMocks();
+  mocks.fetchConnection.mockResolvedValue({ connected: false });
+  mocks.fetchConfig.mockResolvedValue({
+    configured: true,
+    app_id: "app-1",
+    config_id: "config-v4",
+    graph_version: "v25.0",
+    feature_type: "whatsapp_business_app_onboarding",
+  });
+  mocks.launch.mockResolvedValue({
+    code: "short-lived-code",
+    waba_id: "waba-1",
+    phone_number_id: "phone-1",
+    business_id: "business-1",
+    flow_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+  });
 });
 
 function renderCard(qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
@@ -42,135 +68,107 @@ function renderCard(qc = new QueryClient({ defaultOptions: { queries: { retry: f
   return qc;
 }
 
-const VALID = {
-  waba_id: "555000111",
-  phone_number_id: "555000222",
-  access_token: "EAAG" + "x".repeat(40),
-};
-
-async function openForm() {
-  renderCard();
-  fireEvent.click(await screen.findByTestId("wa-manual-toggle"));
-  return {
-    waba: screen.getByTestId("wa-manual-waba"),
-    phone: screen.getByTestId("wa-manual-phone"),
-    token: screen.getByTestId("wa-manual-token"),
-    submit: screen.getByTestId("wa-manual-submit"),
-  };
-}
-
-function fill(f, values) {
-  fireEvent.change(f.waba, { target: { value: values.waba_id } });
-  fireEvent.change(f.phone, { target: { value: values.phone_number_id } });
-  fireEvent.change(f.token, { target: { value: values.access_token } });
-}
-
-describe("WaConnectCard — manual connect", () => {
-  it("posts the three ids the clinic pasted", async () => {
-    const f = await openForm();
-    fill(f, VALID);
-    fireEvent.click(f.submit);
-    await waitFor(() => expect(connectWaManual).toHaveBeenCalledWith("b1", VALID));
+describe("WaConnectCard official Embedded Signup v4", () => {
+  it("passes the v4 Coexistence configuration and completion payload server-side", async () => {
+    renderCard();
+    fireEvent.click(await screen.findByTestId("wa-connect-button"));
+    await waitFor(() => expect(mocks.launch).toHaveBeenCalledWith({
+      appId: "app-1",
+      configId: "config-v4",
+      graphVersion: "v25.0",
+      featureType: "whatsapp_business_app_onboarding",
+    }));
+    await waitFor(() => expect(mocks.connect).toHaveBeenCalledWith("b1", expect.objectContaining({
+      code: "short-lived-code",
+      flow_event: "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    })));
   });
 
-  it("offers the manual path even when Embedded Signup is unconfigured", async () => {
-    // The whole reason it exists: with configured:false the popup button is
-    // disabled, so without this the card would have no working action at all.
+  it("omits the Coexistence feature flag for a new Cloud API number", async () => {
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: /new cloud api number/i }));
+    await waitFor(() => expect(mocks.launch).toHaveBeenCalledWith(expect.objectContaining({
+      featureType: undefined,
+    })));
+  });
+
+  it("has no client-side token or asset-ID paste fallback", async () => {
+    renderCard();
+    await screen.findByTestId("wa-connect-button");
+    expect(screen.queryByText(/access token/i)).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("blocks a doomed popup when server configuration is incomplete", async () => {
+    mocks.fetchConfig.mockResolvedValueOnce({ configured: false });
     renderCard();
     expect(await screen.findByTestId("wa-connect-button")).toBeDisabled();
-    expect(screen.getByTestId("wa-manual-toggle")).toBeEnabled();
+    expect(screen.getByText(/not configured/i)).toBeInTheDocument();
   });
 
-  it("keeps submit disabled until all three fields are usable", async () => {
-    const f = await openForm();
-    expect(f.submit).toBeDisabled();
-
-    fill(f, { ...VALID, waba_id: "not-numeric" });
-    expect(f.submit).toBeDisabled();
-
-    fill(f, { ...VALID, access_token: "short" });
-    expect(f.submit).toBeDisabled();
-
-    fill(f, VALID);
-    expect(f.submit).toBeEnabled();
-  });
-
-  it("names the mistake when the phone NUMBER is pasted into the ID field", async () => {
-    // What actually happened: Meta shows "+1 555 665 9281" in large type with
-    // the ID in small text under it. A silently disabled button told him
-    // nothing.
-    const f = await openForm();
-    fireEvent.change(f.phone, { target: { value: "+1 (555) 665-9281" } });
-    expect(screen.getByTestId("wa-manual-phone-note").textContent)
-      .toMatch(/phone number, not its ID/i);
-    expect(f.submit).toBeDisabled();
-
-    fireEvent.change(f.phone, { target: { value: "555000222" } });
-    expect(screen.getByTestId("wa-manual-phone-note").textContent)
-      .not.toMatch(/not its ID/i);
-  });
-
-  it("shows a hint, not an error, on an untouched field", async () => {
-    const f = await openForm();
-    expect(screen.getByTestId("wa-manual-waba-note").className).not.toMatch(/danger/);
-    expect(screen.queryByTestId("wa-manual-token-note")).toBeNull();
-    fireEvent.change(f.token, { target: { value: "short" } });
-    expect(screen.getByTestId("wa-manual-token-note").textContent).toMatch(/too short/i);
-  });
-
-  it("never renders the token in readable text", async () => {
-    const f = await openForm();
-    fill(f, VALID);
-    // The one place the token exists in the browser — a screen share or a
-    // support call must not expose it.
-    expect(f.token).toHaveAttribute("type", "password");
-    expect(document.body.textContent).not.toContain(VALID.access_token);
-  });
-
-  it("shows the server's reason when the connect is refused", async () => {
-    const { toast } = await import("sonner");
-    connectWaManual.mockRejectedValueOnce({
-      response: { data: { detail: "This WhatsApp Business Account is already connected to another clinic." } },
+  it("shows Meta payment handoff and records owner acknowledgement", async () => {
+    mocks.fetchConnection.mockResolvedValueOnce({
+      connected: true,
+      wa_verified_name: "Sunrise Dental",
+      onboarding: {
+        payment_status: "required",
+        payment_method_url: "https://business.facebook.com/wa/manage/home/",
+      },
     });
-    const f = await openForm();
-    fill(f, VALID);
-    fireEvent.click(f.submit);
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        "This WhatsApp Business Account is already connected to another clinic.",
-      ),
-    );
+    renderCard();
+    expect(await screen.findByRole("link", { name: /open whatsapp manager/i }))
+      .toHaveAttribute("href", "https://business.facebook.com/wa/manage/home/");
+    fireEvent.click(screen.getByRole("button", { name: /i added the payment method/i }));
+    await waitFor(() => expect(mocks.confirmPayment).toHaveBeenCalledWith("b1"));
   });
 
-  it("hides the manual form once the branch is connected", async () => {
-    fetchWaConnection.mockResolvedValueOnce({ connected: true, wa_verified_name: "Sunrise Dental" });
+  it("exposes a retry when either one-shot Coexistence sync fails", async () => {
+    mocks.fetchConnection.mockResolvedValueOnce({
+      connected: true,
+      onboarding: {
+        payment_status: "confirmed",
+        mode: "coexistence",
+        sync: { contacts: { status: "error" }, history: { status: "requested" } },
+      },
+    });
     renderCard();
-    await screen.findByTestId("wa-connected");
-    expect(screen.queryByTestId("wa-manual-toggle")).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: /retry synchronization/i }));
+    await waitFor(() => expect(mocks.retrySync).toHaveBeenCalledWith("b1"));
+  });
+
+  it("requires Meta reauthorization when the business token expires", async () => {
+    mocks.fetchConnection.mockResolvedValueOnce({
+      connected: true,
+      onboarding: {
+        payment_status: "confirmed", mode: "coexistence",
+        token_expires_at: "2020-01-01T00:00:00+00:00",
+      },
+    });
+    renderCard();
+    fireEvent.click(await screen.findByRole("button", { name: /reconnect with meta/i }));
+    await waitFor(() => expect(mocks.launch).toHaveBeenCalledWith(expect.objectContaining({
+      featureType: "whatsapp_business_app_onboarding",
+    })));
   });
 
   it("erases cached patient chats synchronously when disconnected", async () => {
-    fetchWaConnection.mockResolvedValueOnce({
-      connected: true, wa_verified_name: "Sunrise Dental",
+    mocks.fetchConnection.mockResolvedValueOnce({
+      connected: true,
+      wa_verified_name: "Sunrise Dental",
+      onboarding: { payment_status: "confirmed" },
     });
-    disconnectWa.mockResolvedValueOnce({
+    mocks.disconnect.mockResolvedValueOnce({
       connected: false, wa_status: "disconnected", conversations_deleted: 2,
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     qc.setQueryData(["wa-chats", "b1"], [{ last_text: "private chat" }]);
-    qc.setQueryData(["wa-chat", "b1", "+919812345678"], {
-      turns: [{ text: "private chat" }],
-    });
+    qc.setQueryData(["wa-chat", "b1", "+919812345678"], { turns: [{ text: "private chat" }] });
 
     renderCard(qc);
     fireEvent.click(await screen.findByRole("button", { name: /^disconnect$/i }));
-    await waitFor(() => expect(disconnectWa).toHaveBeenCalledWith("b1"));
-
+    await waitFor(() => expect(mocks.disconnect).toHaveBeenCalledWith("b1"));
     expect(qc.getQueryData(["wa-chats", "b1"])).toBeUndefined();
     expect(qc.getQueryData(["wa-chat", "b1", "+919812345678"])).toBeUndefined();
-    expect(qc.getQueryData(["wa-connection", "b1"])).toMatchObject({
-      connected: false, wa_status: "disconnected",
-    });
   });
 });

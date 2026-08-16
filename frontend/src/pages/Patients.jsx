@@ -2,7 +2,13 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { toast } from "sonner";
-import { listPatients, editPatient, deletePatient, fetchUpcoming } from "../api/patients.js";
+import {
+  listPatients,
+  editPatient,
+  deletePatient,
+  fetchUpcoming,
+  importPatients
+} from "../api/patients.js";
 import { fetchDoctors } from "../api/client.js";
 import PageHeader from "../components/PageHeader.jsx";
 
@@ -20,6 +26,21 @@ export default function Patients() {
   const [deleting, setDeleting] = useState(null); // patient pending delete confirm
   const [form, setForm] = useState({ name: "", age: "", phone: "" });
   const [err, setErr] = useState("");
+  const [importFile, setImportFile] = useState(null);
+  const [importResult, setImportResult] = useState(null);
+  const [importInputKey, setImportInputKey] = useState(0);
+
+  const importer = useMutation({
+    mutationFn: () => importPatients(branchId, importFile),
+    onSuccess: (result) => {
+      setImportResult(result);
+      setImportFile(null);
+      setImportInputKey((value) => value + 1);
+      qc.invalidateQueries({ queryKey: ["patients", branchId] });
+      toast.success(`${result.created} patient${result.created === 1 ? "" : "s"} imported`);
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not import the patient file")
+  });
 
   const del = useMutation({
     mutationFn: (p) => deletePatient(p.id, branchId),
@@ -86,6 +107,58 @@ export default function Patients() {
     <div className="mx-auto max-w-4xl space-y-6">
       <PageHeader eyebrow="Records" title="Patient information"
         sub={isLoading ? undefined : `${patients.length} ${patients.length === 1 ? "patient" : "patients"}`} />
+
+      <section className="card p-4 sm:p-5" aria-labelledby="patient-import-title">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 id="patient-import-title" className="font-display text-lg font-semibold">
+              Import existing patients
+            </h2>
+            <p className="mt-1 max-w-2xl font-ui text-sm text-slate">
+              Upload CSV or Excel (.xlsx). Only name, mobile number, age and gender are read;
+              clinical notes and unrelated columns are ignored. Existing records are skipped.
+            </p>
+          </div>
+          <div className="flex min-w-0 flex-col gap-2 sm:w-[24rem]">
+            <input
+              key={importInputKey}
+              className="field min-h-[44px] w-full text-sm"
+              type="file"
+              accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              onChange={(event) => {
+                setImportFile(event.target.files?.[0] ?? null);
+                setImportResult(null);
+              }}
+              aria-label="Patient CSV or Excel file"
+            />
+            <button
+              className="btn-primary"
+              disabled={!importFile || importer.isPending}
+              onClick={() => importer.mutate()}
+            >
+              {importer.isPending ? "Importing…" : "Import patients"}
+            </button>
+          </div>
+        </div>
+        {importResult && (
+          <div className="mt-4 rounded-xl border border-hairline bg-pill p-3 font-ui text-sm">
+            <p className="font-medium">
+              Imported {importResult.created}; skipped {importResult.duplicates} duplicate(s);
+              {" "}{importResult.invalid} invalid row(s).
+            </p>
+            {importResult.errors?.length > 0 && (
+              <details className="mt-2 text-slate">
+                <summary className="cursor-pointer">Review invalid rows</summary>
+                <ul className="mt-2 list-disc space-y-1 pl-5">
+                  {importResult.errors.map((item) => (
+                    <li key={`${item.row}-${item.error}`}>Row {item.row}: {item.error}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+      </section>
 
       <UpcomingAppointments branchId={branchId} />
 

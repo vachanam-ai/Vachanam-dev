@@ -27,6 +27,7 @@ import datetime
 
 import pytest
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy import select
 
 from backend.main import app
 from backend.middleware.auth_middleware import get_current_user, CurrentUser
@@ -234,5 +235,62 @@ async def test_patch_cross_branch_404(db):
             r = await ac.patch(f"/patients/{p.id}",
                                json={"branch_id": str(other.id), "name": "Y"})
             assert r.status_code in (403, 404), r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_patient_csv_import_creates_family_records_and_skips_duplicates(db, redis):
+    org_id, br = await _seed_branch(db, "+910000000059")
+    db.add(
+        Patient(
+            id=uuid.uuid4(), branch_id=br.id, name="Existing",
+            phone="+919876543210", is_primary=True,
+        )
+    )
+    await db.commit()
+    csv_body = (
+        "Patient Name,Mobile Number,Age,Gender,Unneeded diagnosis\n"
+        "Existing,9876543210,40,Male,ignore me\n"
+        "Family Member,9876543210,12,Female,ignore me\n"
+        "New Patient,9876543211,35,Female,ignore me\n"
+        "Bad Number,123,20,Male,ignore me\n"
+    ).encode()
+
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with _client() as ac:
+            response = await ac.post(
+                f"/patients/branches/{br.id}/patients/import",
+                files={"file": ("patients.csv", csv_body, "text/csv")},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["created"] == 2
+        assert response.json()["duplicates"] == 1
+        assert response.json()["invalid"] == 1
+    finally:
+        app.dependency_overrides.clear()
+
+    rows = (
+        await db.execute(select(Patient).where(Patient.branch_id == br.id).order_by(Patient.name))
+    ).scalars().all()
+    assert len(rows) == 3
+    family = next(row for row in rows if row.name == "Family Member")
+    newcomer = next(row for row in rows if row.name == "New Patient")
+    assert family.is_primary is False
+    assert newcomer.is_primary is True
+
+
+@pytest.mark.asyncio
+async def test_doctor_cannot_bulk_import_patient_pii(db, redis):
+    org_id, br = await _seed_branch(db, "+910000000060")
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, role="doctor")
+    try:
+        async with _client() as ac:
+            response = await ac.post(
+                f"/patients/branches/{br.id}/patients/import",
+                files={"file": ("patients.csv", b"Name,Phone\nRavi,9876543210\n", "text/csv")},
+            )
+        assert response.status_code == 403
     finally:
         app.dependency_overrides.clear()

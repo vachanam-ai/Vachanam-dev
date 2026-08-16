@@ -455,13 +455,19 @@ async def analytics_overview(
     ).scalar_one()
     org_row = (
         await db.execute(
-            select(Organization.plan, Organization.status, Organization.minutes_adjustment)
+            select(
+                Organization.plan,
+                Organization.status,
+                Organization.minutes_adjustment,
+                Organization.founding_credit_minutes,
+            )
             .join(Branch, Branch.org_id == Organization.id)
             .where(Branch.id == branch_uuid)
         )
     ).first()
     plan, org_status, adj = (
-        (org_row[0], org_row[1], org_row[2]) if org_row else ("clinic", "active", 0)
+        (org_row[0], org_row[1], (org_row[2] or 0) + (org_row[3] or 0))
+        if org_row else ("solo", "active", 0)
     )
     # Trial clinics get the flat 500-min trial bucket, not the plan allowance;
     # plus the super-admin per-clinic minute adjustment.

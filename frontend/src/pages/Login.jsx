@@ -33,7 +33,7 @@ export default function Login() {
   const [ts, setTs] = useState(""); // current Turnstile token ("" = not solved yet)
   const [resendStep, setResendStep] = useState(0); // index into RESEND_STEPS
   const [resendLeft, setResendLeft] = useState(0); // seconds until resend allowed
-  const [trialAvailable, setTrialAvailable] = useState(false);
+  const [foundingOfferAvailable, setFoundingOfferAvailable] = useState(false);
 
   useEffect(() => {
     revealStagger(pageRef.current);
@@ -42,8 +42,8 @@ export default function Login() {
   useEffect(() => {
     fetch(`${API_BASE}/auth/founding-slots`)
       .then((response) => (response.ok ? response.json() : null))
-      .then((data) => setTrialAvailable(Boolean(data?.trial_for_all || data?.slots_left > 0)))
-      .catch(() => setTrialAvailable(false));
+      .then((data) => setFoundingOfferAvailable(Boolean(data?.slots_left > 0)))
+      .catch(() => setFoundingOfferAvailable(false));
   }, []);
 
   // Countdown tick for the resend cooldown.
@@ -292,7 +292,7 @@ export default function Login() {
           <p data-reveal className="mt-8 text-center font-ui text-sm text-slate">
             New clinic?{" "}
             <Link to="/register" className="font-medium text-ink underline-offset-4 hover:underline">
-              {trialAvailable ? "Start your 14-day free trial" : "Create your clinic"}
+              {foundingOfferAvailable ? "Join the Founding 100 offer" : "Create your clinic"}
             </Link>
           </p>
         </div>

@@ -79,7 +79,7 @@ async def test_named_doctor_availability_is_answered_not_deferred(db):
 
     assert "Srinivas" in reply
     assert "check that with the doctor" not in reply.lower()
-    assert "9 am" in reply, reply
+    assert "9:00 am" in reply.lower(), reply
     assert "09:00" not in reply, "24-hour times must never reach a patient"
 
 

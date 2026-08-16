@@ -53,7 +53,7 @@ Calendar + PWA + Razorpay (WhatsApp deferred to MVP2 — see memory).
 
 ---
 
-## PRICING (FINAL — changed by Vinay 2026-08-10)
+## PRICING (FINAL — changed by Vinay 2026-08-16)
 
 Sell the previous production voice stack only. The public plans are intentionally
 simple, include the complete booking workflow, and never gate correctness or
@@ -62,23 +62,21 @@ compatibility.
 
 | Public plan | Internal key | Price | Included voice | Doctors | Branches | WhatsApp |
 |---|---|---:|---:|---:|---:|---|
-| **Basic** | `solo` | ₹5,999/month | 400 minutes | 3 | 1 | ₹1,499 add-on |
-| **Growth** — most popular | `clinic` | ₹10,999/month | 1,500 minutes | 10 | 1 | included |
-| **Scale** | `multi` | ₹21,999/month | 3,000 minutes | unlimited | 2 | included |
-| **WhatsApp** | `wa` | ₹1,499/month | no voice | 3 | 1 | included |
+| **Vachanam Voice** | `solo` | ₹1,999/month | none | unlimited | 1 | ₹1,499 add-on |
+| **WhatsApp** | `wa` | ₹1,999/month | no voice | 3 | 1 | included |
 
-Overage is ₹6/minute. An additional branch is ₹6,999/month and is provisioned
-as an isolated clinic branch. An additional phone number is ₹2,499/month.
+Voice is ₹6/minute from the first billable minute. An additional branch or
+phone number is ₹1,499/month and is provisioned as an isolated clinic branch.
 The trial ends after 14 days or 30 voice minutes, whichever happens first.
 GST remains waived while `GST_WAIVED=True`; restore statutory GST before
 charging it. All prices and gates must come from
 `backend/services/billing_math.py`; frontend display data comes from
 `frontend/src/lib/plans.js` and must mirror it.
 
-`lite` remains a runtime-compatible legacy enum value only. It is not sellable,
-must not appear in registration or plan-change UI, and must not be reintroduced
-as a public plan. Core booking, cancellation, rescheduling, reminders, grounding,
-languages, auditability, and safety are available on every voice plan.
+`lite`, `clinic`, and `multi` remain runtime-compatible legacy enum values only.
+They are not sellable and must not appear in registration or plan-change UI.
+Core booking, cancellation, rescheduling, reminders, grounding, languages,
+auditability, and safety are available on the applicable public product.
 
 ---
 

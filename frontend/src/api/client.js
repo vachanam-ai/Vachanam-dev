@@ -237,8 +237,10 @@ export const fetchWaSignupConfig = (branchId) =>
   api.get(`/branches/${branchId}/whatsapp/signup-config`).then((r) => r.data);
 export const connectWa = (branchId, payload) =>
   api.post(`/branches/${branchId}/whatsapp/connect`, payload).then((r) => r.data);
-export const connectWaManual = (branchId, payload) =>
-  api.post(`/branches/${branchId}/whatsapp/connect/manual`, payload).then((r) => r.data);
+export const retryWaSync = (branchId) =>
+  api.post(`/branches/${branchId}/whatsapp/connect/sync`).then((r) => r.data);
+export const confirmWaPayment = (branchId) =>
+  api.post(`/branches/${branchId}/whatsapp/connect/payment-confirmed`).then((r) => r.data);
 export const disconnectWa = (branchId) =>
   api.delete(`/branches/${branchId}/whatsapp/connect`).then((r) => r.data);
 

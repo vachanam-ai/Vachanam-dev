@@ -183,13 +183,13 @@ export default function Billing() {
                   </p>
                 </div>
                 <div>
-                  <p className="font-ui text-xs text-slate">Extra minutes</p>
+                  <p className="font-ui text-xs text-slate">Billable minutes</p>
                   <p className="text-lg font-semibold tabular-nums">
                     {d.overage_minutes.toLocaleString("en-IN")}
                   </p>
                 </div>
                 <div>
-                  <p className="font-ui text-xs text-slate">Extra cost</p>
+                  <p className="font-ui text-xs text-slate">Voice usage cost</p>
                   <p className="text-lg font-semibold tabular-nums">
                     {money(d.overage_amount)}
                   </p>
@@ -211,7 +211,7 @@ export default function Billing() {
               )}
               {d.overage_minutes > 0 && (
                 <Row
-                  label="Extra minutes"
+                  label="Voice usage"
                   hint={`${d.overage_minutes.toLocaleString("en-IN")} × ₹${d.overage_rate}/min`}
                   value={money(d.overage_amount)}
                 />
@@ -221,9 +221,9 @@ export default function Billing() {
             </div>
             <p className="mt-3 font-ui text-xs text-slate">
               {d.cancellation_effective
-                ? "No plan renewal will be charged. Any current-cycle extra minutes remain payable."
+                ? "No plan renewal will be charged. Current-cycle voice usage remains payable."
                 : d.autopay_enabled
-                  ? "Plan and WhatsApp charges renew automatically. Extra voice minutes are invoiced separately."
+                  ? "Plan and WhatsApp charges renew automatically. Voice usage is invoiced separately."
                   : "Paid manually each cycle - the button is below."}
             </p>
           </section>
@@ -323,21 +323,6 @@ export default function Billing() {
                   <span className="font-medium text-ink">{day(d.cycle_end)}</span>, when your
                   current cycle ends.
                 </p>
-
-                {d.plan !== "wa" && (
-                  <div className="mt-4 rounded-lg border border-line p-4">
-                    <p className="font-ui text-sm font-medium">
-                      Only want to stop the phone line?
-                    </p>
-                    <p className="mt-1 font-ui text-sm text-slate">
-                      Switch to the WhatsApp-only plan instead and keep booking patients on
-                      chat. You keep your patients, doctors and history.
-                    </p>
-                    <Link to="/billing?plan=wa#plan-payment" className="btn-ghost mt-3 inline-flex">
-                      Review WhatsApp-only switch
-                    </Link>
-                  </div>
-                )}
 
                 {!confirming ? (
                   <button className="btn-ghost mt-4" onClick={() => setConfirming(true)}>

@@ -158,7 +158,7 @@ async def test_full_signup_email_only(client, db):
             "owner_name": "Dr Srinivas",
             "email": email,
             "password": GOOD_PW,
-            "plan": "clinic",
+            "plan": "solo",
             "accepted_terms": True,
             "email_otp": email_code,
         },
@@ -170,18 +170,15 @@ async def test_full_signup_email_only(client, db):
     org = (
         await db.execute(select(Organization).where(Organization.owner_email == email))
     ).scalar_one()
-    assert org.plan == "clinic"
+    assert org.plan == "solo"
     assert org.owner_phone == ""
     # #392: no open trial — orgs start paused. #426: EXCEPT while founding
     # slots remain (first 10 signups get status='trial' + 14-day window).
     # This test runs against a shared test DB, so it accepts either branch
     # but demands internal consistency; test_founding_trial.py pins each
     # branch deterministically.
-    assert org.status in ("trial", "paused")
-    if org.status == "trial":
-        assert org.trial_ends_at is not None
-    else:
-        assert org.trial_ends_at is None
+    assert org.status == "paused"
+    assert org.trial_ends_at is None
     user = (await db.execute(select(User).where(User.email == email))).scalar_one()
     assert user.role == "org_admin"
     assert user.phone is None

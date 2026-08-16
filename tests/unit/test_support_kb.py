@@ -28,8 +28,8 @@ def test_knowledge_doc_loaded_and_comprehensive():
     from backend.services import support_kb
     k = support_kb.knowledge_text()
     assert len(k) > 5000  # end-to-end, not a stub
-    for fact in ("5,999", "10,999", "21,999", "1,499", "400", "1,500",
-                 "3,000", "30 included minutes", "follow-up", "DPDP",
+    for fact in ("1,999", "1,499", "500 voice minutes", "₹6 per voice minute",
+                 "follow-up", "DPDP",
                  "token", "Google Calendar", "support@vachanam.in"):
         assert fact in k, f"knowledge doc missing key fact: {fact}"
 

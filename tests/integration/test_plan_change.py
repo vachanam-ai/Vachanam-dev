@@ -62,23 +62,23 @@ async def test_plan_change_scheduled_for_current_cycle_end(db):
     org = await _seed_org(db, plan="solo")
     cycle_end = date.today() + timedelta(days=12)
     await _seed_cycle(db, org, end=cycle_end)
-    info = await change_plan(PlanChangeRequest(plan="clinic"), _user(org), db)
+    info = await change_plan(PlanChangeRequest(plan="wa"), _user(org), db)
     assert info.plan == "solo"  # current paid cycle untouched
-    assert info.pending_plan == "clinic"
+    assert info.pending_plan == "wa"
     assert info.pending_plan_effective == cycle_end.isoformat()  # anniversary, not 1st
 
 
 async def test_plan_change_without_paid_cycle_applies_immediately(db):
     org = await _seed_org(db, plan="solo", status="trial")
-    info = await change_plan(PlanChangeRequest(plan="clinic"), _user(org), db)
-    assert info.plan == "clinic"  # nothing paid to protect
+    info = await change_plan(PlanChangeRequest(plan="wa"), _user(org), db)
+    assert info.plan == "wa"  # nothing paid to protect
     assert info.pending_plan is None
 
 
 async def test_selecting_current_plan_cancels_pending(db):
     org = await _seed_org(db, plan="solo")
     await _seed_cycle(db, org, end=date.today() + timedelta(days=10))
-    await change_plan(PlanChangeRequest(plan="multi"), _user(org), db)
+    await change_plan(PlanChangeRequest(plan="wa"), _user(org), db)
     info = await change_plan(PlanChangeRequest(plan="solo"), _user(org), db)
     assert info.pending_plan is None
     assert info.pending_plan_effective is None

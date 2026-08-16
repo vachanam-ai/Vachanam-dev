@@ -18,3 +18,10 @@ export const fetchUpcoming = (branchId, { doctorId, onDate, days = 15 } = {}) =>
       ...(onDate ? { on_date: onDate } : {})
     }
   }).then((r) => r.data);
+
+export const importPatients = (branchId, file) => {
+  const form = new FormData();
+  form.append("file", file);
+  return api.post(`/patients/branches/${branchId}/patients/import`, form)
+    .then((r) => r.data);
+};

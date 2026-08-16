@@ -4,10 +4,9 @@ audience: clinic
 category: billing
 tags: plan, upgrade, downgrade, doctors, change, minutes
 ---
-You can change your plan any time from **Plan & billing**. A change takes effect from
-the next billing cycle, so you never lose minutes you've already paid for. The
-number of doctors you can add depends on the plan: three on Basic, ten on
-Growth, and unlimited on Scale. Every voice plan includes the supported
-languages and core appointment workflow. If you go over your included minutes,
-the extra is billed at ₹6 per minute. An additional phone number is ₹2,499/month
-and an additional branch is ₹6,999/month.
+New clinics can choose Vachanam Voice at ₹1,999/month plus ₹6 per voice minute,
+or WhatsApp-only at ₹1,999/month. Voice supports unlimited doctors and every
+supported language; WhatsApp-only supports three doctors and has no phone line.
+WhatsApp can be added to Voice for ₹1,499/month per branch. An additional phone
+number or branch is ₹1,499/month. Historical tiered subscriptions remain visible
+until migrated; switches take effect from the next paid cycle.

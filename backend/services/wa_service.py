@@ -21,6 +21,8 @@ runbook (Phase A) and a branch is linked (Phase B).
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import httpx
 import structlog
 from tenacity import (
@@ -30,12 +32,10 @@ from tenacity import (
 from backend.config import settings
 from backend.services.billing_math import whatsapp_enabled
 from backend.services.crypto import decrypt_secret
+from backend.services.meta_graph import url as graph_url
 from backend.services.wa_lifecycle import is_connected
 
 logger = structlog.get_logger()
-
-_GRAPH = "https://graph.facebook.com/v21.0"
-
 
 def token_for(branch) -> str | None:
     """The Meta bearer token this branch sends with.
@@ -49,6 +49,15 @@ def token_for(branch) -> str | None:
     """
     enc = getattr(branch, "wa_token_enc", None)
     if enc:
+        expiry = (getattr(branch, "wa_onboarding", None) or {}).get("token_expires_at")
+        if expiry:
+            try:
+                if datetime.fromisoformat(expiry) <= datetime.now(timezone.utc):
+                    logger.warning("wa_token_expired", branch_id=str(getattr(branch, "id", None)))
+                    return None
+            except (TypeError, ValueError):
+                logger.warning("wa_token_expiry_invalid", branch_id=str(getattr(branch, "id", None)))
+                return None
         try:
             return decrypt_secret(enc)
         except Exception as e:  # noqa: BLE001 — fail closed, never leak the token
@@ -58,6 +67,11 @@ def token_for(branch) -> str | None:
                 error=str(e)[:120],
             )
             return None
+    # Official Embedded Signup branches must always use their own business
+    # integration token. The platform token remains only for pre-v4 controlled
+    # test-number records that have no onboarding state.
+    if getattr(branch, "wa_onboarding", None):
+        return None
     return settings.meta_access_token or None
 
 
@@ -80,7 +94,7 @@ def wa_enabled(branch, plan: str | None) -> bool:
     if not token_for(branch):
         logger.debug("wa_skipped_unconfigured", reason="no_access_token")
         return False
-    # The ₹1,499 add-on lets Lite/Starter buy WhatsApp without upgrading to
+    # The per-branch add-on lets a voice clinic buy WhatsApp independently.
     # Clinic. getattr defaults to False so a branch object loaded before the
     # column existed (or a bare test stub) can never accidentally grant a paid
     # feature. Flag lives on the BRANCH because WhatsApp is provisioned per
@@ -104,7 +118,7 @@ def wa_enabled(branch, plan: str | None) -> bool:
 async def _post(phone_number_id: str, payload: dict, token: str) -> None:
     async with httpx.AsyncClient(timeout=10) as c:
         r = await c.post(
-            f"{_GRAPH}/{phone_number_id}/messages",
+            graph_url(f"{phone_number_id}/messages"),
             headers={"Authorization": f"Bearer {token}"},
             json=payload,
         )

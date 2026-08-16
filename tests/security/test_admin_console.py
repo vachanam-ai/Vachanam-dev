@@ -111,18 +111,18 @@ async def test_overview_money_and_usage_math(client, biz_org):
     data = r.json()
     row = next(c for c in data["clients"] if c["org_id"] == str(biz_org["org"].id))
     assert row["minutes_used"] == 120.0
-    assert row["minutes_included"] == 1500  # Growth plan
-    assert row["minutes_left"] == 1380.0  # 1500 - 120
-    assert row["revenue_month"] == 10999  # active Growth clinic within bucket
-    assert row["expense_month"] == round(120 * 2.0 + 1000, 2)  # 1 DID
-    assert row["profit_month"] == round(10999 - (120 * 2.0 + 1000), 2)
+    assert row["minutes_included"] == 0  # fixed-plus-usage Growth plan
+    assert row["minutes_left"] == 0.0
+    assert row["revenue_month"] == 4999 + 120 * 6
+    assert row["expense_month"] == round(120 * 2.9 + 1200, 2)  # 1 DID
+    assert row["profit_month"] == round((4999 + 120 * 6) - (120 * 2.9 + 1200), 2)
     assert row["calls_month"] == 6
     assert row["voice_bookings_month"] == 3
     assert row["approaching_limit"] is False
     assert row["blocked_now"] is False
     # totals include this org
     assert data["minutes_this_month"] >= 120.0
-    assert data["revenue_month"] >= 10999
+    assert data["revenue_month"] >= 4999 + 120 * 6
     # never any patient identifiers in the payload
     assert "patient" not in r.text.lower()
 
@@ -131,9 +131,9 @@ async def test_overview_money_and_usage_math(client, biz_org):
     # ₹1.49. Current month: 120 min + 1 DID = 120*2.0 + 1000 = 1240.
     from backend.services.billing_math import VARIABLE_COST_PER_MIN
 
-    assert VARIABLE_COST_PER_MIN == 2.0
+    assert VARIABLE_COST_PER_MIN == 2.9
     cur = data["monthly"][-1]  # current month is the last point
-    assert cur["expense"] == round(120 * VARIABLE_COST_PER_MIN + 1000, 2), cur
+    assert cur["expense"] == round(120 * VARIABLE_COST_PER_MIN + 1200, 2), cur
 
 
 @pytest.mark.asyncio

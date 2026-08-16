@@ -1,4 +1,4 @@
-"""The ₹1,499 WhatsApp add-on: Lite/Starter buy WhatsApp without upgrading.
+"""The WhatsApp add-on: a voice clinic buys chat independently.
 
 Spec: docs/superpowers/specs/2026-08-02-whatsapp-pricing-design.md §1.
 
@@ -32,8 +32,8 @@ def _branch(addon: bool = False):
 
 # ── the gate itself ──────────────────────────────────────────────────────────
 
-def test_addon_turns_whatsapp_on_for_starter_and_lite():
-    for plan in ("lite", "solo"):
+def test_addon_turns_whatsapp_on_for_every_voice_plan():
+    for plan in ("lite", "solo", "clinic", "multi"):
         assert whatsapp_enabled(plan, addon=False) is False
         assert whatsapp_enabled(plan, addon=True) is True
 
@@ -43,16 +43,14 @@ def test_addon_cannot_conjure_whatsapp_onto_an_unknown_plan():
     assert whatsapp_enabled("nonsense", addon=True) is False
 
 
-def test_bundled_plans_do_not_need_the_addon():
-    for plan in ("clinic", "multi", "wa"):
-        assert whatsapp_enabled(plan, addon=False) is True
+def test_whatsapp_plan_bundles_whatsapp():
+    assert whatsapp_enabled("wa", addon=False) is True
 
 
-def test_addon_costs_the_same_as_the_standalone_plan():
-    """One number for WhatsApp everywhere — a clinic must never see the same
-    feature priced two ways."""
-    assert WHATSAPP_ADDON_RUPEES == PLANS["wa"].base_rupees == 1499
-    assert WHATSAPP_ADDON_PLANS == frozenset({"lite", "solo"})
+def test_addon_and_standalone_prices_are_explicit():
+    assert WHATSAPP_ADDON_RUPEES == 1499
+    assert PLANS["wa"].base_rupees == 1999
+    assert WHATSAPP_ADDON_PLANS == frozenset({"lite", "solo", "clinic", "multi"})
 
 
 # ── wa_service.wa_enabled must honour it (this is the production path) ───────
@@ -67,12 +65,12 @@ def test_wa_enabled_reads_the_branch_addon_flag(monkeypatch):
     assert wa_service.wa_enabled(_branch(addon=True), "solo") is True
 
 
-def test_addon_on_a_bundled_plan_changes_nothing(monkeypatch):
+def test_current_growth_plan_requires_the_addon(monkeypatch):
     from backend.services import wa_service
 
     monkeypatch.setattr(wa_service.settings, "meta_access_token", "tok", raising=False)
     assert wa_service.wa_enabled(_branch(addon=True), "clinic") is True
-    assert wa_service.wa_enabled(_branch(addon=False), "clinic") is True
+    assert wa_service.wa_enabled(_branch(addon=False), "clinic") is False
 
 
 def test_a_branch_without_the_attribute_is_treated_as_no_addon(monkeypatch):
@@ -93,4 +91,4 @@ def test_addon_does_not_grant_voice(monkeypatch):
     from backend.services.billing_math import call_blocked
 
     assert call_blocked("active", "solo", True, 0) is None
-    assert call_blocked("active", "solo", True, 10_000) == "minutes_exhausted"
+    assert call_blocked("active", "solo", True, 10_000) is None

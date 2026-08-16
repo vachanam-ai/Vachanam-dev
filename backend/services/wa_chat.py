@@ -50,7 +50,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent.prompts.whatsapp_prompt import build_chat_prompt
 from backend.models.schema import Branch, ClinicQuestion, Doctor, Patient, PatientMessage, Token
 from backend.services import wa_actions, wa_booking, wa_service, wa_session, wa_templates
-from backend.services.doctor_schedule import resolve_doctor_schedule, sessions_as_text
+from backend.services.doctor_schedule import (
+    bookable_starts_as_text,
+    resolve_doctor_schedule,
+    sessions_as_text,
+)
 from backend.services.resilience import guard
 from backend.services.support_bot import _call_gemini
 from backend.services.wa_booking import Slot
@@ -451,9 +455,8 @@ async def _doctor_line(
             f"{doctor.name} sits {sessions_as_text(schedule.sessions)} but has "
             f"nothing open"
         )
-    ranges = _merge_to_ranges(times, doctor.slot_duration_minutes or 15)
-    free = " and ".join(f"{_hhmm(a)} to {_hhmm(b)}" for a, b in ranges)
-    return f"{doctor.name} is free {free}"
+    starts = bookable_starts_as_text(times, doctor.slot_duration_minutes or 15)
+    return f"{doctor.name}'s bookable appointment starts are {starts}"
 
 
 async def _handle_doctor_info(

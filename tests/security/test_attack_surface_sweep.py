@@ -73,7 +73,7 @@ def test_register_model_validates_plan():
     from backend.routers.auth import RegisterRequest
 
     base = dict(clinic_name="C", owner_name="O", email="a@b.com", password="x")
-    for good in ("solo", "clinic", "multi"):
+    for good in ("solo", "wa"):
         assert RegisterRequest(**base, plan=good).plan == good
     with pytest.raises(ValidationError):
         RegisterRequest(**base, plan="enterprise")

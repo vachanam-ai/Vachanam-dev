@@ -26,6 +26,7 @@ const WA_STATUS_LABEL = {
   error: { label: "Connection error", chip: "chip-danger" }
 };
 
+import GoogleReauth from "../components/GoogleReauth.jsx";
 import WaConnectCard from "../components/WaConnectCard.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 
@@ -201,10 +202,11 @@ export default function Settings() {
 
   // DPDP erasure: delete the whole clinic, then sign out to the landing page.
   const [delConfirm, setDelConfirm] = useState("");
+  const wantsGoogleDelete = delConfirm.trim().toUpperCase() === "DELETE";
   const nukeClinic = useMutation({
-    mutationFn: () => deleteAccount(
-      delConfirm.trim().toUpperCase() === "DELETE"
-        ? { confirm: "DELETE" }
+    mutationFn: (googleToken) => deleteAccount(
+      wantsGoogleDelete
+        ? { confirm: "DELETE", id_token: googleToken }
         : { password: delConfirm }
     ),
     onSuccess: () => {
@@ -370,6 +372,42 @@ export default function Settings() {
       <Section id="whatsapp" title="WhatsApp"
         sub="Booking confirmations, reminders and post-visit rating asks on your clinic's own WhatsApp number.">
         <WaConnectCard branchId={branchId} />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="flex min-h-[72px] cursor-pointer items-center gap-3 rounded-xl border border-hairline bg-pill p-3">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-teal"
+              checked={Boolean(data?.reminder_calls_enabled)}
+              disabled={save.isPending || (data?.reminder_calls_enabled && !data?.whatsapp_reminder_ready)}
+              onChange={(event) => save.mutate({ reminder_calls_enabled: event.target.checked })}
+            />
+            <span className="font-ui text-sm">
+              <strong className="block">Also make reminder calls</strong>
+              <span className="text-slate">
+                {data?.whatsapp_reminder_ready
+                  ? "Off = WhatsApp only; on = WhatsApp plus phone call."
+                  : "Connect WhatsApp and approve the reminder template before switching calls off."}
+              </span>
+            </span>
+          </label>
+          <label className="flex min-h-[72px] cursor-pointer items-center gap-3 rounded-xl border border-hairline bg-pill p-3">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-teal"
+              checked={Boolean(data?.followup_calls_enabled)}
+              disabled={save.isPending || (data?.followup_calls_enabled && !data?.whatsapp_followup_ready)}
+              onChange={(event) => save.mutate({ followup_calls_enabled: event.target.checked })}
+            />
+            <span className="font-ui text-sm">
+              <strong className="block">Also make follow-up calls</strong>
+              <span className="text-slate">
+                {data?.whatsapp_followup_ready
+                  ? "Off = WhatsApp only; on = WhatsApp plus phone call."
+                  : "Connect WhatsApp and approve the follow-up template before switching calls off."}
+              </span>
+            </span>
+          </label>
+        </div>
       </Section>
       )}
 
@@ -536,17 +574,37 @@ export default function Settings() {
             <label className="label">Your password (or type DELETE if you sign in with Google)</label>
             <input className="field" type="password" value={delConfirm}
               onChange={(e) => setDelConfirm(e.target.value)} placeholder="Password or DELETE" />
+            {wantsGoogleDelete && (
+              <p className="mt-2 font-ui text-xs text-slate">
+                Confirm once with Google to authorize permanent deletion.
+              </p>
+            )}
           </div>
           <div className="flex items-end">
-            <button type="button"
-              className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
-              disabled={nukeClinic.isPending || !delConfirm.trim()}
-              onClick={() => {
-                if (window.confirm("This erases the ENTIRE clinic — every patient, booking and login. Absolutely sure?"))
-                  nukeClinic.mutate();
-              }}>
-              {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
-            </button>
+            {wantsGoogleDelete ? (
+              <div className="w-full">
+                <GoogleReauth
+                  disabled={nukeClinic.isPending}
+                  onToken={(token) => {
+                    if (window.confirm("This permanently erases every patient, booking and login. Continue?")) {
+                      nukeClinic.mutate(token);
+                    }
+                  }}
+                />
+                {nukeClinic.isPending && <p className="mt-2 font-ui text-xs text-slate">Deleting…</p>}
+              </div>
+            ) : (
+              <button type="button"
+                className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
+                disabled={nukeClinic.isPending || !delConfirm.trim()}
+                onClick={() => {
+                  if (window.confirm("This permanently erases every patient, booking and login. Continue?")) {
+                    nukeClinic.mutate();
+                  }
+                }}>
+                {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
+              </button>
+            )}
           </div>
         </div>
       </Section>

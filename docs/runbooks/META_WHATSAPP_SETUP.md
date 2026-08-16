@@ -1,105 +1,208 @@
-# Meta WhatsApp setup — Vinay's checklist (one-time, ~1–2h)
+# Official Meta WhatsApp onboarding runbook
 
-Spec: `docs/superpowers/specs/2026-07-13-whatsapp-mvp2-design.md`.
-Do Phase A steps 1–6 anytime. Step 7 (webhook) waits until Claude confirms
-the endpoint is deployed. Phase B happens per clinic, after the build.
+Verified against Meta's Embedded Signup v4 documentation on 2026-08-16.
 
-## Phase A — one-time platform setup
+Authoritative references:
 
-**A1. Meta Business Portfolio**
-- https://business.facebook.com → Create account/portfolio.
-- Business name: `Vachanam`, email `hello@vachanam.in`, real address.
-- Use your normal Facebook login (the portfolio is separate from your profile).
+- [Onboard customers as a Tech Provider](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-customers-as-a-tech-provider)
+- [Onboard WhatsApp Business app users (Coexistence)](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users)
+- [Embedded Signup version 4](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/version-4)
+- [Implement Embedded Signup](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation)
 
-**A2. Developer app**
-- https://developers.facebook.com → My Apps → Create App.
-- Use case: **Other** → type: **Business**. Name: `Vachanam`.
-- Connect it to the `Vachanam` business portfolio when asked.
+Embedded Signup v2 is deprecated on 2026-10-15. Vachanam uses v4 and Graph
+API `v25.0` by default.
 
-**A3. Add WhatsApp product**
-- In the app dashboard → Add product → **WhatsApp** → Set up.
-- This auto-creates a WhatsApp Business Account (WABA) + a FREE **test
-  number** (+1 …). The test number can message up to 5 whitelisted numbers —
-  we build and demo everything on it before any clinic is linked.
-- On the API Setup page, note:
-  - **WABA ID**  → env `META_WABA_ID`
-  - **Phone number ID** (of the test number) → env `META_PHONE_NUMBER_ID`
-- Add your own WhatsApp number to the test number's allowed recipients
-  (API Setup → To → Manage phone number list) and send the sample message —
-  confirms the pipe works.
+## 1. Meta account prerequisites
 
-**A4. Permanent token (system user)**
-- business.facebook.com → Settings (gear) → Users → **System users** → Add.
-- Name `vachanam-backend`, role **Admin**.
-- Assign assets: the app (full control) + the WABA (full control).
-- Generate token: select the app, expiry **Never**, permissions:
-  `whatsapp_business_messaging` + `whatsapp_business_management`.
-- Copy ONCE → env `META_ACCESS_TOKEN`. (Shown only once — if lost, generate a
-  new one.)
+Before real clinic self-onboarding:
 
-**A5. App secret**
-- App dashboard → App settings → Basic → **App secret** → Show.
-- → env `META_APP_SECRET`.
+1. Vachanam's Meta Business Portfolio must be verified.
+2. Vachanam must be approved as a Tech Provider or Solution Partner.
+3. The Meta app must have Advanced Access for:
+   - `whatsapp_business_management`
+   - `whatsapp_business_messaging`
+4. The app must be in Live mode.
+5. The app must have a working WhatsApp webhook and session logging.
+6. App Review must contain one video proving template management and another
+   proving message sending.
 
-**A6. Payment method**
-- business.facebook.com → Settings → Billing → add card/UPI on the WABA.
-- Free-tier/test messages don't bill, but template sends to real numbers do
-  (₹0.115–0.145 each) — needs a payment method attached before Phase B.
+Do not use a pasted permanent access token to onboard a customer. The clinic
+must grant access through Embedded Signup, and the resulting one-time code is
+exchanged server-to-server.
 
-**A7. Webhook — WAIT for Claude's "endpoint live" confirmation**
-- App dashboard → WhatsApp → Configuration → Webhook → Edit:
-  - Callback URL: `https://vachanam-backend.onrender.com/webhooks/whatsapp`
-  - Verify token: the value of `META_WEBHOOK_VERIFY_TOKEN` (generate any long
-    random string; same value goes in Render env).
-- Click Verify and save (Meta calls the endpoint — it must be deployed).
-- Webhook fields → subscribe to **messages**.
+## 2. Create the Embedded Signup v4 configuration
 
-**A8. Render env vars** (Dashboard → vachanam-backend → Environment):
+In Meta for Developers:
+
+1. Open the Vachanam app.
+2. Add **Facebook Login for Business** and the **WhatsApp** product.
+3. Create a new Facebook Login for Business configuration.
+4. Choose the **WhatsApp Embedded Signup** variation and **Cloud API** product.
+5. Use the v4 template with a 60-day business integration token expiry where
+   Meta offers it.
+6. Request only the two permissions listed above.
+7. Save the configuration ID as `META_CONFIG_ID`.
+
+Facebook Login for Business settings:
+
+- Client OAuth login: enabled
+- Web OAuth login: enabled
+- Enforce HTTPS: enabled
+- Embedded Browser OAuth Login: enabled
+- Strict Mode for redirect URIs: enabled
+- Login with JavaScript SDK: enabled
+- Allowed domain: `vachanam.in`
+- Valid OAuth redirect URI: the exact HTTPS URI Meta shows for the v4
+  configuration; never use `workers.dev` as the Vachanam product origin.
+
+The JavaScript SDK must use the configured Graph version. The browser logs the
+session event and sends the short-lived code plus session asset IDs to the
+backend immediately. Meta's authorization code expires in about 30 seconds.
+
+## 3. Configure the webhook
+
+Use the currently deployed backend URL:
+
+`https://vachanam-backend.onrender.com/webhooks/whatsapp`
+
+`https://vachanam.in` is the clinic-facing product origin. The webhook is a
+backend route, so its Render hostname is intentional until a verified API
+custom domain points to the same service. Do not use
+`vachanam.vinayrongala.workers.dev`.
+
+Set the callback verify token to the same random secret stored as
+`META_WEBHOOK_VERIFY_TOKEN`. Subscribe the app to:
+
+- `messages`
+- `message_template_status_update`
+- `account_update`
+- `history`
+- `smb_app_state_sync`
+- `smb_message_echoes`
+
+Vachanam also calls `POST /{WABA_ID}/subscribed_apps` for every newly connected
+clinic. App-level field subscription and per-WABA app subscription are both
+required.
+
+## 4. Production environment
+
+Set these only in the backend secret store:
+
+```text
+META_APP_ID=<Meta app ID>
+META_APP_SECRET=<Meta app secret>
+META_CONFIG_ID=<Embedded Signup v4 configuration ID>
+META_GRAPH_VERSION=v25.0
+META_WEBHOOK_VERIFY_TOKEN=<random webhook verification secret>
 ```
-META_ACCESS_TOKEN=        (A4)
-META_PHONE_NUMBER_ID=     (A3 — test number for now)
-META_WABA_ID=             (A3)
-META_WEBHOOK_VERIFY_TOKEN=(A7 — your random string)
-META_APP_SECRET=          (A5)
+
+`META_APP_ID`, `META_CONFIG_ID`, and the graph version are public configuration
+and may be returned to the browser. `META_APP_SECRET`, clinic tokens,
+registration PINs, and the webhook verify token must never leave the backend.
+
+The old platform `META_ACCESS_TOKEN`, `META_WABA_ID`, and
+`META_PHONE_NUMBER_ID` may remain only for an explicitly controlled test
+number. They are not the clinic onboarding mechanism.
+
+## 5. Clinic onboarding paths
+
+The dashboard presents two explicit choices.
+
+### A. Existing WhatsApp Business app number (Coexistence)
+
+Requirements:
+
+- WhatsApp Business app version 2.24.17 or newer.
+- The clinic completes Embedded Signup from its own Meta account.
+- The clinic consents to contacts/history sharing if it wants those imported.
+
+The browser launches signup with:
+
+```js
+extras: {
+  setup: {},
+  featureType: "whatsapp_business_app_onboarding",
+  sessionInfoVersion: "3"
+}
 ```
-Missing vars = WhatsApp features stay no-op (safe).
 
-**A9. Business verification — start when GST certificate arrives (TD-038)**
-- business.facebook.com → Settings → Security Centre → **Start verification**.
-- Upload GST certificate / incorporation proof; 2–10 business days.
-- Until verified: max 2 linked phone numbers, 250 business-initiated
-  conversations/day. Verified: 20 numbers, higher tiers. Blocks REAL clinic
-  numbers at scale, does NOT block the test-number pilot.
+Expected finish event:
 
-## Phase B — per clinic (~15 min, concierge, after build + A9 for real numbers)
+`FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`
 
-**B1.** Clinic must have WhatsApp Business **app** (not personal WhatsApp) on
-their number, app version ≥ 2.24.17, phone in hand.
+Server actions, in order:
 
-**B2.** business.facebook.com → WhatsApp accounts → the WABA → Phone numbers →
-**Add phone number**: clinic's number, display name = clinic's public name
-(Meta reviews the name — must match their signage/website), category Medical
-& health.
+1. Exchange the code with app ID and app secret.
+2. Verify the selected phone belongs to the granted WABA.
+3. Subscribe the WABA to the Vachanam app.
+4. **Skip** `/{PHONE_ID}/register`; Meta already registered the app number.
+5. Start contacts and history synchronization within 24 hours.
+6. Encrypt the clinic-specific business integration token and store it on that
+   clinic branch only.
 
-**B3.** Verify via OTP delivered to the clinic's phone. When the number is
-detected as active on the WhatsApp Business app, choose the **Coexistence /
-"keep using the app"** path (QR scan from the clinic's app: Settings →
-Linked devices → link to API). Their chats and app keep working; API rides
-the same number.
-- ⚠ If Meta offers ONLY migration (loses app access) for this number: STOP,
-  tell Claude — fallback path is Embedded Signup (post-verification) and we
-  schedule accordingly. Do not migrate a clinic off their app.
+Contacts and history sync are one-shot operations. History can contain up to
+180 days and thousands of messages. Vachanam intentionally retains only the
+last 10 messages in a thread and ignores messages older than 30 days. Error
+`2593109` means the clinic declined history sharing and is shown as declined,
+not as a failure.
 
-**B4.** Copy the new number's **Phone number ID** → link it to the branch
-(super_admin JWT, from the Admin console origin):
-```
-PATCH https://vachanam-backend.onrender.com/admin/branches/{branch_id}/whatsapp
-Authorization: Bearer <super_admin JWT>
-{"wa_phone_number_id": "<numeric phone number id>"}
-```
-(409 = that id is already linked to another branch; null clears the link and
-turns WhatsApp off for the branch.) Also register the 4 templates first:
-see `docs/runbooks/META_TEMPLATES.md`.
+Coexistence has a fixed throughput of 20 messages/second. Messages sent in the
+mobile app are free; Cloud API messages follow Meta's pricing. A message sent
+to the app does not itself open the Cloud API 24-hour customer-service window.
 
-**B5.** Test on the clinic's phone: one booking-confirmation template + a
-free-text "hi" reply. Both sides working = clinic live.
+### B. New Cloud API number
+
+The browser launches standard Embedded Signup without the Coexistence feature
+extras. Expected finish event: `FINISH`.
+
+Server actions, in order:
+
+1. Exchange the code server-to-server.
+2. Verify the WABA/phone relationship.
+3. Subscribe the WABA to the app.
+4. Generate a cryptographically random six-digit PIN.
+5. Call `POST /{PHONE_ID}/register` with
+   `{"messaging_product":"whatsapp","pin":"......"}`.
+6. Encrypt the token and PIN at rest.
+
+A connection is not reported as successful if asset verification, WABA
+subscription, or required registration fails.
+
+## 6. Billing ownership
+
+After Embedded Signup, the clinic must add a payment method to its own WABA in
+WhatsApp Manager. Meta charges the clinic for Cloud API messaging. Vachanam
+does not collect or proxy the clinic's Meta card details. The dashboard links
+to WhatsApp Manager and records the clinic owner's acknowledgement; Meta does
+not provide this integration with a public billing-verification result that
+would make the acknowledgement authoritative.
+
+## 7. Required lifecycle behavior
+
+- `smb_message_echoes`: mirror receptionist messages sent from the Business
+  app; never feed them back to the bot as patient messages.
+- edit/revoke: update or remove the matching stored message.
+- `ACCOUNT_OFFBOARDED` or `PARTNER_REMOVED`: immediately clear the clinic token,
+  asset IDs, queued WhatsApp deliveries, and stored WhatsApp conversations.
+- `ACCOUNT_RECONNECTED`: require the owner to complete Embedded Signup again.
+- Dashboard disconnect: unsubscribe the app from the WABA when Meta permits,
+  then clear local credentials and conversations even if the remote call fails.
+
+Every webhook is routed by the receiving `phone_number_id`; patient numbers
+are never used to choose a clinic.
+
+## 8. Acceptance checklist
+
+For one test WABA of each type:
+
+1. Finish Embedded Signup and confirm no secret appears in browser responses.
+2. Confirm the selected phone is visible under the granted WABA.
+3. Confirm `subscribed_apps` contains Vachanam.
+4. Standard flow: confirm registration succeeded.
+5. Coexistence flow: confirm no registration request was made and both sync
+   requests were started before the 24-hour deadline.
+6. Send a patient message and verify it reaches only the matching clinic.
+7. Send from the Business app and verify one echo appears without a bot reply.
+8. Disconnect/offboard and verify chats, token, IDs, and queued deliveries are
+   removed.
+9. Add the clinic's payment method and send one approved utility template.

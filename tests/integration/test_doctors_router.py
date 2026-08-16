@@ -742,9 +742,10 @@ async def starter_clinic(db: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_starter_plan_caps_at_three_doctors(client, db: AsyncSession, starter_clinic):
-    """solo/Starter includes 3 doctors (2026-07-12, Vinay — was 1): the fourth
-    POST must 403 with an upgrade message; the first three succeed."""
+async def test_public_voice_plan_allows_unlimited_doctors(
+    client, db: AsyncSession, starter_clinic
+):
+    """The current public Voice plan deliberately has no doctor cap."""
     token = _make_jwt(
         user_id=str(uuid.uuid4()), email="s@test.com", role="org_admin",
         org_id=starter_clinic["org_id"], branch_ids=[starter_clinic["branch_id"]],
@@ -761,8 +762,7 @@ async def test_starter_plan_caps_at_three_doctors(client, db: AsyncSession, star
         json={"name": "Dr Four", "booking_type": "token"},
         headers=_auth(token),
     )
-    assert r4.status_code == 403, r4.text
-    assert "Upgrade" in r4.json()["detail"]
+    assert r4.status_code == 201, r4.text
 
 
 @pytest.mark.asyncio

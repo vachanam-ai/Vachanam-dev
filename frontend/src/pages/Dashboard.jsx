@@ -29,10 +29,11 @@ function BandKpi({ k, cap }) {
   );
 }
 
-function StatBand({ title, weekday, pct, pctCap, remaining, waiting, booked }) {
+function StatBand({ title, weekday, pct, pctCap, remaining, usageMinutes, waiting, booked }) {
   const days = weekday?.length ? weekday : [];
   const max = Math.max(1, ...days.map((w) => w.bookings));
-  const target = Math.min(Math.max((pct ?? 0) / 100, 0), 1);
+  const usageOnly = usageMinutes != null;
+  const target = usageOnly ? 0 : Math.min(Math.max((pct ?? 0) / 100, 0), 1);
   const N = 46, cx = 85, cy = 84, ri = 52, ro = 68;
   const ticks = Array.from({ length: N }, (_, i) => {
     const f = i / (N - 1), a = Math.PI - f * Math.PI, on = f <= target;
@@ -59,21 +60,21 @@ function StatBand({ title, weekday, pct, pctCap, remaining, waiting, booked }) {
       mm.add("(prefers-reduced-motion: no-preference)", () => {
         const proxy = { v: 0, p: 0 };
         paintTicks(0);
-        if (pctRef.current) pctRef.current.textContent = "0%";
+        if (pctRef.current) pctRef.current.textContent = usageOnly ? "0" : "0%";
         gsap.to(proxy, { v: target, duration: 1.15, ease: "power2.out", onUpdate: () => paintTicks(proxy.v) });
-        gsap.to(proxy, { p: pct ?? 0, duration: 1.15, ease: "power2.out",
-          onUpdate: () => { if (pctRef.current) pctRef.current.textContent = `${Math.round(proxy.p)}%`; } });
+        gsap.to(proxy, { p: usageOnly ? usageMinutes : (pct ?? 0), duration: 1.15, ease: "power2.out",
+          onUpdate: () => { if (pctRef.current) pctRef.current.textContent = usageOnly ? `${Math.round(proxy.p)}` : `${Math.round(proxy.p)}%`; } });
         gsap.fromTo(bars, { scaleY: 0 },
           { scaleY: 1, transformOrigin: "center bottom", duration: 0.7, ease: "power3.out", stagger: 0.06, delay: 0.15 });
       });
       mm.add("(prefers-reduced-motion: reduce)", () => {
         paintTicks(target);
-        if (pctRef.current) pctRef.current.textContent = `${Math.round(pct ?? 0)}%`;
+        if (pctRef.current) pctRef.current.textContent = usageOnly ? `${Math.round(usageMinutes)}` : `${Math.round(pct ?? 0)}%`;
         gsap.set(bars, { scaleY: 1 });
       });
     });
     return () => mm?.revert();
-  }, [target, pct]);
+  }, [target, pct, usageOnly, usageMinutes]);
 
   return (
     <div data-reveal className="band">
@@ -96,13 +97,13 @@ function StatBand({ title, weekday, pct, pctCap, remaining, waiting, booked }) {
         </div>
       </div>
       <div className="gauge">
-        <svg ref={gaugeRef} viewBox="0 0 170 94" role="img" aria-label={`${pctCap} ${Math.round(pct)}%`}>
+        <svg ref={gaugeRef} viewBox="0 0 170 94" role="img" aria-label={usageOnly ? `${usageMinutes} ${pctCap}` : `${pctCap} ${Math.round(pct)}%`}>
           {ticks.map((t, i) => (
             <line key={i} data-f={t.f.toFixed(4)} x1={t.x1.toFixed(1)} y1={t.y1.toFixed(1)} x2={t.x2.toFixed(1)} y2={t.y2.toFixed(1)}
               stroke={t.on ? "rgb(var(--ink))" : "rgb(var(--slate-light))"} strokeWidth={t.on ? 2 : 1.4} strokeLinecap="round" />
           ))}
         </svg>
-        <div ref={pctRef} className="pct numeral">0%</div>
+        <div ref={pctRef} className="pct numeral">{usageOnly ? "0" : "0%"}</div>
         <div className="cap">{pctCap}</div>
         {remaining != null && (
           <div className="cap" style={{ marginTop: 2, fontWeight: 600, color: "rgb(var(--ink))" }}>
@@ -354,8 +355,9 @@ export default function Dashboard() {
         title="Patient visits this week"
         weekday={an?.weekday_load}
         pct={an?.minutes?.pct ?? 0}
-        pctCap="Plan minutes used"
-        remaining={an?.minutes ? Math.max((an.minutes.included ?? 0) - (an.minutes.used ?? 0), 0) : null}
+        pctCap={(an?.minutes?.included ?? 0) > 0 ? "Plan minutes used" : "Billable voice minutes"}
+        remaining={(an?.minutes?.included ?? 0) > 0 ? Math.max(an.minutes.included - (an.minutes.used ?? 0), 0) : null}
+        usageMinutes={(an?.minutes?.included ?? 0) === 0 ? (an?.minutes?.used ?? 0) : null}
         waiting={s.remaining}
         booked={s.total} />
 

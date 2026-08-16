@@ -70,7 +70,7 @@ async def test_doctor_reply_creates_advice_task(db):
         assert task.task_type == "doctor_advice"
         assert task.what_to_ask == "Take the prescribed painkiller twice daily."
         assert task.status == "pending"
-        assert task.channel == "voice"
+        assert task.channel == "both"
         assert task.scheduled_date == date.today()
         assert task.created_by_user_id == usr.id
         assert task.target_date is None  # no date asked for → plain relay

@@ -94,11 +94,12 @@ async def inbound(request: Request, db: AsyncSession = Depends(get_db)):
         # template discovery (which lists /{waba_id}/message_templates) returns
         # nothing, so every template send silently skips. Found 2026-08-05
         # after Vinay got all 7 templates approved and still saw no messages.
-        await _learn_waba_id(db, entry.get("id"), entry.get("changes", []))
+        waba_id = str(entry.get("id") or "")
+        await _learn_waba_id(db, waba_id, entry.get("changes", []))
         for change in entry.get("changes", []):
             value = change.get("value", {})
             try:
-                await _handle_value(db, value)
+                await _handle_change(db, waba_id, change.get("field") or "", value)
             except Exception as e:  # noqa: BLE001 — always 200 to Meta
                 logger.error("wa_inbound_error", error=str(e)[:300])
     return {"ok": True}
@@ -143,7 +144,138 @@ async def _learn_waba_id(db: AsyncSession, waba_id, changes: list) -> None:
         logger.warning("wa_waba_learn_failed", error=str(e)[:150])
 
 
+async def _branch_row(db: AsyncSession, value: dict):
+    phone_number_id = (value.get("metadata") or {}).get("phone_number_id")
+    return (
+        await db.execute(
+            select(Branch, Organization.plan)
+            .join(Organization, Organization.id == Branch.org_id)
+            .where(
+                Branch.wa_phone_number_id == str(phone_number_id or ""),
+                Branch.wa_status == "connected",
+            )
+        )
+    ).first()
+
+
+def _set_sync_state(branch: Branch, key: str, status: str, **values) -> None:
+    onboarding = dict(branch.wa_onboarding or {})
+    sync = dict(onboarding.get("sync") or {})
+    item = dict(sync.get(key) or {})
+    item.update({"status": status, **values})
+    sync[key] = item
+    onboarding["sync"] = sync
+    branch.wa_onboarding = onboarding
+
+
+async def _handle_change(
+    db: AsyncSession, waba_id: str, field: str, value: dict
+) -> None:
+    if field == "account_update":
+        await _handle_account_update(db, waba_id, value)
+        return
+    if field == "history" or value.get("history"):
+        await _handle_history(db, value)
+        return
+    if field == "smb_app_state_sync" or value.get("state_sync"):
+        row = await _branch_row(db, value)
+        if row is None:
+            return
+        branch, _plan = row
+        count = len(value.get("state_sync") or [])
+        previous = ((branch.wa_onboarding or {}).get("sync") or {}).get("contacts") or {}
+        _set_sync_state(
+            branch, "contacts", "receiving",
+            received_count=int(previous.get("received_count") or 0) + count,
+        )
+        await db.commit()
+        logger.info("wa_contacts_sync_received", branch_id=str(branch.id), count=count)
+        return
+    if field == "smb_message_echoes" or value.get("message_echoes"):
+        row = await _branch_row(db, value)
+        if row is None:
+            return
+        branch, _plan = row
+        from backend.services import wa_session
+
+        count = await wa_session.mirror_echoes(
+            db, branch.id, value.get("message_echoes") or []
+        )
+        await db.commit()
+        logger.info("wa_message_echoes_mirrored", branch_id=str(branch.id), count=count)
+        return
+    await _handle_value(db, value)
+
+
+async def _handle_history(db: AsyncSession, value: dict) -> None:
+    row = await _branch_row(db, value)
+    if row is None:
+        return
+    branch, _plan = row
+    blocks = value.get("history") or []
+    errors = [error for block in blocks for error in (block.get("errors") or [])]
+    if any(int(error.get("code") or 0) == 2593109 for error in errors):
+        _set_sync_state(branch, "history", "declined", progress=100)
+        await db.commit()
+        logger.info("wa_history_sync_declined", branch_id=str(branch.id))
+        return
+
+    from backend.services import wa_session
+
+    metadata = value.get("metadata") or {}
+    changed = await wa_session.merge_history(
+        db,
+        branch.id,
+        str(metadata.get("display_phone_number") or ""),
+        blocks,
+    )
+    progress = max(
+        [int((block.get("metadata") or {}).get("progress") or 0) for block in blocks]
+        or [0]
+    )
+    _set_sync_state(
+        branch,
+        "history",
+        "complete" if progress >= 100 else "receiving",
+        progress=progress,
+    )
+    await db.commit()
+    logger.info(
+        "wa_history_sync_received",
+        branch_id=str(branch.id),
+        threads_changed=changed,
+        progress=progress,
+    )
+
+
+async def _handle_account_update(db: AsyncSession, waba_id: str, value: dict) -> None:
+    event = str(value.get("event") or "")
+    if event not in {"PARTNER_REMOVED", "ACCOUNT_OFFBOARDED"}:
+        if event == "ACCOUNT_RECONNECTED":
+            logger.info("wa_account_reconnected_requires_signup", waba_id=waba_id)
+        return
+    branch = (
+        await db.execute(select(Branch).where(Branch.wa_waba_id == waba_id))
+    ).scalar_one_or_none()
+    if branch is None:
+        return
+    from backend.services.wa_lifecycle import disconnect_branch, invalidate_connection_caches
+
+    result = await disconnect_branch(db, branch, status="disconnected")
+    await db.commit()
+    await invalidate_connection_caches(branch.id)
+    logger.warning(
+        "wa_account_offboarded",
+        branch_id=str(branch.id),
+        meta_event=event,
+        sessions_purged=result.conversations_deleted,
+    )
+
+
 async def _handle_value(db: AsyncSession, value: dict) -> None:
+    for error in value.get("errors") or []:
+        logger.info("wa_webhook_error", code=error.get("code"))
+
     statuses = value.get("statuses")
     if statuses:
         for st in statuses:
@@ -159,22 +291,13 @@ async def _handle_value(db: AsyncSession, value: dict) -> None:
 
     # RULE 5: the branch is the RECEIVING number.
     phone_number_id = (value.get("metadata") or {}).get("phone_number_id")
-    row = (
-        await db.execute(
-            select(Branch, Organization.plan)
-            .join(Organization, Organization.id == Branch.org_id)
-            .where(
-                Branch.wa_phone_number_id == str(phone_number_id or ""),
-                Branch.wa_status == "connected",
-            )
-        )
-    ).first()
+    row = await _branch_row(db, value)
     if row is None:
         logger.info("wa_unknown_receiver", phone_number_id=str(phone_number_id))
         return
     branch, plan = row
 
-    from backend.services import wa_actions, wa_agent, wa_chat
+    from backend.services import wa_actions, wa_agent, wa_chat, wa_session
 
     for msg in messages:
         mid = msg.get("id") or ""
@@ -183,7 +306,11 @@ async def _handle_value(db: AsyncSession, value: dict) -> None:
             continue
         sender = msg.get("from") or ""  # patient's number, delivery address only
         try:
-            if msg.get("type") == "interactive":
+            if msg.get("type") in {"edit", "revoke"}:
+                await wa_session.apply_edit_or_revoke(
+                    db, branch.id, sender, msg
+                )
+            elif msg.get("type") == "interactive":
                 inter = msg.get("interactive") or {}
                 reply = inter.get("button_reply") or inter.get("list_reply") or {}
                 await wa_actions.dispatch_button(

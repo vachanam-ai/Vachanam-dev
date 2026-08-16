@@ -36,6 +36,10 @@ def test_tampered_token_raises():
 
 
 def test_branch_with_subaccount_uses_its_own_creds():
+    import backend.services.telephony as tp
+
+    old = tp.settings.outbound_trunk_id
+    tp.settings.outbound_trunk_id = "ST_shared"
     branch = NS(
         id="b1",
         vobiz_subaccount_id="sub_123",
@@ -44,12 +48,15 @@ def test_branch_with_subaccount_uses_its_own_creds():
         vobiz_sip_domain="sip.vobiz.ai",
         outbound_trunk_id="ST_clinic",
     )
-    t = resolve_branch_telephony(branch)
-    assert t.subaccount_id == "sub_123"
-    assert t.sip_username == "clinicuser"
-    assert t.sip_password == "clinicpass"  # decrypted at point of use
-    assert t.outbound_trunk_id == "ST_clinic"
-    assert branch_outbound_trunk_id(branch) == "ST_clinic"
+    try:
+        t = resolve_branch_telephony(branch)
+        assert t.subaccount_id == "sub_123"
+        assert t.sip_username == "clinicuser"
+        assert t.sip_password == "clinicpass"  # decrypted at point of use
+        assert t.outbound_trunk_id == "ST_shared"
+        assert branch_outbound_trunk_id(branch) == "ST_shared"
+    finally:
+        tp.settings.outbound_trunk_id = old
 
 
 def test_branch_without_subaccount_falls_back_to_global(monkeypatch):
@@ -63,27 +70,35 @@ def test_branch_without_subaccount_falls_back_to_global(monkeypatch):
     assert t.subaccount_id is None
     assert t.sip_username == "globaluser"
     assert t.outbound_trunk_id == "ST_global"
-    with pytest.raises(OutboundTrunkIsolationError):
-        branch_outbound_trunk_id(branch)
+    assert branch_outbound_trunk_id(branch) == "ST_global"
 
 
-def test_branch_without_subaccount_can_use_its_explicit_trunk():
+def test_legacy_branch_trunk_is_ignored(monkeypatch):
+    import backend.services.telephony as tp
+
+    monkeypatch.setattr(tp.settings, "outbound_trunk_id", "ST_shared")
     branch = NS(
         id="b2",
         vobiz_subaccount_id=None,
         outbound_trunk_id="ST_venkateshwara",
     )
-    assert branch_outbound_trunk_id(branch) == "ST_venkateshwara"
+    assert branch_outbound_trunk_id(branch) == "ST_shared"
 
 
-def test_dispatch_trunk_must_match_branch_exactly():
+def test_dispatch_trunk_must_match_shared_trunk(monkeypatch):
+    import backend.services.telephony as tp
+
+    monkeypatch.setattr(tp.settings, "outbound_trunk_id", "ST_shared")
     branch = NS(id="skin", outbound_trunk_id="ST_skin")
-    assert validate_branch_outbound_trunk(branch, "ST_skin") == "ST_skin"
+    assert validate_branch_outbound_trunk(branch, "ST_shared") == "ST_shared"
     with pytest.raises(OutboundTrunkIsolationError):
         validate_branch_outbound_trunk(branch, "ST_venkateshwara")
 
 
-def test_decrypt_failure_falls_back_not_crash():
+def test_decrypt_failure_falls_back_not_crash(monkeypatch):
+    import backend.services.telephony as tp
+
+    monkeypatch.setattr(tp.settings, "outbound_trunk_id", "ST_shared")
     """A bad/old ciphertext must not crash a dispatch job — it falls back to no
     password (the call is still attempted) rather than raising."""
     branch = NS(
@@ -96,4 +111,13 @@ def test_decrypt_failure_falls_back_not_crash():
     )
     t = resolve_branch_telephony(branch)  # must NOT raise
     assert t.sip_password == ""
-    assert t.outbound_trunk_id == "ST_x"
+    assert t.outbound_trunk_id == "ST_shared"
+
+
+def test_missing_shared_trunk_fails_closed(monkeypatch):
+    import backend.services.telephony as tp
+
+    monkeypatch.setattr(tp.settings, "outbound_trunk_id", "")
+    monkeypatch.delenv("OUTBOUND_TRUNK_ID", raising=False)
+    with pytest.raises(OutboundTrunkIsolationError):
+        branch_outbound_trunk_id(NS(id="b4", outbound_trunk_id="ST_legacy"))

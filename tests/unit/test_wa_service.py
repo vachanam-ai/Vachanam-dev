@@ -9,11 +9,12 @@ from backend.config import settings
 from backend.services import wa_service
 
 
-def _branch(linked=True):
+def _branch(linked=True, addon=False):
     return SimpleNamespace(
         id=uuid.uuid4(),
         wa_phone_number_id="111222333" if linked else None,
         wa_status="connected" if linked else "disconnected",
+        whatsapp_addon=addon,
     )
 
 
@@ -46,15 +47,16 @@ def _capture_post(sent):
 
 def test_gate_requires_creds_link_and_plan(monkeypatch):
     monkeypatch.setattr(settings, "meta_access_token", "tok", raising=False)
-    assert wa_service.wa_enabled(_branch(), "clinic") is True
-    assert wa_service.wa_enabled(_branch(), "multi") is True
-    assert wa_service.wa_enabled(_branch(), "solo") is False  # plan gate
-    assert wa_service.wa_enabled(_branch(linked=False), "clinic") is False
-    inconsistent = _branch()
+    assert wa_service.wa_enabled(_branch(), "clinic") is False
+    assert wa_service.wa_enabled(_branch(addon=True), "clinic") is True
+    assert wa_service.wa_enabled(_branch(addon=True), "multi") is True
+    assert wa_service.wa_enabled(_branch(addon=True), "solo") is True
+    assert wa_service.wa_enabled(_branch(linked=False, addon=True), "clinic") is False
+    inconsistent = _branch(addon=True)
     inconsistent.wa_status = "disconnected"
     assert wa_service.wa_enabled(inconsistent, "clinic") is False
     monkeypatch.setattr(settings, "meta_access_token", "", raising=False)
-    assert wa_service.wa_enabled(_branch(), "clinic") is False  # no creds
+    assert wa_service.wa_enabled(_branch(addon=True), "clinic") is False  # no creds
 
 
 # ── payload shapes ────────────────────────────────────────────────────────────
@@ -64,7 +66,7 @@ async def test_template_payload_with_buttons(monkeypatch):
     monkeypatch.setattr(settings, "meta_access_token", "tok", raising=False)
     sent = []
     monkeypatch.setattr(wa_service.httpx, "AsyncClient", _capture_post(sent))
-    b = _branch()
+    b = _branch(addon=True)
     ok = await wa_service.send_template(
         b, "+919000000001", "booking_confirm", "te",
         ["Clinic", "Dr X", "14 July, 10:00", "5"],
@@ -92,7 +94,7 @@ async def test_text_and_interactive_payloads(monkeypatch):
     monkeypatch.setattr(settings, "meta_access_token", "tok", raising=False)
     sent = []
     monkeypatch.setattr(wa_service.httpx, "AsyncClient", _capture_post(sent))
-    b = _branch()
+    b = _branch(addon=True)
     assert await wa_service.send_text(b, "+919000000001", "hello", plan="clinic") is True
     assert sent[-1]["json"]["text"]["body"] == "hello"
     inter = {"type": "list", "body": {"text": "pick"}, "action": {}}
@@ -120,7 +122,7 @@ async def test_network_failure_returns_false_never_raises(monkeypatch):
             raise httpx.ConnectError("down")
 
     monkeypatch.setattr(wa_service.httpx, "AsyncClient", _Boom)
-    ok = await wa_service.send_text(_branch(), "+919000000001", "hi", plan="clinic")
+    ok = await wa_service.send_text(_branch(addon=True), "+919000000001", "hi", plan="clinic")
     assert ok is False
 
 

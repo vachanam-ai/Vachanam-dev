@@ -1,64 +1,51 @@
-"""WhatsApp Embedded Signup — Tech Provider connect flow (WA MVP1 Task 9).
+"""Official WhatsApp Embedded Signup v4 Tech Provider onboarding.
 
-Replaces `scripts/wa_link_branch.py` hand-linking for clinics that go through
-Meta's Embedded Signup JS flow: the clinic connects its OWN WhatsApp Business
-Account (WABA) instead of Vinay pasting a phone_number_id.
-
-Flow (frontend does the Meta JS SDK dance, then posts three values here):
-  1. `code`             — one-time authorization code from FB.login's callback
-  2. `waba_id`           the WABA id Meta's embedded-signup session_info event
-  3. `phone_number_id`    delivers directly to the frontend
-
-Server side:
-  1. Exchange `code` for a business access token (GET /oauth/access_token).
-  2. Subscribe our app to that WABA's webhooks (POST /{waba_id}/subscribed_apps)
-     — MANDATORY. Without this no inbound message or status webhook ever
-     reaches us, so a subscribe failure aborts the whole connect (raises).
-  3. Register the phone number for Cloud API (POST /{phone_number_id}/register)
-     — best-effort. A coexistence number already live on the WhatsApp Business
-     app can reject re-registration; that is not a connect failure, only the
-     subscribe step above is load-bearing.
-  4. Fetch the verified display name (GET /{phone_number_id}?fields=verified_name)
-     for the Setup tab — cosmetic, never blocks connect on failure.
-
-RULE 1: `Branch.wa_waba_id` is UNIQUE — the router checks for a clash BEFORE
-calling Meta at all, and the same uniqueness is enforced at the DB layer as a
-backstop (IntegrityError -> 409) against a concurrent double-connect race.
-
-RULE 9: the authorization code and the business token are NEVER logged, not
-even truncated — every log line here carries branch_id / waba_id / status
-only. `encrypt_secret` (Fernet, backend/services/crypto.py) is the only place
-the plaintext token exists outside the Graph response itself.
-
-RULE 5: every external Graph call retries transient failures 3x with
-exponential backoff (mirrors backend/services/wa_service.py's `_post`).
+The browser returns a short-lived code and Meta asset IDs. This module performs
+every privileged step server-to-server: token exchange, asset verification,
+WABA webhook subscription, conditional phone registration, and Coexistence
+data-sync initiation. Secrets are encrypted before the caller commits them.
 """
 from __future__ import annotations
 
+import secrets
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import structlog
-from tenacity import (
-    retry, retry_if_exception_type, stop_after_attempt, wait_exponential,
-)
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from backend.config import settings
-from backend.services.crypto import encrypt_secret
+from backend.services.crypto import decrypt_secret, encrypt_secret
+from backend.services.meta_graph import url as graph_url
 
 logger = structlog.get_logger()
 
-_GRAPH = "https://graph.facebook.com/v21.0"
+FLOW_CLOUD_API = "FINISH"
+FLOW_COEXISTENCE = "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+SUPPORTED_FINISH_EVENTS = frozenset({FLOW_CLOUD_API, FLOW_COEXISTENCE})
+PAYMENT_METHOD_URL = "https://business.facebook.com/wa/manage/home/"
+
+
+def _is_transient(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.TransportError):
+        return True
+    return (
+        isinstance(exc, httpx.HTTPStatusError)
+        and exc.response is not None
+        and (exc.response.status_code == 429 or exc.response.status_code >= 500)
+    )
+
 
 _retry_graph = retry(
     stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
+    wait=wait_exponential(multiplier=0.25, min=0.25, max=2),
+    retry=retry_if_exception(_is_transient),
     reraise=True,
 )
 
 
 class WaConnectError(Exception):
-    """Carries the HTTP status the route should return and a message safe to
-    show the clinic owner verbatim — never a raw Graph error body."""
+    """HTTP status plus a clinic-safe message; never a raw Graph response."""
 
     def __init__(self, status_code: int, detail: str):
         self.status_code = status_code
@@ -66,171 +53,297 @@ class WaConnectError(Exception):
         super().__init__(detail)
 
 
-@_retry_graph
-async def _exchange_code(code: str) -> str:
-    """One-time authorization code -> long-lived business access token.
+def public_onboarding(branch) -> dict:
+    """Return only lifecycle data safe for the clinic dashboard."""
+    state = dict(getattr(branch, "wa_onboarding", None) or {})
+    state.pop("registration_pin_enc", None)
+    state.pop("business_id", None)
+    state["payment_method_url"] = PAYMENT_METHOD_URL
+    return state
 
-    RULE 9: `code` and the returned token are never logged, not even a
-    fragment — only whether the exchange succeeded.
-    """
+
+@_retry_graph
+async def _exchange_code(code: str) -> tuple[str, int | None]:
+    """Spend Meta's 30-second authorization code on the server."""
     if not settings.meta_app_id or not settings.meta_app_secret:
-        raise WaConnectError(
-            500, "WhatsApp connect is not configured on this server yet."
-        )
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(
-            f"{_GRAPH}/oauth/access_token",
+        raise WaConnectError(500, "WhatsApp connect is not configured on this server yet.")
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(
+            graph_url("oauth/access_token"),
             params={
                 "client_id": settings.meta_app_id,
                 "client_secret": settings.meta_app_secret,
                 "code": code,
             },
         )
-        r.raise_for_status()
-        data = r.json()
-    token = data.get("access_token")
+        response.raise_for_status()
+        payload = response.json()
+        token = payload.get("access_token")
+        try:
+            expires_in = int(payload["expires_in"]) if payload.get("expires_in") else None
+        except (TypeError, ValueError):
+            expires_in = None
     if not token:
-        raise WaConnectError(502, "WhatsApp did not return a usable access token.")
-    return token
+        raise WaConnectError(502, "WhatsApp did not return a usable business token.")
+    return token, expires_in
+
+
+@_retry_graph
+async def _verify_assets(waba_id: str, phone_number_id: str, token: str) -> dict:
+    """Prove the browser-supplied phone belongs to the granted WABA."""
+    async with httpx.AsyncClient(timeout=12) as client:
+        response = await client.get(
+            graph_url(f"{waba_id}/phone_numbers"),
+            params={
+                "fields": "id,verified_name,display_phone_number,status,quality_rating"
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        rows = response.json().get("data") or []
+    match = next((row for row in rows if str(row.get("id")) == str(phone_number_id)), None)
+    if match is None:
+        raise WaConnectError(
+            422,
+            "The selected WhatsApp phone number was not granted to Vachanam. "
+            "Please run the connection flow again.",
+        )
+    return match
+
+
+async def _coexistence_status(phone_number_id: str, token: str) -> dict:
+    """Best-effort diagnostics; Embedded Signup's finish event is authoritative."""
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            response = await client.get(
+                graph_url(phone_number_id),
+                params={"fields": "is_on_biz_app,platform_type"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+    except (httpx.HTTPStatusError, httpx.TransportError):
+        logger.info("wa_coexistence_status_unavailable", phone_number_id=phone_number_id)
+        return {}
 
 
 @_retry_graph
 async def _subscribe_app(waba_id: str, token: str) -> None:
-    """Subscribe our app to this WABA's webhooks. MANDATORY — without this no
-    inbound message, status update, or template review event ever reaches us."""
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(
-            f"{_GRAPH}/{waba_id}/subscribed_apps",
+    async with httpx.AsyncClient(timeout=12) as client:
+        response = await client.post(
+            graph_url(f"{waba_id}/subscribed_apps"),
             headers={"Authorization": f"Bearer {token}"},
         )
-        r.raise_for_status()
+        response.raise_for_status()
+        if response.json().get("success") is not True:
+            raise WaConnectError(502, "Meta did not confirm the webhook subscription.")
 
 
-async def _register_phone(phone_number_id: str, token: str) -> bool:
-    """Best-effort Cloud API registration. A coexistence number already
-    running on the WhatsApp Business app can legitimately reject this
-    (already registered) — that must never fail the connect; only the
-    subscribe step above is load-bearing. Returns whether it succeeded so the
-    caller can surface it as an informational flag, never an error."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(
-                f"{_GRAPH}/{phone_number_id}/register",
-                headers={"Authorization": f"Bearer {token}"},
-                json={"messaging_product": "whatsapp"},
-            )
-        if r.status_code >= 300:
-            logger.info("wa_register_skipped", status=r.status_code)
-            return False
-        return True
-    except httpx.TransportError as e:
-        logger.info("wa_register_skipped", error=str(e)[:120])
-        return False
+@_retry_graph
+async def _register_phone(phone_number_id: str, token: str, pin: str) -> None:
+    """Register a new Cloud API number with Meta's mandatory 6-digit PIN."""
+    async with httpx.AsyncClient(timeout=12) as client:
+        response = await client.post(
+            graph_url(f"{phone_number_id}/register"),
+            headers={"Authorization": f"Bearer {token}"},
+            json={"messaging_product": "whatsapp", "pin": pin},
+        )
+        response.raise_for_status()
+        if response.json().get("success") is not True:
+            raise WaConnectError(502, "Meta did not confirm phone-number registration.")
 
 
-async def _phone_verified_name(phone_number_id: str, token: str) -> str | None:
-    """Cosmetic — the display name shown in the Setup tab. Never blocks
-    connect: a lookup failure just leaves the name unset."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.get(
-                f"{_GRAPH}/{phone_number_id}",
-                params={"fields": "verified_name"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            r.raise_for_status()
-            return r.json().get("verified_name")
-    except (httpx.HTTPStatusError, httpx.TransportError) as e:
-        logger.info("wa_verified_name_lookup_failed", error=str(e)[:120])
-        return None
+@_retry_graph
+async def _request_sync(phone_number_id: str, token: str, sync_type: str) -> str:
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            graph_url(f"{phone_number_id}/smb_app_data"),
+            headers={"Authorization": f"Bearer {token}"},
+            json={"messaging_product": "whatsapp", "sync_type": sync_type},
+        )
+        response.raise_for_status()
+        request_id = str(response.json().get("request_id") or "")
+    if not request_id:
+        raise WaConnectError(502, f"Meta accepted no {sync_type} synchronization request.")
+    return request_id
+
+
+async def _start_coexistence_sync(
+    phone_number_id: str,
+    token: str,
+    existing: dict | None = None,
+) -> dict:
+    """Start each one-shot Coexistence sync at most once per stored request ID."""
+    state = dict(existing or {})
+    for key, sync_type in (("contacts", "smb_app_state_sync"), ("history", "history")):
+        previous = dict(state.get(key) or {})
+        if previous.get("request_id") or previous.get("status") in {"complete", "declined"}:
+            continue
+        try:
+            request_id = await _request_sync(phone_number_id, token, sync_type)
+            state[key] = {"status": "requested", "request_id": request_id}
+        except Exception as exc:  # keep the token so the owner can retry inside 24h
+            logger.warning("wa_coexistence_sync_request_failed", sync_type=sync_type)
+            state[key] = {"status": "error"}
+            if isinstance(exc, WaConnectError):
+                state[key]["detail"] = exc.detail
+    return state
 
 
 async def connect_branch(
-    branch, *, code: str, waba_id: str, phone_number_id: str
+    branch,
+    *,
+    code: str,
+    waba_id: str,
+    phone_number_id: str,
+    flow_event: str,
+    business_id: str | None = None,
 ) -> dict:
-    """Run the full Embedded Signup connect flow and mutate `branch` in
-    place (encrypted token, waba id, verified name, status, connected_at).
-    Caller commits — this function never touches the DB session, so it can
-    be exercised in tests without one.
-
-    Raises `WaConnectError` on any failure of a MANDATORY step (token
-    exchange, webhook subscribe). A failure of the best-effort steps
-    (register, verified-name lookup) never raises — it degrades quietly and
-    is reported back in the result dict.
-    """
+    """Complete the official Tech Provider onboarding flow and mutate branch."""
+    if flow_event not in SUPPORTED_FINISH_EVENTS:
+        raise WaConnectError(422, "Unsupported WhatsApp Embedded Signup completion event.")
     try:
-        token = await _exchange_code(code)
-    except (httpx.HTTPStatusError, httpx.TransportError) as e:
-        logger.warning(
-            "wa_connect_token_exchange_failed",
-            branch_id=str(getattr(branch, "id", None)), waba_id=waba_id,
-        )
-        raise WaConnectError(
-            502, "Could not connect to WhatsApp — please try again."
-        ) from e
-
-    return await _finish_connect(
-        branch, token=token, waba_id=waba_id, phone_number_id=phone_number_id,
-    )
-
-
-async def connect_branch_manual(
-    branch, *, token: str, waba_id: str, phone_number_id: str
-) -> dict:
-    """Same connect, without Embedded Signup: the owner pastes the three
-    values from Meta's own API Setup screen.
-
-    Exists because Embedded Signup cannot run until the Meta app is published
-    Live, and because a clinic on a partner-managed WABA may never see that
-    popup at all. Everything after the token is identical — the subscribe is
-    just as mandatory here, so a number linked this way is a real connection
-    and not a half-configured branch that silently drops inbound messages.
-
-    RULE 1: the token is REQUIRED and is stored per branch. It deliberately
-    does NOT fall back to `settings.meta_access_token` — that fallback is
-    bridge mode, reachable only by super_admin, and letting a clinic owner
-    self-serve into it would let any clinic type Vachanam's own WABA id and
-    send from the platform account.
-    """
-    return await _finish_connect(
-        branch, token=token, waba_id=waba_id, phone_number_id=phone_number_id,
-    )
-
-
-async def _finish_connect(
-    branch, *, token: str, waba_id: str, phone_number_id: str
-) -> dict:
-    """Everything a connect does once a usable token exists. Shared so the
-    Embedded Signup and manual paths cannot drift into behaving differently —
-    in particular so neither can skip the mandatory subscribe."""
-    from datetime import datetime, timezone
-
-    try:
+        token, token_expires_in = await _exchange_code(code)
+        phone = await _verify_assets(waba_id, phone_number_id, token)
         await _subscribe_app(waba_id, token)
-    except (httpx.HTTPStatusError, httpx.TransportError) as e:
+    except WaConnectError:
+        raise
+    except (httpx.HTTPStatusError, httpx.TransportError) as exc:
         logger.warning(
-            "wa_connect_subscribe_failed",
-            branch_id=str(getattr(branch, "id", None)), waba_id=waba_id,
+            "wa_connect_graph_step_failed",
+            branch_id=str(getattr(branch, "id", None)),
+            waba_id=waba_id,
+            status=getattr(getattr(exc, "response", None), "status_code", None),
         )
-        raise WaConnectError(
-            502,
-            "Connected to WhatsApp but could not subscribe to message "
-            "delivery — please check the ID and token and try again.",
-        ) from e
+        raise WaConnectError(502, "Could not connect to WhatsApp. Please try again.") from exc
 
-    registered = await _register_phone(phone_number_id, token)
-    verified_name = await _phone_verified_name(phone_number_id, token)
+    now = datetime.now(timezone.utc)
+    mode = "coexistence" if flow_event == FLOW_COEXISTENCE else "cloud_api"
+    pin_enc = None
+    registered = False
+    sync: dict = {}
+
+    if mode == "coexistence":
+        # Meta explicitly requires registration to be skipped for a WhatsApp
+        # Business app number; Embedded Signup already registered it.
+        phone.update(await _coexistence_status(phone_number_id, token))
+        sync = await _start_coexistence_sync(phone_number_id, token)
+    else:
+        if str(phone.get("status") or "").upper() == "CONNECTED":
+            registered = True
+        else:
+            pin = f"{secrets.randbelow(1_000_000):06d}"
+            try:
+                await _register_phone(phone_number_id, token, pin)
+            except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+                logger.warning(
+                    "wa_phone_registration_failed",
+                    branch_id=str(getattr(branch, "id", None)),
+                    status=getattr(getattr(exc, "response", None), "status_code", None),
+                )
+                raise WaConnectError(
+                    502,
+                    "Meta could not register the selected phone number. "
+                    "Please check the number in WhatsApp Manager and reconnect.",
+                ) from exc
+            registered = True
+            pin_enc = encrypt_secret(pin)
 
     branch.wa_waba_id = waba_id
     branch.wa_phone_number_id = phone_number_id
     branch.wa_token_enc = encrypt_secret(token)
-    branch.wa_verified_name = verified_name
+    branch.wa_verified_name = phone.get("verified_name")
     branch.wa_status = "connected"
-    branch.wa_connected_at = datetime.now(timezone.utc)
+    branch.wa_connected_at = now
+    branch.wa_onboarding = {
+        "embedded_signup_version": 4,
+        "flow_event": flow_event,
+        "mode": mode,
+        "business_id": business_id,
+        "token_expires_at": (
+            (now + timedelta(seconds=token_expires_in)).isoformat()
+            if token_expires_in else None
+        ),
+        "phone_registered": registered,
+        "is_on_biz_app": bool(phone.get("is_on_biz_app")),
+        "platform_type": phone.get("platform_type"),
+        "payment_status": "required",
+        "payment_confirmed_at": None,
+        "registration_pin_enc": pin_enc,
+        "sync_deadline": (now + timedelta(hours=24)).isoformat() if mode == "coexistence" else None,
+        "sync": sync,
+    }
 
     logger.info(
         "wa_connect_succeeded",
-        branch_id=str(getattr(branch, "id", None)), waba_id=waba_id,
-        status=branch.wa_status, phone_registered=registered,
+        branch_id=str(getattr(branch, "id", None)),
+        waba_id=waba_id,
+        mode=mode,
+        phone_registered=registered,
     )
-    return {"registered": registered, "verified_name": verified_name}
+    return {
+        "registered": registered,
+        "verified_name": branch.wa_verified_name,
+        "onboarding": public_onboarding(branch),
+    }
+
+
+async def retry_coexistence_sync(branch) -> dict:
+    state = dict(getattr(branch, "wa_onboarding", None) or {})
+    if state.get("mode") != "coexistence":
+        raise WaConnectError(409, "This WhatsApp number does not use Coexistence sync.")
+    deadline_raw = state.get("sync_deadline")
+    try:
+        deadline = datetime.fromisoformat(deadline_raw) if deadline_raw else None
+    except ValueError:
+        deadline = None
+    if deadline and datetime.now(timezone.utc) >= deadline:
+        raise WaConnectError(
+            409,
+            "Meta's 24-hour synchronization window has expired. Disconnect and reconnect WhatsApp.",
+        )
+    try:
+        token = decrypt_secret(branch.wa_token_enc)
+    except Exception as exc:
+        raise WaConnectError(409, "WhatsApp authorization is no longer usable. Reconnect WhatsApp.") from exc
+    state["sync"] = await _start_coexistence_sync(
+        branch.wa_phone_number_id, token, state.get("sync")
+    )
+    branch.wa_onboarding = state
+    return public_onboarding(branch)
+
+
+def confirm_payment_method(branch) -> dict:
+    state = dict(getattr(branch, "wa_onboarding", None) or {})
+    state["payment_status"] = "confirmed"
+    state["payment_confirmed_at"] = datetime.now(timezone.utc).isoformat()
+    branch.wa_onboarding = state
+    return public_onboarding(branch)
+
+
+@_retry_graph
+async def _unsubscribe_app(waba_id: str, token: str) -> bool:
+    async with httpx.AsyncClient(timeout=12) as client:
+        response = await client.delete(
+            graph_url(f"{waba_id}/subscribed_apps"),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response.raise_for_status()
+        return response.json().get("success") is True
+
+
+async def unsubscribe_branch(branch) -> bool:
+    """Best-effort Meta unsubscribe; local revocation must still proceed."""
+    if not getattr(branch, "wa_waba_id", None) or not getattr(branch, "wa_token_enc", None):
+        return False
+    try:
+        token = decrypt_secret(branch.wa_token_enc)
+        return await _unsubscribe_app(branch.wa_waba_id, token)
+    except Exception as exc:  # noqa: BLE001 - never block local credential deletion
+        logger.warning(
+            "wa_meta_unsubscribe_failed",
+            branch_id=str(getattr(branch, "id", None)),
+            waba_id=getattr(branch, "wa_waba_id", None),
+            status=getattr(getattr(exc, "response", None), "status_code", None),
+        )
+        return False

@@ -7,7 +7,7 @@ import hashlib
 import hmac as hmac_mod
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -16,6 +16,7 @@ import pytest_asyncio
 from backend.config import settings
 from backend.models.schema import (
     Branch, Doctor, Organization, Patient, PatientMessage, Rating, Token,
+    WhatsAppSession,
 )
 from backend.services import wa_actions, wa_chat, wa_service
 
@@ -64,6 +65,7 @@ async def _setup(db, plan="clinic"):
         whatsapp_number=f"+9155{str(uuid.uuid4().int)[:8]}", status="active",
         wa_phone_number_id=str(uuid.uuid4().int)[:12],
         wa_status="connected",
+        whatsapp_addon=plan in ("solo", "clinic", "multi"),
     )
     db.add(b)
     await db.flush()
@@ -325,3 +327,111 @@ async def test_a_known_waba_id_is_never_overwritten(client, db, wa_env):
     db.expire_all()
     fresh = (await db.execute(select(Branch).where(Branch.id == bid))).scalar_one()
     assert fresh.wa_waba_id == "111aaa"
+
+
+# Coexistence: one-shot history, app echoes, and Meta lifecycle events.
+
+async def _post_change(client, change, *, waba_id="waba-coexist"):
+    payload = {"entry": [{"id": waba_id, "changes": [change]}]}
+    raw = json.dumps(payload).encode()
+    return await client.post(
+        "/webhooks/whatsapp", content=raw,
+        headers={"X-Hub-Signature-256": _sig(raw), "Content-Type": "application/json"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_coexistence_history_is_tenant_scoped_deduplicated_and_minimized(client, db, wa_env):
+    from sqlalchemy import select
+
+    b, _pat, _tok = await _setup(db)
+    now = datetime.now(timezone.utc)
+    recent = str(int(now.timestamp()))
+    old = str(int((now - timedelta(days=40)).timestamp()))
+    b.wa_onboarding = {"mode": "coexistence", "sync": {}}
+    bid, pnid = b.id, b.wa_phone_number_id
+    await db.commit()
+
+    messages = [
+        {"id": "old", "from": "919", "timestamp": old, "type": "text", "text": {"body": "discard"}},
+        {"id": "keep", "from": "919", "timestamp": recent, "type": "text", "text": {"body": "keep"}},
+        {"id": "keep", "from": "919", "timestamp": recent, "type": "text", "text": {"body": "duplicate"}},
+    ]
+    response = await _post_change(client, {"field": "history", "value": {
+        "metadata": {"phone_number_id": pnid, "display_phone_number": "914012345678"},
+        "history": [{"metadata": {"progress": 100}, "threads": [{"id": "919", "messages": messages}]}],
+    }})
+    assert response.status_code == 200
+    row = (await db.execute(select(WhatsAppSession).where(
+        WhatsAppSession.branch_id == bid, WhatsAppSession.patient_phone == "919",
+    ))).scalar_one()
+    assert [turn["id"] for turn in row.session_data["turns"]] == ["keep"]
+    db.expire_all()
+    fresh = (await db.execute(select(Branch).where(Branch.id == bid))).scalar_one()
+    assert fresh.wa_onboarding["sync"]["history"]["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_coexistence_history_decline_is_visible_not_retried_as_success(client, db, wa_env):
+    from sqlalchemy import select
+
+    b, _pat, _tok = await _setup(db)
+    b.wa_onboarding = {"mode": "coexistence", "sync": {}}
+    bid, pnid = b.id, b.wa_phone_number_id
+    await db.commit()
+    await _post_change(client, {"field": "history", "value": {
+        "metadata": {"phone_number_id": pnid},
+        "history": [{"errors": [{"code": 2593109}]}],
+    }})
+    db.expire_all()
+    fresh = (await db.execute(select(Branch).where(Branch.id == bid))).scalar_one()
+    assert fresh.wa_onboarding["sync"]["history"] == {"status": "declined", "progress": 100}
+
+
+@pytest.mark.asyncio
+async def test_business_app_echo_is_mirrored_without_triggering_the_agent(client, db, wa_env):
+    from sqlalchemy import select
+
+    b, _pat, _tok = await _setup(db)
+    now = str(int(datetime.now(timezone.utc).timestamp()))
+    bid, pnid = b.id, b.wa_phone_number_id
+    await db.commit()
+    await _post_change(client, {"field": "smb_message_echoes", "value": {
+        "metadata": {"phone_number_id": pnid},
+        "message_echoes": [{
+            "id": "echo-1", "to": "919000000042", "timestamp": now,
+            "type": "text", "text": {"body": "Receptionist reply"},
+        }],
+    }})
+    row = (await db.execute(select(WhatsAppSession).where(
+        WhatsAppSession.branch_id == bid, WhatsAppSession.patient_phone == "919000000042",
+    ))).scalar_one()
+    assert row.session_data["turns"][-1]["text"] == "Receptionist reply"
+    assert row.session_data["turns"][-1]["role"] == "bot"
+    assert wa_env == []
+
+
+@pytest.mark.asyncio
+async def test_meta_offboarding_revokes_local_access_and_purges_chats(client, db, wa_env):
+    from sqlalchemy import func, select
+    from backend.services import wa_session
+
+    b, _pat, _tok = await _setup(db)
+    b.wa_waba_id = "waba-coexist"
+    b.wa_onboarding = {"mode": "coexistence"}
+    bid = b.id
+    await db.commit()
+    await wa_session.append(db, bid, "919", "patient", "private")
+
+    response = await _post_change(client, {
+        "field": "account_update", "value": {"event": "ACCOUNT_OFFBOARDED"},
+    })
+    assert response.status_code == 200
+    db.expire_all()
+    fresh = (await db.execute(select(Branch).where(Branch.id == bid))).scalar_one()
+    assert fresh.wa_status == "disconnected"
+    assert fresh.wa_waba_id is None and fresh.wa_token_enc is None
+    count = (await db.execute(select(func.count()).select_from(WhatsAppSession).where(
+        WhatsAppSession.branch_id == bid,
+    ))).scalar_one()
+    assert count == 0

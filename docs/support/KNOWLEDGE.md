@@ -51,26 +51,23 @@ switch language and the agent continues in the new language.
 
 ## Plans and pricing (GST currently waived)
 
-| Plan | Price | Included calling | Doctors | Languages | Extras |
+| Plan | Platform fee | Voice usage | Doctors | Languages | Extras |
 |---|---|---|---|---|---|
-| Basic | ₹5,999/month | 400 minutes (≈140 calls) | up to 3 | all 7 | treatment follow-up calls |
-| Growth (most popular) | ₹10,999/month | 1,500 minutes (≈540 calls) | up to 10 | all 7 | WhatsApp, reminders and follow-up calls |
-| Scale | ₹21,999/month | 3,000 minutes (≈1,080 calls) | unlimited | all 7 | 2 branches, WhatsApp and follow-up calls |
-| WhatsApp only | ₹1,499/month | no voice minutes | up to 3 | chat | WhatsApp booking and patient service |
+| Vachanam Voice | ₹1,999/month | ₹6 per voice minute | unlimited | all 7 | reminders and follow-up calls |
+| WhatsApp | ₹1,999/month | no voice | 3 | all supported chat languages | WhatsApp included |
 
-- Overage on every voice plan: ₹6 per minute beyond included minutes, billed with
-  the next invoice.
-- Extra phone number: ₹2,499/month. Extra branch: ₹6,999/month (a branch is a
+- Voice usage is ₹6 per minute from the first minute, billed with the next invoice.
+- WhatsApp is a ₹1,499/month add-on per Voice branch. Meta message charges are
+  paid directly by the clinic.
+- Extra phone number or branch: ₹1,499/month (a branch is a
   fully separate clinic setup — own number, doctors, staff; data never mixes).
-- Included minutes reset monthly and do not carry over.
 - GST is currently waived, so invoices do not add a GST charge.
 
-## Free trial
+## Founding 100
 
-14 days, no card required, 30 included minutes (about 10 calls). When the trial
-ends or the minutes run out, calls pause until a plan is activated. Around day
-12 the owner receives a payment link. Trial clinics get the full feature set
-of the Growth plan to evaluate.
+The first 100 clinics receive 500 voice minutes free on their first paid
+billing cycle. The ₹1,999 Voice platform fee still applies. This is a one-time credit,
+not a recurring monthly allowance.
 
 ## Getting started (onboarding)
 
@@ -90,8 +87,7 @@ of the Growth plan to evaluate.
 
 - Each doctor has working days, start/end hours, specialization, a booking
   style (token queue or time slots), and a daily token limit (default 50).
-- Doctor caps by plan: Basic 3, Growth 10, Scale unlimited. Adding a doctor
-  beyond the cap prompts an upgrade.
+- Vachanam Voice supports unlimited doctors in its clinic branch.
 - Doctor leave: mark leave dates in the app under Doctor leave. Vachanam then
   automatically CALLS the affected booked patients and rebooks them onto
   another suitable time or doctor, so nobody shows up to a closed door.

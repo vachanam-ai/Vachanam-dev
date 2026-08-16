@@ -26,6 +26,6 @@ def test_prompt_keeps_times_natural_and_phone_digits_clear():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     compact = " ".join(p.split())
     assert "Times, dates, ages, fees, tokens: natural spoken numbers" in p
-    assert "Add a day-part when a time would be ambiguous" in p
+    assert "Add a day-part when a time remains genuinely ambiguous" in p
     assert "PLAIN DIGITS" in p
     assert "never English number words inside another language" in compact

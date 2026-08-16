@@ -15,6 +15,7 @@ from backend.models.schema import Doctor, Token, Patient, Branch
 from backend.services.audit_service import write_audit_row
 from backend.services.doctor_schedule import (
     ResolvedDoctorSchedule,
+    bookable_starts_as_text,
     resolve_doctor_schedule,
     sessions_as_text,
 )
@@ -192,6 +193,11 @@ def _outside_working_hours(
             ),
         }
     return None
+
+
+def _is_session_end(schedule: ResolvedDoctorSchedule, value: time) -> bool:
+    """A published closing time is not a slot start, but gets nearest-slot help."""
+    return any(session.end == value for session in schedule.sessions)
 
 
 def _schedule_block_reason(
@@ -644,7 +650,8 @@ async def check_availability(
 
     # Generate each session independently. A slot can never bridge a lunch or
     # evening break between two published sessions.
-    all_slots = schedule.slots(doctor.slot_duration_minutes)
+    published_slots = schedule.slots(doctor.slot_duration_minutes)
+    all_slots = published_slots
     # Same-day booking: never offer a slot that has already passed.
     # (`now` was resolved above, before the existing-booking note.)
     if booking_date == now.date():
@@ -686,25 +693,26 @@ async def check_availability(
     if not available:
         return _ret(f"{doctor.name} is fully booked on {booking_date.strftime('%d %B')}.")
 
-    def _ranges_str(slot_list: list) -> str:
-        ranges = _merge_to_ranges(slot_list, doctor.slot_duration_minutes)
-        return " and ".join(
-            f"{start.strftime('%I:%M %p').lstrip('0')} to {end.strftime('%I:%M %p').lstrip('0')}"
-            for start, end in ranges
-        )
+    def _ranges_str(slot_list: list[time]) -> str:
+        return bookable_starts_as_text(slot_list, doctor.slot_duration_minutes)
 
     if query_start:
         # LLMs pass "4pm to 4pm" for an exact-time ask — a zero-width window
         # matched nothing and the patient heard "not free" for a FREE slot.
         # Guarantee the window spans at least one slot.
         slot_min = doctor.slot_duration_minutes or 30
-        if not query_end or query_end <= query_start:
+        exact_request = not query_end or query_end <= query_start
+        if exact_request:
             qs_dt = datetime.combine(booking_date, query_start)
             query_end = (qs_dt + timedelta(minutes=slot_min)).time()
         in_window = [s for s in available if query_start <= s < query_end]
         if in_window:
+            availability_prefix = (
+                f"{doctor.name} is available at " if exact_request
+                else f"{doctor.name} has these BOOKABLE APPOINTMENT STARTS: "
+            )
             return _ret(
-                f"{doctor.name} is available {_ranges_str(in_window)} "
+                availability_prefix + f"{_ranges_str(in_window)} "
                 f"on {booking_date.strftime('%d %B')}."
             )
         # Asked window full — lead with the times CLOSEST to what the patient
@@ -717,17 +725,29 @@ async def check_availability(
         nearest_str = " or ".join(
             s.strftime("%I:%M %p").lstrip("0") for s in nearest_free
         )
+        requested = query_start.strftime('%I:%M %p').lstrip('0')
+        if exact_request and query_start not in published_slots:
+            reason = (
+                f"{requested} is not a bookable appointment start in the "
+                "published schedule; do NOT say it is already booked. "
+            )
+        elif exact_request and booking_date == now.date() and query_start <= now.time():
+            reason = f"{requested} today has already passed. "
+        else:
+            reason = f"{requested} is occupied. " if exact_request else (
+                f"Requested window is NOT free. There is no free start between {requested} and "
+                f"{query_end.strftime('%I:%M %p').lstrip('0')}. "
+            )
         return _ret(
-            f"{doctor.name} is NOT free between "
-            f"{query_start.strftime('%I:%M %p').lstrip('0')} and "
-            f"{query_end.strftime('%I:%M %p').lstrip('0')}. "
+            reason
+            +
             f"NEAREST free times to their request: {nearest_str}. "
-            f"Full availability {_ranges_str(available)} on "
+            f"All BOOKABLE APPOINTMENT STARTS: {_ranges_str(available)} on "
             f"{booking_date.strftime('%d %B')}. Offer the nearest time FIRST."
         )
 
     return _ret(
-        f"{doctor.name} is available {_ranges_str(available)} "
+        f"{doctor.name} has these BOOKABLE APPOINTMENT STARTS: {_ranges_str(available)} "
         f"on {booking_date.strftime('%d %B')}."
     )
 
@@ -913,12 +933,6 @@ async def assign_token(
                 ),
             }
 
-        # HARD BOUND: never book outside working hours. The LLM read a spoken
-        # "3" as 03:00 and a patient got a 3 AM appointment.
-        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
-        if hours_block:
-            return hours_block
-
         # M6: never book a same-day slot that has already passed. check_availability
         # filters past slots but nothing forces it to run first, and the walk-in
         # UI lists all slots — a 09:00 booking made at 17:00 gets a calendar
@@ -933,6 +947,14 @@ async def assign_token(
                     "already passed. Offer the next available future slot."
                 ),
             }
+
+        # A genuinely outside time (for example 3 AM against 9 AM–5 PM) must
+        # be identified as outside working hours. The one exception is an exact
+        # session closing boundary: 12:00 for a 9:00–12:00 sitting is best
+        # explained as "not a start" with the nearest real slot (11:45).
+        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
+        if hours_block and not _is_session_end(schedule, appointment_time):
+            return hours_block
 
         # Requested time must sit on the doctor's slot grid (e.g. hours from
         # 9:00 every 30min -> 16:00 valid, 16:10 not). Snap is the agent's job;
@@ -954,6 +976,12 @@ async def assign_token(
                     "this a technical problem."
                 ),
             }
+
+        # HARD BOUND: never book outside working hours. The boundary exception
+        # above has already returned from the grid check.
+        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
+        if hours_block:
+            return hours_block
 
         max_per_slot = doctor.max_concurrent_per_slot or 1
         # DB confirmed count closes the Redis-restart hole (cache loss must
@@ -1169,10 +1197,10 @@ async def confirm_booking(
     else:
         if appointment_time is None:
             return {"success": False, "reason": "appointment_time_required"}
-        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
-        if hours_block:
-            return hours_block
         grid = schedule.slots(doctor.slot_duration_minutes)
+        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
+        if hours_block and not _is_session_end(schedule, appointment_time):
+            return hours_block
         if appointment_time not in grid:
             return {
                 "success": False,
@@ -1189,6 +1217,9 @@ async def confirm_booking(
                 ],
                 "instruction": "That time is not an exact published slot. Offer a nearest slot.",
             }
+        hours_block = _outside_working_hours(doctor, schedule, appointment_time)
+        if hours_block:
+            return hours_block
         if booking_date == schedule_now.date() and appointment_time <= schedule_now.time():
             return {
                 "success": False,

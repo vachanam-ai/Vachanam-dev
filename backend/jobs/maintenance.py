@@ -22,6 +22,7 @@ async def run_hourly_maintenance() -> None:
     from backend.jobs.finalize_stale_calls import run_finalize_stale_calls
     from backend.jobs.spend_watch import run_spend_watch
     from backend.jobs.support_sla import run_sla_escalation
+    from backend.jobs.telephony_reconcile import run_telephony_reconcile
 
     steps = [
         ("requeue_stale_in_progress", requeue_stale_in_progress),
@@ -39,6 +40,11 @@ async def run_hourly_maintenance() -> None:
         # costs no extra DB wake, and its own Redis dedupe keeps an hourly
         # re-detection from mailing the same condition every hour.
         ("spend_watch", run_spend_watch),
+        # Shared inbound/outbound trunks are provider-side derived state. A DID
+        # save/delete may commit while LiveKit is transiently unavailable; this
+        # exact DB->provider reconciliation self-heals both missing and stale
+        # identities on the next existing hourly wake.
+        ("telephony_reconcile", run_telephony_reconcile),
     ]
 
     # Same guard main.py used: CDR sync only runs when Vobiz creds exist.

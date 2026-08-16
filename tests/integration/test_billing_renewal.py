@@ -155,7 +155,7 @@ async def test_renewal_charges_overage_and_gst(db, monkeypatch):
     from backend.services.billing_math import subscription_order_breakdown
 
     expected = subscription_order_breakdown(
-        "clinic", cycle_minutes_used=1550,
+        "clinic", cycle_minutes_used=1550, adjustment=1500,
         subscription_started_at=org.subscription_started_at,
     )["amount_paise"]
     assert resp.amount == expected

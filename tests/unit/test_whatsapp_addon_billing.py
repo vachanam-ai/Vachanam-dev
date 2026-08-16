@@ -1,7 +1,7 @@
 """Buying WhatsApp is one charge now, then one invoice forever after.
 
 Vinay 2026-08-03: "implement a button to add on whatsapp. which should prompt
-for payment of 1499. and from next month on entire billing should come together
+for payment, then from next month the whole bill should come together
 (number+whatsapp)." First month full price, not pro-rated (his call).
 
 The invariants that matter on a money path:
@@ -25,8 +25,8 @@ from backend.services.billing_math import (
 
 def test_the_one_off_charge_is_exactly_the_advertised_price():
     bd = whatsapp_addon_order_breakdown()
-    assert bd["base"] == WHATSAPP_ADDON_RUPEES == 1_499
-    expected = 1_499 if GST_WAIVED else round(1_499 * 1.18, 2)
+    assert bd["base"] == WHATSAPP_ADDON_RUPEES == 1499
+    expected = 1499 if GST_WAIVED else round(1499 * 1.18, 2)
     assert bd["total"] == expected
     assert bd["amount_paise"] == int(round(expected * 100))
 

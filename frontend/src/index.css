@@ -399,7 +399,7 @@ a.app-person-row:hover { background: rgba(236,255,248,.08); }
 .trust-grid p { margin-top: 8px; color: rgb(var(--slate)); font-size: 12px; line-height: 1.6; }
 
 .pricing-section { max-width: none; padding-inline: max(22px,calc((100vw - 1196px)/2)); background: rgb(var(--surface)); border-block: 1px solid rgb(var(--hairline)); }
-.pricing-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: stretch; gap: 14px; margin-top: 48px; }
+.pricing-grid { display: grid; grid-template-columns: minmax(0,680px); justify-content: center; align-items: stretch; gap: 14px; margin-top: 48px; }
 .pricing-card { position: relative; display: flex; min-width: 0; flex-direction: column; border: 1px solid rgb(var(--line2)); border-radius: 23px; padding: 28px; background: rgb(var(--cream)); transition: transform 200ms ease, box-shadow 200ms ease; }
 .pricing-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-float); }
 .pricing-card.is-popular { color: #ecfff9; border-color: transparent; background: linear-gradient(155deg, #075f57, #043d39); transform: translateY(-10px); box-shadow: var(--shadow-float); }

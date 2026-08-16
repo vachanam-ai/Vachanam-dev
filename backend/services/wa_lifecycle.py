@@ -61,6 +61,12 @@ async def disconnect_branch(
     branch.wa_phone_number_id = None
     branch.wa_status = status
     branch.wa_connected_at = None
+    branch.wa_onboarding = None
+    # A disconnected clinic must never silently lose notifications because it
+    # previously chose WhatsApp-only. Restore the safe voice defaults in the
+    # same transaction as credential revocation.
+    branch.reminder_calls_enabled = True
+    branch.followup_calls_enabled = True
 
     purged = (
         await db.execute(

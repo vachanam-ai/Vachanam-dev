@@ -347,7 +347,7 @@ section{padding:96px 60px;}
 /* PRICING */
 .pricing{background:var(--teal-mint);}
 .pricing-grid{
-  display:grid;grid-template-columns:repeat(3,1fr);
+  display:grid;grid-template-columns:minmax(0,680px);justify-content:center;
   gap:1px;background:var(--border);
   border:1px solid var(--border);
   margin-top:56px;
@@ -732,62 +732,48 @@ footer{
   <div class="section-inner">
     <div class="eyebrow">Pricing</div>
     <h2 class="section-heading">Transparent pricing.<br>No hidden charges.</h2>
-    <p class="section-sub">All plans include your dedicated phone number, Google Calendar sync, reminder calls, receptionist app, and analytics dashboard.</p>
-    <!-- WhatsApp-only plan, separate from the voice plans. -->
+    <p class="section-sub">Choose voice, WhatsApp, or both. Voice is charged only for the minutes patients use.</p>
+    <!-- WhatsApp can be bought alone or added to Voice. -->
     <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--hairline,#e3e3e0);border-radius:12px;padding:14px 18px;margin-bottom:22px;">
       <div>
-        <div style="font-weight:600;">WhatsApp &middot; &#8377;1,499/month</div>
-        <div style="font-size:13px;color:var(--slate);">WhatsApp booking and patient service for 3 doctors and 1 branch. No voice line.</div>
+        <div style="font-weight:600;">WhatsApp add-on &middot; &#8377;1,499/month per branch</div>
+        <div style="font-size:13px;color:var(--slate);">Confirmations, reminders, follow-ups and patient booking chat. Meta conversation fees are paid directly by the clinic.</div>
       </div>
-      <button type="button" class="plan-btn plan-btn-outline" data-plan="WhatsApp" data-amount="149900" style="flex:0 0 auto;">Choose WhatsApp</button>
+      <a class="plan-btn plan-btn-outline" href="#contact" style="flex:0 0 auto;">Add WhatsApp</a>
     </div>
     <div class="pricing-grid">
-      <div class="plan">
-        <div class="plan-name">Basic</div>
-        <div class="plan-price">&#8377;5,999 <span style="font-size:14px;font-weight:400;color:var(--slate);">+ &#8377;6/min after</span></div>
-        <div class="plan-per">per month &mdash; 400 voice minutes</div>
-        <ul class="plan-list">
-          <li>3 doctors &middot; 1 dedicated phone number</li>
-          <li>All 7 Indian languages</li>
-          <li>Token booking + Google Calendar</li>
-          <li>Reminder calls</li>
-          <li>Receptionist attendance app</li>
-          <li>Booking, cancellations and reschedules</li>
-        </ul>
-        <button type="button" class="plan-btn plan-btn-outline" data-plan="Basic" data-amount="599900">Get started</button>
-      </div>
       <div class="plan featured">
-        <div class="plan-name">Growth &mdash; Most popular</div>
-        <div class="plan-price">&#8377;10,999 <span style="font-size:14px;font-weight:400;color:var(--slate);">+ &#8377;6/min after</span></div>
-        <div class="plan-per">per month &mdash; 1,500 voice minutes</div>
+        <div class="plan-name">Vachanam Voice</div>
+        <div class="plan-price">&#8377;1,999 <span style="font-size:14px;font-weight:400;color:var(--slate);">+ &#8377;6/voice min</span></div>
+        <div class="plan-per">per month &mdash; pay only for voice usage</div>
         <ul class="plan-list">
-          <li>Up to 10 doctors &middot; 1 dedicated number</li>
+          <li>Unlimited doctors &middot; 1 clinic branch</li>
+          <li>1 dedicated phone number</li>
           <li>All 7 Indian languages</li>
           <li>Natural human-like AI voice</li>
-          <li>WhatsApp confirmations + reminders</li>
+          <li>WhatsApp available as an add-on</li>
           <li>Slot + token booking</li>
           <li>Treatment follow-up calls</li>
           <li>Analytics dashboard</li>
         </ul>
-        <button type="button" class="plan-btn plan-btn-fill" data-plan="Growth" data-amount="1099900">Get started</button>
+        <button type="button" class="plan-btn plan-btn-fill" data-plan="Vachanam Voice" data-amount="199900">Get started</button>
       </div>
       <div class="plan">
-        <div class="plan-name">Scale</div>
-        <div class="plan-price">&#8377;21,999 <span style="font-size:14px;font-weight:400;color:var(--slate);">+ &#8377;6/min after</span></div>
-        <div class="plan-per">per month &mdash; 3,000 voice minutes</div>
+        <div class="plan-name">WhatsApp</div>
+        <div class="plan-price">&#8377;1,999</div>
+        <div class="plan-per">per month &mdash; no phone line or voice usage</div>
         <ul class="plan-list">
-          <li>Unlimited doctors</li>
-          <li>All 7 Indian languages</li>
-          <li>Natural catalog voice in every language</li>
-          <li>WhatsApp confirmations + reminders</li>
-          <li>Multi-doctor smart routing</li>
-          <li>Everything in Growth</li>
-          <li>Analytics CSV export</li>
+          <li>3 doctors &middot; 1 clinic branch</li>
+          <li>Patient booking chat</li>
+          <li>Confirmations and reminders</li>
+          <li>Cancellations and reschedules</li>
+          <li>Clinic dashboard</li>
+          <li>Meta message fees paid directly by the clinic</li>
         </ul>
-        <button type="button" class="plan-btn plan-btn-outline" data-plan="Scale" data-amount="2199900">Get started</button>
+        <button type="button" class="plan-btn plan-btn-outline" data-plan="WhatsApp" data-amount="199900">Get started</button>
       </div>
     </div>
-    <p class="pricing-note">Additional branch: &#8377;6,999/month &middot; additional number &#8377;2,499/month &nbsp;&middot;&nbsp; Cancel anytime</p>
+    <p class="pricing-note">Founding 100: first 500 voice minutes free after Voice activation &middot; Additional branch/number: &#8377;1,499/month &middot; WhatsApp add-on: &#8377;1,499/month per branch &nbsp;&middot;&nbsp; Meta message fees paid directly by the clinic</p>
   </div>
 </section>
 
@@ -803,8 +789,8 @@ footer{
         <a href="mailto:hello@vachanam.in" class="contact-email">hello@vachanam.in</a>
         <div class="contact-chips">
           <span class="chip">Response within 24 hours</span>
-          <span class="chip">14-day free trial</span>
-          <span class="chip">No credit card to start</span>
+          <span class="chip">Founding 100: 500 voice minutes free</span>
+          <span class="chip">Transparent usage billing</span>
         </div>
       </div>
     </div>

@@ -68,6 +68,10 @@ PURPOSES: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
         "vachanam_feedback", ("feedback", "review", "experience"), ("cancel", "rating"),
     ),
     "reminder": ("vachanam_appt_reminder", ("remind",), ("cancel", "reschedul")),
+    "followup": (
+        "vachanam_followup", ("followup", "follow_up", "doctor_message"),
+        ("cancel", "reschedul", "remind"),
+    ),
     "rating": (
         "vachanam_rating_ask", ("rating", "rate", "star"), ("feedback", "review"),
     ),

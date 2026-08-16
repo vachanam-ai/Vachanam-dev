@@ -24,6 +24,7 @@ openai>=1.30.0
 google-genai>=1.0.0
 razorpay>=1.4.0
 python-multipart>=0.0.27
+openpyxl>=3.1,<4
 fastapi-limiter==0.2.0
 markdown>=3.6
 # PDF invoices attached to payment mails (#357). Pure Python, no system deps.

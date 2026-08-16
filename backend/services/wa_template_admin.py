@@ -26,10 +26,9 @@ import httpx
 import structlog
 
 from backend.services import wa_service
+from backend.services.meta_graph import url as graph_url
 
 logger = structlog.get_logger()
-
-_GRAPH = "https://graph.facebook.com/v21.0"
 
 # Wired into wa_templates.py send paths — never deletable from this admin UI.
 SYSTEM_TEMPLATE_DEFINITIONS = (
@@ -66,6 +65,13 @@ SYSTEM_TEMPLATE_DEFINITIONS = (
         "buttons": ["Reschedule", "Cancel"],
     },
     {
+        "name": "vachanam_followup", "body": (
+            "Hello {{1}}, Dr {{2}} has a follow-up message for you: {{3}}"
+        ),
+        "examples": ["Anjali", "Srinivas", "Please schedule your next visit"],
+        "buttons": [],
+    },
+    {
         "name": "vachanam_clinic_location",
         "body": "{{1}} is at {{2}}. Directions: {{3}}",
         "examples": ["Venkateshwara Clinic", "Hyderabad", "https://maps.google.com/"],
@@ -92,7 +98,7 @@ SYSTEM_TEMPLATE_DEFINITIONS = (
 )
 
 SYSTEM_TEMPLATES = frozenset({
-    "booking_confirm", "appt_reminder", "rating_ask", "leave_rebook",
+    "booking_confirm", "appt_reminder", "followup", "rating_ask", "leave_rebook",
     *(item["name"] for item in SYSTEM_TEMPLATE_DEFINITIONS),
 })
 
@@ -209,8 +215,10 @@ async def list_templates(branch) -> list[dict]:
     waba_id, token = _waba_and_token(branch)
     try:
         data = await _get(
-            f"{_GRAPH}/{waba_id}/message_templates"
-            "?fields=name,language,status,category,components",
+            graph_url(
+                f"{waba_id}/message_templates"
+                "?fields=name,language,status,category,components"
+            ),
             token,
         )
     except httpx.HTTPStatusError as e:
@@ -262,7 +270,7 @@ async def create_template(
         "language": language,
         "components": components,
     }
-    r = await _post(f"{_GRAPH}/{waba_id}/message_templates", token, payload)
+    r = await _post(graph_url(f"{waba_id}/message_templates"), token, payload)
     if r.status_code >= 300:
         logger.warning(
             "wa_template_create_failed", branch_id=str(branch.id),
@@ -316,7 +324,7 @@ async def delete_template(branch, name: str) -> None:
         )
     waba_id, token = _waba_and_token(branch)
     r = await _delete(
-        f"{_GRAPH}/{waba_id}/message_templates?name={name}", token,
+        graph_url(f"{waba_id}/message_templates?name={name}"), token,
     )
     if r.status_code >= 300 and r.status_code != 404:
         logger.warning(

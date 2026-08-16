@@ -153,7 +153,7 @@ async def test_create_and_verify_real_autopay_mandate(
     response = await client.post(
         "/api/create-subscription",
         headers=_auth(org_id),
-        json={"plan": "clinic"},
+        json={"plan": "solo"},
     )
     assert response.status_code == 200, response.text
     body = response.json()
@@ -250,11 +250,11 @@ async def test_plan_change_never_repeats_current_overage(
     response = await client.post(
         "/api/plan-change",
         headers=_auth(org.id),
-        json={"plan": "multi"},
+        json={"plan": "solo"},
     )
     assert response.status_code == 200, response.text
     expected = subscription_order_breakdown(
-        "multi", 0, 0, subscription_started_at=org.subscription_started_at
+        "solo", 0, 0, subscription_started_at=org.subscription_started_at
     )["amount_paise"]
     assert provider.plan_payloads[-1]["item"]["amount"] == expected
     assert provider.edit_payloads[-1][1]["schedule_change_at"] == "cycle_end"
@@ -407,7 +407,7 @@ async def test_recurring_charge_uses_due_pending_plan(
     assert fresh.plan == "multi"
     assert fresh.pending_plan is None
 async def test_plan_change_response_preserves_paid_whatsapp_entitlement(client, db, org):
-    org.plan = "solo"
+    org.plan = "clinic"
     org.status = "active"
     branch = Branch(
         org_id=org.id,
@@ -423,12 +423,12 @@ async def test_plan_change_response_preserves_paid_whatsapp_entitlement(client, 
     response = await client.post(
         "/api/plan-change",
         headers=_auth(org.id),
-        json={"plan": "multi"},
+        json={"plan": "solo"},
     )
 
     assert response.status_code == 200, response.text
     assert response.json()["whatsapp_addon"] is True
-    assert response.json()["pending_plan"] == "multi"
+    assert response.json()["pending_plan"] == "solo"
 
 
 async def test_retired_plan_can_cancel_scheduled_change_without_losing_addon(
@@ -531,7 +531,7 @@ async def test_gstin_update_preserves_whatsapp_entitlement(client, db, org):
     assert response.json()["gstin"] == "29ABCDE1234F1Z5"
 
 
-async def test_next_charge_uses_pending_plan_and_drops_redundant_addon(
+async def test_next_charge_uses_pending_plan_and_keeps_branch_addon(
     client, db, org
 ):
     org.plan = "solo"
@@ -555,9 +555,9 @@ async def test_next_charge_uses_pending_plan_and_drops_redundant_addon(
     body = response.json()
     assert body["plan"] == "solo"
     assert body["next_plan"] == "clinic"
-    assert body["next_plan_label"] == "Growth"
-    assert body["base_next"] == 10999
-    assert body["whatsapp_addon_amount"] == 0
+    assert body["next_plan_label"] == "Growth (legacy)"
+    assert body["base_next"] == 4999
+    assert body["whatsapp_addon_amount"] == 1499
 
 
 async def test_scheduled_cancellation_never_shows_another_plan_charge(
@@ -584,7 +584,7 @@ async def test_future_autopay_records_the_provider_plan_as_pending(
     provider = FakeRazorpay()
     monkeypatch.setattr(payments, "_get_client", lambda: provider)
     monkeypatch.setattr(settings, "razorpay_key_id", "rzp_test_future")
-    org.plan = "solo"
+    org.plan = "clinic"
     org.status = "active"
     await db.commit()
     cycle = await _cycle(db, org, days=10)
@@ -592,13 +592,13 @@ async def test_future_autopay_records_the_provider_plan_as_pending(
     response = await client.post(
         "/api/create-subscription",
         headers=_auth(org.id),
-        json={"plan": "multi"},
+        json={"plan": "solo"},
     )
 
     assert response.status_code == 200, response.text
     await db.refresh(org)
-    assert org.plan == "solo"
-    assert org.pending_plan == "multi"
+    assert org.plan == "clinic"
+    assert org.pending_plan == "solo"
     assert org.pending_plan_effective == cycle.cycle_end
     assert provider.subscription_payloads[-1]["start_at"] == int(
         datetime(

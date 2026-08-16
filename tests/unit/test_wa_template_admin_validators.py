@@ -53,7 +53,9 @@ def test_all_required_and_legacy_system_templates_are_frozen():
         item["name"]
         for item in wa_template_admin.SYSTEM_TEMPLATE_DEFINITIONS
     }
-    legacy = {"booking_confirm", "appt_reminder", "rating_ask", "leave_rebook"}
+    legacy = {
+        "booking_confirm", "appt_reminder", "followup", "rating_ask", "leave_rebook",
+    }
 
     assert required == {
         "vachanam_booking_confirm",
@@ -62,6 +64,7 @@ def test_all_required_and_legacy_system_templates_are_frozen():
         "vachanam_appt_reminder",
         "vachanam_clinic_location",
         "vachanam_feedback",
+        "vachanam_followup",
         "vachanam_rating_ask",
         "vachanam_leave_rebook",
     }

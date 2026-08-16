@@ -18,7 +18,7 @@ def test_required_templates_cover_every_patient_event():
     ])
     assert set(mapping) == {
         "booking_confirm", "reschedule", "cancel",
-        "location", "feedback", "reminder", "rating", "leave_rebook",
+        "location", "feedback", "followup", "reminder", "rating", "leave_rebook",
     }
     assert mapping["booking_confirm"]["params"] == 5
     assert mapping["reschedule"]["params"] == 4

@@ -22,7 +22,8 @@ vi.mock("../../api/client.js", () => ({
   deleteWaTemplate: vi.fn(),
   installWaSystemTemplates: vi.fn(),
   connectWa: vi.fn(),
-  connectWaManual: vi.fn(),
+  confirmWaPayment: vi.fn(),
+  retryWaSync: vi.fn(),
   disconnectWa: vi.fn(),
 }));
 vi.mock("../../hooks/useAuth.jsx", () => ({

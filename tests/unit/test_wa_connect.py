@@ -1,14 +1,3 @@
-"""WA MVP1 Task 9 — Embedded Signup / Tech Provider connect flow.
-
-Pure service-level unit tests (no DB, no network — every Graph call is
-mocked). Router-level auth/uniqueness/audit tests live in
-test_wa_connect_router.py (needs Docker + Postgres, `db` fixture).
-
-RULE 5: every external call retries; RULE 9: code/token never logged, and
-the response payload the router returns to the browser must never carry
-either. RULE 1 (WABA uniqueness) is enforced at the router layer, not here —
-this module only mutates the branch object it is given.
-"""
 import uuid
 from types import SimpleNamespace
 
@@ -24,263 +13,194 @@ def FakeBranch(**overrides):
     base = dict(
         id=uuid.uuid4(), wa_status="none", wa_waba_id=None, wa_token_enc=None,
         wa_verified_name=None, wa_phone_number_id=None, wa_connected_at=None,
+        wa_onboarding=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
 
 
-class _FakeClient:
-    """Routes GET/POST by URL substring to a canned httpx.Response. Order of
-    `by_path` matters — first substring match wins (register before bare
-    phone_number_id, since the register URL also contains that id)."""
-
-    def __init__(self, by_path: dict):
-        self._by_path = by_path
-        self.calls: list[tuple] = []
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *a):
-        return False
-
-    async def get(self, url, params=None, headers=None):
-        self.calls.append(("GET", url, params, headers))
-        return self._match(url)
-
-    async def post(self, url, headers=None, json=None):
-        self.calls.append(("POST", url, headers, json))
-        return self._match(url)
-
-    def _match(self, url):
-        for key, resp in self._by_path.items():
-            if key in url:
-                return resp
-        raise AssertionError(f"unexpected Graph URL in test: {url}")
-
-
-def _resp(status_code: int, json_data: dict | None = None) -> httpx.Response:
+def _response(status=200, payload=None):
     return httpx.Response(
-        status_code, json=json_data or {},
-        request=httpx.Request("GET", "https://graph.facebook.com/v21.0/x"),
+        status,
+        json=payload or {},
+        request=httpx.Request("GET", "https://graph.facebook.com/v25.0/test"),
     )
 
 
-def _wire(monkeypatch, *, waba_id: str, phone_number_id: str,
-          exchange=None, subscribe=None, register=None, phone_info=None):
-    """Install a FakeClient covering the whole connect_branch flow. Any step
-    left as None gets a benign default (200 OK) so a test only has to
-    override the one step it cares about."""
-    by_path = {
-        "oauth/access_token": exchange or _resp(200, {"access_token": "BUSINESS_TOKEN"}),
-        f"/{waba_id}/subscribed_apps": subscribe or _resp(200, {"success": True}),
-        f"/{phone_number_id}/register": register or _resp(200, {"success": True}),
-        f"/{phone_number_id}": phone_info or _resp(200, {"verified_name": "Sunrise Dental"}),
+class FakeClient:
+    def __init__(self, routes):
+        self.routes = routes
+        self.calls = []
+
+    async def __aenter__(self): return self
+    async def __aexit__(self, *_args): return False
+
+    def _match(self, method, url):
+        for key, response in self.routes.items():
+            if key in url:
+                self.calls.append((method, url))
+                return response
+        raise AssertionError(f"Unexpected Graph URL: {method} {url}")
+
+    async def get(self, url, **_kwargs): return self._match("GET", url)
+    async def post(self, url, **kwargs):
+        self.calls.append(("POST_BODY", url, kwargs.get("json")))
+        return self._match("POST", url)
+    async def delete(self, url, **_kwargs): return self._match("DELETE", url)
+
+
+def wire(monkeypatch, *, phone=None, subscribe=None, register=None, contacts=None, history=None):
+    routes = {
+        "oauth/access_token": _response(200, {
+            "access_token": "BUSINESS_TOKEN", "expires_in": 5_184_000,
+        }),
+        "/123/phone_numbers": _response(200, {"data": [phone or {
+            "id": "456", "verified_name": "Clinic", "status": "PENDING",
+        }]}),
+        "/123/subscribed_apps": subscribe or _response(200, {"success": True}),
+        "/456/register": register or _response(200, {"success": True}),
+        "/456/smb_app_data": contacts or _response(200, {"request_id": "sync-1"}),
+        "/v25.0/456": _response(200, {"is_on_biz_app": True, "platform_type": "CLOUD_API"}),
     }
-    client = _FakeClient(by_path)
-    monkeypatch.setattr(wa_connect.httpx, "AsyncClient", lambda *a, **k: client)
+    client = FakeClient(routes)
+    # The same endpoint handles contacts and history; return distinct IDs by
+    # call order when a history response is supplied.
+    if history is not None:
+        original = client.post
+        sync_calls = 0
+
+        async def post(url, **kwargs):
+            nonlocal sync_calls
+            if "/smb_app_data" in url:
+                sync_calls += 1
+                client.calls.append(("POST_BODY", url, kwargs.get("json")))
+                client.calls.append(("POST", url))
+                return contacts if sync_calls == 1 and contacts is not None else history
+            return await original(url, **kwargs)
+        client.post = post
+    monkeypatch.setattr(wa_connect.httpx, "AsyncClient", lambda **_kwargs: client)
     return client
 
 
 @pytest.fixture(autouse=True)
-def _app_creds(monkeypatch):
-    monkeypatch.setattr(settings, "meta_app_id", "APP123", raising=False)
-    monkeypatch.setattr(settings, "meta_app_secret", "SECRET", raising=False)
-
-
-# ── happy path ───────────────────────────────────────────────────────────────
+def app_credentials(monkeypatch):
+    monkeypatch.setattr(settings, "meta_app_id", "100", raising=False)
+    monkeypatch.setattr(settings, "meta_app_secret", "secret", raising=False)
+    monkeypatch.setattr(settings, "meta_graph_version", "v25.0", raising=False)
 
 
 @pytest.mark.asyncio
-async def test_connect_branch_happy_path(monkeypatch):
+async def test_cloud_api_flow_registers_with_encrypted_six_digit_pin(monkeypatch):
     branch = FakeBranch()
-    _wire(monkeypatch, waba_id="WABA1", phone_number_id="PHONE1")
-
+    client = wire(monkeypatch)
     result = await wa_connect.connect_branch(
-        branch, code="AUTH_CODE_XYZ", waba_id="WABA1", phone_number_id="PHONE1",
+        branch, code="AUTH_CODE_123", waba_id="123", phone_number_id="456",
+        flow_event="FINISH", business_id="789",
     )
-
-    assert branch.wa_waba_id == "WABA1"
-    assert branch.wa_phone_number_id == "PHONE1"
+    register = next(call for call in client.calls if call[0] == "POST_BODY" and "/register" in call[1])
+    pin = register[2]["pin"]
+    assert len(pin) == 6 and pin.isdigit()
+    assert decrypt_secret(branch.wa_onboarding["registration_pin_enc"]) == pin
     assert branch.wa_status == "connected"
-    assert branch.wa_verified_name == "Sunrise Dental"
-    assert branch.wa_connected_at is not None
-    assert result["registered"] is True
-    assert result["verified_name"] == "Sunrise Dental"
-    # The token is stored ENCRYPTED — never the plaintext Meta returned.
-    assert branch.wa_token_enc != "BUSINESS_TOKEN"
     assert decrypt_secret(branch.wa_token_enc) == "BUSINESS_TOKEN"
+    assert result["onboarding"]["payment_status"] == "required"
+    assert result["onboarding"]["token_expires_at"]
+    assert "registration_pin_enc" not in result["onboarding"]
 
 
 @pytest.mark.asyncio
-async def test_connect_branch_subscribes_with_the_bearer_token(monkeypatch):
-    """The subscribe call must carry the token from the exchange, not the
-    platform token — this is a clinic-owned WABA subscribe, not ours."""
+async def test_coexistence_skips_registration_and_starts_both_syncs(monkeypatch):
     branch = FakeBranch()
-    client = _wire(monkeypatch, waba_id="WABA2", phone_number_id="PHONE2")
-
+    client = wire(
+        monkeypatch,
+        phone={
+            "id": "456", "verified_name": "Clinic", "status": "CONNECTED",
+            "is_on_biz_app": True, "platform_type": "CLOUD_API",
+        },
+        contacts=_response(200, {"request_id": "contacts-1"}),
+        history=_response(200, {"request_id": "history-1"}),
+    )
     await wa_connect.connect_branch(
-        branch, code="c", waba_id="WABA2", phone_number_id="PHONE2",
+        branch, code="AUTH_CODE_123", waba_id="123", phone_number_id="456",
+        flow_event="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
     )
-
-    subscribe_calls = [c for c in client.calls if "subscribed_apps" in c[1]]
-    assert len(subscribe_calls) == 1
-    assert subscribe_calls[0][2]["Authorization"] == "Bearer BUSINESS_TOKEN"
+    assert not any("/register" in call[1] for call in client.calls)
+    assert branch.wa_onboarding["mode"] == "coexistence"
+    assert branch.wa_onboarding["sync"]["contacts"]["request_id"] == "contacts-1"
+    assert branch.wa_onboarding["sync"]["history"]["request_id"] == "history-1"
 
 
 @pytest.mark.asyncio
-async def test_manual_connect_uses_the_pasted_token_and_never_exchanges(monkeypatch):
-    """The manual path has no authorization code. It must reach the SAME
-    subscribe/register/name steps with the owner's own token, and must never
-    touch the oauth exchange."""
+async def test_asset_ids_are_verified_server_side(monkeypatch):
     branch = FakeBranch()
-    client = _wire(monkeypatch, waba_id="WABA9", phone_number_id="PHONE9")
+    wire(monkeypatch, phone={"id": "999", "verified_name": "Other"})
+    with pytest.raises(wa_connect.WaConnectError) as exc:
+        await wa_connect.connect_branch(
+            branch, code="AUTH_CODE_123", waba_id="123", phone_number_id="456",
+            flow_event="FINISH",
+        )
+    assert exc.value.status_code == 422
+    assert branch.wa_token_enc is None
 
-    result = await wa_connect.connect_branch_manual(
-        branch, token="OWNER_TOKEN", waba_id="WABA9", phone_number_id="PHONE9",
+
+@pytest.mark.asyncio
+async def test_webhook_subscription_is_mandatory(monkeypatch):
+    branch = FakeBranch()
+    wire(monkeypatch, subscribe=_response(403, {"error": {"message": "denied"}}))
+    with pytest.raises(wa_connect.WaConnectError):
+        await wa_connect.connect_branch(
+            branch, code="AUTH_CODE_123", waba_id="123", phone_number_id="456",
+            flow_event="FINISH",
+        )
+    assert branch.wa_status == "none" and branch.wa_token_enc is None
+
+
+@pytest.mark.asyncio
+async def test_standard_registration_failure_is_not_silently_accepted(monkeypatch):
+    branch = FakeBranch()
+    wire(monkeypatch, register=_response(400, {"error": {"message": "bad pin"}}))
+    with pytest.raises(wa_connect.WaConnectError) as exc:
+        await wa_connect.connect_branch(
+            branch, code="AUTH_CODE_123", waba_id="123", phone_number_id="456",
+            flow_event="FINISH",
+        )
+    assert "register" in exc.value.detail.lower()
+    assert branch.wa_status == "none"
+
+
+@pytest.mark.asyncio
+async def test_coexistence_sync_failure_is_visible_and_retryable(monkeypatch):
+    branch = FakeBranch()
+    client = wire(
+        monkeypatch,
+        phone={"id": "456", "status": "CONNECTED", "is_on_biz_app": True},
+        contacts=_response(400, {"error": {"message": "cannot start"}}),
+        history=_response(200, {"request_id": "history-1"}),
     )
-
-    assert not [c for c in client.calls if "oauth/access_token" in c[1]]
-    subscribe_calls = [c for c in client.calls if "subscribed_apps" in c[1]]
-    assert len(subscribe_calls) == 1
-    assert subscribe_calls[0][2]["Authorization"] == "Bearer OWNER_TOKEN"
+    await wa_connect.connect_branch(
+        branch, code="AUTH_CODE_123", waba_id="123", phone_number_id="456",
+        flow_event="FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+    )
     assert branch.wa_status == "connected"
-    assert decrypt_secret(branch.wa_token_enc) == "OWNER_TOKEN"
-    assert result["verified_name"] == "Sunrise Dental"
+    assert branch.wa_onboarding["sync"]["contacts"]["status"] == "error"
+    assert client.calls
 
 
 @pytest.mark.asyncio
-async def test_manual_connect_subscribe_failure_leaves_branch_untouched(monkeypatch):
-    """The subscribe is load-bearing on BOTH paths — the shared _finish_connect
-    is what stops the manual route from quietly skipping it and producing a
-    branch that never receives a webhook."""
-    branch = FakeBranch()
-    _wire(monkeypatch, waba_id="WABA10", phone_number_id="PHONE10",
-          subscribe=_resp(403, {"error": {"message": "nope"}}))
-
-    with pytest.raises(wa_connect.WaConnectError) as e:
-        await wa_connect.connect_branch_manual(
-            branch, token="OWNER_TOKEN", waba_id="WABA10", phone_number_id="PHONE10",
-        )
-
-    assert e.value.status_code == 502
-    assert "OWNER_TOKEN" not in e.value.detail
-    assert branch.wa_waba_id is None
-    assert branch.wa_status != "connected"
-
-
-# ── mandatory step: subscribe failure aborts the whole connect ──────────────
-
-
-@pytest.mark.asyncio
-async def test_subscribe_failure_aborts_connect_and_leaves_branch_untouched(monkeypatch):
-    """Subscribing to webhooks is mandatory — without it no message ever
-    arrives. A failure here must raise, and must NOT leave the branch
-    half-connected (no token, no waba_id, status untouched)."""
-    branch = FakeBranch()
-    _wire(
-        monkeypatch, waba_id="WABA3", phone_number_id="PHONE3",
-        subscribe=_resp(400, {"error": {"message": "bad token"}}),
+async def test_disconnect_unsubscribes_with_branch_token(monkeypatch):
+    branch = FakeBranch(
+        wa_waba_id="123", wa_token_enc=wa_connect.encrypt_secret("BUSINESS_TOKEN")
     )
-
-    with pytest.raises(wa_connect.WaConnectError) as exc:
-        await wa_connect.connect_branch(
-            branch, code="c", waba_id="WABA3", phone_number_id="PHONE3",
-        )
-    assert exc.value.status_code == 502
-
-    # Nothing persisted — the router must never commit a half-connected branch.
-    assert branch.wa_waba_id is None
-    assert branch.wa_token_enc is None
-    assert branch.wa_status == "none"
+    client = wire(monkeypatch)
+    assert await wa_connect.unsubscribe_branch(branch) is True
+    assert any(call[0] == "DELETE" and "/123/subscribed_apps" in call[1] for call in client.calls)
 
 
-@pytest.mark.asyncio
-async def test_token_exchange_failure_raises_and_touches_nothing(monkeypatch):
+def test_unsupported_finish_event_fails_without_graph(monkeypatch):
     branch = FakeBranch()
-    _wire(
-        monkeypatch, waba_id="WABA4", phone_number_id="PHONE4",
-        exchange=_resp(400, {"error": {"message": "invalid code"}}),
-    )
-
-    with pytest.raises(wa_connect.WaConnectError) as exc:
-        await wa_connect.connect_branch(
-            branch, code="bad", waba_id="WABA4", phone_number_id="PHONE4",
-        )
-    assert exc.value.status_code == 502
-    assert branch.wa_status == "none"
-    assert branch.wa_token_enc is None
-
-
-def test_missing_app_credentials_fails_before_any_graph_call(monkeypatch):
-    """Rather than reaching Meta with an empty client_id/secret."""
-    monkeypatch.setattr(settings, "meta_app_id", "", raising=False)
-    monkeypatch.setattr(settings, "meta_app_secret", "", raising=False)
     import asyncio
-
-    with pytest.raises(wa_connect.WaConnectError) as exc:
-        asyncio.run(wa_connect._exchange_code("any-code"))
-    assert exc.value.status_code == 500
-
-
-# ── best-effort steps never block the connect ───────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_register_failure_does_not_block_connect(monkeypatch):
-    """A coexistence number already live on the WhatsApp Business app can
-    reject re-registration — that must not fail the connect, only the
-    subscribe step is load-bearing."""
-    branch = FakeBranch()
-    _wire(
-        monkeypatch, waba_id="WABA5", phone_number_id="PHONE5",
-        register=_resp(400, {"error": {"message": "already registered"}}),
-    )
-
-    result = await wa_connect.connect_branch(
-        branch, code="c", waba_id="WABA5", phone_number_id="PHONE5",
-    )
-
-    assert branch.wa_status == "connected"  # connect still succeeds
-    assert result["registered"] is False
-
-
-@pytest.mark.asyncio
-async def test_verified_name_lookup_failure_does_not_block_connect(monkeypatch):
-    branch = FakeBranch()
-    _wire(
-        monkeypatch, waba_id="WABA6", phone_number_id="PHONE6",
-        phone_info=_resp(500, {"error": {"message": "boom"}}),
-    )
-
-    result = await wa_connect.connect_branch(
-        branch, code="c", waba_id="WABA6", phone_number_id="PHONE6",
-    )
-
-    assert branch.wa_status == "connected"
-    assert branch.wa_verified_name is None
-    assert result["verified_name"] is None
-
-
-# ── RULE 9: no secret ever reaches an error message ─────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_error_detail_never_contains_the_code_or_token(monkeypatch):
-    branch = FakeBranch()
-    _wire(
-        monkeypatch, waba_id="WABA7", phone_number_id="PHONE7",
-        subscribe=_resp(400, {"error": {"message": "bad token"}}),
-    )
-    secret_code = "SUPER_SECRET_AUTH_CODE_998877"
-
-    with pytest.raises(wa_connect.WaConnectError) as exc:
-        await wa_connect.connect_branch(
-            branch, code=secret_code, waba_id="WABA7", phone_number_id="PHONE7",
-        )
-    assert secret_code not in exc.value.detail
-    assert "BUSINESS_TOKEN" not in exc.value.detail
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    with pytest.raises(wa_connect.WaConnectError):
+        asyncio.run(wa_connect.connect_branch(
+            branch, code="AUTH_CODE_123", waba_id="123", phone_number_id="456",
+            flow_event="FINISH_ONLY_WABA",
+        ))

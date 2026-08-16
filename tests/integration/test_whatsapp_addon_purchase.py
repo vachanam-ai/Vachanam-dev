@@ -48,9 +48,8 @@ async def _clinic(db, plan="solo", status="active"):
 
 
 @pytest.mark.asyncio
-async def test_a_plan_that_already_includes_whatsapp_cannot_buy_it_again(client, db):
-    """Selling a Clinic-plan customer the add-on is a double charge."""
-    org, br = await _clinic(db, plan="clinic")
+async def test_legacy_whatsapp_plan_cannot_buy_the_addon_again(client, db):
+    org, br = await _clinic(db, plan="wa")
     r = await client.post(
         "/api/whatsapp-addon/order", headers=_auth(_owner(str(org.id), str(br.id)))
     )
@@ -70,7 +69,7 @@ async def test_an_inactive_plan_must_activate_first(client, db):
 
 @pytest.mark.asyncio
 async def test_only_a_clinic_owner_can_spend_money(client, db):
-    """A receptionist must not be able to put ₹1,499 on the clinic's card."""
+    """A receptionist must not be able to put ₹99 on the clinic's card."""
     import jwt as _jwt
     from datetime import datetime, timedelta, timezone
 
@@ -237,9 +236,7 @@ async def test_the_plan_card_reports_which_whatsapp_state_applies(client, db):
 
 
 @pytest.mark.asyncio
-async def test_a_pending_upgrade_that_bundles_whatsapp_is_flagged(client, db):
-    """Don't sell it to someone whose scheduled plan change already includes
-    it — that was Vinay's own clinic, moving to `clinic` on 11 Aug."""
+async def test_a_pending_growth_upgrade_still_requires_the_addon(client, db):
     from datetime import date, timedelta
 
     org, br = await _clinic(db)
@@ -250,4 +247,4 @@ async def test_a_pending_upgrade_that_bundles_whatsapp_is_flagged(client, db):
     body = (await client.get(
         "/api/plan", headers=_auth(_owner(str(org.id), str(br.id)))
     )).json()
-    assert body["whatsapp_included_pending"] is True
+    assert body["whatsapp_included_pending"] is False

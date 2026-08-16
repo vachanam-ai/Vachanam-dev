@@ -2231,6 +2231,36 @@ def _is_booking_intent(text: str) -> bool:
     return any(term in low for term in _BOOKING_INTENT_TERMS)
 
 
+_NOON_WORDS = (
+    "12", "twelve", "noon", "midday", "pannendu", "barah",
+    "పన్నెండు", "बारह", "दोपहर",
+    "பன்னிரண்டு", "ಹನ್ನೆರಡು",
+)
+
+
+def _is_bare_noon_request(text: str) -> bool:
+    """A bare twelve in clinic-time speech means noon, never midnight.
+
+    Midnight is a marked, exceptional time and must be said explicitly.  This
+    annotation happens before the LLM so it cannot ask the receptionist-like
+    nonsense "morning or afternoon twelve?".  The availability tool remains
+    authoritative about whether noon itself is a valid slot start.
+    """
+    value = _normalised_utterance(text)
+    if not value or any(word in value for word in ("midnight", "12 am", "12am", "आधी रात", "అర్ధరాత్రి")):
+        return False
+    if not (_is_booking_intent(value) or any(term in value for term in ("at ", "around ", "time", "టైమ్", "समय", "बजे"))):
+        return False
+    # Do not reinterpret a patient's age, token count, or phone digits as a
+    # clock time merely because the same turn mentions a doctor/appointment.
+    if any(term in value for term in (
+        "12 year", "age 12", "12 yrs", "12 saal", "12 years old",
+        "token 12", "12th token", "phone 12", "mobile 12", "number 12",
+    )):
+        return False
+    return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", value) for word in _NOON_WORDS)
+
+
 # Deterministic caller-authorization vocabulary. These checks run at the tool
 # boundary; they are intentionally narrower than conversational intent routing.
 # Read-only questions and negated actions are rejected before these terms are
@@ -3538,6 +3568,23 @@ class VachanamAgent(Agent):
         utterance = self._message_text(new_message).strip()
         self._state.last_user_utterance = utterance
         _cancel_deferred_clarification(self._state, "next_turn_committed")
+
+        # Semantic normalization before generation: in ordinary clinic speech
+        # bare "12" is noon.  Midnight is accepted only when the caller says it
+        # explicitly.  The note is private per-turn context; tools still decide
+        # whether 12:00 is bookable and return the nearest real slot if it is a
+        # session-closing boundary.
+        if _is_bare_noon_request(utterance):
+            turn_ctx.add_message(
+                role="system",
+                content=(
+                    "Deterministic time normalization for this caller turn: "
+                    "bare twelve means 12:00 PM (noon), never midnight. Do not "
+                    "ask morning-or-afternoon. Check 12:00 PM against the "
+                    "authoritative schedule; if it is a closing boundary, offer "
+                    "the nearest bookable slot returned by the tool."
+                ),
+            )
 
         # ONE ANSWER PER QUESTION. Vinay 2026-08-09: "when i repeat question,
         # before it replied. it is repeating answer 2 times."
@@ -6452,7 +6499,8 @@ async def _reminder_dial_state(meta: dict) -> tuple[str, int | None]:
         lead_seconds = int((appointment - now).total_seconds())
         if lead_seconds < 0:
             return "expired", lead_seconds
-        if lead_seconds > 31 * 60:
+        max_lead_seconds = 25 * 60 * 60 if meta.get("reminder_kind") == "24h" else 31 * 60
+        if lead_seconds > max_lead_seconds:
             return "too_early", lead_seconds
         return "ready", lead_seconds
     except Exception as exc:  # noqa: BLE001 - patient calls fail closed
@@ -6482,7 +6530,10 @@ async def _requeue_early_reminder(meta: dict) -> None:
                 )
             ).scalar_one_or_none()
             if row is not None and row.status == "confirmed":
-                row.reminder_sent = False
+                if meta.get("reminder_kind") == "24h":
+                    row.reminder_24h_sent = False
+                else:
+                    row.reminder_sent = False
                 await db.commit()
         await wake_gate.clear_next_at("reminders")
     except Exception as exc:  # noqa: BLE001 - later scheduler pass self-heals
@@ -6529,10 +6580,18 @@ async def _reminder_retry_on_dial_fail(meta: dict) -> None:
             ).scalar_one_or_none()
             if row is None or row.status != "confirmed":
                 return
-            row.reminder_30m_dial_attempts = (row.reminder_30m_dial_attempts or 0) + 1
-            attempts = row.reminder_30m_dial_attempts
+            is_day_before = meta.get("reminder_kind") == "24h"
+            attempts_field = (
+                "reminder_24h_dial_attempts" if is_day_before
+                else "reminder_30m_dial_attempts"
+            )
+            attempts = (getattr(row, attempts_field, 0) or 0) + 1
+            setattr(row, attempts_field, attempts)
             if attempts <= _REMINDER_MAX_DIAL_ATTEMPTS:
-                row.reminder_sent = False
+                if is_day_before:
+                    row.reminder_24h_sent = False
+                else:
+                    row.reminder_sent = False
             await _db.commit()
         if attempts > _REMINDER_MAX_DIAL_ATTEMPTS:
             logger.warning(
@@ -6570,15 +6629,34 @@ def _trunk_has_branch_did(branch, trunk_id: str, trunks) -> bool:
     return False
 
 
-async def _validated_outbound_trunk(meta: dict, sip_api) -> str:
-    """Require DB ownership and provider caller-ID ownership before dialing."""
+async def _validated_outbound_trunk(meta: dict, sip_api) -> tuple[str, str]:
+    """Return (trunk_id, caller_id) this branch may dial with, or ("", "").
+
+    The CALLER ID is returned explicitly and stated on the dial as `sip_number`,
+    instead of falling out of whichever trunk was used. The number a patient
+    sees IS the tenant boundary on an outbound call — FIXLOG #518 was one
+    clinic's reminder arriving from another clinic's number — so it is read from
+    the branch row and asserted, never inferred from trunk topology.
+
+    That is also what makes ONE SHARED outbound trunk correct and safe. Per-
+    customer trunks are a LiveKit anti-pattern (long-lived cached objects; one
+    per clinic degrades reliability at scale). With the caller ID stated per
+    call, a single trunk carrying every DID gives each clinic its own identity —
+    and the check below becomes a direct assertion about the number being
+    presented rather than an inference from which trunk was picked.
+
+    Fails closed on every uncertainty: unknown branch, a trunk the branch does
+    not own, a trunk that cannot present this branch's DID, or a branch with no
+    DID at all — which has no identity to present and must not dial as someone
+    else's number.
+    """
     branch_id = meta.get("branch_id")
     supplied = meta.get("outbound_trunk_id")
     try:
         branch_uuid = UUID(str(branch_id))
     except (TypeError, ValueError, AttributeError):
         logger.error("outbound_blocked_invalid_branch_metadata")
-        return ""
+        return "", ""
     try:
         async with AsyncSessionLocal() as db:
             branch = (
@@ -6586,7 +6664,7 @@ async def _validated_outbound_trunk(meta: dict, sip_api) -> str:
             ).scalar_one_or_none()
         if branch is None:
             logger.error("outbound_blocked_unknown_branch branch_id=%s", branch_id)
-            return ""
+            return "", ""
         from backend.services.telephony import (
             OutboundTrunkIsolationError,
             validate_branch_outbound_trunk,
@@ -6595,7 +6673,18 @@ async def _validated_outbound_trunk(meta: dict, sip_api) -> str:
         try:
             trunk_id = validate_branch_outbound_trunk(branch, supplied)
         except OutboundTrunkIsolationError:
-            return ""
+            return "", ""
+        # The branch's OWN number, canonicalised exactly as Settings stores it
+        # and as inbound resolution matches it, so the presented caller ID and
+        # the dialled-DID lookup can never disagree about the same clinic.
+        from backend.services.validators import normalize_did
+
+        caller_id = normalize_did(getattr(branch, "did_number", "") or "")
+        if not caller_id:
+            logger.error(
+                "outbound_blocked_branch_has_no_did branch_id=%s", branch_id
+            )
+            return "", ""
         trunks = (
             await sip_api.list_outbound_trunk(api.ListSIPOutboundTrunkRequest())
         ).items
@@ -6603,11 +6692,11 @@ async def _validated_outbound_trunk(meta: dict, sip_api) -> str:
             logger.error(
                 "outbound_blocked_trunk_did_mismatch branch_id=%s", branch_id
             )
-            return ""
-        return trunk_id
+            return "", ""
+        return trunk_id, caller_id
     except Exception as exc:  # noqa: BLE001 - DB failure must fail closed
         logger.error("outbound_trunk_validation_failed: %s", type(exc).__name__)
-        return ""
+        return "", ""
 
 
 async def entrypoint(ctx: agents.JobContext) -> None:
@@ -6806,8 +6895,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     await _requeue_early_reminder(meta)
                 ctx.shutdown()
                 return
-        _out_trunk = await _validated_outbound_trunk(meta, ctx.api.sip)
-        if not _out_trunk:
+        _out_trunk, _out_caller_id = await _validated_outbound_trunk(meta, ctx.api.sip)
+        if not _out_trunk or not _out_caller_id:
             logger.error(
                 "outbound_dial_blocked_no_verified_branch_trunk call_type=%s",
                 meta.get("call_type"),
@@ -6815,6 +6904,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await _reminder_retry_on_dial_fail(meta)
             ctx.shutdown()
             return
+        logger.info(
+            "outbound_caller_id branch=%s presenting=...%s",
+            str(meta.get("branch_id", ""))[-8:], _out_caller_id[-4:],
+        )
         try:
             # The dispatch trunk was reloaded from the branch and matched above.
             # There is deliberately no platform/global caller-ID fallback.
@@ -6823,6 +6916,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     room_name=ctx.room.name,
                     sip_trunk_id=_out_trunk,
                     sip_call_to=outbound_number,
+                    # State the caller ID for THIS call rather than inheriting
+                    # whatever the trunk carries. Read from the branch row, so
+                    # the number the patient sees cannot drift from the clinic
+                    # we resolved — and one shared trunk becomes safe.
+                    sip_number=_out_caller_id,
                     participant_identity=f"sip_{outbound_number}",
                     wait_until_answered=True,
                 )
@@ -7249,7 +7347,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         bool(getattr(_org, "hard_block_on_exhaust", False)),
                         _used_min,
                         trial_ends_at=getattr(_org, "trial_ends_at", None),
-                        adjustment=int(getattr(_org, "minutes_adjustment", 0) or 0),
+                        adjustment=(
+                            int(getattr(_org, "minutes_adjustment", 0) or 0)
+                            + int(getattr(_org, "founding_credit_minutes", 0) or 0)
+                        ),
                     )
         except Exception as e:  # noqa: BLE001
             _blocked = _gate_failure_blocked_reason(_last_status)

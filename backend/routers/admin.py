@@ -412,7 +412,12 @@ async def admin_overview(
             blist = org_branches.get(o.id, [])
             dids = sum(1 for b in blist if b.did_number)
             used = round(org_min_this.get(o.id, 0.0), 1)
-            inc = included_minutes_for(o.plan, o.status, getattr(o, "minutes_adjustment", 0))
+            inc = included_minutes_for(
+                o.plan,
+                o.status,
+                int(getattr(o, "minutes_adjustment", 0) or 0)
+                + int(getattr(o, "founding_credit_minutes", 0) or 0),
+            )
             pct = round(used / inc * 100, 1) if inc else 0.0
             approaching = inc > 0 and used >= 0.8 * inc
             exhausted = inc > 0 and used >= inc
@@ -447,7 +452,10 @@ async def admin_overview(
                         o.status, o.plan, bool(o.hard_block_on_exhaust), used,
                         trial_ends_at=o.trial_ends_at,  # T6: match the agent gate
                         # B3: same bucket as the donut (trial grant + adjustment)
-                        adjustment=int(getattr(o, "minutes_adjustment", 0) or 0),
+                        adjustment=(
+                            int(getattr(o, "minutes_adjustment", 0) or 0)
+                            + int(getattr(o, "founding_credit_minutes", 0) or 0)
+                        ),
                     )
                     is not None,
                     revenue_month=rev,
@@ -689,7 +697,7 @@ async def set_org_plan(
 ) -> dict:
     """Upgrade/downgrade a clinic's plan (effective immediately for limits)."""
     if body.plan not in PLANS:
-        raise HTTPException(status_code=422, detail="plan must be lite|solo|clinic|multi")
+        raise HTTPException(status_code=422, detail="unknown plan")
     async with AsyncSessionLocal() as db:
         org = await _load_org(db, org_id)
         org.plan = body.plan
@@ -743,39 +751,55 @@ async def set_org_minutes(
         return {"org_id": org_id, "minutes_adjustment": int(body.adjustment)}
 
 
-async def _hard_delete_org(db, org) -> None:
+async def _hard_delete_org(db, org) -> list[str]:
     """Delete an org and ALL its tenant data in FK-safe order (children →
     branches → users → billing → org). Admin-initiated, audited, irreversible.
     Ordering is load-bearing: every tenant FK is ondelete=RESTRICT."""
-    from sqlalchemy import delete as _delete
+    from sqlalchemy import delete as _delete, text
 
     from backend.models.schema import (
+        AddonPurchase as _AP,
         BillingCycle as _BC,
         Branch as _B,
+        BranchVoice as _BV,
         Call as _Call,
         CalendarWriteTask as _CWT,
         CallLog as _CL,
         CallQuality as _CQ,
+        ClinicQuestion as _ClinicQuestion,
         Consent as _Cons,
         Doctor as _Doc,
+        DoctorDateSchedule as _DDS,
         DoctorUnavailability as _DU,
         FollowupTask as _FT,
         Patient as _Pat,
+        PatientMessage as _PM,
+        Rating as _Rating,
         Token as _Tok,
         TreatmentNote as _TN,
         SupportMessage as _SM,
         SupportTicket as _ST,
+        WhatsAppDelivery as _WD,
         WhatsAppSession as _WA,
     )
 
-    branch_ids = (
-        await db.execute(select(_B.id).where(_B.org_id == org.id))
-    ).scalars().all()
+    branch_rows = (
+        await db.execute(select(_B.id, _B.did_number).where(_B.org_id == org.id))
+    ).all()
+    branch_ids = [row.id for row in branch_rows]
+    did_numbers = [row.did_number for row in branch_rows if row.did_number]
 
     if branch_ids:
-        # Children that reference tokens/treatment_notes/doctors/patients first.
-        for model in (_FT, _TN, _CWT, _CQ, _CL, _Call, _Cons, _Tok, _DU, _Pat, _Doc, _WA):
+        # Erase explicitly even where the FK is CASCADE. This makes the DPDP
+        # promise testable and prevents a new RESTRICT table from turning the
+        # whole operation into an opaque 500.
+        for model in (
+            _FT, _TN, _CWT, _CQ, _CL, _Call, _Cons, _Tok, _DU,
+            _DDS, _WD, _ClinicQuestion, _PM, _Rating, _BV,
+            _Pat, _Doc, _WA,
+        ):
             await db.execute(_delete(model).where(model.branch_id.in_(branch_ids)))
+        await db.execute(_delete(_AP).where(_AP.branch_id.in_(branch_ids)))
 
     # Support threads can contain owner contact details and clinic context.
     # Self-service deletion promises erasure, so remove the thread before the
@@ -784,11 +808,37 @@ async def _hard_delete_org(db, org) -> None:
     await db.execute(_delete(_SM).where(_SM.ticket_id.in_(ticket_ids)))
     await db.execute(_delete(_ST).where(_ST.org_id == org.id))
 
+    await db.execute(_delete(_AP).where(_AP.org_id == org.id))
     await db.execute(_delete(_BC).where(_BC.org_id == org.id))
     await db.execute(_delete(User).where(User.org_id == org.id))
+    # User.org_id is nullable. Remove tenant staff that only carry a branch
+    # scope, while preserving Vachanam's platform accounts.
+    if branch_ids:
+        await db.execute(
+            _delete(User).where(
+                User.org_id.is_(None),
+                User.role.notin_(("super_admin", "support")),
+                text("users.branch_ids ?| :branch_ids").bindparams(
+                    branch_ids=[str(branch_id) for branch_id in branch_ids]
+                ),
+            )
+        )
     if branch_ids:
         await db.execute(_delete(_B).where(_B.id.in_(branch_ids)))
     await db.execute(_delete(Organization).where(Organization.id == org.id))
+    return did_numbers
+
+
+async def _unwire_deleted_dids(did_numbers: list[str]) -> None:
+    """Best-effort provider cleanup after the DB erasure commits."""
+    from backend.services.livekit_sip import (
+        remove_did_from_inbound_trunk,
+        remove_did_from_outbound_trunk,
+    )
+
+    for did in did_numbers:
+        await remove_did_from_inbound_trunk(did)
+        await remove_did_from_outbound_trunk(did)
 
 
 @router.delete("/orgs/{org_id}")
@@ -809,8 +859,9 @@ async def delete_org(
                 status_code=409,
                 detail="Cancel or pause the clinic before deleting it",
             )
-        await _hard_delete_org(db, org)
+        deleted_dids = await _hard_delete_org(db, org)
         await db.commit()
+        await _unwire_deleted_dids(deleted_dids)
         request.state.audit_resource_id = org_id
         logger.info("org_deleted", org_id=org_id, by=current_user.email)
         return {"org_id": org_id, "deleted": True}
@@ -1095,7 +1146,7 @@ class WaLinkBody(BaseModel):
     # None = leave unchanged (an ordinary re-link must not wipe it);
     # "" = clear. Same convention as whatsapp_addon below.
     wa_waba_id: str | None = None
-    # Rs1,499 add-on (spec 2026-08-02 pricing §1): lets a Lite/Starter branch
+    # Per-branch WhatsApp add-on entitlement (currently Rs1,499/month).
     # use WhatsApp without upgrading to Clinic. None = leave unchanged, so an
     # ordinary re-link never silently grants or revokes a paid feature.
     whatsapp_addon: bool | None = None

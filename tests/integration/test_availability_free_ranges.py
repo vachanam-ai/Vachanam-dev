@@ -19,6 +19,7 @@ from datetime import date, datetime, time, timedelta
 import pytest
 
 from agent.tools.booking_tools import _merge_to_ranges, check_availability
+from backend.services.doctor_schedule import bookable_starts_as_text
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 
 
@@ -84,10 +85,45 @@ async def test_a_booked_slot_is_removed_from_the_spoken_availability(db, redis):
         doctor_id=doc.id, branch_id=br.id, booking_date=tomorrow, db=db,
     )
     text = str(answer)
-    assert "8:15 AM" not in text.replace("8:00 AM to 8:15 AM", ""), \
-        "the booked time must not be offered"
-    assert "8:00 AM to 8:15 AM" in text
-    assert "8:30 AM to 9:00 AM" in text
+    assert "8:15 AM" not in text, "the booked start must not be offered"
+    assert "8:00 AM" in text
+    assert "8:30 AM to 8:45 AM" in text
+
+
+def test_sitting_end_is_never_advertised_as_a_bookable_start():
+    starts = [time(9), time(9, 30), time(10), time(10, 30), time(11), time(11, 30)]
+    assert bookable_starts_as_text(starts, 30) == "9:00 AM to 11:30 AM"
+
+
+@pytest.mark.asyncio
+async def test_request_at_session_end_offers_nearest_without_claiming_occupied(db, redis):
+    _org, br = await _clinic(db)
+    tomorrow = date.today() + timedelta(days=1)
+    doc = Doctor(
+        branch_id=br.id,
+        name="Dr Boundary",
+        booking_type="appointment",
+        slot_duration_minutes=30,
+        max_concurrent_per_slot=1,
+        schedule_mode="recurring",
+        recurring_schedule={str(day): [{"start": "09:00", "end": "12:00"}] for day in range(7)},
+    )
+    db.add(doc)
+    await db.commit()
+
+    answer = await check_availability(
+        doctor_id=doc.id,
+        branch_id=br.id,
+        booking_date=tomorrow,
+        db=db,
+        query_start=time(12),
+        query_end=time(12),
+    )
+
+    assert "not a bookable appointment start" in answer
+    assert "do NOT say it is already booked" in answer
+    assert "NEAREST free times" in answer
+    assert "11:30 AM" in answer
 
 
 @pytest.mark.asyncio

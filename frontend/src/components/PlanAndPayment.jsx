@@ -11,7 +11,9 @@ import {
   verifyAutopaySubscription,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
-import { PLAN_CATALOG, PUBLIC_PLAN_KEYS, planLabel } from "../lib/plans.js";
+import {
+  PLAN_CATALOG, PUBLIC_PLAN_KEYS, WHATSAPP_ADDON_RUPEES, planLabel,
+} from "../lib/plans.js";
 
 /* Every control that takes money, in one place (Vinay 2026-08-09: "migrate
    entire billing to billing page. all billings. (now, if i click adjust it is
@@ -80,7 +82,7 @@ export default function PlanAndPayment({ initialPlan = null }) {
     : PUBLIC_PLAN_KEYS.includes(p?.plan)
       ? p.plan
       : "solo";
-  const hasDraftChange = Boolean(p && selectedPlan !== serverPlan);
+  const hasDraftChange = Boolean(p && (legacyPlan || selectedPlan !== serverPlan));
 
   const planChange = useMutation({
     mutationFn: (p) => changePlan(p),
@@ -229,15 +231,16 @@ export default function PlanAndPayment({ initialPlan = null }) {
   return (
     <section id="plan-payment" data-reveal className="card p-6 scroll-mt-24">
       <p className="eyebrow">Plan &amp; payment</p>
-      <h2 className="section-title text-xl">Change plan or pay</h2>
+      <h2 className="section-title text-xl">Platform and payment</h2>
       <p className="mt-1 font-ui text-sm text-slate">
-        Your billing cycle starts the day you pay and runs 30 days. Plan switches take
-        effect from your next cycle, so you never lose minutes you have already paid for.
+        {selectedPlan === "wa"
+          ? "WhatsApp-only has no phone line or voice usage. Meta message fees are paid directly by your clinic."
+          : "Your monthly billing cycle starts the day you pay. Voice usage is billed separately at ₹6/minute."}
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <div>
-          <label className="label" htmlFor="plan-select">{legacyPlan ? "Choose a current plan" : "Plan"}</label>
+          <label className="label" htmlFor="plan-select">Plan</label>
           <select id="plan-select" className="field min-w-[220px]" value={selectedPlan}
             disabled={planChange.isPending || plan.isLoading}
             onChange={(e) => setSelectedPlan(e.target.value)}>
@@ -252,11 +255,12 @@ export default function PlanAndPayment({ initialPlan = null }) {
           disabled={!hasDraftChange || planChange.isPending || cancelChange.isPending}
           onClick={() => planChange.mutate(selectedPlan)}
         >
-          {planChange.isPending ? "Scheduling..." : "Schedule plan change"}
+          {planChange.isPending ? "Scheduling..."
+            : legacyPlan ? `Move to ${planLabel(selectedPlan)}` : "Change plan"}
         </button>
         {legacyPlan && (
           <p className="mt-3 rounded-lg bg-gold-soft px-3 py-2 font-ui text-xs text-gold-ink">
-            Lite is a retired plan. Select Basic, Growth, or Scale before enabling autopay. Your past invoices remain unchanged.
+            This is a retired plan. Select Vachanam Voice before enabling autopay. Your past invoices remain unchanged.
           </p>
         )}
         <span className={p?.status === "active" ? "chip-token" : "chip-muted"}>
@@ -319,8 +323,8 @@ export default function PlanAndPayment({ initialPlan = null }) {
         </div>
       )}
 
-      {/* WhatsApp add-on. Four states, because selling a clinic something their
-          plan already includes is worse than not selling it at all. */}
+      {/* WhatsApp is included in the standalone plan and is a per-branch add-on
+          on voice plans. Legacy plans retain their recorded entitlement. */}
       {p && (
         <div className="mt-4 border-t border-hairline pt-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -333,7 +337,7 @@ export default function PlanAndPayment({ initialPlan = null }) {
                     ? "Active. From your next renewal it is billed together with your plan."
                     : p.whatsapp_included_pending
                       ? `Included from ${p.pending_plan_effective} when you move to ${p.pending_plan} — no need to buy it.`
-                      : "Patients book, reschedule and ask questions over WhatsApp. ₹1,499/mo — charged now for this cycle, then billed with your plan."}
+                      : `Patients book, reschedule and ask questions over WhatsApp. ₹${WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}/mo — charged now for this cycle, then billed with your plan.`}
               </p>
             </div>
             {p.whatsapp_included || p.whatsapp_addon ? (
@@ -344,7 +348,7 @@ export default function PlanAndPayment({ initialPlan = null }) {
               <button className="btn-primary whitespace-nowrap px-4 py-2 text-sm"
                 disabled={buyingWa || p.status !== "active"}
                 onClick={buyWhatsapp}>
-                {buyingWa ? "Opening…" : "Add WhatsApp · ₹1,499"}
+                {buyingWa ? "Opening…" : `Add WhatsApp · ₹${WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}`}
               </button>
             )}
           </div>
@@ -357,9 +361,9 @@ export default function PlanAndPayment({ initialPlan = null }) {
       )}
 
       <p className="mt-3 font-ui text-xs text-slate">
-        A detailed receipt is emailed after every successful payment. Extra voice
-        minutes are invoiced separately because the recurring mandate covers fixed
-        plan and WhatsApp charges.
+        {selectedPlan === "wa"
+          ? "A detailed receipt is emailed after every successful payment."
+          : "A detailed receipt is emailed after every successful payment. Voice usage is invoiced separately because the recurring mandate covers fixed plan and WhatsApp charges."}
       </p>
     </section>
   );

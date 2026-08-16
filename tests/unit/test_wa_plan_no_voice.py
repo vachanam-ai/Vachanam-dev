@@ -67,11 +67,12 @@ def test_four_voice_plans_call_blocked_unchanged():
         # goodwill adjustment still extends the trial bucket
         assert call_blocked("trial", plan, False, 30, adjustment=100) is None
 
-        # active + not exhausted -> allowed (None)
-        included = {"lite": 150, "solo": 400, "clinic": 1_500, "multi": 3_000}[plan]
-        assert call_blocked("active", plan, True, included - 1) is None
-        # active + exhausted (hard block on) -> minutes_exhausted
-        assert call_blocked("active", plan, True, included) == "minutes_exhausted"
+        # Usage-only current plans never cut off paid calls. Legacy Lite keeps
+        # its historical bucket and hard-block behavior.
+        included = {"lite": 150, "solo": 0, "clinic": 0, "multi": 0}[plan]
+        assert call_blocked("active", plan, True, max(included - 1, 0)) is None
+        expected = "minutes_exhausted" if included else None
+        assert call_blocked("active", plan, True, max(included, 10_000)) == expected
 
 
 def test_clinic_matrix_from_test_billing_math_still_holds():
@@ -80,7 +81,7 @@ def test_clinic_matrix_from_test_billing_math_still_holds():
     assert call_blocked("cancelled", "clinic", False, 0) == "cancelled"
     assert call_blocked("active", "clinic", False, 99999) is None
     assert call_blocked("active", "clinic", True, 1499) is None
-    assert call_blocked("active", "clinic", True, 1500) == "minutes_exhausted"
+    assert call_blocked("active", "clinic", True, 1500) is None
 
 
 # ── pre_appt_reminder job: voice skipped, WhatsApp still fires ───────────────
@@ -188,6 +189,12 @@ async def test_reminder_job_still_sends_the_wa_reminder(db, redis, monkeypatch, 
     monkeypatch.setenv("LIVEKIT_URL", "wss://x")
     monkeypatch.setenv("LIVEKIT_API_KEY", "k")
     from backend.jobs import pre_appt_reminder as job
+    from backend.services import wa_readiness
+
+    async def _ready(*args, **kwargs):
+        return {"reminder": True}
+
+    monkeypatch.setattr(wa_readiness, "purpose_readiness", _ready)
 
     br, doc, pat, tok = await _seed_in_window(db, plan="wa")
 

@@ -204,7 +204,7 @@ async def run_billing_renewal(today: date | None = None) -> None:
                             f"Namaste {org.name},\n\n"
                             f"Your current billing cycle ends on {end.strftime('%d %b %Y')}. "
                             f"Renew for Rs {price:,} + 18% GST — plus any extra-usage "
-                            "minutes beyond your plan at Rs 5/min (the exact total shows "
+                            "voice minutes at Rs 6/min (the exact total shows "
                             f"at checkout) — to keep your AI receptionist answering every "
                             f"call:\n\n{billing_url}\n\n"
                             "Pay with UPI, card or netbanking (Razorpay). If the cycle "

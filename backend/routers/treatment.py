@@ -555,7 +555,7 @@ async def doctor_reply(
         patient_id=patient_id,
         treatment_note_id=body.treatment_note_id,
         task_type="doctor_advice",
-        channel="voice",
+        channel="both",
         what_to_ask=body.message,
         target_date=target,
         scheduled_date=today_local,

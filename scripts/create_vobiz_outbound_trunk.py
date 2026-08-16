@@ -1,22 +1,23 @@
-"""Create a LiveKit OUTBOUND SIP trunk that authenticates to a Vobiz
-sub-account, so this clinic dials patients through its OWN Vobiz channel pool.
+"""Idempotently create the ONE shared Vobiz outbound trunk.
 
-Prints the new trunk id — paste it into the branch's `outbound_trunk_id`
-(Settings → telephony, or PATCH /branches/{id}/telephony).
+Every clinic DID belongs in this trunk's ``numbers`` list. Calls still present
+the correct clinic number because the worker supplies that branch's database
+DID as ``sip_number`` on every dial. Re-running merges ``DID_NUMBERS`` into the
+existing named trunk; it never creates one trunk per clinic.
 
-Secrets come from the ENVIRONMENT only (never hardcode, never commit). Set:
-  LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET   (LiveKit project)
-  VOBIZ_SIP_DOMAIN     Vobiz termination/SIP domain for the sub-account
-  VOBIZ_SIP_USERNAME   sub-account SIP/Auth ID (e.g. SA_LZ7BN59D)
-  VOBIZ_SIP_PASSWORD   sub-account SIP password / Auth Token
-  DID_NUMBER           the purchased DID in E.164 (e.g. +918012345678)
+Secrets come from environment variables only:
+  LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
+  VOBIZ_SIP_DOMAIN, VOBIZ_SIP_USERNAME, VOBIZ_SIP_PASSWORD
+  DID_NUMBERS   optional comma-separated DIDs in E.164
+  DID_NUMBER    one optional DID (backward-compatible alternative)
 
-Run:
-  python -m scripts.create_vobiz_outbound_trunk
+Run: python -m scripts.create_vobiz_outbound_trunk
 """
 import asyncio
 import os
 import sys
+
+TRUNK_NAME = "vobiz-outbound"
 
 
 async def main() -> int:
@@ -25,28 +26,47 @@ async def main() -> int:
     required = [
         "LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET",
         "VOBIZ_SIP_DOMAIN", "VOBIZ_SIP_USERNAME", "VOBIZ_SIP_PASSWORD",
-        "DID_NUMBER",
     ]
-    missing = [k for k in required if not os.getenv(k)]
+    missing = [key for key in required if not os.getenv(key)]
     if missing:
         print(f"Missing env vars: {', '.join(missing)}", file=sys.stderr)
         return 2
 
-    did = os.environ["DID_NUMBER"].strip()
+    raw_numbers = os.getenv("DID_NUMBERS") or os.getenv("DID_NUMBER") or ""
+    numbers = sorted({item.strip() for item in raw_numbers.split(",") if item.strip()})
     lkapi = api.LiveKitAPI()
     try:
+        existing = await lkapi.sip.list_outbound_trunk(
+            api.ListSIPOutboundTrunkRequest()
+        )
+        for trunk in existing.items:
+            if trunk.name != TRUNK_NAME:
+                continue
+            merged = sorted(set(trunk.numbers) | set(numbers))
+            if merged != sorted(trunk.numbers):
+                await lkapi.sip.update_outbound_trunk_fields(
+                    trunk_id=trunk.sip_trunk_id, numbers=merged
+                )
+            print(
+                f"OK OUTBOUND_TRUNK_ID={trunk.sip_trunk_id} "
+                f"numbers={len(merged)} reused=true"
+            )
+            return 0
+
         trunk = api.SIPOutboundTrunkInfo(
-            name=f"vobiz-{os.getenv('VOBIZ_SIP_USERNAME')}",
+            name=TRUNK_NAME,
             address=os.environ["VOBIZ_SIP_DOMAIN"].strip(),
-            numbers=[did],
+            numbers=numbers,
             auth_username=os.environ["VOBIZ_SIP_USERNAME"].strip(),
             auth_password=os.environ["VOBIZ_SIP_PASSWORD"],
         )
-        res = await lkapi.sip.create_sip_outbound_trunk(
+        result = await lkapi.sip.create_sip_outbound_trunk(
             api.CreateSIPOutboundTrunkRequest(trunk=trunk)
         )
-        # last-4 only in logs (Rule 9); full id is the non-secret output we want.
-        print(f"OK outbound_trunk_id={res.sip_trunk_id} did=...{did[-4:]}")
+        print(
+            f"OK OUTBOUND_TRUNK_ID={result.sip_trunk_id} "
+            f"numbers={len(numbers)} reused=false"
+        )
         return 0
     finally:
         await lkapi.aclose()

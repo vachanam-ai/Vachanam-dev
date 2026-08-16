@@ -322,7 +322,9 @@ async def test_terms_pricing_matches_billing_math():
     truth) so a future repricing fails CI until the terms are updated."""
     from pathlib import Path
 
-    from backend.services.billing_math import PLANS, SELLABLE_PLANS, TRIAL_MINUTES
+    from backend.services.billing_math import (
+        FOUNDING_CLINIC_SLOTS, FOUNDING_CREDIT_MINUTES, PLANS, SELLABLE_PLANS,
+    )
 
     text = Path("docs/legal/terms-of-service.md").read_text(encoding="utf-8")
     for key in SELLABLE_PLANS:
@@ -333,13 +335,14 @@ async def test_terms_pricing_matches_billing_math():
         if plan.included_minutes:
             assert f"{plan.included_minutes:,} minutes" in text, (
                 f"terms missing included minutes for {plan.display_name}")
-        else:
+        elif not plan.has_voice:
             # A plan with no voice (WhatsApp-only) must say so explicitly
             # rather than advertise "0 minutes", which reads like a defect.
             assert "no voice minutes" in text.lower(), (
                 f"terms must state that {plan.display_name} includes no voice")
-    assert "INR 6 per minute" in text        # overage, all voice plans
-    assert f"{TRIAL_MINUTES} minutes" in text  # trial size
+    assert "INR 6 per voice minute" in text  # usage, all current voice plans
+    assert f"first {FOUNDING_CLINIC_SLOTS}" in text.lower()
+    assert f"{FOUNDING_CREDIT_MINUTES} voice minutes" in text
     assert "18% GST" in text
     # Dead old-model figures must never reappear. (Plain "1,999" is now the
     # legitimate extra-DID price, so match the old rows distinctively.)

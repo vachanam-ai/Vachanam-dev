@@ -7,7 +7,7 @@ RULE 1: every route branch-scoped (assert_branch_access); super_admin denied
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,11 @@ from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import default_limit  # SEC #4: throttle PII reads
 from backend.models.schema import Patient, Token, Doctor
 from backend.services.validators import normalize_indian_phone
+from backend.services.patient_import import (
+    MAX_IMPORT_BYTES,
+    PatientImportError,
+    parse_patient_file,
+)
 
 logger = structlog.get_logger()
 router = APIRouter(dependencies=[Depends(forbid_admin)])
@@ -37,6 +42,88 @@ class PatientEdit(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     age: int | None = Field(None, ge=0, le=120)
     phone: str | None = None
+
+
+@router.post(
+    "/branches/{branch_id}/patients/import",
+    dependencies=[Depends(default_limit)],
+)
+async def import_patients(
+    branch_id: uuid.UUID,
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Import a clinic's existing patient register without importing notes.
+
+    Only Name, Mobile, Age and Gender are read. Unknown columns are ignored,
+    duplicates are skipped, and the entire database write commits atomically.
+    """
+    await assert_branch_access(user, str(branch_id), db)
+    if user.role not in ("org_admin", "receptionist"):
+        raise HTTPException(status_code=403, detail="Only the clinic owner or reception can import patients")
+
+    content = await file.read(MAX_IMPORT_BYTES + 1)
+    if len(content) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Patient file must be 10 MB or smaller")
+    try:
+        parsed, invalid = parse_patient_file(file.filename or "", content)
+    except PatientImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    phones = sorted({row.phone for row in parsed})
+    existing_rows = []
+    if phones:
+        existing_rows = (
+            await db.execute(
+                select(Patient.phone, Patient.name, Patient.is_primary).where(
+                    Patient.branch_id == branch_id,
+                    Patient.phone.in_(phones),
+                    Patient.anonymized_at.is_(None),
+                )
+            )
+        ).all()
+    existing = {(phone, name.strip().casefold()) for phone, name, _ in existing_rows}
+    phones_with_primary = {phone for phone, _, primary in existing_rows if primary}
+    seen: set[tuple[str, str]] = set()
+    created = 0
+    duplicates = 0
+    for row in parsed:
+        key = (row.phone, row.name.casefold())
+        if key in existing or key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        primary = row.phone not in phones_with_primary
+        if primary:
+            phones_with_primary.add(row.phone)
+        db.add(
+            Patient(
+                branch_id=branch_id,
+                name=row.name,
+                phone=row.phone,
+                age=row.age,
+                gender=row.gender,
+                is_primary=primary,
+                followup_consent=False,
+            )
+        )
+        created += 1
+
+    await db.commit()
+    logger.info(
+        "patients_imported",
+        branch_id=str(branch_id),
+        created=created,
+        duplicates=duplicates,
+        invalid=len(invalid),
+    )
+    return {
+        "created": created,
+        "duplicates": duplicates,
+        "invalid": len(invalid),
+        "errors": invalid[:100],
+    }
 
 
 @router.get("/branches/{branch_id}/patients", dependencies=[Depends(default_limit)])

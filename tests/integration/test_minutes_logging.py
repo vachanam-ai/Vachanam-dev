@@ -78,7 +78,7 @@ async def test_logged_call_minutes_show_on_dashboard(branch, client, db):
     assert r.status_code == 200, r.text
     minutes = r.json()["minutes"]
     assert minutes["used"] == 7          # 420s // 60
-    assert minutes["included"] == 400    # Basic plan allowance
+    assert minutes["included"] == 0      # Basic is fixed-plus-usage
 
 
 async def test_b11_finalize_refreshes_call_type(branch, db):

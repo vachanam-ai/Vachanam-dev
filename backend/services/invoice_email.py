@@ -18,10 +18,17 @@ import httpx
 import structlog
 
 from backend.config import settings
+from backend.services.billing_math import PLANS
 
 logger = structlog.get_logger()
 
-_PLAN_LABEL = {"lite": "Lite", "solo": "Starter", "clinic": "Clinic", "multi": "Multi"}
+_PLAN_LABEL = {
+    "wa": "WhatsApp",
+    "lite": "Lite (legacy)",
+    "solo": "Vachanam Voice",
+    "clinic": "Growth (legacy)",
+    "multi": "Scale (legacy)",
+}
 
 
 def invoice_number(cycle_start: date, payment_id: str) -> str:
@@ -35,10 +42,13 @@ def invoice_number(cycle_start: date, payment_id: str) -> str:
 def _rows(plan: str, bd: dict) -> list[tuple[str, float]]:
     rows = [(f"{_PLAN_LABEL.get(plan, plan)} plan", float(bd["base"]))]
     if bd["overage_minutes"]:
+        rate = float(getattr(PLANS.get(plan), "overage_per_min", 0.0) or 0.0)
         rows.append(
-            (f"Extra usage · {bd['overage_minutes']} min × Rs 5/min",
+            (f"Voice usage · {bd['overage_minutes']} min x Rs {rate:g}/min",
              float(bd["overage_amount"]))
         )
+    if bd.get("whatsapp_addon"):
+        rows.append(("WhatsApp add-on", float(bd["whatsapp_addon"])))
     return rows
 
 
@@ -51,7 +61,7 @@ def build_invoice_text(
     numbers the Razorpay order charged. org_gstin accepted for call-site
     compatibility, deliberately unused (#358)."""
     no = invoice_number(cycle_start, payment_id)
-    subtotal = bd["base"] + bd["overage_amount"]
+    subtotal = bd["base"] + bd["overage_amount"] + float(bd.get("whatsapp_addon", 0) or 0)
     lines = [
         f"Receipt from Vachanam  ·  {no}",
         f"Rs {bd['total']:,.2f} paid on {date.today():%d %b %Y}",
@@ -88,7 +98,7 @@ def build_invoice_html(
     number, service period, line items, GST, amount paid. Inline styles only
     (email clients)."""
     no = invoice_number(cycle_start, payment_id)
-    subtotal = bd["base"] + bd["overage_amount"]
+    subtotal = bd["base"] + bd["overage_amount"] + float(bd.get("whatsapp_addon", 0) or 0)
     safe_org_name = escape(org_name, quote=True)
     safe_payment_id = escape(payment_id, quote=True)
 
@@ -158,7 +168,7 @@ def build_invoice_pdf(
     from fpdf import FPDF
 
     no = invoice_number(cycle_start, payment_id)
-    subtotal = bd["base"] + bd["overage_amount"]
+    subtotal = bd["base"] + bd["overage_amount"] + float(bd.get("whatsapp_addon", 0) or 0)
 
     TEAL = (14, 74, 73)
     INK = (26, 32, 36)

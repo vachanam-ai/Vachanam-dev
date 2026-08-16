@@ -98,7 +98,40 @@ async def clinic(db):
     return {"org_id": str(org.id), "branch_id": str(branch.id)}
 
 
-async def test_full_settings_onboarding_makes_everything_work(clinic, client, db, redis):
+async def test_voice_channels_can_only_be_disabled_after_whatsapp_is_ready(
+    clinic, client, db, monkeypatch
+):
+    from backend.services import wa_readiness
+
+    bid = clinic["branch_id"]
+    owner = _owner_jwt(clinic["org_id"], bid)
+    refused = await client.patch(
+        f"/branches/{bid}/settings", headers=_auth(owner),
+        json={"reminder_calls_enabled": False},
+    )
+    assert refused.status_code == 409
+    assert "WhatsApp must be connected" in refused.json()["detail"]
+
+    async def ready(*args, **kwargs):
+        return {purpose: True for purpose in args[2]}
+
+    monkeypatch.setattr(wa_readiness, "purpose_readiness", ready)
+    accepted = await client.patch(
+        f"/branches/{bid}/settings", headers=_auth(owner),
+        json={
+            "reminder_calls_enabled": False,
+            "followup_calls_enabled": False,
+        },
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["reminder_calls_enabled"] is False
+    assert accepted.json()["followup_calls_enabled"] is False
+
+
+async def test_full_settings_onboarding_makes_everything_work(clinic, client, db, redis, monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "outbound_trunk_id", "ST_shared")
     bid = clinic["branch_id"]
     owner = _owner_jwt(clinic["org_id"], bid)
     DID = "+918045678901"
@@ -106,6 +139,9 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     # ── 1. Owner saves clinic details + calendar + DID through the real API ──
     with patch(
         "backend.services.livekit_sip.sync_did_to_inbound_trunk",
+        new=AsyncMock(return_value={"ok": True, "detail": "wired"}),
+    ), patch(
+        "backend.services.livekit_sip.sync_did_to_outbound_trunk",
         new=AsyncMock(return_value={"ok": True, "detail": "wired"}),
     ):
         r = await client.patch(
@@ -172,23 +208,23 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
             "vobiz_subaccount_id": "sub_madhapur",
             "vobiz_sip_username": "madhapur_user",
             "vobiz_sip_password": "sup3r-secret-sip",
-            "outbound_trunk_id": "ST_madhapur",
         },
     )
     assert tp.status_code == 200, tp.text
     body_tp = tp.json()
     assert body_tp["has_sip_password"] is True
     assert "sup3r-secret-sip" not in tp.text  # secret never returned
-    assert body_tp["outbound_trunk_id"] == "ST_madhapur"
+    assert body_tp["shared_outbound_trunk_configured"] is True
     # The DB column holds CIPHERTEXT, not the plaintext password.
     row = (
         await db.execute(select(Branch).where(Branch.id == uuid.UUID(bid)))
     ).scalar_one()
     assert row.vobiz_sip_password_enc and row.vobiz_sip_password_enc != "sup3r-secret-sip"
     assert row.vobiz_subaccount_id == "sub_madhapur"
-    # That stored trunk is what an outbound call would dial through.
+    # Runtime ignores the deprecated per-branch trunk column and always uses
+    # the one configured shared outbound trunk.
     from backend.services.telephony import branch_outbound_trunk_id
-    assert branch_outbound_trunk_id(row) == "ST_madhapur"
+    assert branch_outbound_trunk_id(row) == settings.outbound_trunk_id
 
     # Soniox is the sole TTS provider; the picker exposes only its catalog.
     vs = await client.get(f"/branches/{bid}/voices?language=te", headers=_auth(owner))
