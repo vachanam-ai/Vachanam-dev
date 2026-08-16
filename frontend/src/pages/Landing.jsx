@@ -14,7 +14,7 @@ import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import { submitContact } from "../api/support";
 import { API_BASE } from "../api/client.js";
 import {
-  PLAN_CATALOG, PUBLIC_PLAN_KEYS, OVERAGE_RUPEES, WHATSAPP_ADDON_RUPEES,
+  PLAN_CATALOG, OVERAGE_RUPEES, WHATSAPP_ADDON_RUPEES,
   ADDITIONAL_BRANCH_RUPEES, ADDITIONAL_NUMBER_RUPEES, FOUNDING_CREDIT_MINUTES,
 } from "../lib/plans.js";
 
@@ -54,6 +54,128 @@ function Brand() {
 
 function CheckItem({ children }) {
   return <li><span><Check size={14} weight="bold" /></span>{children}</li>;
+}
+
+const formatRupees = (value) => `₹${value.toLocaleString("en-IN")}`;
+
+export function PricingSection({ foundingOfferOn = false, slotsLeft = null }) {
+  const [voiceMinutes, setVoiceMinutes] = useState(300);
+  const voicePlan = PLAN_CATALOG.solo;
+  const whatsappPlan = PLAN_CATALOG.wa;
+  const usageCost = voiceMinutes * OVERAGE_RUPEES;
+  const estimatedTotal = voicePlan.price + usageCost;
+
+  return (
+    <section id="pricing" data-motion-section className="pricing-section">
+      <div className="pricing-heading" data-motion-item>
+        <div>
+          <span className="marketing-kicker">Simple, usage-based pricing</span>
+          <h2>One fixed fee. Pay only for the calls you use.</h2>
+        </div>
+        <p>Start with a complete voice receptionist for one branch. Add WhatsApp when your clinic wants confirmations, reminders and patient chat on the same workflow.</p>
+      </div>
+
+      <div className="pricing-core" data-motion-item>
+        <article className="pricing-voice-plan">
+          <header>
+            <span className="pricing-channel-label"><PhoneCall size={18} weight="fill" /> Vachanam Voice</span>
+            <span className="pricing-choice-label">Recommended</span>
+          </header>
+          <h3>Your clinic phone line, answered end to end.</h3>
+          <p className="pricing-plan-copy">One number, unlimited doctors, all supported languages, and appointment actions checked against your clinic data.</p>
+
+          <div className="pricing-equation" aria-label={`${formatRupees(voicePlan.price)} per month plus ${formatRupees(OVERAGE_RUPEES)} per voice minute`}>
+            <div>
+              <span>Platform</span>
+              <strong><sup>₹</sup>{voicePlan.price.toLocaleString("en-IN")}</strong>
+              <small>per month</small>
+            </div>
+            <b aria-hidden>+</b>
+            <div>
+              <span>Voice calls</span>
+              <strong><sup>₹</sup>{OVERAGE_RUPEES}</strong>
+              <small>per minute</small>
+            </div>
+          </div>
+
+          <ul className="pricing-includes">
+            <CheckItem>One clinic branch and phone number</CheckItem>
+            <CheckItem>Bookings, cancellations and reschedules</CheckItem>
+            <CheckItem>Unlimited doctors and supported languages</CheckItem>
+            <CheckItem>Usage visible in the clinic workspace</CheckItem>
+          </ul>
+
+          {foundingOfferOn && (
+            <div className="pricing-founder-note">
+              <Sparkle size={19} weight="fill" />
+              <span>
+                <strong>Founding clinic offer</strong>
+                <small>First {FOUNDING_CREDIT_MINUTES} voice minutes free after activation{slotsLeft != null ? `. ${slotsLeft} places left.` : "."}</small>
+              </span>
+            </div>
+          )}
+
+          <div className="pricing-actions">
+            <Link to="/register?plan=solo" className="btn-primary">Start with Voice <ArrowRight size={17} /></Link>
+            <a href="#demo" className="pricing-text-link">Hear a real clinic call</a>
+          </div>
+        </article>
+
+        <aside className="pricing-estimator" aria-labelledby="pricing-estimator-title">
+          <div className="pricing-estimator-head">
+            <span>Plan your bill</span>
+            <h3 id="pricing-estimator-title">What would Voice cost each month?</h3>
+            <p>Move the slider to match your expected call usage.</p>
+          </div>
+
+          <output htmlFor="voice-minute-estimate" className="pricing-minute-output">
+            <strong>{voiceMinutes.toLocaleString("en-IN")}</strong>
+            <span>voice minutes</span>
+          </output>
+          <input
+            id="voice-minute-estimate"
+            className="pricing-range"
+            type="range"
+            min="0"
+            max="1500"
+            step="50"
+            value={voiceMinutes}
+            onChange={(event) => setVoiceMinutes(Number(event.target.value))}
+            aria-label="Estimated voice minutes per month"
+          />
+          <div className="pricing-range-scale" aria-hidden><span>0</span><span>750</span><span>1,500</span></div>
+
+          <dl className="pricing-calculation">
+            <div><dt>Platform fee</dt><dd>{formatRupees(voicePlan.price)}</dd></div>
+            <div><dt>{voiceMinutes.toLocaleString("en-IN")} min × {formatRupees(OVERAGE_RUPEES)}</dt><dd>{formatRupees(usageCost)}</dd></div>
+            <div className="pricing-total"><dt>Estimated monthly total</dt><dd>{formatRupees(estimatedTotal)}</dd></div>
+          </dl>
+          <p className="pricing-estimator-note">GST is currently waived. Founding credits are not applied to this estimate.</p>
+        </aside>
+      </div>
+
+      <div className="pricing-channels" data-motion-item>
+        <div className="pricing-channels-intro">
+          <WhatsappLogo size={28} weight="duotone" />
+          <div><h3>Add WhatsApp, or use it on its own.</h3><p>Choose the channel mix that matches how your patients contact the clinic.</p></div>
+        </div>
+        <article>
+          <div><span className="pricing-option-tag">With Voice</span><h4>WhatsApp add-on</h4><p>Booking confirmations, reminders, follow-ups and patient chat.</p></div>
+          <p className="pricing-option-price"><strong>{formatRupees(WHATSAPP_ADDON_RUPEES)}</strong><span>/month</span></p>
+          <small>Add it during clinic setup.</small>
+        </article>
+        <article>
+          <div><span className="pricing-option-tag">No phone line</span><h4>WhatsApp only</h4><p>Patient booking and support in chat, without voice usage.</p></div>
+          <p className="pricing-option-price"><strong>{formatRupees(whatsappPlan.price)}</strong><span>/month</span></p>
+          <Link to="/register?plan=wa">Choose WhatsApp <ArrowRight size={15} /></Link>
+        </article>
+      </div>
+
+      <p className="pricing-footnote" data-motion-item>
+        One branch is included. Additional branch {formatRupees(ADDITIONAL_BRANCH_RUPEES)}/month. Additional number {formatRupees(ADDITIONAL_NUMBER_RUPEES)}/month. Meta message fees are paid directly by the clinic.
+      </p>
+    </section>
+  );
 }
 
 export default function Landing() {
@@ -207,37 +329,7 @@ export default function Landing() {
           </div>
         </section>
 
-        <section id="pricing" data-motion-section className="pricing-section">
-          <div className="marketing-section-heading" data-motion-item><span className="marketing-kicker">Simple, usage-based pricing</span><h2>Choose voice, WhatsApp, or both.</h2><p>Each monthly fee covers one clinic branch and the platform. The voice plan includes a clinic phone number and meters calls separately.</p></div>
-          <div className="pricing-grid">
-            {PUBLIC_PLAN_KEYS.map((key) => {
-              const plan = PLAN_CATALOG[key];
-              const whatsappOnly = key === "wa";
-              return (
-                <article key={key} data-motion-item className={`pricing-card ${plan.popular ? "is-popular" : ""}`}>
-                  {plan.popular && <span className="popular-label">Most popular</span>}
-                  <div className="pricing-card-head"><h3>{plan.name}</h3><p>{plan.tagline}</p></div>
-                  <p className="price"><sup>₹</sup>{plan.price.toLocaleString("en-IN")}<span>/month</span></p>
-                  <ul>
-                    {whatsappOnly
-                      ? <CheckItem>WhatsApp booking and patient support</CheckItem>
-                      : <CheckItem>Voice usage at ₹{OVERAGE_RUPEES}/minute</CheckItem>}
-                    <CheckItem>{plan.doctors}</CheckItem><CheckItem>{plan.branches}</CheckItem>
-                    <CheckItem>{whatsappOnly
-                      ? "No phone line or voice usage"
-                      : `WhatsApp add-on ₹${WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}/branch`}</CheckItem>
-                    <CheckItem>Booking, cancellations and reschedules</CheckItem><CheckItem>All supported languages</CheckItem>
-                  </ul>
-                  <Link to={`/register?plan=${key}`} className={plan.popular ? "btn-primary" : "btn-ghost"}>Choose {plan.name}<ArrowRight size={17} /></Link>
-                </article>
-              );
-            })}
-          </div>
-          <div data-motion-item className="pricing-notes">
-            <div><WhatsappLogo size={22} weight="duotone" /><span><strong>WhatsApp options</strong><small>₹{PLAN_CATALOG.wa.price.toLocaleString("en-IN")}/month standalone or ₹{WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}/month with Voice · Meta message fees are paid directly by the clinic</small></span></div>
-            <p>Voice usage ₹{OVERAGE_RUPEES}/minute · Additional branch ₹{ADDITIONAL_BRANCH_RUPEES.toLocaleString("en-IN")}/month · Additional number ₹{ADDITIONAL_NUMBER_RUPEES.toLocaleString("en-IN")}/month</p>
-          </div>
-        </section>
+        <PricingSection foundingOfferOn={foundingOfferOn} slotsLeft={slotsLeft} />
 
         <section data-motion-section className="faq-section">
           <div className="marketing-section-heading compact" data-motion-item><span className="marketing-kicker">Practical answers</span><h2>What clinics ask before going live.</h2></div>
