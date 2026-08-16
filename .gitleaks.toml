@@ -77,3 +77,12 @@ paths = [
   '''\.claude/.*\.md''',
   '''CLAUDE\.md''',
 ]
+
+[[allowlists]]
+description = "Alembic reminder-attempt column name (schema identifier, not a credential)"
+regexes = [
+  '''reminder_24h_dial_attempts''',
+]
+paths = [
+  '''alembic/versions/cccc49_notification_channel_preferences\.py''',
+]
