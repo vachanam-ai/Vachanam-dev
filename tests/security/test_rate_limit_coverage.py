@@ -57,12 +57,18 @@ def _limited(route) -> bool:
 
 def _routes():
     for route in _app().routes:
-        methods = getattr(route, "methods", None)
-        if not methods or not getattr(route, "endpoint", None):
-            continue
-        if route.path in _NOT_OURS:
-            continue
-        yield route, methods - {"HEAD", "OPTIONS"}
+        # FastAPI >=0.139 stores included routers lazily. Materialize their
+        # effective routes so this audit sees the same endpoint table the ASGI
+        # app serves; older FastAPI versions already expose flat routes.
+        contexts = getattr(route, "effective_route_contexts", None)
+        resolved = contexts() if callable(contexts) else (route,)
+        for effective_route in resolved:
+            methods = getattr(effective_route, "methods", None)
+            if not methods or not getattr(effective_route, "endpoint", None):
+                continue
+            if effective_route.path in _NOT_OURS:
+                continue
+            yield effective_route, methods - {"HEAD", "OPTIONS"}
 
 
 def test_every_route_is_rate_limited():
