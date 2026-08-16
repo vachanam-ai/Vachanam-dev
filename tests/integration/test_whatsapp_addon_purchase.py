@@ -48,6 +48,19 @@ async def _clinic(db, plan="solo", status="active"):
 
 
 @pytest.mark.asyncio
+async def test_addon_purchase_is_locked_until_meta_approval(client, db, monkeypatch):
+    org, br = await _clinic(db)
+    monkeypatch.setattr(settings, "whatsapp_self_serve_live", False)
+
+    r = await client.post(
+        "/api/whatsapp-addon/order", headers=_auth(_owner(str(org.id), str(br.id)))
+    )
+
+    assert r.status_code == 409
+    assert r.json()["detail"] == "WhatsApp onboarding is coming soon"
+
+
+@pytest.mark.asyncio
 async def test_legacy_whatsapp_plan_cannot_buy_the_addon_again(client, db):
     org, br = await _clinic(db, plan="wa")
     r = await client.post(
@@ -134,7 +147,7 @@ async def test_bank_mandate_addon_is_blocked_before_money_is_taken(
     )
 
     assert response.status_code == 409
-    assert "bank mandate cannot be changed" in response.text
+    assert "autopay mandate cannot be changed" in response.text
 
 
 @pytest.mark.asyncio

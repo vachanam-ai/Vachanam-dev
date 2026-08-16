@@ -61,11 +61,10 @@ def test_four_voice_plans_call_blocked_unchanged():
             trial_ends_at=(now - timedelta(days=2)).replace(tzinfo=None),
         ) == "trial_expired"
 
-        # trial ALWAYS hard-blocks on exhaust, flag or not
-        assert call_blocked("trial", plan, False, 29) is None
-        assert call_blocked("trial", plan, False, 30) == "minutes_exhausted"
-        # goodwill adjustment still extends the trial bucket
-        assert call_blocked("trial", plan, False, 30, adjustment=100) is None
+        # Trial usage is unlimited until the exact expiry, regardless of the
+        # paid-plan hard-block flag or a minutes adjustment.
+        assert call_blocked("trial", plan, False, 100_000) is None
+        assert call_blocked("trial", plan, True, 100_000, adjustment=-100) is None
 
         # Usage-only current plans never cut off paid calls. Legacy Lite keeps
         # its historical bucket and hard-block behavior.

@@ -1,6 +1,6 @@
 # Vachanam — Go-Live Checklist
 
-**Owner:** Vinay. **Last updated:** 2026-06-13.
+**Owner:** Vinay. **Last updated:** 2026-08-16.
 
 Split into **what code does** (done / in repo) and **what Vinay must do** (accounts,
 money, KYC, secrets, physical actions). Code items below are implemented + tested
@@ -62,7 +62,7 @@ unless marked otherwise. External items are blocking — the software cannot do 
 - [ ] **Sarvam / Gemini / OpenAI**: prod API keys with quota.
 - [ ] **Google**: `google-service-account.json` on the API host; each clinic shares its
   calendar with the service account (the Settings page guides this + "Test connection").
-- [ ] **Neon / Upstash**: prod Postgres + Redis → `DATABASE_URL`, `REDIS_URL`.
+- [x] **Supabase / Upstash**: production Postgres + Redis → `DATABASE_URL`, `REDIS_URL`.
 - [ ] **MSG91 (SMS)** — `MSG91_AUTH_KEY` + approved `MSG91_SENDER_ID`. **HARD-REQUIRED
   in production**: signup verification is **mobile-only** (decision 2026-06-14). With no
   SMS provider in prod the code is neither sent nor echoed → **nobody can sign up**.
@@ -72,7 +72,8 @@ unless marked otherwise. External items are blocking — the software cannot do 
 
 - [ ] Set all ~26 env vars (`.env.example`) on **Render** (API), **Fly** (agent),
   **Cloudflare Pages** (frontend). Never commit `.env` or the SA JSON.
-- [ ] `alembic upgrade head` on the prod DB (head = `j6cancelpatient2026`).
+- [ ] Run `alembic heads`, then `alembic upgrade head` manually on the production
+  DB for every migration-bearing release. Render does not run it automatically.
 - [ ] Fly Mumbai: open **UDP 5060** (SIP) + **10000-60000** (RTP).
 - [ ] DNS/TLS: vachanam.in → frontend, `api.` → Render; MX for hello@vachanam.in.
 - [ ] `APP_ENV=production` (disables /docs, /dev/test, and OTP echo; recording is

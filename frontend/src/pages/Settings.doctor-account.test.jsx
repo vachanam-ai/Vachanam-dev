@@ -49,6 +49,15 @@ function renderSettings() {
 }
 
 describe("Settings — doctor account creation", () => {
+  it("renders the guided onboarding journey and keeps destructive controls collapsed", async () => {
+    const { container } = renderSettings();
+
+    expect(await screen.findByRole("heading", { name: "Your path to the first perfect call" })).toBeInTheDocument();
+    expect(screen.getByText("Vaani")).toBeInTheDocument();
+    expect(container.querySelectorAll(".settings-journey-card")).toHaveLength(5);
+    expect(container.querySelector(".settings-danger-disclosure")).not.toHaveAttribute("open");
+  });
+
   it("selecting Role = Doctor renders the doctor dropdown without crashing", async () => {
     renderSettings();
 

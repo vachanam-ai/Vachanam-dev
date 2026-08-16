@@ -17,6 +17,7 @@ import {
   startOrgPilot
 } from "../api/client.js";
 import { pulseRow, revealStagger } from "../lib/motion.js";
+import { useActionDialog } from "../components/ActionDialog.jsx";
 
 const inr = (v) =>
   "₹" + Math.round(v ?? 0).toLocaleString("en-IN");
@@ -208,6 +209,7 @@ function UsageBar({ row }) {
 
 function ClinicRow({ row, costRow, onAction }) {
   const ref = useRef(null);
+  const ask = useActionDialog();
   const expense = costRow?.total_cost_inr ?? row.expense_month;
   const profit = costRow?.gross_profit_inr ?? row.profit_month;
   const act = (fn, label) =>
@@ -250,8 +252,13 @@ function ClinicRow({ row, costRow, onAction }) {
               Resume
             </button>
             <button className="rounded border border-hairline px-3 py-1 font-ui text-xs transition-transform active:scale-[0.97]"
-              onClick={() => {
-                if (!window.confirm(`Start 14-day founding pilot for ${row.name}? Free AI service (300-min hard cap) at Vachanam's cost — only for hand-picked clinics with a signed pilot agreement.`)) return;
+              onClick={async () => {
+                const confirmed = await ask({
+                  title: `Start ${row.name}'s pilot?`,
+                  description: "This starts 14 days of free AI service with a 300-minute hard cap at Vachanam's cost. Use only for a clinic with a signed pilot agreement.",
+                  confirmLabel: "Start pilot",
+                });
+                if (!confirmed) return;
                 act(() => startOrgPilot(row.org_id), `${row.name} pilot started`);
               }}>
               Start 14-day pilot
@@ -279,19 +286,30 @@ function ClinicRow({ row, costRow, onAction }) {
           hard-block at limit
         </label>
         <button className="rounded border border-hairline px-3 py-1 font-ui text-xs transition-transform active:scale-[0.97]"
-          onClick={() => {
+          onClick={async () => {
             const cur = String(row.minutes_adjustment ?? 0);
-            const v = window.prompt(`Minute adjustment for ${row.name} (signed delta, e.g. 500 or -200):`, cur);
-            if (v === null) return;
+            const v = await ask({
+              title: `Adjust ${row.name}'s minutes`,
+              description: "Enter a signed allowance adjustment. For example, 500 grants minutes and -200 removes them.",
+              confirmLabel: "Save adjustment",
+              input: { label: "Minute adjustment", defaultValue: cur, inputMode: "numeric", placeholder: "500 or -200" },
+            });
+            if (v === false) return;
             const n = parseInt(v, 10);
-            if (Number.isNaN(n)) return;
+            if (Number.isNaN(n)) { toast.error("Enter a whole number"); return; }
             act(() => setOrgMinutes(row.org_id, n), `${row.name} minutes adj → ${n}`);
           }}>
           Adjust minutes
         </button>
         <button className="rounded border border-danger bg-danger/5 px-3 py-1 font-ui text-xs font-semibold text-danger transition-transform active:scale-[0.97]"
-          onClick={() => {
-            if (!window.confirm(`Permanently DELETE ${row.name} and ALL its data? This cannot be undone. (The clinic must be paused/cancelled first.)`)) return;
+          onClick={async () => {
+            const confirmed = await ask({
+              title: `Delete ${row.name}?`,
+              description: "All clinic data and logins will be permanently erased. The clinic must be paused or cancelled first. This cannot be undone.",
+              confirmLabel: "Delete everything",
+              tone: "danger",
+            });
+            if (!confirmed) return;
             act(() => deleteOrg(row.org_id), `${row.name} deleted`);
           }}>
           Delete clinic

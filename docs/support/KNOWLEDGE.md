@@ -56,7 +56,10 @@ switch language and the agent continues in the new language.
 | Vachanam Voice | ₹1,999/month | ₹6 per voice minute | unlimited | all 7 | reminders and follow-up calls |
 | WhatsApp | ₹1,999/month | no voice | 3 | all supported chat languages | WhatsApp included |
 
-- Voice usage is ₹6 per minute from the first minute, billed with the next invoice.
+- After any free trial, Voice usage is ₹6 per minute from the first paid minute. The fixed platform fee
+  can renew by autopay; variable voice usage is reviewed and paid manually by
+  the owner from Plan & billing after the billing cycle closes. There is no
+  automatic wallet recharge or variable auto-debit.
 - WhatsApp is a ₹1,499/month add-on per Voice branch. Meta message charges are
   paid directly by the clinic.
 - Extra phone number or branch: ₹1,499/month (a branch is a
@@ -65,9 +68,12 @@ switch language and the agent continues in the new language.
 
 ## Founding 100
 
-The first 100 clinics receive 500 voice minutes free on their first paid
-billing cycle. The ₹1,999 Voice platform fee still applies. This is a one-time credit,
-not a recurring monthly allowance.
+The first 100 clinics receive 14 calendar days of Vachanam Voice completely
+free. There is no platform fee, voice-minute cap, card requirement, or automatic
+charge. Usage remains visible but is not billed. The service pauses at the exact
+expiry unless the clinic chooses to activate the ₹1,999/month + ₹6/minute paid
+plan. Vachanam may request honest feedback after a successful trial; a positive
+testimonial is optional and never a condition of the free service.
 
 ## Getting started (onboarding)
 
@@ -82,6 +88,22 @@ not a recurring monthly allowance.
    recommended).
 5. Choose a supported catalog voice in Settings.
 6. Test-call the number; go live.
+
+## Voices and the founding custom-voice offer
+
+- Every clinic chooses its call language and one supported studio voice from
+  the Voices page. A change applies from the next call.
+- The first 10 clinics that successfully create or connect a custom voice get
+  permanent access to one custom voice. Merely opening the page does not use a
+  place.
+- The owner may record up to 20 seconds, upload WAV, MP3, M4A, OGG or WebM
+  audio, or paste an existing provider voice ID. The speaker's explicit
+  permission is mandatory.
+- One clinic can keep one custom voice. It can delete that voice and create a
+  replacement without losing its founding access.
+- After all 10 places are claimed, custom-voice creation is hidden for new
+  clinics; existing members keep it. Studio voices remain available to every
+  clinic.
 
 ## Doctors
 
@@ -153,7 +175,9 @@ not a recurring monthly allowance.
   cards, net banking. Vachanam never stores card details.
 - Activate or change a plan from Plan & billing. A scheduled change protects
   the already-paid cycle and takes effect at the next renewal.
-- Overage minutes (₹6/min) appear on the next invoice.
+- Voice minutes (₹6/min after any free trial) appear as a separate usage
+  amount when the cycle closes. The owner reviews and pays it manually; only
+  the fixed platform fee is eligible for autopay.
 - Refunds and cancellation terms are published at the website's Refunds page;
   subscription can be cancelled anytime and stays active till the period ends.
 
@@ -231,8 +255,8 @@ and the signable Data Processing Agreement at vachanam.in/dpa.
   a reset code goes to the owner email.
 - "Didn't get the signup code": check spam; codes expire in 10 minutes;
   request a new one.
-- "Minutes ran out": calls pause on trial; on paid plans calls continue at
-  ₹6/min overage. Upgrade any time from Plan & billing.
+- "Trial ended": free calls pause after 14 calendar days, never because a
+  minute cap was reached. Paid plans continue at ₹6/minute.
 - "AI spoke the wrong language": each caller's language preference is
   remembered; the caller can say, in their language, "speak in Hindi" (etc.)
   and the agent switches if the plan includes that language.

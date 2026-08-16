@@ -12,6 +12,8 @@ thread can settle; whether "book" actually writes a row, whether one patient
 can touch another's booking, and whether a cancelled seat is freed are not.
 """
 import uuid
+import re
+from types import SimpleNamespace
 from datetime import date, timedelta
 from datetime import time as time_cls
 
@@ -413,6 +415,106 @@ async def test_a_failed_reschedule_leaves_the_original_intact(db, redis):
     assert out["success"] is False
     still = (await db.execute(select(Token).where(Token.id == uuid.UUID(appt)))).scalar_one()
     assert still.status == "confirmed", "the original booking must survive"
+
+
+@pytest.mark.asyncio
+async def test_invalid_mutation_ids_return_fresh_verified_appointments(db, redis):
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+    appointment_id = await _book(db, br)
+    tools = _tools(db, br)
+
+    moved = await tools.reschedule_appointment(
+        appointment_id=str(uuid.uuid4()), date=_tomorrow(), time="09:30"
+    )
+    cancelled = await tools.cancel_appointment(appointment_id=str(uuid.uuid4()))
+
+    for result in (moved, cancelled):
+        assert result["success"] is False
+        assert result["appointments"][0]["appointment_id"] == appointment_id
+    original = (await db.execute(
+        select(Token).where(Token.id == uuid.UUID(appointment_id))
+    )).scalar_one()
+    assert original.status == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_existing_booking_id_survives_yes_on_the_next_whatsapp_message(
+    db, redis, monkeypatch
+):
+    """Exact production incident: offer move -> next-message yes -> reschedule."""
+    _org, br = await _clinic(db)
+    await _doctor(db, br, "Lakshmi")
+    seed = await _tools(db, br).book_appointment(
+        doctor_name="Lakshmi", date=_tomorrow(), time="09:00",
+        patient_name="Vinay", patient_age=24,
+    )
+    assert seed["success"] is True
+    original_id = (
+        await _tools(db, br).my_appointments()
+    )["appointments"][0]["appointment_id"]
+    sent = []
+    calls = 0
+
+    class CallResponse:
+        def __init__(self, name, args):
+            self.function_calls = [SimpleNamespace(name=name, args=args)]
+            self.candidates = [SimpleNamespace(content=object())]
+
+    class TextResponse:
+        function_calls = []
+        candidates = []
+
+        def __init__(self, text):
+            self.text = text
+
+    async def fake_model(system, contents, tool_specs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return CallResponse("book_appointment", {
+                "doctor_name": "Lakshmi", "date": _tomorrow(), "time": "09:30",
+                "patient_name": "Vinay", "patient_age": 24,
+            })
+        if calls == 2:
+            return TextResponse(
+                "You already have a 9 am appointment. Shall I move it to 9:30 am?"
+            )
+        if calls == 3:
+            match = re.search(r"appointment_id=([0-9a-f-]{36})", system)
+            assert match and match.group(1) == original_id
+            assert "pending reschedule" in system
+            return CallResponse("reschedule_appointment", {
+                "appointment_id": match.group(1),
+                "date": _tomorrow(), "time": "09:30",
+            })
+        return TextResponse(
+            "Done, your appointment is now at 9:30 am. Please come on time."
+        )
+
+    async def fake_send(branch, to, text, plan=None):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(wa_agent, "_call_model", fake_model)
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+    monkeypatch.setattr(wa_service, "send_text", fake_send)
+    monkeypatch.setattr(wa_booking, "_LazyGoogleCalendar", StubCalendar)
+    monkeypatch.setattr(wa_booking, "_default_meta_service", StubMeta)
+
+    await wa_agent.handle(
+        db, br, "clinic", CALLER,
+        "Book Dr Lakshmi tomorrow at 9:30. I am Vinay, 24.",
+    )
+    await wa_agent.handle(db, br, "clinic", CALLER, "Yes please")
+
+    live = (await db.execute(
+        select(Token).where(Token.branch_id == br.id, Token.status == "confirmed")
+    )).scalars().all()
+    assert len(live) == 1 and live[0].appointment_time == time_cls(9, 30)
+    assert sent[-1].startswith("Done")
+    from backend.services import wa_session
+    assert (await wa_session.load(db, br.id, CALLER))["draft"] == {}
 
 
 # ── RULE 7 ───────────────────────────────────────────────────────────────────

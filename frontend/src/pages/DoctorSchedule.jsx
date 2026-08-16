@@ -12,6 +12,7 @@ import {
   updateDoctor
 } from "../api/client.js";
 import QuestionsCard from "../components/QuestionsCard.jsx";
+import { useActionDialog } from "../components/ActionDialog.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 
@@ -387,6 +388,7 @@ function timingSummary(doctor) {
  *  date publisher; the other cards compress to make room. */
 function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, onChanged, setRef }) {
   const qc = useQueryClient();
+  const ask = useActionDialog();
   const editorRef = useRef(null);
   const isAdmin = role === "org_admin";
 
@@ -450,10 +452,14 @@ function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, o
           )}
           {isAdmin && (
             <button className="btn-danger px-3 py-1.5 text-sm" disabled={remove.isPending}
-              onClick={() => {
-                if (window.confirm(`Remove ${doctor.name}? Patients can no longer be booked with them; past bookings stay.`)) {
-                  remove.mutate();
-                }
+              onClick={async () => {
+                const confirmed = await ask({
+                  title: `Remove ${doctor.name}?`,
+                  description: "Patients can no longer book this doctor. Past bookings and attendance history stay intact.",
+                  confirmLabel: "Remove doctor",
+                  tone: "danger",
+                });
+                if (confirmed) remove.mutate();
               }}>
               Remove
             </button>

@@ -1,108 +1,62 @@
 # Vachanam — Roadmap
 
-10 phases. Each is independently testable. Conquer one at a time. Don't start a phase until its prerequisites are done.
+Current roadmap, verified **2026-08-16**. Historical phase specifications remain
+under `docs/phases/`; they describe how the product was built, not the current
+deployment state.
 
----
+## Shipped foundation
 
-## Dependency graph
+- Multi-tenant FastAPI backend, Supabase Postgres migrations, Upstash Redis,
+  JWT/Google authentication, audit/security controls, and owner/admin surfaces.
+- Production LiveKit voice agent on Fly Mumbai using Soniox Japan STT/TTS,
+  Gemini with fallback, deterministic booking tools, interruption handling,
+  language switching, prompt caching, and per-turn latency telemetry.
+- Day-specific multi-window doctor schedules, token- and slot-based doctors,
+  availability alternatives, atomic booking/rescheduling/cancellation, Google
+  Calendar integration, reminders, follow-ups, leave, queues, and walk-ins.
+- React/Vite clinic PWA on Cloudflare with onboarding, doctors, patients,
+  imports, queue, billing, analytics, settings, support, conversations, and
+  custom voice management.
+- Razorpay payment/webhook infrastructure, usage metering, owner cost ledger,
+  manual paid activation, and the founding-clinic trial lifecycle.
+- WhatsApp message/booking infrastructure, templates, outbox, reminders and
+  follow-ups. Public self-serve onboarding remains gated pending Meta approval.
 
-```
-Phase 1  Foundation ─────┐
-                         ├──► Phase 2  Voice agent ──┐
-                         │                           │
-                         └──► Phase 3  Razorpay ─────┤
-                                                     │
-                              Phase 4  Backend core ◄┘ (needs 1,2,3)
-                                       │
-                                       ▼
-                              Phase 4.5  Security & compliance
-                                       │
-                ┌──────────────────────┼────────────────┐
-                │                      │                │
-                ▼                      ▼                ▼
-  [MVP2] Phase 5 WhatsApp    Phase 6 Jobs+Cal     Phase 7 PWA receptionist
-         (DEFERRED)          (reduced: Cal +           │
-                │             token expiry)             │
-                │                      │                │
-                │              ┌───────┴────────────────┘
-                │              │
-                │              ▼
-                │       Phase 8 Owner + Admin dashboards
-                │              │
-                │              ▼
-                │       Phase 9 Subscriptions + Onboarding
-                │              │      (email reminders, not WA)
-                │              ▼
-                │       Phase 10 Deployment (MVP1 SHIPS HERE)
-                │
-                └──────► MVP2 starts after first paying clinic
-```
+## Release gate now
 
----
+1. Keep one Alembic head and apply it manually to production before schema-
+   dependent code goes live.
+2. Require Ruff, the full PostgreSQL/Redis backend suite, frontend tests/lint/
+   build, and secret scan before deployment.
+3. Verify Render health, Cloudflare content, and a freshly registered Fly voice
+   worker after every production release.
+4. Run real-call and real-payment smoke tests whenever provider credentials or
+   routing change; automated tests cannot prove the PSTN or bank edge.
 
-## Phases at a glance
+## Immediate commercial milestone
 
-| # | Name | Status | Days | Unlocks | Doc |
-|---|---|---|---|---|---|
-| 1 | Foundation (env, DB schema, alembic, docker) | ✅ DONE | — | everything | [01-foundation/](phases/01-foundation/CLAUDE.md) |
-| 2 | Voice agent (LiveKit + Sarvam + Gemini + 4 tools) | ✅ DONE | — | inbound calls (once telephony live) | [02-voice-agent/](phases/02-voice-agent/CLAUDE.md) |
-| 3 | Razorpay Standard Checkout (one-time) | ✅ DONE | — | paid signup flow | [03-razorpay-checkout/](phases/03-razorpay-checkout/CLAUDE.md) |
-| 4 | Backend core (main.py, JWT auth, queue API) | ✅ DONE | 1-2 | every backend route | [04-backend-core/](phases/04-backend-core/CLAUDE.md) |
-| 4.5 | Security & compliance (CSP, rate limit, audit log, privacy policy, DPDP) | ✅ DONE (2026-06-05) | 3-4 | safe Phase 5+ | [spec](superpowers/specs/2026-05-22-security-hardening-design.md) |
-| 5 | WhatsApp (Meta webhook, doctor cmds, patient FSM) | 🅿️ DEFERRED-MVP2 | 3-4 | WA channel (MVP2 only) | [05-whatsapp/](phases/05-whatsapp/CLAUDE.md) |
-| 6 | Jobs + Calendar (Google Cal + token expiry; WA jobs → MVP2) | ⬜ | 1 | calendar events, token cleanup | [06-jobs-calendar/](phases/06-jobs-calendar/CLAUDE.md) |
-| 7 | Receptionist PWA (React + Vite, queue UI) | ⬜ | 3-4 | staff use clinic | [07-frontend-receptionist/](phases/07-frontend-receptionist/CLAUDE.md) |
-| 8 | Owner + Admin dashboards | ⬜ | 3 | analytics + Vinay's P&L | [08-frontend-dashboards/](phases/08-frontend-dashboards/CLAUDE.md) |
-| **🔒** | **Shannon scan gate** — must pass 0 critical findings before Phase 9 onboarding work begins | **GATE** | — | blocks Phase 9 | TD-029 |
-| 9 | Subscriptions + Onboarding (Razorpay subs + Vobiz DID; email reminders, not WA) | ⬜ | 3-4 | sell to first paying clinic | [09-subscriptions-onboarding/](phases/09-subscriptions-onboarding/CLAUDE.md) |
-| 10 | Deployment (Fly + Render + Cloudflare + monitoring) | ⬜ | 2-3 | go live | [10-deployment/](phases/10-deployment/CLAUDE.md) |
-| 11 | Reliability hardening (post-launch placeholder) | 🅿️ DEFERRED | TBD | scale beyond 50 clinics | [11-reliability-hardening/](phases/11-reliability-hardening/CLAUDE.md) |
+- Onboard the first 100 eligible clinics with the 14-day unlimited founding
+  trial, no card, no auto-conversion, and an explicit post-trial purchase.
+- Capture consented testimonials and measure calls answered, successful
+  appointment mutations, latency, support incidents, trial cost, conversion,
+  paid gross margin, and retention.
+- Replace conservative cost assumptions with provider invoices and the product
+  owner's per-clinic cost ledger before changing ₹1,999 + ₹6/min pricing.
 
-**Total remaining (Phases 4.5-10, excluding Phase 5):** ~14-18 working days for a one-person execution. Phase 5 (WhatsApp) deferred to MVP2 per client decision 2026-06-03, saving ~4-5 days. Phase 6 reduced by ~1 day (WA jobs removed).
+## Next, only when triggered
 
-**Phase 5 is deferred to MVP2** per client decision 2026-06-03. Do NOT build WhatsApp functionality until after first paying clinic ships.
+- Turn on public WhatsApp Embedded Signup after Meta Tech Provider approval and
+  complete a real clinic-number certification run.
+- Add capacity or self-host components when measured concurrency—not clinic
+  count alone—approaches current limits.
+- Introduce tested database restore/failover and stronger observability before
+  the operational blast radius justifies them.
+- Revisit tiered minute pricing only after actual paid usage proves that the
+  margin floor remains safe.
 
-**Phase 11 is deferred** until one of three triggers fires (see Phase 11 doc). Do NOT pre-build it.
+## Non-negotiable product rule
 
----
-
-## What each phase produces
-
-**Phase 4 — Backend Core**
-A working FastAPI app at `localhost:8000`. JWT-protected routes scoped by `branch_id`. Existing Razorpay router wired in. Fresh Alembic migration that matches current schema. Standalone test app deleted.
-
-**Phase 5 — WhatsApp (DEFERRED-MVP2)**
-Doctor texts "list today" → gets formatted schedule. Patient texts a clinic number → state machine walks them through booking → confirmed token + WA confirmation. All without touching the voice agent. **Deferred to MVP2 per client decision 2026-06-03.**
-
-**Phase 6 — Jobs + Calendar (MVP1 REDUCED)**
-Confirmed bookings sync to Google Calendar. Token expiry job runs every 2 minutes to clean up stale tokens. WA-dependent jobs (EOD summary, follow-up tasks) deferred to MVP2.
-
-**Phase 7 — Receptionist PWA**
-React PWA. Receptionist opens it on their phone, sees today's queue grouped by doctor, taps to mark attended/no-show. Works offline (last queue cached, mutations queue and replay).
-
-**Phase 8 — Owner + Admin dashboards**
-Clinic owner sees last 30 days analytics for their branches. Vinay's admin view shows every org, plan, billing cycle, revenue.
-
-**Phase 9 — Subscriptions + Onboarding**
-Plan signup creates a Razorpay subscription (not just a one-time order). Owner onboarding wizard: pick plan → pay → Vobiz DID provisioned → first doctor + working hours → call forwarding instructions emailed. 14-day trial without card. Trial expiry job pauses on day 14.
-
-**Phase 10 — Deployment**
-Voice agent live on Fly Mumbai. Backend on Render Singapore. Landing + receptionist app on Cloudflare Pages. UptimeRobot monitoring. End-to-end test: real phone calls real DID, books real token, Google Calendar event created, real receptionist marks attended. No Meta WhatsApp infra needed for MVP1.
-
----
-
-## How to start a phase
-
-```bash
-cd docs/phases/04-backend-core
-# read CLAUDE.md
-# work through the task list top-to-bottom
-# commit after each task with the suggested message
-# when the acceptance checklist is fully checked, update STATUS.md
-```
-
----
-
-## When a phase changes
-
-If a phase doc gets significantly out of date during execution, update the phase's CLAUDE.md in-place AND update `STATUS.md`. Don't fork or version-bump — there's one truth per phase.
+Prompt wording may improve the conversation, but it cannot be the only guard
+for patient privacy, tenant routing, availability, appointment mutation,
+billing, or trial enforcement. Those outcomes remain database- and
+architecture-enforced.

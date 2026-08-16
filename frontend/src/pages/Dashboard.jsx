@@ -355,7 +355,7 @@ export default function Dashboard() {
         title="Patient visits this week"
         weekday={an?.weekday_load}
         pct={an?.minutes?.pct ?? 0}
-        pctCap={(an?.minutes?.included ?? 0) > 0 ? "Plan minutes used" : "Billable voice minutes"}
+        pctCap={an?.minutes?.unlimited ? "Free trial voice minutes" : (an?.minutes?.included ?? 0) > 0 ? "Plan minutes used" : "Billable voice minutes"}
         remaining={(an?.minutes?.included ?? 0) > 0 ? Math.max(an.minutes.included - (an.minutes.used ?? 0), 0) : null}
         usageMinutes={(an?.minutes?.included ?? 0) === 0 ? (an?.minutes?.used ?? 0) : null}
         waiting={s.remaining}

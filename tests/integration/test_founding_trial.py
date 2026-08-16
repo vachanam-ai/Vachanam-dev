@@ -1,12 +1,13 @@
-"""Founding 100: one-time 500-minute credit on the first paid cycle."""
+"""Founding 100: unlimited 14-day trial, then normal paid pricing."""
 import uuid
+from datetime import datetime, timezone
 
 import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
 
-from backend.models.schema import BillingCycle, Organization
+from backend.models.schema import BillingCycle, Branch, CallLog, Organization
 from backend.routers.payments import activate_subscription
 from backend.services import billing_math
 
@@ -55,7 +56,7 @@ async def _register(client, email):
 
 
 @pytest.mark.asyncio
-async def test_available_slot_grants_credit_but_not_a_free_trial(client, db, monkeypatch):
+async def test_available_slot_starts_unlimited_fourteen_day_trial(client, db, monkeypatch):
     monkeypatch.setattr(billing_math, "FOUNDING_CLINIC_SLOTS", 10**9)
     email = _unique_email()
     response = await _register(client, email)
@@ -64,10 +65,33 @@ async def test_available_slot_grants_credit_but_not_a_free_trial(client, db, mon
     org = (
         await db.execute(select(Organization).where(Organization.owner_email == email))
     ).scalar_one()
-    assert org.status == "paused"
-    assert org.trial_ends_at is None
+    assert org.status == "trial"
+    assert org.trial_ends_at is not None
     assert org.founding_member is True
-    assert org.founding_credit_minutes == 500
+    assert org.founding_credit_minutes == 0
+
+    branch = (
+        await db.execute(select(Branch).where(Branch.org_id == org.id))
+    ).scalar_one()
+    db.add(CallLog(
+        branch_id=branch.id,
+        call_type="inbound",
+        caller_last4="0000",
+        answered=True,
+        started_at=datetime.now(timezone.utc),
+        duration_seconds=100_000 * 60,
+    ))
+    await db.commit()
+    summary = await client.get(
+        "/api/billing/summary",
+        headers={"Authorization": f"Bearer {response.json()['access_token']}"},
+    )
+    assert summary.status_code == 200, summary.text
+    bill = summary.json()
+    assert bill["trial_unlimited"] is True
+    assert bill["minutes_used"] == 100_000
+    assert bill["overage_minutes"] == 0
+    assert bill["overage_amount"] == 0
 
 
 @pytest.mark.asyncio
@@ -86,14 +110,15 @@ async def test_offer_off_creates_normal_paused_clinic(client, db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_public_counter_reports_credit_and_capacity(client, db, monkeypatch):
+async def test_public_counter_reports_unlimited_trial_and_capacity(client, db, monkeypatch):
     monkeypatch.setattr(billing_math, "FOUNDING_CLINIC_SLOTS", 100)
-    monkeypatch.setattr(billing_math, "FOUNDING_CREDIT_MINUTES", 500)
     body = (await client.get("/auth/founding-slots")).json()
     assert body["trial_for_all"] is False
     assert body["slots_total"] == 100
     assert 0 <= body["slots_left"] <= 100
-    assert body["credit_minutes"] == 500
+    assert body["credit_minutes"] == 0
+    assert body["trial_days"] == 14
+    assert body["trial_unlimited"] is True
 
 
 @pytest.mark.asyncio

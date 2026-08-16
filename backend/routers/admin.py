@@ -243,6 +243,7 @@ from backend.services.billing_math import (
     PILOT_DAYS,
     PLANS,
     TRIAL_MINUTES,
+    TRIAL_UNLIMITED,
     VARIABLE_COST_PER_MIN,
     call_blocked,
     included_minutes_for,
@@ -697,10 +698,9 @@ async def start_org_pilot(
     current_user: CurrentUser = Depends(require_admin),
     _rate_limit: None = Depends(default_limit),
 ) -> dict:
-    """Start the 14-day founding-clinic pilot (Vinay 2026-07-19): flips a
-    hand-picked (paused) clinic to status='trial' with trial_ends_at set, so
-    the existing trial machinery enforces the TRIAL_MINUTES hard cap and the
-    trial_pause job re-pauses it at day 14. A dedicated endpoint (not the
+    """Start the 14-day founding-clinic pilot: flips a hand-picked (paused)
+    clinic to status='trial' with trial_ends_at set. Usage is measured but not
+    limited or billed; the trial_pause job re-pauses it at day 14. A dedicated endpoint (not the
     status route) because a 'trial' with trial_ends_at=None would never
     expire. Blocked for active orgs — never comp a paying clinic by accident."""
     async with AsyncSessionLocal() as db:
@@ -714,8 +714,13 @@ async def start_org_pilot(
         request.state.audit_resource_id = org_id
         logger.info("org_pilot_started", org_id=org_id, ends=ends.isoformat(),
                     minutes=TRIAL_MINUTES, by=current_user.email)
-        return {"org_id": org_id, "status": "trial",
-                "trial_ends_at": ends.isoformat(), "pilot_minutes": TRIAL_MINUTES}
+        return {
+            "org_id": org_id,
+            "status": "trial",
+            "trial_ends_at": ends.isoformat(),
+            "pilot_minutes": None if TRIAL_UNLIMITED else TRIAL_MINUTES,
+            "trial_unlimited": TRIAL_UNLIMITED,
+        }
 
 
 @router.post("/orgs/{org_id}/plan")

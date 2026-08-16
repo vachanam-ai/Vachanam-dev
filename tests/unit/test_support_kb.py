@@ -28,10 +28,15 @@ def test_knowledge_doc_loaded_and_comprehensive():
     from backend.services import support_kb
     k = support_kb.knowledge_text()
     assert len(k) > 5000  # end-to-end, not a stub
-    for fact in ("1,999", "1,499", "500 voice minutes", "₹6 per voice minute",
+    for fact in ("1,999", "1,499", "14 calendar days", "₹6 per voice minute",
                  "follow-up", "DPDP",
                  "token", "Google Calendar", "support@vachanam.in"):
         assert fact in k, f"knowledge doc missing key fact: {fact}"
+    for product_update in (
+        "first 10 clinics", "one custom voice", "paid manually",
+        "automatic wallet recharge", "WhatsApp booking confirmations are planned",
+    ):
+        assert product_update in k, f"bot missing current product update: {product_update}"
 
 
 def test_knowledge_doc_names_no_stack_vendors():

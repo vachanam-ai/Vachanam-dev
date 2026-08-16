@@ -1,11 +1,15 @@
 ---
-title: Founding credit and billing
+title: Founding trial and billing
 audience: both
 category: billing
 tags: trial, billing, payment, razorpay, invoice
 ---
-The first 100 clinics receive 500 free voice minutes in their first paid cycle.
-The ₹1,999 monthly Voice platform fee is still charged because it covers the clinic
-number and cloud platform. The credit is automatic, expires at the end of the
-first paid cycle, and never renews. Payment and autopay use Razorpay. Later
-cycles charge the platform fee plus ₹6 for every voice minute used.
+The first 100 clinics receive 14 calendar days of Vachanam Voice completely
+free. There is no platform fee, voice-minute cap, card requirement, or automatic
+charge during the trial. Usage is still measured so the clinic can see the
+value delivered and Vachanam can track its acquisition cost. At the exact trial
+expiry, an unpaid clinic pauses without deleting its setup or records. The owner
+can activate paid service at ₹1,999/month plus ₹6 per voice minute. The fixed
+platform fee may renew by autopay; metered usage is reviewed and paid separately
+from Plan & billing. Vachanam may invite successful trial clinics to provide
+honest feedback, but a positive testimonial is never required.

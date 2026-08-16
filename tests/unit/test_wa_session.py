@@ -94,6 +94,21 @@ async def test_append_preserves_draft_across_turns(db):
 
 
 @pytest.mark.asyncio
+async def test_save_draft_round_trips_hidden_verified_booking_state(db):
+    from backend.services import wa_session
+
+    branch = await make_branch(db, whatsapp_number="+9155000000015")
+    appointment_id = str(uuid.uuid4())
+    await wa_session.save_draft(
+        db, branch.id, "919000000001",
+        {"appointments": [{"appointment_id": appointment_id}]},
+    )
+    state = await wa_session.load(db, branch.id, "919000000001")
+    assert state["draft"]["appointments"][0]["appointment_id"] == appointment_id
+    assert state["turns"] == []
+
+
+@pytest.mark.asyncio
 async def test_clear_deletes_the_row(db):
     from backend.services import wa_session
 

@@ -323,7 +323,7 @@ async def test_terms_pricing_matches_billing_math():
     from pathlib import Path
 
     from backend.services.billing_math import (
-        FOUNDING_CLINIC_SLOTS, FOUNDING_CREDIT_MINUTES, PLANS, SELLABLE_PLANS,
+        FOUNDING_CLINIC_SLOTS, PILOT_DAYS, PLANS, SELLABLE_PLANS,
     )
 
     text = Path("docs/legal/terms-of-service.md").read_text(encoding="utf-8")
@@ -342,7 +342,9 @@ async def test_terms_pricing_matches_billing_math():
                 f"terms must state that {plan.display_name} includes no voice")
     assert "INR 6 per voice minute" in text  # usage, all current voice plans
     assert f"first {FOUNDING_CLINIC_SLOTS}" in text.lower()
-    assert f"{FOUNDING_CREDIT_MINUTES} voice minutes" in text
+    assert f"{PILOT_DAYS} calendar days" in text
+    assert "no voice-minute cap" in text
+    assert "does not convert to a paid service automatically" in text
     assert "18% GST" in text
     # Dead old-model figures must never reappear. (Plain "1,999" is now the
     # legitimate extra-DID price, so match the old rows distinctively.)

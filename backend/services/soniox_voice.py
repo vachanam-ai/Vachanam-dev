@@ -16,6 +16,7 @@ from backend.config import settings
 
 logger = structlog.get_logger()
 MAX_CLIP_BYTES = 10 * 1024 * 1024
+CUSTOM_VOICE_CLINIC_SLOTS = 10
 CONSENT_TEXT = (
     "I confirm that the speaker owns this voice or gave explicit permission "
     "for this clinic to create and use an AI voice clone."

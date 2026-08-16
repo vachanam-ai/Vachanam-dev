@@ -12,6 +12,7 @@ from typing import Iterable
 from openpyxl import load_workbook
 
 from backend.services.validators import normalize_indian_phone
+from backend.services.patient_identity import normalize_patient_age, normalize_patient_name
 
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 MAX_EXPANDED_XLSX_BYTES = 50 * 1024 * 1024
@@ -90,12 +91,10 @@ def _parse_rows(rows: Iterable[list[object]]) -> tuple[list[ImportedPatient], li
             raise PatientImportError(f"A file can contain at most {MAX_IMPORT_ROWS:,} patients")
         if not any(str(value or "").strip() for value in row):
             continue
-        name = re.sub(r"\s+", " ", str(_cell(row, columns["name"]) or "").strip())
-        if not name:
-            errors.append({"row": row_number, "error": "name is missing"})
-            continue
-        if len(name) > 255:
-            errors.append({"row": row_number, "error": "name is longer than 255 characters"})
+        try:
+            name = normalize_patient_name(str(_cell(row, columns["name"]) or ""))
+        except ValueError as exc:
+            errors.append({"row": row_number, "error": str(exc)})
             continue
         try:
             phone = normalize_indian_phone(_phone_text(_cell(row, columns["phone"])))
@@ -107,11 +106,8 @@ def _parse_rows(rows: Iterable[list[object]]) -> tuple[list[ImportedPatient], li
         raw_age = _cell(row, columns.get("age"))
         if raw_age not in (None, ""):
             try:
-                number = float(str(raw_age).strip())
-                if not number.is_integer() or not 0 <= number <= 120:
-                    raise ValueError
-                age = int(number)
-            except (TypeError, ValueError):
+                age = normalize_patient_age(raw_age)
+            except ValueError:
                 errors.append({"row": row_number, "error": "age must be a whole number from 0 to 120"})
                 continue
 

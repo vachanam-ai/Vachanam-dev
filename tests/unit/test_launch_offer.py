@@ -53,18 +53,13 @@ def test_ui_surfaces_show_only_the_list_price():
         assert "offer price" not in text.lower()
 
 
-def test_founding_credit_is_live_gated_and_never_marketed_as_a_trial():
-    """#425/#426: the stale '300 free minutes' hero claim may never return.
-    Landing free-trial copy must be gated on the LIVE founding-slot count
-    (fetch of /auth/founding-slots), so an exhausted offer hides itself; the
-    static SEO mirror can't react, so it never claims a trial at all."""
+def test_founding_trial_is_live_gated_and_replaces_old_minute_credit():
     landing = Path("frontend/src/pages/Landing.jsx").read_text(encoding="utf-8")
     static = Path("backend/static/index.html").read_text(encoding="utf-8")
     # The stale "300 free minutes" claim may never return anywhere.
     assert "300 free minutes" not in landing and "300 free minutes" not in static
-    assert "14-day free trial" not in landing.lower()
-    assert "14-day free trial" not in static.lower()
     assert "founding-slots" in landing
     assert "foundingOfferOn" in landing
-    assert "first {FOUNDING_CREDIT_MINUTES} voice minutes free" in landing
-    assert "first 500 voice minutes free" in static.lower()
+    assert "no voice-minute cap" in landing
+    assert "unlimited voice for 14 days" in static.lower()
+    assert "500 voice minutes free" not in static.lower()

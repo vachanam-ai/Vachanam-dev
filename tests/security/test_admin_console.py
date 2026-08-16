@@ -228,7 +228,8 @@ async def test_pilot_start_sets_trial_with_expiry(client, db, biz_org):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "trial"
-    assert body["pilot_minutes"] == 30  # TRIAL_MINUTES hard cap applies
+    assert body["pilot_minutes"] is None
+    assert body["trial_unlimited"] is True
 
     org = await _fresh_org(uuid.UUID(org_id))
     assert org.status == "trial"

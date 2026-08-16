@@ -164,31 +164,6 @@ export default function Patients() {
 
       {err && <p className="font-ui text-sm text-danger">{err}</p>}
 
-      {/* Erase confirmation — permanent, so it interrupts */}
-      {deleting && (
-        <div className="card space-y-3 border-danger/40 p-4">
-          <p className="font-ui text-sm">
-            Permanently erase <span className="font-semibold">{deleting.name}</span>
-            {deleting.phone ? ` (${deleting.phone})` : ""}? Their name, phone and
-            visit notes are deleted and any scheduled follow-up calls stop. Anonymous
-            booking counts remain in analytics. <span className="font-medium">This
-            cannot be undone.</span>
-          </p>
-          <div className="flex gap-2">
-            <button
-              className="btn-danger"
-              onClick={() => del.mutate(deleting)}
-              disabled={del.isPending}
-            >
-              {del.isPending ? "Erasing…" : "Erase permanently"}
-            </button>
-            <button className="btn-ghost" onClick={() => setDeleting(null)} disabled={del.isPending}>
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
       <div className="card overflow-hidden">
         {isLoading ? (
           <p className="px-4 py-6 font-ui text-sm text-slate">Loading patients…</p>
@@ -209,7 +184,7 @@ export default function Patients() {
               <tbody className="divide-y divide-hairline">
                 {patients.map((p) =>
                   editing === p.id ? (
-                    <tr key={p.id}>
+                    <tr key={p.id} className={deleting?.id === p.id ? "bg-danger/5" : undefined}>
                       <td className="p-2">
                         <input
                           className="field min-h-[44px] w-full"
@@ -265,19 +240,48 @@ export default function Patients() {
                       <td className="p-3">{p.age ?? "—"}</td>
                       <td className="p-3">{p.phone || "—"}</td>
                       <td className="p-3">{p.last_doctor || "—"}</td>
-                      <td className="whitespace-nowrap p-3">
-                        <button
-                          className="btn-ghost px-3 py-1.5"
-                          onClick={() => startEdit(p)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="btn-danger ml-2 px-3 py-1.5"
-                          onClick={() => setDeleting(p)}
-                        >
-                          Delete
-                        </button>
+                      <td className="p-3">
+                        {deleting?.id === p.id ? (
+                          <div className="min-w-[19rem]" role="group"
+                            aria-labelledby={`erase-patient-${p.id}`}>
+                            <p id={`erase-patient-${p.id}`} className="font-ui text-sm font-semibold text-danger">
+                              Erase {p.name} permanently?
+                            </p>
+                            <p className="mt-1 max-w-md font-ui text-xs leading-5 text-slate">
+                              Removes personal details and scheduled follow-ups. Anonymous booking counts remain.
+                              This cannot be undone.
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                className="btn-danger px-3 py-1.5"
+                                onClick={() => del.mutate(p)}
+                                disabled={del.isPending}
+                              >
+                                {del.isPending ? "Erasing…" : "Confirm erasure"}
+                              </button>
+                              <button className="btn-ghost px-3 py-1.5"
+                                onClick={() => setDeleting(null)} disabled={del.isPending}>
+                                Keep patient
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="whitespace-nowrap">
+                            <button
+                              className="btn-ghost px-3 py-1.5"
+                              onClick={() => startEdit(p)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="btn-danger ml-2 px-3 py-1.5"
+                              onClick={() => setDeleting(p)}
+                              aria-label={`Delete ${p.name}`}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )

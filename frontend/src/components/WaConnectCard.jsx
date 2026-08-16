@@ -9,6 +9,7 @@ import {
   retryWaSync,
 } from "../api/client.js";
 import useEmbeddedSignup from "../hooks/useEmbeddedSignup.js";
+import { useActionDialog } from "./ActionDialog.jsx";
 
 const ERRORS = {
   not_configured: "WhatsApp sign-up is not configured on the server yet.",
@@ -19,6 +20,7 @@ const ERRORS = {
 
 export default function WaConnectCard({ branchId }) {
   const qc = useQueryClient();
+  const ask = useActionDialog();
   const { launch, launching } = useEmbeddedSignup();
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["wa-connection", branchId] });
@@ -159,9 +161,15 @@ export default function WaConnectCard({ branchId }) {
         )}
 
         <button type="button" className="btn-ghost text-danger" disabled={remove.isPending}
-          onClick={() => window.confirm(
-            "Disconnect WhatsApp? New messages and automations will stop, and stored WhatsApp conversations will be removed.",
-          ) && remove.mutate()}>
+          onClick={async () => {
+            const confirmed = await ask({
+              title: "Disconnect WhatsApp?",
+              description: "New messages and automations will stop, and stored WhatsApp conversations will be removed from Vachanam.",
+              confirmLabel: "Disconnect",
+              tone: "danger",
+            });
+            if (confirmed) remove.mutate();
+          }}>
           {remove.isPending ? "Disconnecting…" : "Disconnect"}
         </button>
       </div>

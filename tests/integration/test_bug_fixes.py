@@ -741,6 +741,29 @@ async def test_confirm_booking_first_time_patient_requires_age(clinic, db, redis
     assert ok["success"], ok
 
 
+async def test_confirm_booking_stores_english_name_and_numeric_age(clinic, db, redis):
+    branch, doc = clinic["branch"], clinic["token_doc"]
+    day = _tomorrow()
+    assigned = await assign_token(doc.id, branch.id, day, db)
+
+    result = await confirm_booking(
+        doctor_id=doc.id, branch_id=branch.id, patient_name="వినయ్",
+        patient_phone="+919666444434", complaint="fever", booking_date=day,
+        token_number=assigned["token_number"], followup_consent=False,
+        patient_age="౨౪", appointment_time=None, source="voice", db=db,
+        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
+    )
+
+    assert result["success"], result
+    patient = (
+        await db.execute(
+            select(Patient).where(Patient.phone == "+919666444434")
+        )
+    ).scalar_one()
+    assert patient.name == "Vinay"
+    assert patient.age == 24
+
+
 async def test_confirm_booking_known_patient_skips_age_gate(clinic, db, redis):
     """Reschedules / repeat bookings must not be blocked by the details gate."""
     branch, doc = clinic["branch"], clinic["token_doc"]

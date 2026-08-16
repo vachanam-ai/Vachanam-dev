@@ -185,6 +185,6 @@ Fixed TODAY (#344):
 
 Still open on purpose: TD-021-walkin (needs Vinay's product call), TD-022-ifTrue +
 TD-024-watchdog (P3, churn>value), TD-023 (audit GRANT/REVOKE needs a second prod
-DB role — Neon single-role today), TD-026/034/035 (Phase 9 onboarding), TD-031
+DB role — Supabase production still uses one application role), TD-026/034/035 (Phase 9 onboarding), TD-031
 (conditional), TD-027-alembic-chain (documented workaround), #10/#12/#13/#15/#16/#18
 + G15 (security backlog for a dedicated pass), TD-038 (gated on GSTIN).

@@ -12,7 +12,8 @@ import {
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
 import {
-  PLAN_CATALOG, PUBLIC_PLAN_KEYS, WHATSAPP_ADDON_RUPEES, planLabel,
+  PLAN_CATALOG, PUBLIC_PLAN_KEYS, WHATSAPP_ADDON_RUPEES,
+  WHATSAPP_SELF_SERVE_LIVE, planLabel,
 } from "../lib/plans.js";
 
 /* Every control that takes money, in one place (Vinay 2026-08-09: "migrate
@@ -34,7 +35,7 @@ const PLAN_PRICES = Object.fromEntries(
 );
 
 // Razorpay checkout script — loaded on demand, once.
-function loadRazorpay() {
+export function loadRazorpay() {
   return new Promise((resolve, reject) => {
     if (window.Razorpay) return resolve();
     const s = document.createElement("script");
@@ -266,6 +267,11 @@ export default function PlanAndPayment({ initialPlan = null }) {
         <span className={p?.status === "active" ? "chip-token" : "chip-muted"}>
           {p?.status ?? "—"}
         </span>
+        {p?.status === "trial" && p.trial_ends_at && (
+          <span className="font-ui text-sm text-slate">
+            Free until <strong className="text-ink">{fmt(p.trial_ends_at)}</strong>
+          </span>
+        )}
         {p?.last_payment_date && (
           <span className="font-ui text-sm text-slate">
             Last paid <strong className="text-ink">{fmt(p.last_payment_date)}</strong>
@@ -282,7 +288,9 @@ export default function PlanAndPayment({ initialPlan = null }) {
         {p && !p.autopay_enabled && (
           <button type="button" className="btn-primary" disabled={paying} onClick={payNow}>
             {paying ? "Opening payment…"
-              : "Enable autopay — ₹" + autopayBase.toLocaleString("en-IN") + "/month"}
+              : p?.status === "trial"
+                ? "Activate paid plan — ₹" + autopayBase.toLocaleString("en-IN") + "/month"
+                : "Enable autopay — ₹" + autopayBase.toLocaleString("en-IN") + "/month"}
           </button>
         )}
         {p?.autopay_enabled && (
@@ -300,7 +308,13 @@ export default function PlanAndPayment({ initialPlan = null }) {
           Your line is active without a paid cycle. Paying starts your 30-day billing cycle today.
         </p>
       )}
-      {p && p.status !== "active" && (
+      {p?.status === "trial" && (
+        <p className="mt-2 font-ui text-xs text-slate">
+          Trial calls are unlimited and free until the date above. No payment is
+          taken automatically. Activating now ends the trial and starts paid service.
+        </p>
+      )}
+      {p && p.status !== "active" && p.status !== "trial" && (
         <p className="mt-2 font-ui text-xs text-slate">
           Authorise recurring payment securely in Razorpay. Your line activates
           after the first successful charge.
@@ -331,7 +345,9 @@ export default function PlanAndPayment({ initialPlan = null }) {
             <div className="min-w-0">
               <p className="font-ui text-sm font-medium text-ink">WhatsApp</p>
               <p className="mt-1 font-ui text-xs text-slate">
-                {p.whatsapp_included
+                {!WHATSAPP_SELF_SERVE_LIVE && !p.whatsapp_included && !p.whatsapp_addon
+                  ? "Coming soon. Clinic connections will open after Meta Tech Provider approval."
+                  : p.whatsapp_included
                   ? "Included in your plan — patients can message your clinic number."
                   : p.whatsapp_addon
                     ? "Active. From your next renewal it is billed together with your plan."
@@ -340,7 +356,9 @@ export default function PlanAndPayment({ initialPlan = null }) {
                       : `Patients book, reschedule and ask questions over WhatsApp. ₹${WHATSAPP_ADDON_RUPEES.toLocaleString("en-IN")}/mo — charged now for this cycle, then billed with your plan.`}
               </p>
             </div>
-            {p.whatsapp_included || p.whatsapp_addon ? (
+            {!WHATSAPP_SELF_SERVE_LIVE && !p.whatsapp_included && !p.whatsapp_addon ? (
+              <span className="chip-muted whitespace-nowrap">Coming soon</span>
+            ) : p.whatsapp_included || p.whatsapp_addon ? (
               <span className="chip-token whitespace-nowrap">on</span>
             ) : p.whatsapp_included_pending ? (
               <span className="chip-muted whitespace-nowrap">from {p.pending_plan_effective}</span>
@@ -352,7 +370,7 @@ export default function PlanAndPayment({ initialPlan = null }) {
               </button>
             )}
           </div>
-          {p.status !== "active" && !p.whatsapp_included && !p.whatsapp_addon && (
+          {WHATSAPP_SELF_SERVE_LIVE && p.status !== "active" && !p.whatsapp_included && !p.whatsapp_addon && (
             <p className="mt-2 font-ui text-xs text-slate">
               Activate your plan first — WhatsApp is billed alongside it.
             </p>

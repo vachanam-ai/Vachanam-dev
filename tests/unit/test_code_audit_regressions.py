@@ -357,11 +357,12 @@ def test_frontend_has_branch_selection_state():
 
 # Product truth/documentation
 
-@known("AUDIT-038", "landing trial copy must match the 30-minute bucket")
-def test_founding_marketing_uses_actual_minute_credit():
+@known("AUDIT-038", "landing trial copy must match unlimited 14-day entitlement")
+def test_founding_marketing_uses_actual_trial_entitlement():
     text = source("frontend/src/pages/Landing.jsx")
     assert "≈100 call minutes included" not in text
-    assert "{FOUNDING_CREDIT_MINUTES} voice minutes" in text
+    assert "{TRIAL_DAYS} days completely free" in text
+    assert "no minute cap" in text
 
 
 @known("AUDIT-039", "login advertises trial after founding slots are exhausted")

@@ -12,6 +12,9 @@ import {
   installWaSystemTemplates,
 } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
+import WhatsAppComingSoon from "../components/WhatsAppComingSoon.jsx";
+import { useActionDialog } from "../components/ActionDialog.jsx";
+import { WHATSAPP_SELF_SERVE_LIVE } from "../lib/plans.js";
 
 // WA MVP1 Task 10 — option C (chosen over a card grid, which doesn't scale
 // past ~15 templates, and a bare table, which reads like an admin console
@@ -39,6 +42,7 @@ function StatusChip({ status }) {
 
 function TemplateRow({ branchId, t, onDeleted }) {
   const qc = useQueryClient();
+  const ask = useActionDialog();
   const isSystem = SYSTEM_TEMPLATES.has(t.name);
   const remove = useMutation({
     mutationFn: () => deleteWaTemplate(branchId, t.name),
@@ -69,9 +73,14 @@ function TemplateRow({ branchId, t, onDeleted }) {
           <button type="button"
             className="font-ui text-xs font-medium text-danger underline-offset-2 hover:underline"
             disabled={remove.isPending}
-            onClick={() => {
-              if (window.confirm(`Delete template "${t.name}"? This cannot be undone.`))
-                remove.mutate();
+            onClick={async () => {
+              const confirmed = await ask({
+                title: `Delete “${t.name}”?`,
+                description: "This custom WhatsApp template will be permanently removed. System templates are protected separately.",
+                confirmLabel: "Delete template",
+                tone: "danger",
+              });
+              if (confirmed) remove.mutate();
             }}>
             {remove.isPending ? "Deleting…" : "Delete"}
           </button>
@@ -81,7 +90,7 @@ function TemplateRow({ branchId, t, onDeleted }) {
   );
 }
 
-export default function WhatsApp() {
+export function WhatsAppLive() {
   const { branchId } = useAuth();
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
@@ -207,4 +216,8 @@ export default function WhatsApp() {
       </div>
     </div>
   );
+}
+
+export default function WhatsApp() {
+  return WHATSAPP_SELF_SERVE_LIVE ? <WhatsAppLive /> : <WhatsAppComingSoon />;
 }

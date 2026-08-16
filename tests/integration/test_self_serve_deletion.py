@@ -93,6 +93,7 @@ async def test_owner_removes_staff_login_doctor_unlinked_records_stay(client, db
 @pytest.mark.asyncio
 async def test_delete_clinic_requires_password_then_erases_everything(client, db):
     org, b, owner, staffu, doc = await _seed(db, password="Own3r@Pass!")
+    owner_email = owner.email
     tok = _jwt("org_admin", org.id, b.id, owner.id)
 
     # Wrong password -> 401, nothing deleted.
@@ -114,6 +115,22 @@ async def test_delete_clinic_requires_password_then_erases_everything(client, db
     ]:
         left = (await db.execute(select(model).where(cond))).scalars().all()
         assert left == [], f"{model.__name__} rows survived erasure"
+
+    # The browser may still hold a pre-token_version JWT. Organization-wide
+    # revocation makes it unusable immediately instead of waiting eight hours.
+    old_session = await client.get("/auth/me", headers=_auth(tok))
+    assert old_session.status_code == 401
+    assert old_session.json()["detail"] in {"Token revoked", "Session no longer valid"}
+
+    # Deletion removes the credential itself, not just the active browser
+    # session. Entering the same email/password again must never recreate or
+    # authenticate the deleted clinic.
+    fresh_login = await client.post(
+        "/auth/login",
+        json={"email": owner_email, "password": "Own3r@Pass!"},
+    )
+    assert fresh_login.status_code == 401
+    assert fresh_login.json()["detail"] == "Invalid email or password"
 
 
 @pytest.mark.asyncio

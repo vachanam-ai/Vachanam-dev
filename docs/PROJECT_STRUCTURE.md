@@ -1,8 +1,12 @@
 # Vachanam — Project Structure (live doc)
 
-**Source of truth for what exists in the repo, where it lives, and what state it is in.** Auto-updated by every dispatch that adds/renames/deletes a tracked file under `agent/`, `backend/`, `frontend/`, `infra/`, `tests/`, `scripts/`, `alembic/`, or `docs/`. Stale entries are a merge blocker — `manager` rejects the merge checklist when this file does not match `git ls-files`.
+**Historical annotated inventory.** The repository itself (`rg --files` or
+`git ls-files`) is authoritative for exact paths; `docs/ARCHITECTURE.md` and
+`docs/MAIN_AGENDA.md` are authoritative for the current runtime. This document
+retains older file-by-file notes and should not override those live sources.
 
-**Last verified against `git ls-files`:** 2026-06-04 (after Phase 4.5 Tasks 11+13 — docs/legal/ + docs/runbooks/ expanded)
+**Last runtime correction:** 2026-08-16. The exhaustive inventory below was
+last mechanically verified on 2026-06-04 and is retained for history.
 
 ---
 
@@ -38,7 +42,7 @@ Every dispatch that adds, renames, or deletes a tracked file under `agent/`, `ba
 ```
 vachanam/
 |-- CLAUDE.md                  master context (the law)
-|-- .env.example               all 26 required env vars (empty values)
+|-- .env.example               canonical deployment-variable checklist (empty values)
 |-- .env                       NEVER COMMITTED (local secrets)
 |-- .gitignore
 |-- .gitleaks.toml             gitleaks config — default OSS ruleset + allowlist for test fixtures
@@ -52,9 +56,9 @@ vachanam/
 |   `-- dependabot.yml         weekly pip (backend+agent) + npm (frontend, future-proof) + github-actions updates
 |
 |-- .claude/agents/            10 specialist personas + AGILE + QUALITY_BAR + README
-|-- agent/                     voice agent (LiveKit + Sarvam + Gemini) — runs on Fly.io bom
+|-- agent/                     voice agent (LiveKit + Soniox + Gemini) — runs on Fly.io bom
 |-- backend/                   FastAPI app — runs on Render
-|-- frontend/                  React + Vite PWA — runs on Cloudflare Pages (NOT YET BUILT)
+|-- frontend/                  React + Vite PWA — runs on Cloudflare Pages
 |-- infra/                     Dockerfiles + Fly/Render configs
 |-- alembic/                   schema migrations
 |-- scripts/                   one-off operational scripts
@@ -62,18 +66,23 @@ vachanam/
 `-- docs/                      ROADMAP, STATUS, CHANGELOG, TECH_DEBT, DISPATCHES, phases, specs
 ```
 
-Status: `working` for backend / agent / tests / docs; `placeholder` for frontend; `scaffolded` for scripts.
+Status: backend, agent, frontend, tests, and docs are production code; scripts
+include both active operational tooling and historical one-offs.
 
 ---
 
 ## Section 3 — Voice agent (`agent/`)
 
-Owner: `voice-agent-engineer`. Runs on Fly.io Mumbai. Connects to LiveKit + Sarvam STT/TTS + Gemini (fallback GPT-4o-mini) + Vobiz SIP trunk. Booking tools call backend HTTP API.
+Owner: `voice-agent-engineer`. Runs on Fly.io Mumbai. Connects to LiveKit +
+Soniox Japan STT/TTS + Gemini (fallback GPT-4o-mini) + Vobiz SIP trunks.
+Booking tools use the shared transactional service layer and database-backed
+grounding.
 
 | Path | Status | Purpose |
 |---|---|---|
 | `agent/__init__.py` | placeholder | Package marker. |
-| `agent/bot.py` | working (live calls tested) | Pipecat 1.3.0 pipeline: Sarvam Saaras STT + Gemini 2.5 Flash (GPT-4o-mini fallback) + Sarvam Bulbul TTS (kavitha, Telugu script). Tool registration, token-rollback-on-disconnect, intent-based human transfer. Replaced `agent/agent.py` (LiveKit entrypoint, deleted). |
+| `agent/livekit_minimal/agent.py` | deployed | Production LiveKit pipeline: Soniox Japan STT/TTS, Gemini 2.5 Flash with fallback, deterministic booking tools, tenant-safe inbound/outbound routing, interruption handling, prompt caching, and latency telemetry. |
+| `agent/bot.py` | archived compatibility path | Earlier Pipecat/Vobiz implementation retained for historical tooling; it is not the production Fly entrypoint. |
 | `agent/server.py` | working | FastAPI WS transport for Vobiz: `/answer` XML (inbound + outbound), `/ws` Pipecat bridge, transfer signal map, recording callback (testing-only). |
 | `agent/vobiz_minimal/` | frozen baseline | From-scratch Pipecat+Vobiz connector used to debug transport; reference only. |
 | `agent/livekit_minimal/` | working (in+out) | Live LiveKit voice agent: SIP trunks + dispatch rule, agent worker. |

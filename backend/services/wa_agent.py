@@ -711,8 +711,12 @@ class WaTools:
 
     async def cancel_appointment(self, appointment_id: str = "") -> dict:
         ok = await wa_booking.cancel(self.db, self.branch, self.sender, appointment_id)
-        return {"success": ok} if ok else {
-            "success": False, "error": "no booking of yours with that id"
+        if ok:
+            return {"success": True}
+        return {
+            "success": False,
+            "error": "no booking of yours with that id; use an exact appointment_id below",
+            **(await self.my_appointments()),
         }
 
     async def reschedule_appointment(
@@ -721,7 +725,11 @@ class WaTools:
         rows = await wa_booking.upcoming(self.db, self.branch, self.sender)
         old = next((t for t in rows if str(t.id) == str(appointment_id)), None)
         if old is None:
-            return {"success": False, "error": "no booking of yours with that id"}
+            return {
+                "success": False,
+                "error": "no booking of yours with that id; use an exact appointment_id below",
+                **(await self.my_appointments()),
+            }
         docs = await _doctors(self.db, self.branch)
         doc = next((d for d in docs if d.id == old.doctor_id), None)
         when = _parse_time(time)
@@ -840,6 +848,90 @@ def _whole_sentences(reply: str) -> str:
     return text[: cut + 1].strip() if cut > 0 else text
 
 
+def _remember_tool_result(
+    draft: dict, tool: str, args: dict, result: dict
+) -> dict:
+    """Keep verified booking IDs across WhatsApp messages."""
+    state = dict(draft or {})
+    if tool in _MUTATION_TOOLS and result.get("success") is True:
+        return {}
+
+    appointments = result.get("appointments")
+    if isinstance(appointments, list):
+        verified = [
+            {
+                key: row.get(key)
+                for key in ("appointment_id", "patient", "doctor", "date", "time")
+                if row.get(key) is not None
+            }
+            for row in appointments
+            if isinstance(row, dict) and row.get("appointment_id")
+        ]
+        if verified:
+            state["appointments"] = verified
+        else:
+            # Keep an empty result genuinely empty.  Otherwise {"appointments": []}
+            # stays truthy forever and makes every later WhatsApp message perform an
+            # unnecessary booking lookup.
+            state.pop("appointments", None)
+            state.pop("pending", None)
+
+    existing_id = result.get("existing_appointment_id")
+    if tool == "book_appointment" and existing_id:
+        state["appointments"] = [{
+            "appointment_id": str(existing_id),
+            "doctor": args.get("doctor_name"),
+            "date": args.get("date"),
+            "time": result.get("existing_time"),
+        }]
+        state["pending"] = {
+            "action": "reschedule",
+            "appointment_id": str(existing_id),
+            "doctor": args.get("doctor_name"),
+            "date": args.get("date"),
+            "time": args.get("time"),
+        }
+    return state
+
+
+def _verified_booking_context(draft: dict) -> str:
+    """Render hidden DB identifiers for the next model turn, never the patient."""
+    appointments = list((draft or {}).get("appointments") or [])
+    pending = (draft or {}).get("pending") or {}
+    if not appointments and not pending:
+        return ""
+    lines = [
+        "\nVERIFIED BOOKING STATE FROM THE DATABASE (internal; never show IDs to the patient):"
+    ]
+    for row in appointments:
+        lines.append(
+            "- appointment_id={appointment_id}; patient={patient}; doctor={doctor}; "
+            "date={date}; time={time}".format(
+                appointment_id=row.get("appointment_id") or "",
+                patient=row.get("patient") or "this patient",
+                doctor=row.get("doctor") or "",
+                date=row.get("date") or "",
+                time=row.get("time") or "",
+            )
+        )
+    if pending:
+        lines.append(
+            "- pending {action}: use appointment_id={appointment_id}, target "
+            "doctor={doctor}, date={date}, time={time} if the patient agrees.".format(
+                action=pending.get("action") or "change",
+                appointment_id=pending.get("appointment_id") or "",
+                doctor=pending.get("doctor") or "",
+                date=pending.get("date") or "",
+                time=pending.get("time") or "",
+            )
+        )
+    lines.append(
+        "Use only these exact IDs. If the requested booking is not listed, call "
+        "my_appointments again; never invent an ID."
+    )
+    return "\n".join(lines)
+
+
 def _history(turns: list[dict], text: str) -> list:
     from google.genai import types
 
@@ -918,17 +1010,32 @@ async def handle(
 
     session = await wa_session.load(db, branch.id, sender)
     turns = session["turns"]
+    draft = session["draft"]
     await wa_session.append(db, branch.id, sender, "patient", text)
 
     now = await wa_booking._branch_now(branch.id, db)
+    tools = WaTools(db, branch, sender, plan)
+    if draft:
+        # A receptionist or voice call may have changed it since the previous
+        # message. Re-read before carrying any stored identifier forward.
+        refreshed = _remember_tool_result(
+            {}, "my_appointments", {}, await tools.my_appointments()
+        )
+        pending = draft.get("pending") or {}
+        valid_ids = {
+            row.get("appointment_id")
+            for row in refreshed.get("appointments", [])
+        }
+        if pending.get("appointment_id") in valid_ids:
+            refreshed["pending"] = pending
+        draft = refreshed
     system = SYSTEM_PROMPT.format(
         clinic=branch.name,
         today=now.date().isoformat(),
         weekday=now.strftime("%A"),
         date_table=_date_table(now),
         faq=_faq_block(branch),
-    )
-    tools = WaTools(db, branch, sender, plan)
+    ) + _verified_booking_context(draft)
     contents = _history(turns, text)
 
     reply = ""
@@ -937,6 +1044,7 @@ async def handle(
 
     async def _run_rounds() -> str:
         """Model <-> tool loop. Returns the model's final text."""
+        nonlocal draft
         out = ""
         for _round in range(MAX_TOOL_ROUNDS):
             response = await _call_model(system, contents, TOOLS)
@@ -968,6 +1076,10 @@ async def handle(
                     and result.get("success") is True
                 ):
                     successful_mutations.add(call.name)
+                if isinstance(result, dict):
+                    draft = _remember_tool_result(
+                        draft, call.name, dict(call.args or {}), result
+                    )
                 logger.info(
                     "wa_agent_tool", tool=call.name, branch_id=str(branch.id),
                     phone_last4=(sender or "")[-4:],
@@ -1012,6 +1124,7 @@ async def handle(
         )
 
     reply = _whole_sentences(reply) or FALLBACK_REPLY
+    await wa_session.save_draft(db, branch.id, sender, draft)
 
     # Make the promise true (see _CALLBACK_CLAIMS).
     if "record_question_for_doctor" not in called and _claims_a_callback(reply):

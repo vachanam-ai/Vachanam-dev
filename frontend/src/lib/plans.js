@@ -36,13 +36,17 @@ export const PLAN_CATALOG = {
 };
 
 export const VOICE_PLAN_KEYS = ["solo"];
-export const PUBLIC_PLAN_KEYS = [...VOICE_PLAN_KEYS, "wa"];
+// Fail closed until Meta approves Vachanam for public clinic onboarding.
+// The private Venkateshwara bridge is backend-only and does not need this UI.
+export const WHATSAPP_SELF_SERVE_LIVE = false;
+export const PUBLIC_PLAN_KEYS = WHATSAPP_SELF_SERVE_LIVE
+  ? [...VOICE_PLAN_KEYS, "wa"]
+  : VOICE_PLAN_KEYS;
 export const OVERAGE_RUPEES = 6;
 export const WHATSAPP_ADDON_RUPEES = 1499;
 export const ADDITIONAL_BRANCH_RUPEES = 1499;
 export const ADDITIONAL_NUMBER_RUPEES = 1499;
-export const TRIAL_MINUTES = 30;
-export const FOUNDING_CREDIT_MINUTES = 500;
+export const TRIAL_DAYS = 14;
 
 export const planLabel = (key, withPrice = false) => {
   const plan = PLAN_CATALOG[key];

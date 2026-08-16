@@ -515,7 +515,14 @@ async def create_walkin(
 
     # M4: match patient on (phone, name) — phone alone attaches a family
     # member's walk-in to whoever was created first (FIXLOG #9 for the desk).
-    wanted = body.patient_name.strip().lower()
+    from backend.services.patient_identity import normalize_patient_name
+
+    try:
+        patient_name = normalize_patient_name(body.patient_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    wanted = patient_name.lower()
     patient = None
     if norm_phone:
         same_phone = (
@@ -587,7 +594,7 @@ async def create_walkin(
             existing_on_phone = same_phone if norm_phone else []
             patient = Patient(
                 branch_id=branch_uuid,
-                name=body.patient_name,
+                name=patient_name,
                 phone=norm_phone,
                 is_primary=(len(existing_on_phone) == 0),
             )
@@ -647,7 +654,7 @@ async def create_walkin(
         # Doctor-level calendars retired 2026-08-03 (Vinay) — one calendar per
         # clinic branch; per-doctor google_calendar_id is never read here.
         branch_row.google_calendar_id,
-        patient_first_name=body.patient_name.split()[0] if body.patient_name else "",
+        patient_first_name=patient_name.split()[0],
         # B17: use the NORMALIZED phone for last-4, not the raw typed value — a
         # trailing space / formatting in the input otherwise put junk like
         # "345 " into the calendar summary.
@@ -667,7 +674,7 @@ async def create_walkin(
 
             await MetaService().send_booking_confirmation(
                 to=norm_phone,
-                patient_name=body.patient_name,
+                patient_name=patient_name,
                 doctor_name=doctor.name,
                 clinic_name=branch_row.name,
                 booking_date=today,
@@ -700,6 +707,6 @@ async def create_walkin(
         token_number=token.token_number,
         appointment_time=body.appointment_time,
         doctor_name=doctor.name,
-        patient_name=body.patient_name,
+        patient_name=patient_name,
         booking_type=doctor.booking_type,
     )

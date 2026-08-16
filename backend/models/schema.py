@@ -40,13 +40,24 @@ class Organization(Base):
     minutes_adjustment: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
-    # Founding 100 offer. Membership is permanent for audit/counting; the
-    # minute credit is consumed after the first paid billing cycle.
+    # Founding 100 offer. Membership is permanent for audit/counting. New
+    # members receive an unlimited 14-day trial; the credit field remains for
+    # historical paid-cycle compatibility.
     founding_member: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
     founding_credit_minutes: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
+    )
+    # Launch-only custom voice entitlement. The first ten organizations that
+    # actually create/import a voice keep the entitlement permanently, even if
+    # they later replace that voice. This prevents page visits and abandoned
+    # signups from consuming scarce provider inventory.
+    custom_voice_member: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    custom_voice_granted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Clinic's GST number — printed on payment invoices so the clinic can claim
     # input credit (B2B). Optional; set by the owner in Settings.
@@ -977,6 +988,9 @@ class BillingCycle(Base):
         nullable=False,
     )
     razorpay_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    overage_order_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    overage_order_amount_paise: Mapped[int | None] = mapped_column(Integer)
+    overage_payment_id: Mapped[str | None] = mapped_column(String(255), unique=True)
     invoice_number: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

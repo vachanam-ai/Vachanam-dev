@@ -67,7 +67,11 @@ compatibility.
 
 Voice is ₹6/minute from the first billable minute. An additional branch or
 phone number is ₹1,499/month and is provisioned as an isolated clinic branch.
-The trial ends after 14 days or 30 voice minutes, whichever happens first.
+The first 100 eligible clinics receive a 14-calendar-day founding trial with
+unlimited voice usage, no card requirement, and no automatic conversion. The
+service pauses at the exact expiry time; paid billing starts only after the
+owner explicitly activates a plan. This acquisition offer is intentionally
+separate from paid-cycle credits.
 GST remains waived while `GST_WAIVED=True`; restore statutory GST before
 charging it. All prices and gates must come from
 `backend/services/billing_math.py`; frontend display data comes from
@@ -97,8 +101,11 @@ auditability, and safety are available on the applicable public product.
 | Agent host | Fly.io Mumbai · API host: Render · Frontend: React+Vite PWA on Cloudflare Pages |
 | Payments | Razorpay · Monitoring: UptimeRobot · Logs: structlog JSON · Retry: tenacity |
 
-Cost floor: ~₹1.49/min variable + ₹1,000/mo per DID. Infra burn before first
-client ≈ ₹3,048/mo. Keep unit economics in mind when choosing services.
+Current conservative planning model: ~₹2.90/min variable plus ~₹1,499/month
+fixed branch allocation. At ₹6/minute the variable gross margin is ~51.7%
+(106.9% markup). Keep the detailed assumptions and trial exposure model in
+`docs/PRICING_MODEL_2026-08-16.md`; replace estimates with invoice-ledger data
+as production volume becomes representative.
 
 ---
 

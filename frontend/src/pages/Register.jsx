@@ -8,7 +8,7 @@ import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
 import PasswordField from "../components/PasswordField.jsx";
-import { PLAN_CATALOG, PUBLIC_PLAN_KEYS } from "../lib/plans.js";
+import { PLAN_CATALOG, PUBLIC_PLAN_KEYS, TRIAL_DAYS } from "../lib/plans.js";
 
 const PLANS = Object.fromEntries(
   PUBLIC_PLAN_KEYS.map((key) => [key, PLAN_CATALOG[key].name]),
@@ -52,6 +52,7 @@ export default function Register() {
   const [devCode, setDevCode] = useState(null);
   const [busy, setBusy] = useState(false);
   const [ts, setTs] = useState(""); // current Turnstile token ("" = not solved yet)
+  const [foundingTrial, setFoundingTrial] = useState(null);
   const tsRef = useRef("");
   useEffect(() => { tsRef.current = ts; }, [ts]);
   // DPDP: clinic (Data Fiduciary) must accept Terms + DPA before signup.
@@ -60,6 +61,13 @@ export default function Register() {
   // closure would otherwise capture a stale `terms`.
   const termsRef = useRef(false);
   useEffect(() => { termsRef.current = terms; }, [terms]);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/auth/founding-slots`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => setFoundingTrial(data?.slots_left > 0 ? data : false))
+      .catch(() => setFoundingTrial(false));
+  }, []);
 
   const gsiRef = useRef(null);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -111,8 +119,8 @@ export default function Register() {
               id_token: resp.credential,
               accepted_terms: true
             }, tsRef.current);
-            toast.success("Clinic created — activate your plan in Settings to go live");
-            navigate(roleHome(me.role), { replace: true });
+            toast.success("Clinic created. Let’s prepare your receptionist.");
+            navigate(me.role === "org_admin" ? "/settings" : roleHome(me.role), { replace: true });
           } catch (e) {
             toast.error(e?.response?.data?.detail ?? "Google signup failed");
           } finally {
@@ -186,8 +194,8 @@ export default function Register() {
         email_otp: otp,
         accepted_terms: true
       }, ts);
-      toast.success("Clinic created — activate your plan in Settings to go live");
-      navigate(roleHome(me.role), { replace: true });
+      toast.success("Clinic created. Let’s prepare your receptionist.");
+      navigate(me.role === "org_admin" ? "/settings" : roleHome(me.role), { replace: true });
     } catch (err) {
       toast.error(err?.response?.data?.detail ?? "Registration failed");
     } finally {
@@ -212,6 +220,12 @@ export default function Register() {
             ? `${PLAN_CATALOG[form.plan].tagline} · ₹${PLAN_CATALOG[form.plan].price.toLocaleString("en-IN")}/month`
             : `Enter the 6-digit code we emailed to ${form.email}.`}
         </p>
+        {foundingTrial && step === "details" && (
+          <div data-reveal className="mt-5 rounded-xl bg-pill px-4 py-3 font-ui">
+            <p className="text-sm font-semibold text-ink">Your first {TRIAL_DAYS} days are completely free</p>
+            <p className="mt-1 text-xs text-slate">No platform fee, no voice-minute cap, no card, and no automatic charge. {foundingTrial.slots_left} founding places remain.</p>
+          </div>
+        )}
 
         {step === "details" ? (
           <form data-reveal className="card mt-8 space-y-4 p-6"
@@ -263,7 +277,9 @@ export default function Register() {
               <p className="mt-1.5 font-ui text-xs text-slate">
                 {form.plan === "wa"
                   ? "WhatsApp-only has no phone line or voice usage. Meta message fees are paid directly by the clinic."
-                  : "Voice usage is billed at ₹6/minute. WhatsApp is an optional ₹1,499/month add-on per connected clinic number."}
+                  : foundingTrial
+                    ? `Your ${TRIAL_DAYS}-day trial has no minute cap. After it ends, Voice is ₹1,999/month + ₹6/minute.`
+                    : "Voice usage is billed at ₹6/minute. WhatsApp is an optional ₹1,499/month add-on per connected clinic number."}
               </p>
             </div>
             {/* DPDP consent — the clinic is the Data Fiduciary; Vachanam is the

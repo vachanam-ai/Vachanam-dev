@@ -15,7 +15,8 @@ import { submitContact } from "../api/support";
 import { API_BASE } from "../api/client.js";
 import {
   PLAN_CATALOG, OVERAGE_RUPEES, WHATSAPP_ADDON_RUPEES,
-  ADDITIONAL_BRANCH_RUPEES, ADDITIONAL_NUMBER_RUPEES, FOUNDING_CREDIT_MINUTES,
+  ADDITIONAL_BRANCH_RUPEES, ADDITIONAL_NUMBER_RUPEES, TRIAL_DAYS,
+  WHATSAPP_SELF_SERVE_LIVE,
 } from "../lib/plans.js";
 
 gsap.registerPlugin(ScrollTrigger, useGSAP);
@@ -39,7 +40,7 @@ const FAQ = [
   ["Can it handle changing doctor schedules?", "Yes. Each doctor can have multiple time windows and date-specific availability. The agent checks the configured date before answering."],
   ["What happens when it does not know an answer?", "It tells the caller the clinic will check, records the question with their name and number, and surfaces it for staff or the doctor."],
   ["Does it provide medical advice?", "No. It can relay clinic-approved information and doctor instructions, but it does not diagnose or prescribe."],
-  ["How is voice usage billed?", `Each plan has a fixed monthly platform fee, then voice usage is ₹${OVERAGE_RUPEES} per minute from the first minute. Usage stays visible in the clinic workspace.`],
+  ["How is voice usage billed?", `The first 100 clinics get ${TRIAL_DAYS} days free with no voice-minute cap. After the trial, the fixed ₹1,999 platform fee can renew automatically and voice usage is ₹${OVERAGE_RUPEES} per minute, reviewed and paid separately in Plan & billing.`],
   ["How quickly can we start?", "We configure the clinic, doctors, schedules and call routing with your team. A demo lets you validate the real flow before going live."],
 ];
 
@@ -110,14 +111,14 @@ export function PricingSection({ foundingOfferOn = false, slotsLeft = null }) {
             <div className="pricing-founder-note">
               <Sparkle size={19} weight="fill" />
               <span>
-                <strong>Founding clinic offer</strong>
-                <small>First {FOUNDING_CREDIT_MINUTES} voice minutes free after activation{slotsLeft != null ? `. ${slotsLeft} places left.` : "."}</small>
+                <strong>The {TRIAL_DAYS}-Day Live Clinic Trial</strong>
+                <small>₹0 platform fee and no voice-minute cap. No card and no automatic charge.{slotsLeft != null ? ` ${slotsLeft} of the first 100 places remain.` : ""}</small>
               </span>
             </div>
           )}
 
           <div className="pricing-actions">
-            <Link to="/register?plan=solo" className="btn-primary">Start with Voice <ArrowRight size={17} /></Link>
+            <Link to="/register?plan=solo" className="btn-primary">Start {TRIAL_DAYS} days free <ArrowRight size={17} /></Link>
             <a href="#demo" className="pricing-text-link">Hear a real clinic call</a>
           </div>
         </article>
@@ -138,39 +139,41 @@ export function PricingSection({ foundingOfferOn = false, slotsLeft = null }) {
             className="pricing-range"
             type="range"
             min="0"
-            max="1500"
+            max="5000"
             step="50"
             value={voiceMinutes}
             onChange={(event) => setVoiceMinutes(Number(event.target.value))}
             aria-label="Estimated voice minutes per month"
           />
-          <div className="pricing-range-scale" aria-hidden><span>0</span><span>750</span><span>1,500</span></div>
+          <div className="pricing-range-scale" aria-hidden><span>0</span><span>2,500</span><span>5,000</span></div>
 
           <dl className="pricing-calculation">
             <div><dt>Platform fee</dt><dd>{formatRupees(voicePlan.price)}</dd></div>
             <div><dt>{voiceMinutes.toLocaleString("en-IN")} min × {formatRupees(OVERAGE_RUPEES)}</dt><dd>{formatRupees(usageCost)}</dd></div>
             <div className="pricing-total"><dt>Estimated monthly total</dt><dd>{formatRupees(estimatedTotal)}</dd></div>
           </dl>
-          <p className="pricing-estimator-note">GST is currently waived. Founding credits are not applied to this estimate.</p>
+          <p className="pricing-estimator-note">This shows paid service after your free trial. Platform autopay is optional; usage is reviewed and paid separately. GST is currently waived.</p>
         </aside>
       </div>
 
       <div className="pricing-channels" data-motion-item>
         <header className="pricing-channels-intro">
           <div><WhatsappLogo size={29} weight="duotone" /><span>Choose your patient channels</span></div>
-          <h3>Add WhatsApp to Voice, or choose chat only.</h3>
-          <p>Most clinics receive both calls and messages. Voice + WhatsApp keeps both patient journeys on the same verified booking workflow.</p>
+          <h3>{WHATSAPP_SELF_SERVE_LIVE ? "Add WhatsApp to Voice, or choose chat only." : "WhatsApp clinic onboarding is coming soon."}</h3>
+          <p>{WHATSAPP_SELF_SERVE_LIVE
+            ? "Most clinics receive both calls and messages. Voice + WhatsApp keeps both patient journeys on the same verified booking workflow."
+            : "Voice is available now. WhatsApp add-on and chat-only onboarding will open after Meta Tech Provider approval."}</p>
         </header>
 
         <div className="pricing-channel-choices">
           <article className="pricing-bundle-choice">
             <header>
               <span className="pricing-channel-pair"><PhoneCall size={18} weight="fill" /><b aria-hidden>+</b><WhatsappLogo size={19} weight="fill" /></span>
-              <span className="pricing-bundle-badge">Best patient coverage</span>
+              <span className="pricing-bundle-badge">{WHATSAPP_SELF_SERVE_LIVE ? "Best patient coverage" : "Coming soon"}</span>
             </header>
             <h4>Voice + WhatsApp</h4>
             <p className="pricing-choice-copy">Answer the call, complete the appointment, then keep confirmations, reminders and follow-ups in the patient’s WhatsApp.</p>
-            <p className="pricing-bundle-price"><strong>{formatRupees(voiceWhatsappTotal)}</strong><span>/month + {formatRupees(OVERAGE_RUPEES)}/voice minute</span></p>
+            <p className="pricing-bundle-price"><strong>{formatRupees(voiceWhatsappTotal)}</strong><span>/month + {formatRupees(OVERAGE_RUPEES)}/voice minute {WHATSAPP_SELF_SERVE_LIVE ? "" : "after launch"}</span></p>
             <p className="pricing-bundle-math">{formatRupees(voicePlan.price)} Voice + {formatRupees(WHATSAPP_ADDON_RUPEES)} WhatsApp add-on</p>
             <ul className="pricing-option-list">
               <CheckItem>Handle patients who call and patients who message</CheckItem>
@@ -179,8 +182,8 @@ export function PricingSection({ foundingOfferOn = false, slotsLeft = null }) {
               <CheckItem>Keep the phone line covered when reception is busy</CheckItem>
             </ul>
             <div className="pricing-option-action">
-              <Link to="/register?plan=solo" className="btn-primary">Start Voice + WhatsApp setup <ArrowRight size={17} /></Link>
-              <small>WhatsApp is added during clinic setup.</small>
+              <Link to="/register?plan=solo" className="btn-primary">Start Voice now <ArrowRight size={17} /></Link>
+              <small>{WHATSAPP_SELF_SERVE_LIVE ? "WhatsApp is added during clinic setup." : "Add WhatsApp after approval without changing your voice plan."}</small>
             </div>
           </article>
 
@@ -194,7 +197,11 @@ export function PricingSection({ foundingOfferOn = false, slotsLeft = null }) {
               <CheckItem>No phone line or call handling</CheckItem>
               <CheckItem>No voice-minute charges</CheckItem>
             </ul>
-            <Link to="/register?plan=wa" className="btn-ghost">Choose WhatsApp only <ArrowRight size={16} /></Link>
+            {WHATSAPP_SELF_SERVE_LIVE ? (
+              <Link to="/register?plan=wa" className="btn-ghost">Choose WhatsApp only <ArrowRight size={16} /></Link>
+            ) : (
+              <span className="chip-muted w-fit">Coming soon</span>
+            )}
           </article>
         </div>
       </div>
@@ -271,7 +278,7 @@ export default function Landing() {
             <a href="#workflow">How it works</a><a href="#voices">Languages</a>
             <a href="#pricing">Pricing</a><a href="#trust">Trust</a><Link to="/help">Help</Link>
           </div>
-          <div className="marketing-nav-actions"><ThemeToggle /><Link to="/login" className="marketing-signin">Sign in</Link><a href="#demo" className="btn-primary">Book a demo</a></div>
+          <div className="marketing-nav-actions"><ThemeToggle /><Link to="/login" className="marketing-signin">Sign in</Link>{foundingOfferOn ? <Link to="/register?plan=solo" className="btn-primary">Start free trial</Link> : <a href="#demo" className="btn-primary">Book a demo</a>}</div>
         </nav>
       </header>
 
@@ -282,15 +289,15 @@ export default function Landing() {
             <h1>Your clinic answers with <em>clarity, warmth and proof.</em></h1>
             <p className="marketing-lede">Vachanam answers patient calls in familiar Indian languages, checks real clinic availability, and completes appointments without losing the conversation.</p>
             <div className="marketing-hero-actions">
-              <a href="#demo" className="btn-primary">See a real call <ArrowRight size={18} weight="bold" /></a>
-              <a href="#workflow" className="btn-ghost">Explore the workflow</a>
+              {foundingOfferOn ? <Link to="/register?plan=solo" className="btn-primary">Start {TRIAL_DAYS} days free <ArrowRight size={18} weight="bold" /></Link> : <a href="#demo" className="btn-primary">Book a demo <ArrowRight size={18} weight="bold" /></a>}
+              <a href="#demo" className="btn-ghost">Hear a real clinic call</a>
             </div>
             <div className="marketing-proof-row">
               <span><CheckCircle size={18} weight="fill" />Uses your existing number</span>
               <span><CheckCircle size={18} weight="fill" />Date-specific doctor schedules</span>
               <span><CheckCircle size={18} weight="fill" />Atomic appointment actions</span>
             </div>
-            {foundingOfferOn && <p className="marketing-trial">Founding 100 clinics: first {FOUNDING_CREDIT_MINUTES} voice minutes free after activation{slotsLeft != null ? ` · ${slotsLeft} places left` : ""}</p>}
+            {foundingOfferOn && <p className="marketing-trial">Founding 100: {TRIAL_DAYS} days completely free, with no minute cap{slotsLeft != null ? ` · ${slotsLeft} places left` : ""}</p>}
           </div>
 
           <figure data-hero-visual className="marketing-hero-visual">

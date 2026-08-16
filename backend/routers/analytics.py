@@ -82,6 +82,7 @@ class MinutesUsage(BaseModel):
     used: int  # minutes this calendar month
     included: int  # plan allowance
     pct: float
+    unlimited: bool = False
 
 
 class WeekdayLoad(BaseModel):
@@ -469,8 +470,8 @@ async def analytics_overview(
         (org_row[0], org_row[1], (org_row[2] or 0) + (org_row[3] or 0))
         if org_row else ("solo", "active", 0)
     )
-    # Trial clinics get the flat 500-min trial bucket, not the plan allowance;
-    # plus the super-admin per-clinic minute adjustment.
+    # Trials have no minute bucket; the response marks them unlimited and the
+    # exact trial expiry is enforced by the service gate.
     included = included_minutes_for(plan or "clinic", org_status or "active", adj or 0)
     used_min = int(used_seconds // 60)
 
@@ -591,6 +592,7 @@ async def analytics_overview(
             used=used_min,
             included=included,
             pct=round(min(used_min / included, 1.0) * 100, 1) if included else 0.0,
+            unlimited=org_status == "trial",
         ),
         attendance_rate=_show_rate(total_attended, total_no_show),
         lifetime=LifetimeTotals(

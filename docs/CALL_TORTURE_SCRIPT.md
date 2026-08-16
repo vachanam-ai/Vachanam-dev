@@ -80,7 +80,7 @@ booking, a "technical issue" line, or a repeated confirmation.
 
 ## H. Latency (report the numbers, don't tune blindly)
 
-- H1 First call after a deploy: agent speaks within ~2s (Neon keepalive, #285).
+- H1 First call after a deploy: agent speaks within ~2s (Supabase/LLM/provider warm-up, #285).
 - H2 Every later call: first word ~1.5-2s; interrupt-to-stop ~0.4s (#280).
 - H3 "one moment / okay అండి" filler plays instantly on a slot check (#282).
 - After the call, grab `lat_first_word`, `lat_eou`, `lat_llm ttft`, `lat_tts`

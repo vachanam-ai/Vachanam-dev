@@ -1120,6 +1120,23 @@ async def confirm_booking(
     Returns:
         {"success": True, "token_id": str} or {"success": False, "reason": str}
     """
+    # One storage representation across voice and WhatsApp, enforced at the
+    # tool boundary rather than left to prompt compliance or STT spelling.
+    from backend.services.patient_identity import (
+        normalize_patient_age,
+        normalize_patient_name,
+    )
+
+    try:
+        patient_name = normalize_patient_name(patient_name)
+        patient_age = normalize_patient_age(patient_age)
+    except ValueError as exc:
+        return {
+            "success": False,
+            "reason": "invalid_patient_details",
+            "instruction": str(exc),
+        }
+
     # 0. Phone sanity. Spoken numbers arrive garbled ("nine triple six double
     # four..." became 9-digit 966444428) and were stored as-is, splitting one
     # patient into several records. Reject anything that is not a valid Indian
@@ -1307,6 +1324,8 @@ async def confirm_booking(
         await db.flush()
     else:
         patient.followup_consent = followup_consent
+        if any(ch.isalpha() and not ch.isascii() for ch in patient.name):
+            patient.name = patient_name
         if patient_age is not None:
             patient.age = patient_age
         if patient_gender:

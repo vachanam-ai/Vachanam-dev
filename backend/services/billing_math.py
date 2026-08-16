@@ -143,24 +143,18 @@ def whatsapp_enabled(plan: str, addon: bool = False) -> bool:
     """Single gate for every WhatsApp capability check."""
     return plan in WHATSAPP_PLANS or (bool(addon) and plan in WHATSAPP_ADDON_PLANS)
 
-# The 14-day trial grants 30 voice minutes regardless of selected voice plan.
-# The cap is hard-enforced because trial usage is paid by Vachanam.
-TRIAL_MINUTES = 30
+# Zero is an unlimited-trial sentinel. Usage is measured for the cost ledger,
+# but it is not billed or exhausted during the 14-day founding trial.
+TRIAL_MINUTES = 0
+TRIAL_UNLIMITED = True
 
-# Founding 100: a one-time credit on the first PAID cycle. It is deliberately
-# not a trial: the platform fee first covers the DID/cloud cost, then these
-# clinics can use 500 voice minutes without a usage charge.
+# Founding 100 capacity. The legacy credit constant remains at zero for client
+# compatibility; the acquisition offer is now the free service window.
 FOUNDING_CLINIC_SLOTS = 100
-FOUNDING_CREDIT_MINUTES = 500
+FOUNDING_CREDIT_MINUTES = 0
 
-# FOUNDING-CLINIC PILOT (Vinay 2026-07-19). Self-serve free trial stays
-# REMOVED (signups start paused, 2026-07-17); instead Vinay hand-picks
-# clinics and starts a 14-day pilot from the super-admin console. Reuses the
-# trial machinery end-to-end: status='trial', TRIAL_MINUTES cap (hard-block),
-# trial_ends_at expiry defense in call_blocked, and the 6-hourly trial_pause
-# job flips it back to paused — from there the first payment (at launch-offer
-# price) activates as usual. Pilot terms (success criteria, auto-convert)
-# live on paper, not in code.
+# The absolute timestamp, not minutes, ends the offer. Service pauses with no
+# automatic payment if the clinic has not explicitly activated a paid plan.
 PILOT_DAYS = 14
 
 # CLAUDE.md: all prices are exclusive of 18% GST. An overage invoice (a real
@@ -216,12 +210,32 @@ def included_minutes_for(plan: str, status: str, adjustment: int = 0) -> int:
     """Voice-minute allowance for an org THIS month, honoring the trial grant
     and the super-admin per-clinic ``adjustment`` (signed delta, floored at 0).
 
-    A trial org gets the flat TRIAL_MINUTES bucket regardless of the plan it
-    picked at signup; any other status gets the plan's own included bucket.
+    An unlimited trial has no finite bucket and is represented by zero. Any
+    other status gets the plan's own included bucket.
     Single source for both the clinic dashboard donut and the super-admin view.
     """
+    if status == "trial" and TRIAL_UNLIMITED:
+        return 0
     base = TRIAL_MINUTES if status == "trial" else included_minutes(plan)
     return max(0, base + (adjustment or 0))
+
+
+def allowance_adjustment(
+    plan: str,
+    *,
+    cycle_included: int | None = None,
+    org_adjustment: int = 0,
+    founding_credit: int = 0,
+) -> int:
+    """Adjustment to pass to allowance math.
+
+    A paid cycle is the entitlement ledger. Organization-level founding credit
+    is only a staging value before the first cycle exists and can be cleared by
+    an early renewal, so runtime gates must prefer the stamped cycle allowance.
+    """
+    if cycle_included is not None:
+        return int(cycle_included) - included_minutes(plan)
+    return int(org_adjustment or 0) + int(founding_credit or 0)
 
 
 def overage_breakdown(
@@ -241,7 +255,10 @@ def overage_breakdown(
     p = PLANS.get(plan)
     rate = p.overage_per_min if p else 0.0
     used = int(round(minutes_used))
-    overage_min = max(0, used - included)
+    overage_min = (
+        0 if status == "trial" and TRIAL_UNLIMITED
+        else max(0, used - included)
+    )
     overage_amount = round(overage_min * rate, 2)
     gst = _gst_on(overage_amount)
     total = round(overage_amount + gst, 2)
@@ -270,8 +287,8 @@ def subscription_order_breakdown(
 
     total = plan base + previous-cycle overage minutes × rate, + GST on the
     whole subtotal (0 while GST_WAIVED). First activation passes
-    cycle_minutes_used=0 (trial minutes are free service; exhaust hard-blocks —
-    never billed). #391: base honors the first-3-months launch-offer price —
+    cycle_minutes_used=0 (the unlimited trial is free service and is never
+    billed). #391: base honors the first-3-months launch-offer price —
     pass the org's subscription_started_at; None (first activation) = offer.
     """
     p = PLANS.get(plan)
@@ -386,11 +403,9 @@ def minutes_exhausted(
     (hard-block trigger).
 
     B3: the bucket is the SAME one the dashboard shows — `included_minutes_for`,
-    which honors the 500-min trial grant (#166) and the super-admin
-    `minutes_adjustment` (#169). Comparing against the plain plan bucket blocked
-    trial/adjusted orgs early (e.g. a solo-plan trial cut off at 100 min while
-    the donut still showed 400 remaining) and let a negative adjustment block
-    later than the dashboard implied.
+    including the super-admin `minutes_adjustment` (#169). Trials have no
+    minute bucket; their exact end time is enforced separately in
+    `call_blocked`.
     """
     inc = included_minutes_for(plan, status, adjustment)
     return inc > 0 and minutes_used >= inc
@@ -412,7 +427,7 @@ def call_blocked(
 
     trial_expired is defense-in-depth: the daily trial_pause job flips status
     to 'paused', but if that job hasn't run yet an expired trial must not keep
-    getting free AI service (~Rs1.49/min cost to Vachanam).
+    getting free AI service (currently about Rs2.90/min variable cost).
     """
     if status in ("paused", "cancelled"):
         return status
@@ -425,11 +440,9 @@ def call_blocked(
             ends = ends.replace(tzinfo=timezone.utc)
         if ends < now:
             return "trial_expired"
-    # B3: thread status + adjustment so the hard-block bucket matches the
-    # trial grant and super-admin adjustment the dashboard already honors.
-    # Trials ALWAYS hard-block on exhaust (2026-07-11): trial minutes are free
-    # service at Vachanam's cost — the bucket is the offer, not a suggestion.
-    if (hard_block_on_exhaust or status == "trial") and minutes_exhausted(
+    # Paying plans may opt into a minute-bucket hard stop. Trials deliberately
+    # bypass minute exhaustion: the offer is unlimited until `trial_ends_at`.
+    if status != "trial" and hard_block_on_exhaust and minutes_exhausted(
         plan, minutes_used, status, adjustment
     ):
         return "minutes_exhausted"

@@ -118,16 +118,23 @@ Vachanam offers a metered voice plan and a WhatsApp-only plan. GST is currently 
 | **Vachanam Voice** | INR 1,999/month | INR 6 per voice minute | unlimited | 1 |
 | **WhatsApp** | INR 1,999/month | no voice minutes | 3 | 1 |
 
-- Voice usage is INR 6 per minute from the first minute and is billed with the next invoice.
+- After any free trial ends and the clinic activates paid service, voice usage
+  is INR 6 per minute from the first paid minute and is settled separately for
+  the completed billing cycle.
 - WhatsApp is an optional INR 1,499/month add-on per Voice branch. Meta message fees are paid directly by the clinic.
 - **WhatsApp message costs are billed to you by Meta, not by Vachanam.** On any plan that uses WhatsApp, your clinic holds its own WhatsApp Business Account and its own payment method with Meta. Vachanam's fee covers the software only and adds no per-message markup.
 - Optional add-ons: WhatsApp INR 1,499/month per Voice branch; additional phone number or branch INR 1,499/month (a branch is a fully separate clinic setup with its own number, doctors, and staff).
 
 Current pricing and what each plan includes are always published at vachanam.in; if this table and the website ever differ, the website's published pricing at the time of purchase governs.
 
-### 4.2 Founding-clinic credit
+### 4.2 Founding-clinic trial
 
-The first 100 eligible clinics receive a one-time credit for 500 voice minutes on their first paid billing cycle. The monthly platform fee remains payable. The credit does not renew, has no cash value, and unused minutes expire at the end of that first paid cycle.
+The first 100 eligible clinics receive 14 calendar days of Vachanam Voice free,
+with no platform fee and no voice-minute cap. No card is required and the trial
+does not convert to a paid service automatically. The trial ends at the exact
+expiry time shown in the clinic dashboard; service pauses unless the clinic
+explicitly activates a paid plan. Trial access has no cash value and cannot be
+transferred or combined with a first-cycle minute credit.
 
 ### 4.3 Payment
 

@@ -409,9 +409,10 @@ Flow:
   Redis.
 - Greeting synthesis/playback overlaps session startup and is seeded into chat
   context. Consent persistence is best-effort.
-- STT is Soniox `stt-rt-v5` when configured, with strict language/context bias;
-  Sarvam Saaras v3 is fallback. TTS is smallest.ai Lightning, primarily over a
-  streaming WebSocket, with a REST/WAV path for greetings and fillers.
+- STT is Soniox Japan `stt-rt-v5` when configured, with strict
+  language/context bias; Sarvam Saaras v3 is the emergency fallback. TTS is
+  Soniox Japan `tts-rt-v1`; greetings and fillers may use validated cached WAV
+  assets, but production must not silently switch voice providers.
 - The LLM classifies untrusted complaint text for intent routing, then validates
   any returned doctor ID against the current branch roster. It is not allowed to
   diagnose, triage, prescribe, or invent emergency guidance.
@@ -508,14 +509,17 @@ gates. The browser never controls a charge amount.
 | `clinic` | Growth | INR 10,999 | 1,500 | INR 6/min | 10 |
 | `multi` | Scale | INR 21,999 | 3,000 | INR 6/min | unlimited |
 
-Launch-offer pricing is removed; standard plan prices are charged. `GST_WAIVED`
-is currently true, and invoices omit a zero-tax/18% claim while it is waived.
-Trial allowance is 30 minutes and nominal pilot duration is 14 days.
+Public pricing is ₹1,999/month for Voice plus ₹6 per billable minute, with
+WhatsApp offered as a ₹1,499/month add-on or a ₹1,999/month WhatsApp-only
+product. `GST_WAIVED` is currently true, and invoices omit a zero-tax/18% claim
+while it is waived.
 
-All plans receive supported languages and follow-up. Normal voice-clone access
-is removed. WhatsApp is bundled in Growth/Scale and sold separately for Basic.
-Trials hard-block at allowance; active paid organizations normally accrue
-overage unless explicitly hard-blocked.
+The first 100 eligible clinics receive a 14-calendar-day unlimited founding
+trial. It requires no card, does not auto-convert, and pauses at exact expiry;
+paid billing begins only after explicit activation. All plans receive supported
+languages and the applicable deterministic booking workflow. Custom voice is a
+limited founding offer governed by provider capacity. WhatsApp self-serve
+onboarding remains gated until Meta Tech Provider approval.
 
 Current registration can grant trials globally or through a capped founding
 allocation. Allocation is serialized with a PostgreSQL advisory lock, and the
@@ -615,7 +619,7 @@ Current deployment topology:
 - Voice worker: Fly.io Mumbai, Python 3.12, 4 shared CPUs / 4 GB, always on,
   rolling deployment, no HTTP service.
 - React SPA: Cloudflare static/Workers hosting with SPA fallback.
-- Neon Postgres and Upstash Redis.
+- Supabase Postgres (`ap-south-1` Mumbai) and Upstash Redis.
 - Vobiz/LiveKit, Google Calendar, Razorpay, Meta WhatsApp, Resend/SMTP/MSG91,
   and Cloudflare Turnstile integrations.
 

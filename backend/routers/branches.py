@@ -1275,6 +1275,8 @@ async def create_whatsapp_template(
     a WhatsApp template is brand-facing, same bar as the FAQ/voice."""
     await assert_branch_access(current_user, branch_id, db)
     _require_org_admin(current_user)
+    if not settings.whatsapp_self_serve_live:
+        raise HTTPException(status_code=409, detail="WhatsApp onboarding is coming soon")
 
     branch = (
         await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))
@@ -1623,6 +1625,8 @@ async def connect_whatsapp(
     """
     await assert_branch_access(current_user, branch_id, db)
     _require_org_admin(current_user)
+    if not settings.whatsapp_self_serve_live:
+        raise HTTPException(status_code=409, detail="WhatsApp onboarding is coming soon")
 
     branch = (
         await db.execute(select(Branch).where(Branch.id == uuid.UUID(branch_id)))

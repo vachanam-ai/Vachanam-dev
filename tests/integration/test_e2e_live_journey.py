@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -189,6 +189,36 @@ async def test_full_patient_journey(db, redis, captured):
     for t, nm in rows:
         print(f"  {nm:12s} {t.date} {t.appointment_time}  {t.status}")
     assert rows, "the journey must have written bookings"
+
+
+@pytest.mark.asyncio
+async def test_existing_booking_move_survives_next_message_live(db, redis, captured):
+    """Production 2026-08-16: the UUID used to disappear before "Yes please"."""
+    _org, br = await _clinic(db)
+    doctor = await _doctor(db, br, "Lakshmi", "skin")
+    seed = await wa_booking.confirm(
+        db, br, CALLER,
+        wa_booking.Slot(
+            doctor_id=doctor.id, doctor_name=doctor.name,
+            booking_type="appointment", date=date.today() + timedelta(days=1),
+            appointment_time=time(10, 0),
+        ),
+        patient_name="QA Patient", patient_age=30,
+        calendar_service=_Cal(), meta_service=_Meta(),
+    )
+    assert seed.token is not None
+
+    await wa_agent.handle(
+        db, br, "clinic", CALLER,
+        f"Book Dr Lakshmi on {_tomorrow()} at 10:30 am. I am QA Patient, age 30.",
+    )
+    await wa_agent.handle(db, br, "clinic", CALLER, "Yes please")
+
+    live = (await db.execute(
+        select(Token).where(Token.branch_id == br.id, Token.status == "confirmed")
+    )).scalars().all()
+    assert len(live) == 1
+    assert live[0].appointment_time.strftime("%H:%M") == "10:30"
 
 
 # ── multilingual journey ─────────────────────────────────────────────────────

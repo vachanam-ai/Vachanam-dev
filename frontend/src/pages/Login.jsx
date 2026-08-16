@@ -292,7 +292,7 @@ export default function Login() {
           <p data-reveal className="mt-8 text-center font-ui text-sm text-slate">
             New clinic?{" "}
             <Link to="/register" className="font-medium text-ink underline-offset-4 hover:underline">
-              {foundingOfferAvailable ? "Join the Founding 100 offer" : "Create your clinic"}
+              {foundingOfferAvailable ? "Start 14 days free" : "Create your clinic"}
             </Link>
           </p>
         </div>

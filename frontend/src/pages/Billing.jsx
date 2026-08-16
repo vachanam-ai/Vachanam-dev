@@ -3,9 +3,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Link, useSearchParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader.jsx";
-import PlanAndPayment from "../components/PlanAndPayment.jsx";
+import PlanAndPayment, { loadRazorpay } from "../components/PlanAndPayment.jsx";
 import { revealStagger } from "../lib/motion.js";
-import { cancelSubscription, fetchBillingSummary } from "../api/client.js";
+import {
+  cancelSubscription,
+  createVoiceUsageOrder,
+  fetchBillingSummary,
+  verifyPayment,
+} from "../api/client.js";
+import { useAuth } from "../hooks/useAuth.jsx";
 
 /* Dedicated billing page (Vinay 2026-08-07: "this is money part right. so, i
    feel this way it will be better").
@@ -79,7 +85,9 @@ function UsageBar({ used, included }) {
 export default function Billing() {
   const [searchParams] = useSearchParams();
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [confirming, setConfirming] = useState(false);
+  const [payingUsage, setPayingUsage] = useState(null);
   const cancelM = useMutation({
     mutationFn: (cancel) => cancelSubscription(cancel),
     onSuccess: (_d, cancel) => {
@@ -102,6 +110,44 @@ export default function Billing() {
     refetchInterval: 60_000,
   });
   const d = q.data;
+
+  const payVoiceUsage = async (cycle) => {
+    setPayingUsage(cycle.cycle_id);
+    try {
+      await loadRazorpay();
+      const order = await createVoiceUsageOrder(cycle.cycle_id);
+      await new Promise((resolve, reject) => {
+        const checkout = new window.Razorpay({
+          key: order.key_id,
+          order_id: order.order_id,
+          amount: order.amount,
+          currency: order.currency,
+          name: "Vachanam",
+          description: `Voice usage · ${cycle.overage_minutes} minutes`,
+          prefill: { email: user?.email ?? "" },
+          theme: { color: "#0e7468" },
+          modal: { ondismiss: () => reject(new Error("Payment window closed")) },
+          handler: async (response) => {
+            await verifyPayment({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            });
+            resolve();
+          },
+        });
+        checkout.open();
+      });
+      toast.success("Voice usage paid. Your billing history is updated.");
+      await q.refetch();
+    } catch (error) {
+      if (error?.message !== "Payment window closed") {
+        toast.error(error?.response?.data?.detail ?? error?.message ?? "Payment failed");
+      }
+    } finally {
+      setPayingUsage(null);
+    }
+  };
 
   // Without this the page is INVISIBLE, not empty (Vinay 2026-08-07: "billing
   // page is completely empty"). index.css pre-hides every [data-reveal] block
@@ -137,6 +183,26 @@ export default function Billing() {
 
       {d && (
         <>
+          {d.trial_unlimited && (
+            <section data-reveal className="rounded-2xl bg-pill p-5">
+              <p className="eyebrow text-teal">Founding clinic trial</p>
+              <h2 className="section-title mt-1 text-xl">Every call is free during your trial</h2>
+              <p className="mt-1 font-ui text-sm text-ink-soft">
+                No platform fee and no voice-minute cap until <strong>{day(d.trial_ends_at)}</strong>.
+                Nothing is charged automatically when the trial ends.
+              </p>
+            </section>
+          )}
+          {d.outstanding_usage_amount > 0 && (
+            <section data-reveal className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+              <p className="eyebrow text-amber-900">Action required</p>
+              <h2 className="section-title mt-1 text-xl">Voice usage payment due</h2>
+              <p className="mt-1 font-ui text-sm text-amber-950">
+                Your fixed plan renewed automatically. {money(d.outstanding_usage_amount)} of
+                metered voice usage is ready to pay in the history below.
+              </p>
+            </section>
+          )}
           <div className="grid gap-5 lg:grid-cols-3">
             {/* Plan */}
             <section data-reveal className="card p-6 lg:col-span-1">
@@ -151,7 +217,9 @@ export default function Billing() {
                 </p>
               )}
               <p className="mt-3 font-ui text-sm text-slate">
-                {d.has_billed ? (
+                {d.trial_unlimited ? (
+                  <>Trial ends <span className="font-medium text-ink">{day(d.trial_ends_at)}</span></>
+                ) : d.has_billed ? (
                   <>Renews on <span className="font-medium text-ink">{day(d.cycle_end)}</span></>
                 ) : (
                   <>
@@ -183,9 +251,9 @@ export default function Billing() {
                   </p>
                 </div>
                 <div>
-                  <p className="font-ui text-xs text-slate">Billable minutes</p>
+                  <p className="font-ui text-xs text-slate">{d.trial_unlimited ? "Free trial minutes" : "Billable minutes"}</p>
                   <p className="text-lg font-semibold tabular-nums">
-                    {d.overage_minutes.toLocaleString("en-IN")}
+                    {(d.trial_unlimited ? d.minutes_used : d.overage_minutes).toLocaleString("en-IN")}
                   </p>
                 </div>
                 <div>
@@ -198,10 +266,15 @@ export default function Billing() {
             </section>
           </div>
 
-          {/* Next charge — itemised so it adds up on screen */}
+          {/* Fixed renewal and metered usage are separate payment rails. */}
           <section data-reveal className="card p-6">
-            <p className="eyebrow">Next charge</p>
-            <h2 className="section-title text-xl">What you will pay</h2>
+            <p className="eyebrow">Upcoming billing</p>
+            <h2 className="section-title text-xl">{d.trial_unlimited ? "What paid service costs after the trial" : "Two charges, clearly separated"}</h2>
+            <p className="mt-1 font-ui text-sm text-slate">
+              {d.trial_unlimited
+                ? "These prices are informational. You choose whether to activate; there is no automatic conversion."
+                : "Your monthly platform fee renews by autopay. Voice minutes close and bill separately at the end of the cycle."}
+            </p>
             <div className="mt-3 divide-y divide-line">
               {d.base_next > 0 && (
                 <Row label={`${d.next_plan_label} plan`} value={money(d.base_next)} />
@@ -209,21 +282,25 @@ export default function Billing() {
               {d.whatsapp_addon_amount > 0 && (
                 <Row label="WhatsApp add-on" value={money(d.whatsapp_addon_amount)} />
               )}
-              {d.overage_minutes > 0 && (
-                <Row
-                  label="Voice usage"
-                  hint={`${d.overage_minutes.toLocaleString("en-IN")} × ₹${d.overage_rate}/min`}
-                  value={money(d.overage_amount)}
-                />
-              )}
-              {d.gst_amount > 0 && <Row label="GST (18%)" value={money(d.gst_amount)} />}
-              <Row label="Total" value={money(d.total_next)} strong />
+              <Row label="Scheduled monthly autopay" value={money(d.autopay_amount)} strong />
+              <Row
+                label="Voice usage estimate"
+                hint={d.trial_unlimited
+                  ? "₹0 during the trial · paid usage starts only after you activate"
+                  : `${d.overage_minutes.toLocaleString("en-IN")} × ₹${d.overage_rate}/min · settled separately after cycle close`}
+                value={money(d.trial_unlimited ? 0 : d.usage_payment_estimate)}
+              />
+              <Row
+                label="Estimated combined cost"
+                value={money(d.trial_unlimited ? d.autopay_amount : d.total_next)}
+                strong
+              />
             </div>
             <p className="mt-3 font-ui text-xs text-slate">
               {d.cancellation_effective
                 ? "No plan renewal will be charged. Current-cycle voice usage remains payable."
                 : d.autopay_enabled
-                  ? "Plan and WhatsApp charges renew automatically. Voice usage is invoiced separately."
+                  ? "Only the monthly platform fee is on autopay today. Voice usage is invoiced separately."
                   : "Paid manually each cycle - the button is below."}
             </p>
           </section>
@@ -279,6 +356,16 @@ export default function Billing() {
                           <span className={STATUS_CHIP[c.status] || "chip-muted"}>
                             {c.status}
                           </span>
+                          {c.usage_payment_due && (
+                            <button
+                              type="button"
+                              className="btn-primary ml-2 px-3 py-1.5 text-xs"
+                              disabled={payingUsage === c.cycle_id}
+                              onClick={() => payVoiceUsage(c)}
+                            >
+                              {payingUsage === c.cycle_id ? "Opening…" : `Pay ${money(c.usage_payment_amount)}`}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const mocks = vi.hoisted(() => ({
@@ -38,6 +38,7 @@ vi.mock("../../hooks/useEmbeddedSignup.js", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import WaConnectCard from "../WaConnectCard.jsx";
+import { ActionDialogProvider } from "../ActionDialog.jsx";
 
 afterEach(() => {
   cleanup();
@@ -62,7 +63,7 @@ afterEach(() => {
 function renderCard(qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   render(
     <QueryClientProvider client={qc}>
-      <WaConnectCard branchId="b1" />
+      <ActionDialogProvider><WaConnectCard branchId="b1" /></ActionDialogProvider>
     </QueryClientProvider>,
   );
   return qc;
@@ -160,13 +161,13 @@ describe("WaConnectCard official Embedded Signup v4", () => {
     mocks.disconnect.mockResolvedValueOnce({
       connected: false, wa_status: "disconnected", conversations_deleted: 2,
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     qc.setQueryData(["wa-chats", "b1"], [{ last_text: "private chat" }]);
     qc.setQueryData(["wa-chat", "b1", "+919812345678"], { turns: [{ text: "private chat" }] });
 
     renderCard(qc);
     fireEvent.click(await screen.findByRole("button", { name: /^disconnect$/i }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: /^disconnect$/i }));
     await waitFor(() => expect(mocks.disconnect).toHaveBeenCalledWith("b1"));
     expect(qc.getQueryData(["wa-chats", "b1"])).toBeUndefined();
     expect(qc.getQueryData(["wa-chat", "b1", "+919812345678"])).toBeUndefined();

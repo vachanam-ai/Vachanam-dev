@@ -6,6 +6,7 @@ import { Toaster } from "sonner";
 import App from "./App.jsx";
 import { AuthProvider } from "./hooks/useAuth.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
+import { ActionDialogProvider } from "./components/ActionDialog.jsx";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -20,8 +21,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <AuthProvider>
-            <App />
-            <Toaster
+            <ActionDialogProvider>
+              <App />
+              <Toaster
               position="top-center"
               toastOptions={{
                 style: {
@@ -33,7 +35,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
                   boxShadow: "var(--shadow-float)"
                 }
               }}
-            />
+              />
+            </ActionDialogProvider>
           </AuthProvider>
         </BrowserRouter>
       </QueryClientProvider>

@@ -2,7 +2,7 @@
 
 Registration sets organizations.trial_ends_at 14 days out. Nothing flipped the
 status when that passed, so an expired-trial clinic kept getting full AI
-service free, indefinitely, at ~Rs1.49/min cost to Vachanam (bug-bounty H5).
+service free, indefinitely, at about Rs2.90/min variable cost (bug-bounty H5).
 
 Every run: orgs with status='trial' AND trial_ends_at < now() -> status='paused'
 + admin alert. The voice agent's service gate already refuses calls for paused
@@ -231,6 +231,9 @@ async def run_pending_plan_changes(today: date | None = None) -> None:
     daily job promotes pending_plan -> plan once today >= effective, then clears
     the pending fields. Idempotent: rows with no pending change are untouched.
     """
+    from backend.models.schema import BillingCycle
+    from backend.routers.payments import finalize_cycle_usage
+
     today = today or date.today()
     async with _db_module.AsyncSessionLocal() as db:
         rows = (
@@ -270,6 +273,21 @@ async def run_pending_plan_changes(today: date | None = None) -> None:
             )
         ).scalars().all()
         for org in cancelling:
+            closing = (
+                await db.execute(
+                    select(BillingCycle)
+                    .where(
+                        BillingCycle.org_id == org.id,
+                        BillingCycle.cycle_end <= today,
+                    )
+                    .order_by(BillingCycle.cycle_end.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if closing is not None and not closing.overage_payment_id:
+                await finalize_cycle_usage(
+                    db, closing, usage_paid_with_plan=False
+                )
             org.status = "cancelled"
             org.cancellation_effective = None
             logger.info("org_cancellation_applied", org_id=str(org.id))

@@ -18,6 +18,7 @@ from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import default_limit  # SEC #4: throttle PII reads
 from backend.models.schema import Patient, Token, Doctor
 from backend.services.validators import normalize_indian_phone
+from backend.services.patient_identity import normalize_patient_name
 from backend.services.patient_import import (
     MAX_IMPORT_BYTES,
     PatientImportError,
@@ -318,7 +319,13 @@ async def edit_patient(
     # comparisons). Reject an all-whitespace name post-strip.
     if body.name is not None and not body.name.strip():
         raise HTTPException(status_code=422, detail="name cannot be empty")
-    new_name = body.name.strip() if body.name is not None else patient.name
+    if body.name is not None:
+        try:
+            new_name = normalize_patient_name(body.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    else:
+        new_name = patient.name
     new_phone = patient.phone
     if body.phone is not None:
         try:

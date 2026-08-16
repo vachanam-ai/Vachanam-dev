@@ -13,7 +13,7 @@ from pathlib import Path
 import structlog
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -21,7 +21,7 @@ from backend.database import get_db
 from backend.middleware.auth_middleware import CurrentUser, get_current_user
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import queue_today_limit
-from backend.models.schema import Branch, BranchVoice
+from backend.models.schema import Branch, BranchVoice, Organization
 from backend.services import soniox_voice
 from backend.services.audit_service import audit
 
@@ -90,6 +90,72 @@ async def _branch_and_rows(db: AsyncSession, branch_id: uuid.UUID):
     return branch, rows
 
 
+async def _organization_voice_count(db: AsyncSession, org_id: uuid.UUID) -> int:
+    return int(
+        (
+            await db.execute(
+                select(func.count(BranchVoice.id))
+                .join(Branch, Branch.id == BranchVoice.branch_id)
+                .where(Branch.org_id == org_id)
+            )
+        ).scalar_one()
+        or 0
+    )
+
+
+async def _custom_voice_offer(
+    db: AsyncSession, org_id: uuid.UUID, *, claim: bool = False
+) -> tuple[Organization, int, bool]:
+    """Return entitlement state and atomically claim a launch slot when asked.
+
+    A global PostgreSQL advisory lock serializes only the first ten claims.
+    Existing members never consume a second slot and keep access permanently.
+    """
+    if claim:
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('vachanam_custom_voice_10'))"))
+    org = (
+        await db.execute(
+            select(Organization)
+            .where(Organization.id == org_id)
+            .with_for_update() if claim else select(Organization).where(Organization.id == org_id)
+        )
+    ).scalar_one_or_none()
+    if org is None:
+        raise HTTPException(status_code=404, detail="Clinic not found")
+    used = int(
+        (
+            await db.execute(
+                select(func.count(Organization.id)).where(
+                    Organization.custom_voice_member.is_(True)
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    newly_granted = False
+    if claim and not org.custom_voice_member:
+        if used >= soniox_voice.CUSTOM_VOICE_CLINIC_SLOTS:
+            raise HTTPException(
+                status_code=409,
+                detail="The first-10 custom voice offer is full. Choose a studio voice instead.",
+            )
+        org.custom_voice_member = True
+        org.custom_voice_granted_at = datetime.now(timezone.utc)
+        used += 1
+        newly_granted = True
+    return org, max(0, soniox_voice.CUSTOM_VOICE_CLINIC_SLOTS - used), newly_granted
+
+
+async def _release_failed_first_claim(
+    db: AsyncSession, org: Organization, newly_granted: bool
+) -> None:
+    """A provider/config failure must not burn one of the ten launch slots."""
+    if not newly_granted:
+        return
+    org.custom_voice_member = False
+    org.custom_voice_granted_at = None
+
+
 async def _sync_rows(db: AsyncSession, rows: list[BranchVoice]) -> str | None:
     if not rows:
         return None
@@ -128,11 +194,17 @@ async def list_voice_clones(
     await assert_branch_access(current_user, branch_id, db)
     _owner_only(current_user)
     branch, rows = await _branch_and_rows(db, uuid.UUID(branch_id))
+    org, slots_left, _ = await _custom_voice_offer(db, branch.org_id)
+    org_voice_count = await _organization_voice_count(db, branch.org_id)
     sync_warning = await _sync_rows(db, rows)
     return {
         "voices": [_payload(row, branch.tts_voice) for row in rows],
-        "clinic_count": len(rows),
+        "clinic_count": org_voice_count,
         "sync_warning": sync_warning,
+        "custom_voice_member": bool(org.custom_voice_member),
+        "custom_voice_available": bool(org.custom_voice_member or slots_left > 0),
+        "custom_voice_slots_left": slots_left,
+        "custom_voice_slots_total": soniox_voice.CUSTOM_VOICE_CLINIC_SLOTS,
     }
 
 
@@ -176,7 +248,9 @@ async def create_voice_clone(
         raise HTTPException(status_code=404, detail="Branch not found")
     existing_voice = (
         await db.execute(
-            select(BranchVoice.id).where(BranchVoice.branch_id == branch_uuid)
+            select(BranchVoice.id)
+            .join(Branch, Branch.id == BranchVoice.branch_id)
+            .where(Branch.org_id == branch.org_id)
         )
     ).scalar_one_or_none()
     if existing_voice is not None:
@@ -195,6 +269,7 @@ async def create_voice_clone(
     if duplicate:
         raise HTTPException(status_code=409, detail="A voice with this name already exists")
 
+    org, _, newly_granted = await _custom_voice_offer(db, branch.org_id, claim=True)
     local_id = uuid.uuid4()
     row = BranchVoice(
         id=local_id,
@@ -233,6 +308,7 @@ async def create_voice_clone(
             row.status = "failed"
             row.error_type = exc.error_type
             row.error_message = exc.message
+            await _release_failed_first_claim(db, org, newly_granted)
             await db.commit()
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -241,6 +317,7 @@ async def create_voice_clone(
         row.status = "failed"
         row.error_type = "provider_invalid_response"
         row.error_message = "Soniox accepted the request but did not return a voice ID."
+        await _release_failed_first_claim(db, org, newly_granted)
         await db.commit()
         raise HTTPException(status_code=502, detail=row.error_message)
     row.provider_voice_id = str(provider_voice_id)
@@ -278,7 +355,11 @@ async def import_voice_clone(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
     existing_voice = (
-        await db.execute(select(BranchVoice.id).where(BranchVoice.branch_id == branch_uuid))
+        await db.execute(
+            select(BranchVoice.id)
+            .join(Branch, Branch.id == BranchVoice.branch_id)
+            .where(Branch.org_id == branch.org_id)
+        )
     ).scalar_one_or_none()
     if existing_voice is not None:
         raise HTTPException(
@@ -296,6 +377,7 @@ async def import_voice_clone(
             detail="This Soniox voice is already connected to a clinic",
         )
 
+    org, _, newly_granted = await _custom_voice_offer(db, branch.org_id, claim=True)
     try:
         provider = next(
             (
@@ -306,8 +388,12 @@ async def import_voice_clone(
             None,
         )
     except soniox_voice.SonioxVoiceError as exc:
+        await _release_failed_first_claim(db, org, newly_granted)
+        await db.commit()
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
     if provider is None:
+        await _release_failed_first_claim(db, org, newly_granted)
+        await db.commit()
         raise HTTPException(
             status_code=404,
             detail="This voice ID was not found in the connected Soniox account",

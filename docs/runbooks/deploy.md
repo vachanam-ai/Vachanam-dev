@@ -4,7 +4,7 @@ Topology: **Render** = backend API · **Fly.io (Mumbai)** = voice agent · **Clo
 
 > Neon was PURGED on 2026-07-31 and must not be reintroduced. The Supabase pooler needs asyncpg `ssl="require"`, NOT `ssl=True`.
 
-Already done (2026-06-17, DB since migrated to Supabase): schema/migrations (head q14) · Upstash · FIELD_ENCRYPTION_KEY · JWT · Resend · LiveKit/Vobiz/Google creds verified · super_admin `vachanamai@gmail.com` seeded.
+Already done (DB migrated to Supabase 2026-07-31): schema/migrations · Upstash · FIELD_ENCRYPTION_KEY · JWT · Resend · LiveKit/Vobiz/Google credentials verified · super_admin `vachanamai@gmail.com` seeded. Always confirm the current Alembic head with `alembic heads`; do not copy a historical revision ID from this document.
 
 ---
 
@@ -24,8 +24,12 @@ Everything else (dashboard, payments) is not on the call path.
 1. Render → New → Blueprint → point at the repo (auto-detects `render.yaml` at the repo root).
 2. Set every `sync: false` env var in the Render dashboard (secrets + `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `FIELD_ENCRYPTION_KEY`, `SMALLEST_API_KEY`, `RESEND_API_KEY`, `BASE_URL=https://api.vachanam.in`, `FRONTEND_URL=https://vachanam.in`, `ADMIN_PHONE`). Razorpay vars can wait (trial).
 3. Upload `google-service-account.json` as a **Secret File** at `/etc/secrets/google-service-account.json`.
-4. Deploy. `preDeployCommand` runs `alembic upgrade head` (no-op now; applies future migrations). Health check `/health`.
-5. Push-to-deploy is automatic thereafter.
+4. Run `alembic upgrade head` manually against production before code that
+   depends on a new schema becomes live. The Render free-plan blueprint has no
+   `preDeployCommand`; a push alone does **not** migrate the database.
+5. Deploy and confirm `/health` returns 200.
+6. Push-to-deploy is automatic thereafter, but every migration-bearing release
+   still requires the manual migration step above.
 
 ## 2. Agent → Fly (Mumbai)
 
@@ -62,7 +66,7 @@ fly deploy --config infra/fly.agent.toml
 
 ## 6. First clinic + live-call test
 
-1. Onboard a clinic via `/register` (creates org_admin + branch, 14-day trial) — or the owner self-registers.
+1. Onboard a clinic via `/register` (creates org_admin + branch; the first 100 eligible clinics receive the 14-day unlimited founding trial) — or the owner self-registers.
 2. In Settings: set the branch's **DID number**, language, doctor(s). For a sub-account clinic, paste Vobiz auth_id/token + SIP (stored encrypted).
 3. Super_admin: log in at `/admin` with `vachanamai@gmail.com` (Google) → Operations + Monitoring.
 4. **Call the DID** → agent answers, books, drops a `call_quality` row → appears on the owner Dashboard + `/admin/monitoring`.

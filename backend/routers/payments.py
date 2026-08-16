@@ -18,7 +18,7 @@ import razorpay
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import backend.services.audit_service as _audit_svc
@@ -35,6 +35,7 @@ from backend.services.billing_math import (
     PLANS,
     SELLABLE_PLANS,
     add_month,
+    allowance_adjustment,
     effective_price,
     subscription_order_breakdown,
 )
@@ -267,10 +268,6 @@ async def create_autopay_subscription(
             "plan": plan,
             "amount_paise": str(breakdown["amount_paise"]),
         },
-        "notify_info": {
-            "notify_email": org.owner_email,
-            "notify_phone": org.owner_phone,
-        },
     }
     if last is not None and last.cycle_end > date.today():
         payload["start_at"] = int(
@@ -370,7 +367,7 @@ async def create_order(
     amount is server-derived, never client-supplied (#341, Vinay 2026-07-12):
     plan base + the CURRENT paid cycle's overage minutes × ₹5, + 18% GST on the
     whole subtotal. A first activation (trial/paused, no paid cycle) has no
-    overage — trial minutes are free service and hard-block on exhaust. The
+    overage — trial usage is free and the trial ends only by time. The
     order ``notes`` carry org_id + plan + the billed breakdown set BY US, so
     the webhook can trust them when it activates.
     """
@@ -496,6 +493,13 @@ class PlanInfo(BaseModel):
     cancellation_effective: str | None = None
     autopay_enabled: bool = False
     autopay_status: str | None = None
+    # Launch-only custom voice entitlement. Non-members lose the navigation
+    # surface once all ten slots are claimed; members keep it permanently.
+    custom_voice_available: bool = False
+    custom_voice_member: bool = False
+    custom_voice_slots_left: int = 0
+    trial_ends_at: str | None = None
+    trial_unlimited: bool = False
 
 
 class PlanChangeRequest(BaseModel):
@@ -536,6 +540,27 @@ async def _cycle_minutes_used(db: AsyncSession, org_id, start: date, end: date) 
         )
     ).scalar_one()
     return float(secs or 0) / 60.0
+
+
+async def finalize_cycle_usage(
+    db: AsyncSession, cycle, *, usage_paid_with_plan: bool
+) -> float:
+    """Stamp measured usage onto a closing cycle exactly once.
+
+    Fixed-price autopay does not include variable voice usage, so a cycle with
+    extra minutes becomes ``invoiced`` until its separate order is paid. Manual
+    renewal already includes the usage and leaves the cycle ``paid``.
+    """
+    used = await _cycle_minutes_used(db, cycle.org_id, cycle.cycle_start, cycle.cycle_end)
+    plan = PLANS.get(cycle.plan)
+    used_minutes = int(round(used))
+    overage_minutes = max(0, used_minutes - int(cycle.included_minutes or 0))
+    cycle.minutes_used = used_minutes
+    cycle.overage_minutes = overage_minutes
+    cycle.overage_amount = int(round(overage_minutes * (plan.overage_per_min if plan else 0)))
+    if overage_minutes:
+        cycle.status = "paid" if usage_paid_with_plan else "invoiced"
+    return used
 
 
 async def _latest_cycle(db: AsyncSession, org_id):
@@ -617,6 +642,7 @@ def _plan_info(
     current_cycle=None,
     wa_addon: bool = False,
     latest_payment_cycle=None,
+    custom_voice_slots_left: int = 0,
 ) -> "PlanInfo":
     from backend.services.billing_math import WHATSAPP_PLANS
 
@@ -624,6 +650,9 @@ def _plan_info(
     payment_cycle = latest_payment_cycle or current_cycle
     _base, _is_offer = effective_price(plan_key, org.subscription_started_at)
     return PlanInfo(
+        custom_voice_available=bool(getattr(org, "custom_voice_member", False) or custom_voice_slots_left > 0),
+        custom_voice_member=bool(getattr(org, "custom_voice_member", False)),
+        custom_voice_slots_left=custom_voice_slots_left,
         autopay_enabled=_autopay_enabled(org),
         autopay_status=getattr(org, "razorpay_subscription_status", None),
         next_base_rupees=_base,
@@ -652,6 +681,10 @@ def _plan_info(
             else None
         ),
         gstin=getattr(org, "gstin", None),
+        trial_ends_at=(
+            org.trial_ends_at.isoformat() if org.trial_ends_at else None
+        ),
+        trial_unlimited=org.status == "trial",
     )
 
 
@@ -662,16 +695,30 @@ async def get_plan(
 ) -> "PlanInfo":
     """Caller's current plan + any scheduled change + current cycle end."""
     org = await _load_my_org(current_user, db)
+    from backend.services.soniox_voice import CUSTOM_VOICE_CLINIC_SLOTS
+
+    custom_voice_members = int(
+        (
+            await db.execute(
+                select(func.count(Organization.id)).where(
+                    Organization.custom_voice_member.is_(True)
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
     return _plan_info(
         org,
         await _current_cycle(db, org.id),
         await _org_wa_addon(db, org.id),
         await _latest_cycle(db, org.id),
+        max(0, CUSTOM_VOICE_CLINIC_SLOTS - custom_voice_members),
     )
 
 
 class BillingCycleOut(BaseModel):
     """One past cycle, for the billing history table."""
+    cycle_id: str
     cycle_start: str
     cycle_end: str
     plan: str
@@ -681,6 +728,8 @@ class BillingCycleOut(BaseModel):
     overage_amount: int
     total: int
     status: str
+    usage_payment_due: bool = False
+    usage_payment_amount: int = 0
     invoice_number: str | None = None
 
 
@@ -709,9 +758,14 @@ class BillingSummary(BaseModel):
     whatsapp_addon_amount: int = 0
     gst_amount: float = 0.0
     total_next: int = 0
+    autopay_amount: int = 0
+    usage_payment_estimate: int = 0
     is_offer: bool = False
     autopay_enabled: bool = False
     cancellation_effective: str | None = None
+    outstanding_usage_amount: int = 0
+    trial_ends_at: str | None = None
+    trial_unlimited: bool = False
     history: list[BillingCycleOut] = []
 
 
@@ -748,7 +802,10 @@ async def billing_summary(
         else (plan_def.included_minutes if plan_def else 0)
         + _minute_allowance_adjustment(org)
     )
+    trial_unlimited = org.status == "trial"
     over_min = max(0, used_min - included)
+    if trial_unlimited:
+        over_min = 0
     rate = plan_def.overage_per_min if plan_def else 0.0
     over_amt = int(round(over_min * rate))
 
@@ -768,8 +825,11 @@ async def billing_summary(
             if wa_addon and next_plan_key in WHATSAPP_ADDON_PLANS
             else 0
         )
-    subtotal = base_next + addon_amt + over_amt
-    gst = _gst_on(subtotal)
+    autopay_subtotal = base_next + addon_amt
+    autopay_gst = _gst_on(autopay_subtotal)
+    usage_gst = _gst_on(over_amt)
+    subtotal = autopay_subtotal + over_amt
+    gst = autopay_gst + usage_gst
 
     rows = (
         await db.execute(
@@ -804,14 +864,26 @@ async def billing_summary(
         whatsapp_addon_amount=addon_amt,
         gst_amount=gst,
         total_next=int(round(subtotal + gst)),
+        autopay_amount=int(round(autopay_subtotal + autopay_gst)),
+        usage_payment_estimate=int(round(over_amt + usage_gst)),
         is_offer=bool(is_offer),
         autopay_enabled=_autopay_enabled(org),
         cancellation_effective=(
             org.cancellation_effective.isoformat()
             if org.cancellation_effective else None
         ),
+        outstanding_usage_amount=sum(
+            int(round(float(c.overage_amount or 0) + _gst_on(float(c.overage_amount or 0))))
+            for c in rows
+            if c.status in {"invoiced", "failed"} and not c.overage_payment_id
+        ),
+        trial_ends_at=(
+            org.trial_ends_at.isoformat() if org.trial_ends_at else None
+        ),
+        trial_unlimited=trial_unlimited,
         history=[
             BillingCycleOut(
+                cycle_id=str(c.id),
                 cycle_start=c.cycle_start.isoformat(),
                 cycle_end=c.cycle_end.isoformat(),
                 plan=c.plan,
@@ -821,11 +893,148 @@ async def billing_summary(
                 overage_amount=c.overage_amount or 0,
                 total=(c.base_amount or 0) + (c.overage_amount or 0),
                 status=c.status,
+                usage_payment_due=(
+                    c.status in {"invoiced", "failed"}
+                    and bool(c.overage_amount)
+                    and not c.overage_payment_id
+                ),
+                usage_payment_amount=int(
+                    round(
+                        float(c.overage_amount or 0)
+                        + _gst_on(float(c.overage_amount or 0))
+                    )
+                ),
                 invoice_number=c.invoice_number,
             )
             for c in rows
         ],
     )
+
+
+@router.post(
+    "/billing/cycles/{cycle_id}/usage-order",
+    response_model=CreateOrderResponse,
+    dependencies=[Depends(create_order_limit)],
+)
+async def create_voice_usage_order(
+    cycle_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> CreateOrderResponse:
+    """Create the separate order for metered usage on a closed autopay cycle."""
+    from backend.models.schema import BillingCycle
+    from backend.services.billing_math import _gst_on
+
+    if current_user.role != "org_admin" or not current_user.org_id:
+        raise HTTPException(status_code=403, detail="Only a clinic owner can pay this invoice")
+    try:
+        cycle_uuid = _uuid.UUID(cycle_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Billing cycle not found") from exc
+    # One closed cycle gets one provider order. This serializes two tabs or
+    # retries before either reaches Razorpay, so a clinic cannot accidentally
+    # pay the same usage twice.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"razorpay:voice-usage-order:{cycle_uuid}"},
+    )
+    cycle = (
+        await db.execute(
+            select(BillingCycle).where(
+                BillingCycle.id == cycle_uuid,
+                BillingCycle.org_id == _uuid.UUID(current_user.org_id),
+            )
+        )
+    ).scalar_one_or_none()
+    if cycle is None:
+        raise HTTPException(status_code=404, detail="Billing cycle not found")
+    if cycle.overage_payment_id or cycle.status == "paid":
+        raise HTTPException(status_code=409, detail="Voice usage is already paid")
+    if cycle.status not in {"invoiced", "failed"} or not cycle.overage_amount:
+        raise HTTPException(status_code=409, detail="No voice usage payment is due")
+
+    if cycle.overage_order_id and cycle.overage_order_amount_paise:
+        return CreateOrderResponse(
+            order_id=cycle.overage_order_id,
+            amount=cycle.overage_order_amount_paise,
+            currency="INR",
+            key_id=settings.razorpay_key_id,
+        )
+
+    gst = _gst_on(float(cycle.overage_amount))
+    amount_paise = int(round((float(cycle.overage_amount) + gst) * 100))
+    try:
+        order = _get_client().order.create({
+            "amount": amount_paise,
+            "currency": "INR",
+            "receipt": f"voice_{cycle.id.hex[:10]}",
+            "notes": {
+                "kind": "voice_usage",
+                "org_id": str(cycle.org_id),
+                "cycle_id": str(cycle.id),
+                "overage_minutes": str(cycle.overage_minutes),
+                "overage_rate": str(cycle.overage_rate),
+                "overage_amount": str(cycle.overage_amount),
+                "gst": str(gst),
+            },
+        })
+    except razorpay.errors.BadRequestError as exc:
+        logger.error("voice_usage_order_rejected", cycle_id=cycle_id, error=str(exc)[:160])
+        raise HTTPException(status_code=502, detail="Could not start the voice usage payment") from exc
+    cycle.overage_order_id = order["id"]
+    cycle.overage_order_amount_paise = amount_paise
+    await db.commit()
+    return CreateOrderResponse(
+        order_id=order["id"],
+        amount=amount_paise,
+        currency="INR",
+        key_id=settings.razorpay_key_id,
+    )
+
+
+async def _settle_voice_usage_payment(
+    db: AsyncSession, notes: dict, payment_id: str, *, order_id: str | None = None
+) -> str:
+    """Idempotently settle the exact cycle named by trusted Razorpay notes."""
+    from backend.models.schema import BillingCycle
+
+    try:
+        org_id = _uuid.UUID(str((notes or {}).get("org_id")))
+        cycle_id = _uuid.UUID(str((notes or {}).get("cycle_id")))
+    except (ValueError, TypeError, AttributeError):
+        return "invalid_notes"
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"razorpay:voice-usage:{payment_id}"},
+    )
+    cycle = (
+        await db.execute(
+            select(BillingCycle).where(
+                BillingCycle.id == cycle_id,
+                BillingCycle.org_id == org_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if cycle is None:
+        return "cycle_not_found"
+    if cycle.overage_payment_id:
+        return "already_processed" if cycle.overage_payment_id == payment_id else "already_paid"
+    if cycle.overage_order_id and cycle.overage_order_id != order_id:
+        logger.error(
+            "voice_usage_order_mismatch",
+            cycle_id=str(cycle.id),
+            expected=cycle.overage_order_id,
+            incoming=order_id,
+        )
+        return "order_mismatch"
+    if str(cycle.overage_amount or 0) != str((notes or {}).get("overage_amount")):
+        logger.error("voice_usage_amount_mismatch", cycle_id=str(cycle.id))
+        return "amount_mismatch"
+    cycle.overage_payment_id = payment_id
+    cycle.status = "paid"
+    await db.commit()
+    logger.info("voice_usage_paid", cycle_id=str(cycle.id), payment_id=payment_id)
+    return "usage_paid"
 
 
 async def _enable_whatsapp_addon(
@@ -971,6 +1180,8 @@ async def create_whatsapp_addon_order(
 
     if current_user.role != "org_admin" or not current_user.org_id:
         raise HTTPException(status_code=403, detail="Only a clinic owner can buy this")
+    if not settings.whatsapp_self_serve_live:
+        raise HTTPException(status_code=409, detail="WhatsApp onboarding is coming soon")
 
     org = await _load_my_org(current_user, db)
     if org.plan in WHATSAPP_PLANS:
@@ -1021,11 +1232,13 @@ async def create_whatsapp_addon_order(
                 detail="Could not confirm the current autopay mandate",
             ) from exc
         payment_method = str(subscription.get("payment_method") or "").lower()
-        if payment_method in {"emandate", "nach"}:
+        # Razorpay permits plan edits only for card-authorised Subscriptions.
+        # UPI Autopay and bank eMandates need a new mandate for a new amount.
+        if payment_method and payment_method != "card":
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This bank mandate cannot be changed. Choose a plan that "
+                    "This autopay mandate cannot be changed. Choose a plan that "
                     "includes WhatsApp and create a new autopay mandate."
                 ),
             )
@@ -1079,6 +1292,8 @@ async def change_plan(
     Selecting the current plan cancels a pending change. A daily job applies
     the change once its effective date arrives.
     """
+    if req.plan == "wa" and not settings.whatsapp_self_serve_live:
+        raise HTTPException(status_code=409, detail="WhatsApp onboarding is coming soon")
     if current_user.role != "org_admin":
         raise HTTPException(status_code=403, detail="Only a clinic owner can change the plan")
     plan = req.plan.strip().lower()
@@ -1440,12 +1655,23 @@ async def verify_payment(
     # successful checkouts produced ZERO cycles, no lock, no invoice.
     # A WhatsApp add-on order buys a FEATURE, not a billing cycle — running
     # activate_subscription on it would start a cycle nobody paid a plan for.
-    if (trusted_notes or {}).get("kind") == "whatsapp_addon":
+    payment_kind = (trusted_notes or {}).get("kind")
+    if payment_kind == "whatsapp_addon":
         try:
             await _enable_whatsapp_addon(db, trusted_notes, req.razorpay_payment_id)
         except Exception as e:  # noqa: BLE001 — money taken; never fail the
             # verified response. Support/webhook resolves it.
             logger.error("wa_addon_enable_failed", error=str(e)[:160])
+    elif payment_kind == "voice_usage":
+        try:
+            await _settle_voice_usage_payment(
+                db,
+                trusted_notes,
+                req.razorpay_payment_id,
+                order_id=req.razorpay_order_id,
+            )
+        except Exception as e:  # noqa: BLE001 - webhook is the redundant backstop
+            logger.error("voice_usage_settle_failed", error=str(e)[:160])
     elif org_id is not None:
         try:
             plan_note = (trusted_notes.get("plan") or "").strip().lower() or None
@@ -1547,11 +1773,11 @@ async def activate_subscription(
             org.pending_plan = None
             org.pending_plan_effective = None
     used_closing = 0.0
-    closing_plan = PLANS.get(last.plan) if last is not None else None
-    closing_allowance_adjustment = (
-        int(last.included_minutes) - int(closing_plan.included_minutes)
-        if last is not None and closing_plan is not None
-        else _minute_allowance_adjustment(org)
+    closing_allowance_adjustment = allowance_adjustment(
+        last.plan if last is not None else chosen_plan,
+        cycle_included=(last.included_minutes if last is not None else None),
+        org_adjustment=int(getattr(org, "minutes_adjustment", 0) or 0),
+        founding_credit=int(getattr(org, "founding_credit_minutes", 0) or 0),
     )
     new_cycle_allowance = plan_def.included_minutes + int(
         getattr(org, "minutes_adjustment", 0) or 0
@@ -1559,18 +1785,9 @@ async def activate_subscription(
     if last is not None:
         # Close out the ending cycle's meter (#341): its extra usage was billed
         # inside this payment (subscription_order_breakdown at order time).
-        used_closing = await _cycle_minutes_used(db, org.id, last.cycle_start, last.cycle_end)
-        last_plan = PLANS.get(last.plan)
-        if last_plan is not None:
-            over_min = max(0, int(round(used_closing)) - last.included_minutes)
-            last.minutes_used = int(round(used_closing))
-            last.overage_minutes = over_min
-            last.overage_amount = int(round(over_min * last_plan.overage_per_min))
-            # The recurring plan charge contains fixed plan/add-on pricing.
-            # Preserve extra usage as outstanding instead of falsely marking
-            # it paid by a debit that did not include it.
-            if not billed_usage and over_min:
-                last.status = "invoiced"
+        used_closing = await finalize_cycle_usage(
+            db, last, usage_paid_with_plan=billed_usage
+        )
         # The Founding 100 credit is for the first paid cycle only. Membership
         # remains true so its slot can never be granted again.
         org.founding_credit_minutes = 0
@@ -1730,6 +1947,10 @@ async def razorpay_webhook(
         # Checkout may succeed after the browser closes. The signed webhook is
         # therefore an authoritative add-on activation path, not a plan cycle.
         status = await _enable_whatsapp_addon(db, notes, payment_id)
+    elif notes.get("kind") == "voice_usage":
+        status = await _settle_voice_usage_payment(
+            db, notes, payment_id, order_id=order_ent.get("id")
+        )
     else:
         status = await activate_subscription(
             db, notes.get("org_id"), notes.get("plan"), payment_id

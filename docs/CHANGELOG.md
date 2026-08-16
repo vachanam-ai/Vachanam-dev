@@ -13,6 +13,28 @@ Format per session:
 
 ---
 
+## 2026-08-16 - Clinic-launch hardening and founding trial
+
+Prepared the combined production release for deterministic appointment
+mutations, reliable reminders/follow-ups, tenant-isolated voice and WhatsApp
+identity, patient import and normalized Latin-script identity, clinic erasure,
+custom voice ownership, billing visibility, and the redesigned onboarding and
+settings surfaces. WhatsApp self-serve remains visibly gated until Meta Tech
+Provider approval.
+
+The first 100 eligible clinics receive an unlimited 14-calendar-day founding
+trial. No card is required, there is no automatic conversion, service pauses at
+the exact expiry instant, and paid billing begins only after explicit owner
+activation. The paid model remains ₹1,999/month plus ₹6 per voice minute;
+WhatsApp is ₹1,499/month as an add-on or ₹1,999/month alone.
+
+Added migrations `gggg53_voice_usage_payment`,
+`hhhh54_patient_names_latin`, `iiii55_custom_voice_offer`, and
+`jjjj56_founding_unlimited_trial`. Updated deployment documentation to reflect
+Supabase Mumbai, Soniox Japan STT/TTS, manual Render migrations, the current
+cost model, and the production release gate. Final CI/deployment proof is
+reported in `docs/STATUS.md` and the release handoff.
+
 ## 2026-08-10 - Live-call doctor, listening, language and reminder grounding
 
 Fixed the production call in which an explicit request for Dr. Lakshmi retained

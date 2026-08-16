@@ -2,7 +2,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import PlanAndPayment from "../PlanAndPayment.jsx";
-import { cancelPlanChange, changePlan, fetchPlan } from "../../api/client.js";
+import {
+  cancelPlanChange,
+  changePlan,
+  createAutopaySubscription,
+  fetchPlan,
+  verifyAutopaySubscription,
+} from "../../api/client.js";
 
 vi.mock("../../hooks/useAuth.jsx", () => ({ useAuth: () => ({ user: { email: "owner@example.com" } }) }));
 vi.mock("../../api/client.js", () => ({
@@ -21,7 +27,10 @@ function renderPayment() {
 }
 
 describe("PlanAndPayment legacy-plan guard", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete window.Razorpay;
+  });
 
   it("never quotes retired Lite pricing for a new autopay mandate", async () => {
     fetchPlan.mockResolvedValue({
@@ -34,15 +43,16 @@ describe("PlanAndPayment legacy-plan guard", () => {
     expect(screen.getByRole("button", { name: /Enable autopay.*1,999/i })).toBeInTheDocument();
   });
 
-  it("shows both public plans and the current price", async () => {
+  it("offers Voice only and marks WhatsApp as coming soon", async () => {
     fetchPlan.mockResolvedValue({
       plan: "solo", status: "active", next_base_rupees: 1999,
-      autopay_enabled: false, whatsapp_included: false, whatsapp_addon: true,
+      autopay_enabled: false, whatsapp_included: false, whatsapp_addon: false,
     });
     renderPayment();
     const plan = await screen.findByRole("combobox", { name: /Plan/i });
     expect(plan).toHaveValue("solo");
-    expect(screen.getByRole("option", { name: /WhatsApp.*1,999/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /WhatsApp.*1,999/i })).not.toBeInTheDocument();
+    expect(await screen.findByText("Coming soon")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Change plan/i })).toBeDisabled();
     expect(changePlan).not.toHaveBeenCalled();
   });
@@ -59,5 +69,37 @@ describe("PlanAndPayment legacy-plan guard", () => {
     renderPayment();
     fireEvent.click(await screen.findByRole("button", { name: /Cancel scheduled change/i }));
     await waitFor(() => expect(cancelPlanChange).toHaveBeenCalledTimes(1));
+  });
+
+  it("enables a fixed monthly mandate through subscription checkout", async () => {
+    fetchPlan.mockResolvedValue({
+      plan: "solo", status: "paused", next_base_rupees: 1999,
+      autopay_enabled: false, whatsapp_included: false, whatsapp_addon: false,
+    });
+    createAutopaySubscription.mockResolvedValue({
+      subscription_id: "sub_fixed_monthly", key_id: "rzp_test", amount: 199900,
+    });
+    verifyAutopaySubscription.mockResolvedValue({ verified: true });
+    let checkoutOptions;
+    window.Razorpay = function Razorpay(options) {
+      checkoutOptions = options;
+      this.open = () => options.handler({
+        razorpay_subscription_id: "sub_fixed_monthly",
+        razorpay_payment_id: "pay_authorise",
+        razorpay_signature: "signed",
+      });
+    };
+
+    renderPayment();
+    fireEvent.click(await screen.findByRole("button", { name: /Enable autopay.*1,999/i }));
+
+    await waitFor(() => expect(createAutopaySubscription).toHaveBeenCalledWith("solo"));
+    expect(checkoutOptions.subscription_id).toBe("sub_fixed_monthly");
+    expect(checkoutOptions.order_id).toBeUndefined();
+    await waitFor(() => expect(verifyAutopaySubscription).toHaveBeenCalledWith({
+      razorpay_subscription_id: "sub_fixed_monthly",
+      razorpay_payment_id: "pay_authorise",
+      razorpay_signature: "signed",
+    }));
   });
 });

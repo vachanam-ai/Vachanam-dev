@@ -1,5 +1,19 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-08-16 — CLINIC-LAUNCH RELEASE CANDIDATE.**
+> Consolidated the production hardening work for booking, rescheduling,
+> cancellation, reminder/follow-up controls, patient CSV/XLSX import, Latin
+> patient names, tenant-safe outbound identity, one-clinic custom voices,
+> account erasure, WhatsApp gating, and owner billing visibility. The first 100
+> eligible clinics now receive an unlimited 14-calendar-day founding trial with
+> no card and no automatic conversion; exact expiry pauses service and paid
+> billing starts only on explicit activation. Pricing remains ₹1,999/month plus
+> ₹6/voice minute, with the existing WhatsApp prices. Migrations in this release:
+> `gggg53_voice_usage_payment`, `hhhh54_patient_names_latin`,
+> `iiii55_custom_voice_offer`, and `jjjj56_founding_unlimited_trial`. Deployment
+> proof and the final production revision are recorded in the 2026-08-16
+> changelog entry after all release gates pass.
+
 > **2026-08-10 - SONIOX CLONED-VOICE STUDIO BUILT, NOT DEPLOYED.**
 > Added an owner-only Voices page with microphone recording, audio upload,
 > consent capture, asynchronous status polling, generated preview, activation,

@@ -177,8 +177,12 @@ async def test_full_signup_email_only(client, db):
     # This test runs against a shared test DB, so it accepts either branch
     # but demands internal consistency; test_founding_trial.py pins each
     # branch deterministically.
-    assert org.status == "paused"
-    assert org.trial_ends_at is None
+    if org.founding_member:
+        assert org.status == "trial"
+        assert org.trial_ends_at is not None
+    else:
+        assert org.status == "paused"
+        assert org.trial_ends_at is None
     user = (await db.execute(select(User).where(User.email == email))).scalar_one()
     assert user.role == "org_admin"
     assert user.phone is None

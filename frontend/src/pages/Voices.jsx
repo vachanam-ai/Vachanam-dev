@@ -6,6 +6,7 @@ import {
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import PageHeader from "../components/PageHeader.jsx";
+import { useActionDialog } from "../components/ActionDialog.jsx";
 import {
   activateVoiceClone, createVoiceClone, deleteVoiceClone, fetchBranchSettings,
   fetchVoiceClones, getBranchVoices, importVoiceClone, previewVoiceClone, setBranchVoice,
@@ -43,6 +44,7 @@ function VoiceBars({ active = false }) {
 
 function CloneCard({ voice, branchId, playing, onPlay }) {
   const qc = useQueryClient();
+  const ask = useActionDialog();
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["voice-clones", branchId] });
     qc.invalidateQueries({ queryKey: ["branch-voices", branchId] });
@@ -84,7 +86,15 @@ function CloneCard({ voice, branchId, playing, onPlay }) {
             </button>
           )}
           <button type="button" className="clone-delete" aria-label={`Delete ${voice.name}`} disabled={remove.isPending || voice.status === "deleting"}
-            onClick={() => window.confirm(`Delete “${voice.name}”? The original recording and clone will be permanently removed from Soniox.`) && remove.mutate()}>
+            onClick={async () => {
+              const confirmed = await ask({
+                title: `Delete “${voice.name}”?`,
+                description: "The custom voice will be permanently removed. The clinic keeps its launch entitlement and can create one replacement.",
+                confirmLabel: "Delete voice",
+                tone: "danger",
+              });
+              if (confirmed) remove.mutate();
+            }}>
             <Trash size={17} />
           </button>
         </div>
@@ -262,6 +272,9 @@ export default function Voices() {
   const catalogVoices = (catalog.data?.voices ?? []).filter((voice) => voice.kind !== "clone");
   const cloneCount = clones.data?.clinic_count ?? clones.data?.voices?.length ?? 0;
   const hasCustomVoice = cloneCount >= MAX_CUSTOM_VOICES;
+  const customVoiceAvailable = clones.data?.custom_voice_available !== false;
+  const customVoiceMember = Boolean(clones.data?.custom_voice_member);
+  const customVoiceSlotsLeft = clones.data?.custom_voice_slots_left;
   const languageOptions = branch.data?.allowed_languages?.length
     ? branch.data.allowed_languages.map((language) => ({ code: language.code, label: `${language.native_name} (${language.name})` }))
     : LANGUAGES;
@@ -269,7 +282,9 @@ export default function Voices() {
   return (
     <div className="voices-page">
       <PageHeader eyebrow="Voice studio" title="A voice patients remember"
-        sub="Choose a Soniox studio voice or create a consented clinic voice from one clean recording. The selected voice applies from the next call." />
+        sub={customVoiceAvailable
+          ? "Choose a studio voice or create one consented clinic voice from a clean recording. The selection applies from the next call."
+          : "Choose the studio voice and language patients hear. Changes apply from the next call."} />
 
       <section className="voice-configuration" aria-label="Call language and voice settings">
         <div>
@@ -287,6 +302,11 @@ export default function Voices() {
         </label>
       </section>
 
+      {customVoiceAvailable && <>
+      <div className="voice-offer-strip">
+        <div><span>Founding voice offer</span><strong>{customVoiceMember ? "Your clinic has permanent access" : "One custom voice, included"}</strong></div>
+        {!customVoiceMember && Number.isInteger(customVoiceSlotsLeft) && <p>{customVoiceSlotsLeft} of 10 clinic spots remain</p>}
+      </div>
       <section className="voice-studio-grid">
         <article className="voice-recorder-panel">
           <div className="voice-section-heading"><span>01</span><div><h2>Capture the voice</h2><p>One speaker, a quiet room, and a steady natural tone.</p></div></div>
@@ -340,6 +360,7 @@ export default function Voices() {
           <div className="clone-empty"><Waveform size={29} weight="duotone" /><h3>No custom voices yet</h3><p>Record a clean sample above. Your first clone will appear here while Soniox prepares it.</p></div>
         )}
       </section>
+      </>}
 
       <section className="catalog-voice-row">
         <div><span>Soniox studio collection</span><h2>Prefer a ready-made voice?</h2><p>All studio and cloned voices preserve their identity when patients switch languages.</p></div>

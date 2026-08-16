@@ -7,11 +7,12 @@
 Vachanam is a B2B service for clinics. Patients are never charged by Vachanam —
 this policy is for clinic owners who pay for a Vachanam plan.
 
-## 1. Founding-clinic credit
+## 1. Founding-clinic trial
 
-The first 100 eligible clinics receive 500 voice minutes free in their first
-paid billing cycle. The monthly platform fee is still payable. The credit is
-not refundable, has no cash value, does not renew, and expires with that cycle.
+The first 100 eligible clinics receive 14 calendar days of Vachanam Voice free,
+with no platform fee, voice-minute cap, card requirement, or automatic paid
+conversion. The trial has no cash value and is not refundable. Service pauses
+at the exact expiry time unless the clinic explicitly activates a paid plan.
 
 ## 2. Cancelling your subscription
 
@@ -34,9 +35,9 @@ not refundable, has no cash value, does not renew, and expires with that cycle.
   receptionist down for more than 24 continuous hours in a billed month, we
   credit a pro-rata amount to your next invoice (or refund it if you are
   cancelling).
-- **Change of mind mid-month:** monthly subscription fees for the current,
-  already-started billing month are non-refundable. Included minutes do not
-  carry over or convert to cash.
+- **Change of mind mid-cycle:** subscription fees for the current,
+  already-started billing cycle are non-refundable. Trial access does not
+  convert to cash or carry forward.
 - **Voice-usage charges:** per-minute usage reflects calls actually answered for
   your clinic and is non-refundable, except when caused by a verified fault on
   our side (e.g. calls double-billed), which is refunded in full.

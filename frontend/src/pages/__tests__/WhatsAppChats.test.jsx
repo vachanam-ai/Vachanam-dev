@@ -15,7 +15,7 @@ vi.mock("../../hooks/useAuth.jsx", () => ({
   useAuth: () => ({ branchId: "b1", role: "org_admin" }),
 }));
 
-import WhatsAppChats from "../WhatsAppChats.jsx";
+import { WhatsAppChatsLive as WhatsAppChats } from "../WhatsAppChats.jsx";
 
 beforeEach(() => {
   fetchWaConnection.mockResolvedValue({ connected: false, wa_status: "disconnected" });

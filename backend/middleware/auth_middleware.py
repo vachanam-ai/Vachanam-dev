@@ -107,7 +107,12 @@ async def get_current_user(
     # Revocation check — Redis SET key per revoked jti, TTL = remaining exp.
     # Shared client: do NOT aclose/async-with it (#305).
     try:
-        revoked = await _revocation_redis().exists(f"revoked_jwts:{jti}")
+        revocation_keys = [f"revoked_jwts:{jti}"]
+        if payload.get("org_id"):
+            revocation_keys.append(f"revoked_orgs:{payload['org_id']}")
+        # One Redis round-trip covers both ordinary logout and a whole-clinic
+        # erasure. This also invalidates older tokens that predate token_version.
+        revoked = await _revocation_redis().exists(*revocation_keys)
     except HTTPException:
         raise
     except Exception:
@@ -236,3 +241,11 @@ async def revoke_jwt(jti: str, exp_timestamp: int) -> None:
     ttl = max(exp_timestamp - now_ts, 1)
     await _revocation_redis().set(f"revoked_jwts:{jti}", "1", ex=ttl)
     logger.info("jwt_revoked", jti=jti, ttl=ttl)
+
+
+async def revoke_org_sessions(org_id: str, exp_timestamp: int) -> None:
+    """Invalidate every browser token issued for one deleted clinic."""
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    ttl = max(exp_timestamp - now_ts, 1)
+    await _revocation_redis().set(f"revoked_orgs:{org_id}", "1", ex=ttl)
+    logger.info("org_sessions_revoked", org_id=org_id, ttl=ttl)

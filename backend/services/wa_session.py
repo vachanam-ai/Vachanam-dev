@@ -117,6 +117,27 @@ async def append(
     )
 
 
+async def save_draft(
+    db: AsyncSession, branch_id: uuid.UUID, phone: str, draft: dict
+) -> None:
+    """Persist hidden, branch-scoped tool state between patient messages."""
+    row = await _get_row(db, branch_id, phone)
+    if row is None:
+        row = WhatsAppSession(
+            branch_id=branch_id, patient_phone=phone, session_data=dict(_EMPTY_STATE),
+        )
+        db.add(row)
+        await db.flush()
+    data = dict(row.session_data or {})
+    row.session_data = {
+        **data,
+        "turns": list(data.get("turns") or []),
+        "draft": dict(draft or {}),
+    }
+    row.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+
 def _webhook_text(message: dict) -> str:
     mtype = str(message.get("type") or "")
     payload = message.get(mtype) or {}

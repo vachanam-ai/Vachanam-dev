@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import PageHeader from "../components/PageHeader.jsx";
 import { fetchWaChat, fetchWaChats, fetchWaConnection } from "../api/client.js";
 import { useAuth } from "../hooks/useAuth.jsx";
+import WhatsAppComingSoon from "../components/WhatsAppComingSoon.jsx";
+import { WHATSAPP_SELF_SERVE_LIVE } from "../lib/plans.js";
 
 // Thread list on the left, transcript on the right — the shape everyone
 // already knows from every messaging app, so nothing here needs explaining.
@@ -38,7 +40,7 @@ function Bubble({ turn }) {
   );
 }
 
-export default function WhatsAppChats() {
+export function WhatsAppChatsLive() {
   const { branchId } = useAuth();
   const [selected, setSelected] = useState(null);
 
@@ -168,4 +170,8 @@ export default function WhatsAppChats() {
       )}
     </div>
   );
+}
+
+export default function WhatsAppChats() {
+  return WHATSAPP_SELF_SERVE_LIVE ? <WhatsAppChatsLive /> : <WhatsAppComingSoon />;
 }

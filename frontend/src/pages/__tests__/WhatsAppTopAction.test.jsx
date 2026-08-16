@@ -33,7 +33,7 @@ vi.mock("../../hooks/useEmbeddedSignup.js", () => ({
   default: () => ({ launch: vi.fn(), launching: false }),
 }));
 
-import WhatsApp from "../WhatsApp.jsx";
+import { WhatsAppLive as WhatsApp } from "../WhatsApp.jsx";
 
 afterEach(() => {
   cleanup();

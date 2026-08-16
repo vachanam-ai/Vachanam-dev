@@ -95,6 +95,8 @@ export const verifyPayment = (payload) =>
   api.post("/api/verify-payment", payload).then((r) => r.data);
 export const verifyAutopaySubscription = (payload) =>
   api.post("/api/verify-subscription", payload).then((r) => r.data);
+export const createVoiceUsageOrder = (cycleId) =>
+  api.post(`/api/billing/cycles/${cycleId}/usage-order`).then((r) => r.data);
 export const saveGstin = (gstin) =>
   api.post("/api/billing/gstin", { gstin }).then((r) => r.data);
 

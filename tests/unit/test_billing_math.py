@@ -1,7 +1,7 @@
 """billing_math — the money numbers on the super-admin console must be right.
 
 Public pricing: Voice Rs1,999 + Rs6/min; WhatsApp-only Rs1,999; WhatsApp
-add-on Rs1,499. Trial = 30 min and is hard-blocked on exhaustion.
+add-on Rs1,499. Founding trial = unlimited for 14 days with a hard expiry.
 """
 from backend.services.billing_math import (
     PLAN_LANGUAGES,
@@ -80,11 +80,14 @@ def test_overage_breakdown_respects_minute_adjustment():
     assert bd["amount_paise"] == 1000 * 6 * 100  # GST waived
 
 
-def test_trial_org_gets_flat_30_minutes_regardless_of_plan():
-    assert TRIAL_MINUTES == 30
-    assert included_minutes_for("solo", "trial") == 30
-    assert included_minutes_for("clinic", "trial") == 30
-    assert included_minutes_for("multi", "trial") == 30
+def test_trial_org_is_unmetered_regardless_of_plan():
+    from backend.services.billing_math import TRIAL_UNLIMITED
+
+    assert TRIAL_MINUTES == 0 and TRIAL_UNLIMITED is True
+    assert included_minutes_for("solo", "trial") == 0
+    assert included_minutes_for("clinic", "trial") == 0
+    assert included_minutes_for("multi", "trial") == 0
+    assert overage_breakdown("solo", 100_000, "trial")["amount_paise"] == 0
 
 
 def test_non_trial_org_has_no_bundled_bucket():
@@ -97,7 +100,7 @@ def test_minutes_adjustment_applies_and_floors_at_zero():
     # Super-admin per-clinic override: signed delta on top of the bucket.
     assert included_minutes_for("solo", "active", 50) == 50
     assert included_minutes_for("clinic", "active", -300) == 0
-    assert included_minutes_for("solo", "trial", 100) == 130
+    assert included_minutes_for("solo", "trial", 100) == 0
     # Never goes negative.
     assert included_minutes_for("solo", "active", -9999) == 0
 
@@ -271,22 +274,17 @@ def test_call_blocked_matrix():
     assert call_blocked("active", "clinic", True, 1500) is None
 
 
-def test_trial_always_hard_blocks_on_exhaust():
-    """Trial minutes are Vachanam's own cash, so the 30-minute bucket
-    is enforced even when the super-admin hard_block flag is OFF (the flag
-    governs PAYING orgs' overage behavior, not free trials)."""
-    assert call_blocked("trial", "clinic", False, 29) is None
-    assert call_blocked("trial", "clinic", False, 30) == "minutes_exhausted"
-    assert call_blocked("trial", "solo", False, 30) == "minutes_exhausted"
-    # goodwill adjustment still extends the trial bucket
-    assert call_blocked("trial", "solo", False, 30, adjustment=100) is None
+def test_trial_never_blocks_on_minutes_before_expiry():
+    for used in (0, 30, 500, 100_000):
+        assert call_blocked("trial", "clinic", False, used) is None
+        assert call_blocked("trial", "solo", True, used) is None
 
 
 def test_trial_expiry_hard_stops_even_before_pause_job():
     """Vinay 2026-07-17 ("hard stop after free trial limit ended"): an expired
     trial blocks IMMEDIATELY via call_blocked — no free service in the window
-    before the daily trial_pause job flips status to paused. Both trial
-    dimensions hard-stop: days (here) and minutes (test above)."""
+    before the daily trial_pause job flips status to paused. Usage remains
+    unlimited until this exact time boundary."""
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
@@ -308,13 +306,9 @@ def test_blocked_call_speaks_emergency_number_source_guard():
     assert "emergency_contact" in src.split("_blocked_text = lines.service_blocked")[1][:1200]
 
 
-def test_b3_hard_block_honors_trial_grant_and_adjustment():
-    # B3: a solo-plan TRIAL org has the flat trial grant, not the plan bucket.
-    assert minutes_exhausted("solo", 20, status="trial") is False
-    assert minutes_exhausted("solo", 29, status="trial") is False
-    assert minutes_exhausted("solo", 30, status="trial") is True
-    assert call_blocked("trial", "solo", True, 20) is None
-    assert call_blocked("trial", "solo", True, 30) == "minutes_exhausted"
+def test_b3_hard_block_honors_unlimited_trial_and_paid_adjustment():
+    assert minutes_exhausted("solo", 100_000, status="trial") is False
+    assert call_blocked("trial", "solo", True, 100_000) is None
 
     # A positive super-admin adjustment extends the active bucket; a negative
     # one shrinks it — the gate must track both, exactly like the donut.
@@ -369,13 +363,38 @@ def test_mandate_ceiling_stays_low_enough_to_sign():
     assert bm.mandate_max_amount("solo", False) == 6_000
 
 
-def test_founding_offer_is_one_hundred_clinics_and_five_hundred_minutes():
+def test_founding_offer_is_one_hundred_clinics_and_no_paid_cycle_credit():
     from backend.services.billing_math import (
         FOUNDING_CLINIC_SLOTS, FOUNDING_CREDIT_MINUTES,
     )
 
     assert FOUNDING_CLINIC_SLOTS == 100
-    assert FOUNDING_CREDIT_MINUTES == 500
+    assert FOUNDING_CREDIT_MINUTES == 0
+
+
+def test_founding_credit_is_consumed_before_six_rupee_usage_billing():
+    from backend.services.billing_math import overage_breakdown
+
+    at_credit = overage_breakdown("solo", 500, adjustment=500)
+    first_billable_minute = overage_breakdown("solo", 501, adjustment=500)
+    next_cycle = overage_breakdown("solo", 1, adjustment=0)
+
+    assert at_credit["overage_minutes"] == 0
+    assert at_credit["overage_amount"] == 0
+    assert first_billable_minute["overage_minutes"] == 1
+    assert first_billable_minute["overage_amount"] == 6
+    assert next_cycle["overage_amount"] == 6
+
+
+def test_paid_cycle_allowance_outlives_the_staging_credit_field():
+    from backend.services.billing_math import allowance_adjustment
+
+    assert allowance_adjustment(
+        "solo", cycle_included=500, founding_credit=0
+    ) == 500
+    assert allowance_adjustment(
+        "solo", cycle_included=None, founding_credit=500
+    ) == 500
 
 
 def test_mandate_ceiling_is_a_round_number():

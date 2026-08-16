@@ -1,75 +1,68 @@
 # Vachanam — Main Agenda
 
-One-page project highlight. Plain English. Facts sourced from `CLAUDE.md`, `docs/STATUS.md`, `docs/ROADMAP.md`, `docs/PROJECT_STRUCTURE.md`, and the graphify AST analysis (2026-06-03).
+Current product and operating summary. Last verified: **2026-08-16**. Detailed
+implementation truth lives in `CLAUDE.md`, `docs/STATUS.md`,
+`docs/ARCHITECTURE.md`, and the deployment runbooks.
 
----
+## What Vachanam is
 
-## What Vachanam Is
+Vachanam is a multilingual clinic receptionist for phone and WhatsApp. It
+answers patients in Telugu, Hindi, or English; grounds doctor and clinic answers
+in the clinic database; checks day-specific availability; books, reschedules,
+and cancels appointments; and keeps the clinic dashboard and Google Calendar in
+sync. Database success is the authority: the assistant must never claim a
+mutation succeeded before the committed record is verified.
 
-Vachanam is an AI-powered telephone appointment booking service for Indian clinics. A patient calls the clinic's existing phone number; the call is forwarded to a Vachanam AI agent that answers in Telugu, Hindi, or English; understands the health complaint; routes to the correct doctor; checks availability; assigns an atomic token number; confirms by voice; creates a Google Calendar event; and sends WhatsApp confirmation to both patient and doctor — all within four minutes and without any human receptionist involvement.
+## Who it serves
 
----
+The initial customer is an Indian clinic with one or more doctors whose
+receptionist cannot answer every call. Each DID, branch, patient record,
+appointment, WhatsApp account, custom voice, and outbound caller ID is strictly
+tenant-owned. Ambiguous or mismatched tenant identity fails closed.
 
-## Who It Serves
+## Runtime
 
-Primary: clinic owners and their receptionists across India — specifically small-to-mid-sized clinics with one to six doctors receiving 20–80 inbound patient calls per day. Secondary: the patients themselves, who get instant confirmation and a WhatsApp reminder instead of a busy signal. Vinay Rongala (founder) sells directly to clinic owners; the receptionist and doctors use the system through WhatsApp commands and a mobile PWA without needing any training.
+- Vobiz routes the clinic DID through LiveKit to always-warm voice workers on
+  Fly.io Mumbai.
+- Soniox Japan provides production STT (`stt-rt-v5`) and TTS (`tts-rt-v1`).
+  Sarvam is an emergency STT fallback only. Gemini 2.5 Flash is the primary LLM
+  with GPT-4o mini fallback.
+- Deterministic tools perform availability checks and appointment mutations.
+  PostgreSQL constraints/transactions and Redis coordination prevent duplicate
+  work; Google Calendar is updated as part of the supported schedule workflow.
+- FastAPI runs on Render, the React PWA is served by Cloudflare, Supabase
+  Postgres is in Mumbai, and Upstash provides Redis.
+- Reminder and follow-up jobs use each branch's configured channel and outbound
+  identity. Missing or conflicting trunk/WhatsApp ownership blocks delivery
+  instead of borrowing another clinic's identity.
 
----
+## Commercial model
 
-## Why It Exists
+- **Voice:** ₹1,999/month plus ₹6 per billable voice minute.
+- **WhatsApp add-on:** ₹1,499/month. **WhatsApp only:** ₹1,999/month.
+- **Founding offer:** the first 100 eligible clinics receive 14 calendar days
+  of unlimited voice usage, without a card or automatic conversion. Service
+  pauses at exact expiry and paid billing begins only after explicit activation.
+- Current conservative cost model is ₹2.90 per voice minute plus ₹1,499 monthly
+  fixed branch allocation. See `docs/PRICING_MODEL_2026-08-16.md` for the full
+  margin and trial-exposure model.
 
-A typical Indian clinic misses 20–30% of inbound calls when the receptionist is busy. Each missed call is a lost consultation worth ₹300–500. At 10 missed calls per day that is ₹3,000–5,000 of lost revenue daily — recurring, invisible, and fixable. Existing scheduling software requires patients to use an app or website; Indian patients call. Vachanam meets patients where they are (a phone call), speaks their language (Telugu), and requires zero behavior change from either the patient or the doctor.
+## Current priority
 
----
+The product is in production hardening and first-clinic onboarding. The release
+gate is: one Alembic head, Ruff clean, the full backend suite green on PostgreSQL
+and Redis, frontend tests/lint/build green, secret scan green, production schema
+migrated, Render/Cloudflare healthy, and a freshly registered Fly voice worker.
+No prompt-only behavior is treated as a correctness guarantee for booking,
+rescheduling, cancellation, tenant isolation, billing, or trial enforcement.
 
-## How It Works at Runtime
+## Operating constraints
 
-- A patient dials the clinic's forwarded number. Vobiz SIP trunk routes the call to a LiveKit voice agent running on Fly.io Mumbai.
-- The AI greets the patient using a pre-cached Telugu WAV (sub-200ms). Sarvam Saaras v3 transcribes speech; Gemini 2.5 Flash (fallback: GPT-4o mini) drives conversation; Sarvam Bulbul v3 synthesizes replies.
-- The agent detects the health complaint, routes to a doctor via the `route_to_doctor` tool, checks availability via `check_availability`, then atomically assigns a token number using `Redis INCR` (no double-booking ever — Rule 2).
-- On patient verbal confirmation, the agent calls the backend's `/queue` API: a Google Calendar event is created first (failure = booking failure), then WhatsApp messages are dispatched to patient and doctor (failure = retry, booking still succeeds — Rule 4).
-- The doctor manages their day entirely via WhatsApp commands (`CANCEL TODAY`, `BLOCK 2PM`, etc.). The receptionist marks attended/no-show on a mobile PWA. The clinic owner views analytics on a dashboard. APScheduler jobs send 30-minute pre-appointment reminders and an EOD summary.
-
----
-
-## Tech Stack at a Glance
-
-| Layer | Tool | Why |
-|---|---|---|
-| Speech-to-text | Sarvam Saaras v3 | Only viable Telugu STT; 99.99% uptime |
-| Text-to-speech | Sarvam Bulbul v3 | Only natural Telugu TTS |
-| Primary LLM | Gemini 2.5 Flash | Best Telugu reasoning; generous free tier |
-| Fallback LLM | GPT-4o mini | Auto-activates if Gemini fails |
-| Voice pipeline | LiveKit Agents 1.5.9 | Self-hosted; SIP + WebSocket; open source |
-| Telephony | Vobiz | Indian DID; ₹0.65/min streaming |
-| Token locking | Upstash Redis 7 | Atomic INCR; no double-booking |
-| Calendar | Google Calendar API v3 | Doctors already use it; free |
-| Messaging | Meta Cloud API (WhatsApp) | No BSP fee; direct; ₹0.115/message |
-| Database | Neon Postgres | Serverless; pooler URL; $5/month |
-| Backend | FastAPI + SQLAlchemy 2.x async | Async Python; Pydantic types |
-| Voice agent host | Fly.io bom (Mumbai) | Only India-region PaaS; always-on |
-| API host | Render (Singapore) | Reliable HTTP; $7/month |
-| Frontend host | Cloudflare Pages | Free; global CDN |
-| Payments | Razorpay | India standard; UPI + cards |
-
----
-
-## Current State
-
-Phases 1–4 complete (Foundation, Voice Agent, Razorpay Checkout, Backend Core). The backend boots (`uvicorn`), `/health` returns 200, JWT auth and queue API are live with 77/77 tests passing. Phase 4.5 (Security & Compliance) is the active phase: `fastapi-limiter` middleware is the outstanding task (13 RED tests authored as the spec). WhatsApp, Calendar jobs, receptionist PWA, dashboards, subscriptions, and deployment remain as future phases.
-
----
-
-## What Graphify Revealed
-
-Graphify version 0.8.30 was run in AST-only mode (code files; no LLM semantic pass) on 2026-06-03. Results: 46 code files, 402 nodes, 1006 edges.
-
-- **`agent/agent.py` (now `agent/bot.py` after the Pipecat rewrite — same coupling) directly imports `backend/config.py`, `backend/database.py`, and `backend/models/schema.py`.** The voice agent (Fly.io Mumbai) and the backend API (Render Singapore) are two separate deployment containers but share Python modules via monorepo `PYTHONPATH`. A schema change in `backend/models/schema.py` requires both containers to redeploy simultaneously — this is an undocumented operational constraint not visible from reading either Dockerfile alone.
-
-- **`Doctor`, `Patient`, `Token` schema models appear on both the agent side (8 edges each) and the backend side (8 edges each).** The SQLAlchemy ORM models are the only inter-service contract. There is no separate interface layer (no protobuf, no shared Pydantic schemas, no OpenAPI client). This is the largest single architectural coupling in the codebase.
-
-- **`SilenceState` (degree 41) is the highest-connected node in the codebase — outranking `agent.py` (degree 40).** The silence state machine (`agent/services/silence_handler.py`) has more dependents than the agent entrypoint itself, making it the highest-impact change surface in the voice path.
-
-- **`booking_tools.py` has 23 connections but no isolated unit test file imports it directly.** The 4 booking tool functions are only exercised through `tests/integration/test_booking_flow.py`. If a tool function's behaviour changes, the only signal is a full integration test failure — no fast-feedback unit test exists.
-
-- **`test_rate_limit.py` ranks 8th in degree (25) despite all 13 tests being intentionally RED.** The tests already reference `config.py` and `jose` — the implementation wire-points are pre-mapped. This confirms Phase 4.5 Task 5 can land without structural refactoring; it is purely an additive implementation task.
+- Render's free-plan blueprint does **not** run migrations. Apply
+  `alembic upgrade head` manually for every migration-bearing release.
+- Never commit `.env`, provider credentials, service-account JSON, recordings,
+  or patient data.
+- WhatsApp self-serve onboarding remains marked coming soon until Meta Tech
+  Provider approval; already connected test numbers may continue to operate.
+- Custom voice is limited to one clinic-owned voice and is available only while
+  the provider capacity reserved for the founding offer remains available.

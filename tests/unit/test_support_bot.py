@@ -29,3 +29,28 @@ async def test_bot_llm_failure_is_safe_refusal(monkeypatch):
     # RULE 8: never raise; refusal → answered False (becomes an open ticket)
     assert out["answered"] is False
     assert "hello@vachanam.in" in out["answer"] or "team" in out["answer"].lower()
+
+
+@pytest.mark.parametrize(
+    ("question", "grounding_fact"),
+    [
+        ("How can I add my own voice?", "first 10 clinics"),
+        ("Will voice usage auto debit?", "paid manually"),
+        ("Is WhatsApp available now?", "planned but not live yet"),
+    ],
+)
+async def test_bot_receives_every_current_product_update(
+    monkeypatch, question, grounding_fact
+):
+    from backend.services import support_bot
+
+    async def grounded(prompt, **_):
+        assert grounding_fact in prompt
+        return '{"answer": "This is covered by the current product policy.", "answered": true}'
+
+    monkeypatch.setattr(support_bot, "_call_gemini", grounded)
+    result = await support_bot.answer(question, [], "clinic")
+    assert result == {
+        "answer": "This is covered by the current product policy.",
+        "answered": True,
+    }

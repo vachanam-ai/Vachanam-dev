@@ -10,8 +10,7 @@ import {
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { fetchBranchSettings, fetchDoctors, fetchPlan, fetchStaff } from "../api/client.js";
 import ThemeToggle from "./ThemeToggle.jsx";
-
-const WHATSAPP_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
+import { WHATSAPP_SELF_SERVE_LIVE } from "../lib/plans.js";
 
 const NAV = {
   receptionist: [
@@ -83,6 +82,7 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, 
             <NavLink key={to} to={to} onClick={onNavigate} className={({ isActive }) => `app-nav-item ${isActive ? "is-active" : ""}`}>
               <Icon size={20} weight="duotone" aria-hidden />
               <span>{label}</span>
+              {!WHATSAPP_SELF_SERVE_LIVE && to === "/whatsapp" && <span className="app-nav-count">Soon</span>}
               {counts?.[to] > 0 && <span className="app-nav-count">{counts[to]}</span>}
             </NavLink>
           ))}
@@ -134,8 +134,12 @@ export default function Shell() {
   const [branchNames, setBranchNames] = useState({});
 
   const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan, enabled: role === "org_admin", staleTime: 60_000 });
-  const hasWhatsapp = WHATSAPP_LIVE || Boolean(plan.data?.whatsapp_included || plan.data?.whatsapp_addon);
-  const links = navFor(role).filter((item) => !item.to.startsWith("/whatsapp") || hasWhatsapp);
+  const hasWhatsapp = WHATSAPP_SELF_SERVE_LIVE || Boolean(plan.data?.whatsapp_included || plan.data?.whatsapp_addon);
+  const links = navFor(role).filter((item) => {
+    if (item.to === "/whatsapp") return true;
+    if (!WHATSAPP_SELF_SERVE_LIVE && item.to.startsWith("/whatsapp")) return false;
+    return !item.to.startsWith("/whatsapp") || hasWhatsapp;
+  });
   const hasBranch = ["org_admin", "receptionist", "doctor"].includes(role);
   const { data: doctorsRaw } = useQuery({
     queryKey: ["doctors", branchId], queryFn: () => fetchDoctors(branchId),
@@ -161,7 +165,7 @@ export default function Shell() {
   const activeLink = links.find((item) => location.pathname === item.to || location.pathname.startsWith(item.to + "/"));
   const pageLabel = activeLink?.label ?? "Vachanam";
   const profileTo = role === "org_admin" ? "/settings" : roleHome(role);
-  const topAction = location.pathname === "/whatsapp"
+  const topAction = WHATSAPP_SELF_SERVE_LIVE && location.pathname === "/whatsapp"
     ? { to: "/whatsapp?new=1", label: "New template" }
     : links.some((item) => item.to === "/walk-in") ? { to: "/walk-in", label: "Add walk-in" } : null;
 

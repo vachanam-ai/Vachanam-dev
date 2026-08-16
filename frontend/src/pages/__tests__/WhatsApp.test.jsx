@@ -27,7 +27,7 @@ vi.mock("../../hooks/useAuth.jsx", () => ({
   useAuth: () => ({ branchId: "b1", role: "org_admin" }),
 }));
 
-import WhatsApp from "../WhatsApp.jsx";
+import WhatsApp, { WhatsAppLive } from "../WhatsApp.jsx";
 import TemplateEditor from "../../components/TemplateEditor.jsx";
 
 afterEach(() => {
@@ -45,6 +45,16 @@ function renderWithQuery(ui) {
     </MemoryRouter>,
   );
 }
+
+describe("WhatsApp launch gate", () => {
+  it("shows approval status without mounting connection or payment controls", () => {
+    renderWithQuery(<WhatsApp />);
+    expect(screen.getByRole("heading", { name: "WhatsApp is coming soon" })).toBeInTheDocument();
+    expect(screen.getByText(/Meta review in progress/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /connect/i })).not.toBeInTheDocument();
+    expect(fetchWaTemplates).not.toHaveBeenCalled();
+  });
+});
 
 describe("TemplateEditor — live preview", () => {
   it("previews the message with realistic sample data, not {{1}}", async () => {
@@ -125,7 +135,7 @@ describe("WhatsApp page — template list", () => {
       existing: [],
       errors: [],
     });
-    renderWithQuery(<WhatsApp />);
+    renderWithQuery(<WhatsAppLive />);
 
     fireEvent.click(await screen.findByRole(
       "button", { name: /install required templates/i },
@@ -140,7 +150,7 @@ describe("WhatsApp page — template list", () => {
       { name: "booking_confirm", category: "UTILITY", language: "en", status: "APPROVED" },
       { name: "diwali_offer", category: "MARKETING", language: "en", status: "REJECTED" },
     ]);
-    renderWithQuery(<WhatsApp />);
+    renderWithQuery(<WhatsAppLive />);
 
     await waitFor(() => expect(screen.getByText("booking_confirm")).toBeInTheDocument());
     expect(screen.getByText(/approved/i)).toBeInTheDocument();
@@ -152,7 +162,7 @@ describe("WhatsApp page — template list", () => {
       { name: "booking_confirm", category: "UTILITY", language: "en", status: "APPROVED" },
       { name: "diwali_offer", category: "MARKETING", language: "en", status: "PENDING" },
     ]);
-    renderWithQuery(<WhatsApp />);
+    renderWithQuery(<WhatsAppLive />);
 
     const bookingRow = await screen.findByTestId("template-row-booking_confirm");
     expect(within(bookingRow).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -164,7 +174,7 @@ describe("WhatsApp page — template list", () => {
   it("submits a new template through the editor", async () => {
     fetchWaTemplates.mockResolvedValue([]);
     createWaTemplate.mockResolvedValue({ id: "1", status: "PENDING" });
-    renderWithQuery(<WhatsApp />);
+    renderWithQuery(<WhatsAppLive />);
 
     fireEvent.click(await screen.findByRole("button", { name: /new template/i }));
     fireEvent.change(screen.getByLabelText(/template name/i), {

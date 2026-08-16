@@ -14,7 +14,8 @@ def test_summary_totals_are_computed_server_side():
     import backend.routers.payments as m
 
     src = inspect.getsource(m.billing_summary)
-    assert "subtotal = base_next + addon_amt + over_amt" in src
+    assert "autopay_subtotal = base_next + addon_amt" in src
+    assert "subtotal = autopay_subtotal + over_amt" in src
     assert "total_next=int(round(subtotal + gst))" in src
 
 

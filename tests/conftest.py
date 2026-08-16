@@ -53,6 +53,11 @@ settings.smtp_host = ""
 # or leaks a background task; test_tool_prefetch re-enables it per-test.
 settings.voice_tool_prefetch = False
 
+# Existing WhatsApp integration tests exercise the approved/live path. Public
+# production defaults fail-closed; individual launch-gate tests set this back
+# to False and verify that no purchase or connection can start.
+settings.whatsapp_self_serve_live = True
+
 # The real DATABASE_URL as loaded from .env — captured BEFORE the fuse below
 # overwrites it, so _refuse_unsafe_test_db can still compare against it.
 _ORIG_DATABASE_URL = settings.database_url

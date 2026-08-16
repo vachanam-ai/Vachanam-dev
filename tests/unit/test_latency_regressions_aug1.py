@@ -63,6 +63,8 @@ async def test_shared_prompt_cache_uses_sync_client_accessor(monkeypatch):
             return "projects/p/locations/asia-south1/cachedContents/one"
 
     monkeypatch.setattr("backend.redis_client.get_redis", lambda: Redis())
+    monkeypatch.setattr(agent_mod.settings, "voice_prompt_cache", True)
+    monkeypatch.setattr(agent_mod, "_prompt_cache_ttl_seconds", lambda: 3600)
     agent_mod._PROMPT_CACHE.clear()
     key = ("branch", "te", "2026-08-01", "digest")
     assert await agent_mod._load_shared_prompt_cache(key, "prompt") is True

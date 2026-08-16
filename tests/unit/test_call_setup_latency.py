@@ -29,7 +29,7 @@ def test_gate_keeps_fail_closed_semantics():
     # Window widened 4000 -> 6000 (2026-08-01): metering the org's real billing
     # CYCLE instead of the calendar month lengthened this function. The
     # fail-closed lines below are unchanged — they had just moved past the slice.
-    fn = SRC.split("async def _service_gate_check")[1][:6000]
+    fn = SRC.split("async def _service_gate_check")[1][:8000]
     # fail CLOSED for known terminal status, fail OPEN otherwise (iter1 #23)
     assert "_gate_failure_blocked_reason(_last_status)" in fn
     assert "service_gate_check_failed_failing_closed" in fn

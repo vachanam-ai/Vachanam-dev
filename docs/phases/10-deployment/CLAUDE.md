@@ -13,7 +13,7 @@
 | Voice agent | Fly.io Machines | `bom` (Mumbai) | Only India PaaS, lowest STT/TTS latency |
 | Backend API | Render Web Service | Singapore | Most reliable India-adjacent Render region |
 | Receptionist + Owner + Admin PWA | Cloudflare Pages | Global edge | Free, fast in India, 99.99% |
-| Postgres | Neon | Singapore | Serverless, pooler built-in |
+| Postgres | Supabase Postgres | `ap-south-1` (Mumbai) | Managed Postgres with session/transaction poolers |
 | Redis | Upstash | Mumbai region | Atomic INCR for token counters |
 | LiveKit server | Fly.io (separate app) | `bom` | Co-located with agent |
 | Monitoring | UptimeRobot | — | Free, 2-min checks, SMS alerts |
@@ -62,7 +62,7 @@ npm run build
 
 ### 6. Run the migration in prod
 ```bash
-DATABASE_URL=<neon-url> alembic upgrade head
+DATABASE_URL=<supabase-session-pooler-url> alembic upgrade head
 ```
 Seed yourself as the first admin user via psql.
 
@@ -107,7 +107,7 @@ Seed yourself as the first admin user via psql.
 - ❌ No managed log aggregation (Render + Fly built-in only)
 - ❌ No paging on-call rotation (Vinay's phone is the on-call)
 - ❌ No load testing — defer until 10 concurrent clinics
-- ❌ No backups beyond Neon's default daily — fine for MVP
+- ❌ No tested cross-provider database failover yet; use Supabase backups and run restore drills
 
 ---
 

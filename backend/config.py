@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     # only. Unset = the Connect button reports "not configured yet" instead of
     # opening a popup that Meta would reject.
     meta_config_id: str = ""
+    # Public clinic onboarding remains fail-closed until Meta approves Vachanam
+    # as a Tech Provider. Existing connected test numbers keep operating.
+    whatsapp_self_serve_live: bool = False
     # WhatsApp replies come from wa_agent (short prompt + database tools).
     # False falls back to wa_chat's intent router + canned replies — kept as a
     # one-flag way back if the tool loop misbehaves on a live clinic number.

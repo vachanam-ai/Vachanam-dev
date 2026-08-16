@@ -13,9 +13,21 @@ Vachanam has two public products:
 | Additional branch or phone number | ₹1,499/month | separate DID and isolated branch setup |
 | Meta message fees | direct at cost to clinic | paid by the clinic to Meta from the clinic-owned WABA |
 
-The first 100 clinics receive a one-time 500-minute voice credit in their
-first paid billing cycle. They still pay the ₹1,999 Voice platform fee. Unused credit
-expires at that cycle boundary and never renews.
+The first 100 clinics receive 14 calendar days completely free. During this
+trial there is no platform fee, voice-minute cap, card requirement, or automatic
+charge. The trial ends at an absolute timestamp and the service pauses unless
+the clinic explicitly activates paid service. The former 500-minute first-cycle
+credit is retired for new clinics; it is not stacked on top of this offer.
+
+The fixed platform fee may renew by autopay. Variable voice usage is never
+auto-debited or auto-recharged at launch: the completed cycle is priced by the
+server, shown to the owner, and paid manually from Plan & billing.
+
+The proposed “free WhatsApp after 1,000 minutes” waiver is deliberately not a
+launch rule. A fixed recurring mandate cannot safely vary month to month
+without credits, refunds or subscription replacement, and that complexity is
+not worth introducing before WhatsApp onboarding is live. Keep the published
+₹1,499 add-on predictable; reconsider a volume reward after real cohort data.
 
 ## Why this structure
 
@@ -61,11 +73,31 @@ that it receives another full ₹299 allocation; if the existing branch already
 absorbs that infrastructure, its incremental contribution is 97.6% before
 support labour.
 
-The Founding 100 credit is an explicit acquisition budget. If every founding
-clinic consumes all 500 minutes, the first-cycle bill is ₹1,999 against about
-₹2,949 service cost plus ₹47 gateway cost: an acquisition loss of about ₹997
-per clinic, or about ₹99,700 if all 100 consume the full credit. Later cycles
-return to the normal contribution margins above.
+The Founding 100 trial is an explicit acquisition budget. “Unlimited” means
+there is no billable minute ceiling, so the cash exposure depends on real use:
+
+| Average trial usage | Cost per trial clinic | Cost for 100 clinics |
+|---:|---:|---:|
+| 100 minutes | ₹1,789 | ₹178,900 |
+| 500 minutes | ₹2,949 | ₹294,900 |
+| 1,000 minutes | ₹4,399 | ₹439,900 |
+| 2,000 minutes | ₹7,299 | ₹729,900 |
+
+The theoretical one-line ceiling is much larger: 14 continuously occupied
+24-hour days equal 20,160 minutes, or about ₹59,963 including the fixed clinic
+allocation. If all 100 trial lines were continuously occupied, exposure would
+be about ₹59.96 lakh. That is not a forecast, but it is the honest cash-risk
+boundary of a truly uncapped offer. Keep the existing single-line concurrency,
+fraud controls, and real-time cost alerts active; do not silently introduce a
+marketing minute cap.
+
+This is deliberately not described as a 100% margin offer; it is acquisition
+spend. Paid usage has 106.9% markup on variable cost, equivalent to 51.7% gross
+margin before fixed costs. Trial access remains protected by one-clinic
+eligibility, serialized first-100 allocation, normal fraud/rate controls, and
+the hard 14-day expiry. Clinics may be invited to provide honest feedback after
+the trial, but a positive testimonial is optional and is never a condition of
+free service.
 
 ## WhatsApp ownership and billing
 
@@ -95,7 +127,8 @@ can be reconsidered later through a Solution Partner when volume justifies it.
 
 - Display platform and usage as separate lines everywhere.
 - Bill voice from the first billable minute; no bundled monthly allowance.
-- Apply the Founding 100 credit only to the first paid cycle.
+- Give the first 100 eligible clinics an unlimited 14-day trial; do not add a
+  separate minute credit to their first paid cycle.
 - Stamp the exact allowance onto each billing-cycle ledger row and use that
   value for access control, dashboard usage and renewal billing.
 - Preserve paid legacy subscriptions for renewal, but offer only Vachanam

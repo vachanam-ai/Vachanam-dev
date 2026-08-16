@@ -1,8 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useGSAP } from "@gsap/react";
+import gsap from "gsap";
+import {
+  ArrowRight, BookOpenText, Buildings, CalendarCheck, Check, CheckCircle,
+  GearSix, Heart, MapPin, PhoneCall, ShieldWarning, Sparkle, Stethoscope,
+  UsersThree, WhatsappLogo,
+} from "@phosphor-icons/react";
 import { toast } from "sonner";
 import {
   addStaff,
+  clearToken,
   deleteAccount,
   fetchBranchSettings,
   fetchDoctors,
@@ -28,12 +36,25 @@ const WA_STATUS_LABEL = {
 
 import GoogleReauth from "../components/GoogleReauth.jsx";
 import WaConnectCard from "../components/WaConnectCard.jsx";
+import { useActionDialog } from "../components/ActionDialog.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
 
 const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 // Runtime deployment flag: build with VITE_WHATSAPP_LIVE=true only after Meta
 // onboarding is available. The backend independently enforces credentials and plan.
 const WHATSAPP_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
+
+gsap.registerPlugin(useGSAP);
+
+const prefersReducedMotion = () => !window.matchMedia || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const SETUP_ICONS = {
+  details: Buildings,
+  doctors: Stethoscope,
+  calendar: CalendarCheck,
+  phone: PhoneCall,
+  team: UsersThree,
+};
 
 /* Setup checklist derived from live data — the owner's map through onboarding. */
 function checklist(data, calOk) {
@@ -46,37 +67,86 @@ function checklist(data, calOk) {
   ];
 }
 
-function Section({ id, title, sub, done, tone, children }) {
+function Section({ id, title, sub, done, tone, icon: Icon = GearSix, children }) {
   return (
     <section id={id}
-      className={`settings-section scroll-mt-24 ${tone === "cream" ? "is-muted" : ""}`}>
-      <div className="flex items-start justify-between gap-3">
+      className={`settings-section settings-section-${id} scroll-mt-24 ${tone === "cream" ? "is-muted" : ""} ${tone === "danger" ? "is-danger" : ""}`}>
+      <div className="settings-section-head">
+        <span className="settings-section-icon" aria-hidden><Icon size={21} weight="duotone" /></span>
         <div>
-          <h2 className="font-display text-lg font-semibold">{title}</h2>
-          {sub && <p className="mt-0.5 font-ui text-sm text-slate">{sub}</p>}
+          <h2>{title}</h2>
+          {sub && <p>{sub}</p>}
         </div>
         {done !== undefined && (
-          <span className={done ? "chip-token shrink-0" : "chip-muted shrink-0"}>
-            {done ? "done" : "pending"}
+          <span className={`settings-state ${done ? "is-done" : ""}`}>
+            {done && <Check size={12} weight="bold" />}{done ? "Ready" : "Set up"}
           </span>
         )}
       </div>
-      <div className="mt-4">{children}</div>
+      <div className="settings-section-body">{children}</div>
     </section>
   );
 }
 
 function InfoBox({ title, children }) {
   return (
-    <div className="mt-4 rounded-xl border border-teal-pale bg-pill p-4 font-ui text-sm">
+    <div className="settings-info-box">
       {title && <p className="font-medium">{title}</p>}
       <div className="mt-1 space-y-1 text-ink-soft">{children}</div>
     </div>
   );
 }
 
+function ClinicCompanion({ message, progress, signal }) {
+  const root = useRef(null);
+
+  useGSAP(() => {
+    const pupils = root.current?.querySelectorAll(".companion-pupil");
+    const face = root.current?.querySelector(".companion-face");
+    if (!pupils?.length || !face || prefersReducedMotion()) return undefined;
+    const moveX = [...pupils].map((node) => gsap.quickTo(node, "x", { duration: .32, ease: "power3.out" }));
+    const moveY = [...pupils].map((node) => gsap.quickTo(node, "y", { duration: .32, ease: "power3.out" }));
+    const tilt = gsap.quickTo(face, "rotation", { duration: .5, ease: "power3.out" });
+    const onMove = (event) => {
+      const nx = (event.clientX / window.innerWidth - .5) * 2;
+      const ny = (event.clientY / window.innerHeight - .5) * 2;
+      moveX.forEach((move) => move(nx * 4.5));
+      moveY.forEach((move) => move(ny * 3.2));
+      tilt(nx * 2.2);
+    };
+    window.addEventListener("pointermove", onMove, { passive: true });
+    return () => window.removeEventListener("pointermove", onMove);
+  }, { scope: root });
+
+  useGSAP(() => {
+    if (!signal || prefersReducedMotion()) return;
+    gsap.fromTo(".companion-face", { scale: .94 }, { scale: 1, duration: .55, ease: "back.out(2)" });
+    gsap.fromTo(".companion-message", { opacity: .45, y: 5 }, { opacity: 1, y: 0, duration: .28, ease: "power3.out" });
+  }, { scope: root, dependencies: [signal], revertOnUpdate: true });
+
+  return (
+    <div ref={root} className="clinic-companion" aria-live="polite">
+      <div className="companion-message">
+        <span><Sparkle size={13} weight="fill" /> Vaani</span>
+        <p>{message}</p>
+      </div>
+      <div className={`companion-face ${progress === 100 ? "is-complete" : ""}`} aria-hidden>
+        <span className="companion-ear companion-ear-left" />
+        <span className="companion-ear companion-ear-right" />
+        <div className="companion-brow companion-brow-left" />
+        <div className="companion-brow companion-brow-right" />
+        <div className="companion-eye"><i className="companion-pupil" /></div>
+        <div className="companion-eye"><i className="companion-pupil" /></div>
+        <div className="companion-mouth" />
+        <Heart className="companion-heart" size={18} weight="fill" />
+      </div>
+    </div>
+  );
+}
+
 export default function Settings() {
   const { branchId, user, logout } = useAuth();
+  const ask = useActionDialog();
   const qc = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -102,6 +172,13 @@ export default function Settings() {
   const [form, setForm] = useState(null);
   const [calOk, setCalOk] = useState(null);
   const [newStaff, setNewStaff] = useState({ name: "", email: "", password: "", role: "receptionist", doctor_id: "" });
+  const [companionMessage, setCompanionMessage] = useState("Let’s make your receptionist clinic-ready.");
+  const [companionSignal, setCompanionSignal] = useState(0);
+  const pageRef = useRef(null);
+  const react = (message) => {
+    setCompanionMessage(message);
+    setCompanionSignal((value) => value + 1);
+  };
 
   useEffect(() => {
     if (data && form === null) {
@@ -123,6 +200,7 @@ export default function Settings() {
     mutationFn: (payload) => updateBranchSettings(branchId, payload),
     onSuccess: (d) => {
       qc.setQueryData(["branch-settings", branchId], d);
+      react("Saved. I’ll use the updated information from the next patient conversation.");
       if (d.did_wired === true) toast.success("Saved — number is wired and live");
       else if (d.did_wired === false)
         toast.warning("Saved. Number stored but telephony wiring pending — we've been notified.");
@@ -160,6 +238,7 @@ export default function Settings() {
     mutationFn: () => saveBranchFaq(branchId, faqRows ?? []),
     onSuccess: (d) => {
       qc.setQueryData(["branch-faq", branchId], d);
+      react("Knowledge added. I can now answer those questions with confidence.");
       toast.success("FAQ saved — the agent will answer these from the next call");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not save the FAQ")
@@ -169,6 +248,7 @@ export default function Settings() {
     mutationFn: () => testCalendar(branchId),
     onSuccess: (r) => {
       setCalOk(r.ok);
+      if (r.ok) react("Calendar connected. Confirmed appointments now have somewhere safe to land.");
       r.ok
         ? toast.success("Calendar connected — bookings will appear there")
         : toast.error(`Calendar test failed: ${r.detail ?? "no writer access yet"}`);
@@ -185,6 +265,7 @@ export default function Settings() {
       qc.invalidateQueries({ queryKey: ["staff", branchId] });
       qc.invalidateQueries({ queryKey: ["branch-settings", branchId] });
       setNewStaff({ name: "", email: "", password: "", role: "receptionist" });
+      react(`${m.role === "doctor" ? "Doctor" : "Reception"} access is ready. Your care team is growing.`);
       toast.success(`${m.role} account created — share the login with them`);
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not add member")
@@ -195,6 +276,7 @@ export default function Settings() {
     mutationFn: (userId) => removeStaff(branchId, userId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["staff", branchId] });
+      react("Access updated. Clinic records remain safely in place.");
       toast.success("Login removed");
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove the login")
@@ -211,10 +293,24 @@ export default function Settings() {
     ),
     onSuccess: () => {
       toast.success("Clinic deleted — goodbye");
+      // Clear locally before the best-effort remote logout. The user row no
+      // longer exists, so /auth/logout is expected to return 401.
+      clearToken();
       logout();
     },
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not delete the clinic")
   });
+
+  useGSAP(() => {
+    if (!data || !form || !pageRef.current || prefersReducedMotion()) return;
+    gsap.from(".settings-masthead > *", { opacity: 0, y: 12, duration: .5, stagger: .06, ease: "power3.out" });
+    gsap.from(".settings-journey-card", { opacity: 0, y: 10, duration: .4, stagger: .045, ease: "power3.out", delay: .12 });
+  }, { scope: pageRef, dependencies: [Boolean(data && form)], revertOnUpdate: true });
+
+  const steps = checklist(data, calOk);
+  const doneCount = steps.filter((s) => s.done).length;
+  const progress = Math.round((doneCount / steps.length) * 100);
+  const nextStep = steps.find((step) => !step.done);
 
   if (error)
     return (
@@ -225,34 +321,84 @@ export default function Settings() {
   if (isLoading || form === null)
     return <p className="font-ui text-slate">Loading settings…</p>;
 
-  const steps = checklist(data, calOk);
-  const doneCount = steps.filter((s) => s.done).length;
-
   return (
-    <div className="settings-page">
+    <div ref={pageRef} className="settings-page">
       <header className="settings-masthead">
-        <div>
-          <p className="settings-kicker">Clinic workspace</p>
-          <h1>{data?.name}</h1>
-          <p>Keep the clinic details, booking rules, team access, and call hand-off information accurate.</p>
-        </div>
-        <div className="settings-progress" aria-label={`${doneCount} of ${steps.length} setup tasks complete`}>
-          <strong>{doneCount}<span>/{steps.length}</span></strong>
-          <span>setup tasks complete</span>
-        </div>
-        <div className="settings-progress-line"><i style={{ width: `${(doneCount / steps.length) * 100}%` }} /></div>
-        <nav className="settings-checklist" aria-label="Clinic setup checklist">
-          {steps.map((s, i) => (
-            <a key={s.id} href={`#${s.id}`}
-              className={s.done ? "is-complete" : ""}>
-              <span>
-                {s.done ? "✓" : i + 1}
-              </span>
-              {s.label}
+        <div className="settings-hero-copy">
+          <p className="settings-kicker"><Sparkle size={13} weight="fill" /> {data?.name} · clinic launch studio</p>
+          <h1>Build the receptionist<br /><span>patients remember.</span></h1>
+          <p>Everything Vachanam says and does begins here. Shape your clinic’s identity, appointment flow, patient communication and care team from one calm workspace.</p>
+          <div className="settings-capability-row" aria-label="Configured capabilities">
+            <span><PhoneCall size={15} weight="duotone" /> Answers every call</span>
+            <span><CalendarCheck size={15} weight="duotone" /> Books from live availability</span>
+            <span><BookOpenText size={15} weight="duotone" /> Learns your clinic</span>
+            <span><UsersThree size={15} weight="duotone" /> Keeps the care team in sync</span>
+          </div>
+          {nextStep ? (
+            <a href={`#${nextStep.id}`} className="settings-next-action">
+              Continue with {nextStep.label}<ArrowRight size={16} weight="bold" />
             </a>
-          ))}
-        </nav>
+          ) : (
+            <span className="settings-launch-ready"><CheckCircle size={18} weight="fill" /> Clinic ready for patients</span>
+          )}
+        </div>
+        <div className="settings-hero-side">
+          <div className="settings-progress-orbit" style={{ "--progress": `${progress * 3.6}deg` }}
+            aria-label={`${doneCount} of ${steps.length} setup tasks complete`}>
+            <div><strong>{progress}<span>%</span></strong><small>clinic ready</small></div>
+          </div>
+          <ClinicCompanion message={companionMessage} progress={progress} signal={companionSignal} />
+        </div>
       </header>
+
+      <section className="settings-journey" aria-labelledby="setup-journey-heading">
+        <div className="settings-journey-intro">
+          <span>Onboarding</span>
+          <h2 id="setup-journey-heading">Your path to the first perfect call</h2>
+          <p>{doneCount === steps.length ? "The essentials are ready. Revisit any step whenever the clinic changes." : `${steps.length - doneCount} focused ${steps.length - doneCount === 1 ? "step" : "steps"} left before your clinic is fully ready.`}</p>
+        </div>
+        <div className="settings-journey-track">
+          {steps.map((step, index) => {
+            const Icon = SETUP_ICONS[step.id];
+            return (
+              <a key={step.id} href={`#${step.id}`} className={`settings-journey-card ${step.done ? "is-complete" : ""} ${nextStep?.id === step.id ? "is-next" : ""}`}>
+                <span className="settings-journey-icon"><Icon size={19} weight="duotone" /></span>
+                <small>0{index + 1}</small>
+                <strong>{step.label}</strong>
+                <em>{step.done ? "Ready" : nextStep?.id === step.id ? "Up next" : "To do"}</em>
+              </a>
+            );
+          })}
+        </div>
+      </section>
+
+      <div className="settings-workspace">
+        <aside className="settings-rail">
+          <div>
+            <p>Capability map</p>
+            <nav className="settings-checklist" aria-label="Clinic setup checklist">
+              {steps.map((s, i) => (
+                <a key={s.id} href={`#${s.id}`} className={s.done ? "is-complete" : ""}>
+                  <span>{s.done ? <Check size={13} weight="bold" /> : i + 1}</span>
+                  <strong>{s.label}</strong>
+                  <small>{s.done ? "Ready" : "Needs attention"}</small>
+                </a>
+              ))}
+              <a href="#faq">
+                <span><BookOpenText size={14} weight="duotone" /></span>
+                <strong>Clinic knowledge</strong>
+                <small>What Vachanam knows</small>
+              </a>
+            </nav>
+          </div>
+          <div className="settings-rail-note">
+            <Sparkle size={18} weight="duotone" />
+            <strong>Grounded by design</strong>
+            <p>Vachanam checks these details, doctors, schedules and answers before speaking to a patient.</p>
+          </div>
+        </aside>
+
+        <main className="settings-panels">
 
       {/* Plan & billing MOVED to /billing (Vinay 2026-08-09: "migrate entire
           billing to billing page. all billings."). Settings keeps the `plan`
@@ -260,7 +406,8 @@ export default function Settings() {
           is now full-width: it lost the card it used to sit beside. */}
 
       {/* 1 — Clinic details */}
-      <Section id="details" title="1 · Clinic details" done={steps[0].done}
+      <div className="settings-content-heading"><span>01 · Foundation</span><h2>Give every conversation a reliable starting point.</h2><p>These details define how Vachanam introduces your clinic, finds the right doctor and completes appointments.</p></div>
+      <Section id="details" title="Clinic identity" icon={MapPin} done={steps[0].done}
         sub="What patients hear and where they find you.">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -304,8 +451,8 @@ export default function Settings() {
       </Section>
 
       {/* Doctors + Google Calendar — side by side */}
-      <div className="grid gap-6 lg:grid-cols-2">
-      <Section id="doctors" title="2 · Doctors" done={steps[1].done}
+      <div className="settings-pair-grid">
+      <Section id="doctors" title="Doctors and availability" icon={Stethoscope} done={steps[1].done}
         sub={`${data?.doctors_count ?? 0} configured. The AI books patients against these profiles.`}>
         <InfoBox title="Two booking styles — pick per doctor:">
           <p><strong>Token queue</strong> — numbered line for high-volume OP (the AI announces "your token number is 8"). Set a daily limit.</p>
@@ -315,7 +462,7 @@ export default function Settings() {
       </Section>
 
       {/* 3 — Calendar */}
-      <Section id="calendar" title="3 · Google Calendar" done={steps[2].done}
+      <Section id="calendar" title="Calendar connection" icon={CalendarCheck} done={steps[2].done}
         sub="Every confirmed booking becomes an event the doctor can see on their phone.">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-72 flex-1">
@@ -342,8 +489,9 @@ export default function Settings() {
       </div>
 
       {/* Phone · Agent language · Agent voice — cream row, side by side */}
-      <div className="grid gap-6 lg:grid-cols-3">
-      <Section id="phone" title="4 · Phone number (AI line)" done={steps[3].done}
+      <div className="settings-pair-grid settings-capability-group">
+      <div className="settings-content-heading"><span>02 · Patient communication</span><h2>Choose how patients reach you and what happens next.</h2><p>Your AI line answers first. Connected channels keep confirmations, reminders and follow-ups moving.</p></div>
+      <Section id="phone" title="AI phone line" icon={PhoneCall} done={steps[3].done}
         sub="The number your AI answers. Your existing clinic number forwards to it — patients notice nothing.">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-64">
@@ -369,7 +517,7 @@ export default function Settings() {
           call, which does not survive contact with more than a handful of
           clinics. */}
       {(WHATSAPP_LIVE || plan.data?.whatsapp_included || plan.data?.whatsapp_addon) && (
-      <Section id="whatsapp" title="WhatsApp"
+      <Section id="whatsapp" title="WhatsApp continuity" icon={WhatsappLogo}
         sub="Booking confirmations, reminders and post-visit rating asks on your clinic's own WhatsApp number.">
         <WaConnectCard branchId={branchId} />
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -414,14 +562,15 @@ export default function Settings() {
       </div>
 
       {/* Clinic FAQ + Team — side by side, compact */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="settings-knowledge-stack">
       {/* Clinic FAQ — the agent answers these on calls */}
-      <Section id="faq" title="Clinic FAQ"
+      <div className="settings-content-heading"><span>03 · Knowledge and people</span><h2>Teach the receptionist. Invite the care team.</h2><p>Answers stay grounded in clinic-approved information, while each team member sees only the workspace they need.</p></div>
+      <Section id="faq" title="Clinic knowledge" icon={BookOpenText}
         sub="Answers your AI agent gives when callers ask about fees, timings, parking, insurance, reports and more. Leave a row blank to skip it.">
         <div className="space-y-3">
-          <div className="max-h-[340px] space-y-2 overflow-y-auto pr-1">
+          <div className="settings-faq-list">
           {(faqRows ?? []).map((row, i) => (
-            <div key={i} className="rounded-xl border border-hairline p-2.5">
+            <div key={i} className="settings-faq-card">
               <div className="flex items-start justify-between gap-2">
                 <input className="field flex-1 !py-1.5 text-sm font-medium"
                   value={row.q}
@@ -431,7 +580,7 @@ export default function Settings() {
                     next[i] = { ...next[i], q: e.target.value };
                     setFaqRows(next);
                   }} />
-                <button type="button" className="btn-ghost shrink-0 px-2 py-1 text-xs"
+                <button type="button" className="settings-remove-action"
                   onClick={() => setFaqRows(faqRows.filter((_, j) => j !== i))}>
                   Remove
                 </button>
@@ -484,22 +633,31 @@ export default function Settings() {
       </Section>
 
       {/* 6 — Team */}
-      <Section id="team" title="5 · Team" done={steps[4].done}
+      <Section id="team" title="Team access" icon={UsersThree} done={steps[4].done}
         sub="Reception runs the queue and walk-ins on their phone. Doctors see their own day.">
-        <div className="space-y-1">
+        <div className="settings-team-layout">
+        <div className="settings-team-roster">
+          <div className="settings-subhead"><span>Current team</span><strong>{staff.length} {staff.length === 1 ? "member" : "members"}</strong></div>
+          {staff.length === 0 && <p className="settings-empty-note">The clinic owner will appear here after setup finishes.</p>}
           {staff.map((m) => (
-            <div key={m.user_id} className="ledger-row !px-0">
+            <div key={m.user_id} className="settings-team-member">
+              <span className="settings-member-avatar" aria-hidden>{(m.name ?? m.email ?? "V").slice(0, 1).toUpperCase()}</span>
               <div className="min-w-0 flex-1">
                 <p className="truncate font-ui font-medium">{m.name ?? m.email}</p>
                 <p className="truncate font-ui text-xs text-slate">{m.email}</p>
               </div>
-              <span className="chip-token">{m.role}</span>
+              <span className="chip-token">{m.role.replace("_", " ")}</span>
               {m.role !== "org_admin" && m.user_id !== user?.user_id && (
                 <button type="button" className="ml-2 font-ui text-xs text-danger underline-offset-2 hover:underline"
                   disabled={fireStaff.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Remove ${m.name ?? m.email}'s login? Their clinic records stay; only the login is deleted.`))
-                      fireStaff.mutate(m.user_id);
+                  onClick={async () => {
+                    const confirmed = await ask({
+                      title: `Remove ${m.name ?? m.email}?`,
+                      description: "Their clinic records stay. Only this person's login access is removed immediately.",
+                      confirmLabel: "Remove login",
+                      tone: "danger",
+                    });
+                    if (confirmed) fireStaff.mutate(m.user_id);
                   }}>
                   Remove
                 </button>
@@ -507,8 +665,9 @@ export default function Settings() {
             </div>
           ))}
         </div>
-        <form className="mt-5 grid gap-3 border-t border-hairline pt-5 sm:grid-cols-2"
+        <form className="settings-team-form"
           onSubmit={(e) => { e.preventDefault(); invite.mutate(); }}>
+          <div className="settings-subhead sm:col-span-2"><span>Invite someone</span><strong>Private login</strong></div>
           <div>
             <label className="label">{newStaff.role === "doctor" ? "Which doctor" : "Name"}</label>
             {newStaff.role === "doctor" ? (
@@ -549,6 +708,7 @@ export default function Settings() {
             {invite.isPending ? "Creating…" : "Add team member"}
           </button>
         </form>
+        </div>
         {newStaff.role === "doctor" && unlinkedDoctors.length === 0 && (
           <p className="mt-2 font-ui text-sm text-slate">
             Every doctor already has a login. Add the doctor first under
@@ -567,12 +727,14 @@ export default function Settings() {
 
       {/* DPDP erasure (Vinay 2026-07-17): the fiduciary can close the account
           and erase everything — patients, bookings, notes, logins, billing. */}
-      <Section id="danger" title="Delete clinic"
-        sub="Permanently erase this clinic and ALL its data — patients, bookings, treatment notes, logins, billing. This cannot be undone.">
-        <div className="grid gap-3 sm:grid-cols-2">
+      <Section id="danger" title="Account controls" icon={ShieldWarning} tone="danger"
+        sub="Sensitive actions stay out of the way until you explicitly open them.">
+        <details className="settings-danger-disclosure">
+          <summary><span><strong>Delete clinic and all data</strong><small>Patients, bookings, notes, logins and billing</small></span><span>Open controls</span></summary>
+        <div className="settings-danger-body grid gap-3 sm:grid-cols-2">
           <div>
             <label className="label">Your password (or type DELETE if you sign in with Google)</label>
-            <input className="field" type="password" value={delConfirm}
+            <input className="field" type="password" autoComplete="current-password" value={delConfirm}
               onChange={(e) => setDelConfirm(e.target.value)} placeholder="Password or DELETE" />
             {wantsGoogleDelete && (
               <p className="mt-2 font-ui text-xs text-slate">
@@ -585,29 +747,40 @@ export default function Settings() {
               <div className="w-full">
                 <GoogleReauth
                   disabled={nukeClinic.isPending}
-                  onToken={(token) => {
-                    if (window.confirm("This permanently erases every patient, booking and login. Continue?")) {
-                      nukeClinic.mutate(token);
-                    }
+                  onToken={async (token) => {
+                    const confirmed = await ask({
+                      title: "Permanently delete this clinic?",
+                      description: "Every patient, booking, treatment note, login, billing record and clinic configuration will be erased. This cannot be undone.",
+                      confirmLabel: "Delete everything",
+                      tone: "danger",
+                    });
+                    if (confirmed) nukeClinic.mutate(token);
                   }}
                 />
                 {nukeClinic.isPending && <p className="mt-2 font-ui text-xs text-slate">Deleting…</p>}
               </div>
             ) : (
               <button type="button"
-                className="w-full rounded-xl bg-[#ff1e1e] px-4 py-3 font-ui text-sm font-bold uppercase tracking-wide text-white shadow-[0_4px_18px_-2px_rgba(255,30,30,0.55)] transition hover:bg-[#ff3b3b] disabled:opacity-50"
+                className="btn-danger w-full"
                 disabled={nukeClinic.isPending || !delConfirm.trim()}
-                onClick={() => {
-                  if (window.confirm("This permanently erases every patient, booking and login. Continue?")) {
-                    nukeClinic.mutate();
-                  }
+                onClick={async () => {
+                  const confirmed = await ask({
+                    title: "Permanently delete this clinic?",
+                    description: "Every patient, booking, treatment note, login, billing record and clinic configuration will be erased. This cannot be undone.",
+                    confirmLabel: "Delete everything",
+                    tone: "danger",
+                  });
+                  if (confirmed) nukeClinic.mutate();
                 }}>
                 {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
               </button>
             )}
           </div>
         </div>
+        </details>
       </Section>
+        </main>
+      </div>
     </div>
   );
 }

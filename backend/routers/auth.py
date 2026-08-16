@@ -31,6 +31,7 @@ from backend.middleware.auth_middleware import (
     create_access_token,
     get_current_user,
     revoke_jwt,
+    revoke_org_sessions,
 )
 from backend.middleware.rate_limit import (
     auth_google_limit,
@@ -286,10 +287,26 @@ async def delete_account(
         await db.commit()
         await _unwire_deleted_dids(deleted_dids)
 
+    # Verify the committed state from a fresh session before reporting success.
+    # A green toast must mean the tenant and every login are actually gone.
+    async with AsyncSessionLocal() as verify_db:
+        org_still_exists = await verify_db.get(_Org, uuid_mod.UUID(org_id))
+        user_still_exists = await verify_db.get(User, uuid_mod.UUID(current_user.user_id))
+    if org_still_exists is not None or user_still_exists is not None:
+        logger.critical("org_self_delete_verification_failed", org_id=org_id)
+        raise HTTPException(status_code=500, detail="Clinic deletion could not be verified")
+
     # Kill the session; audit AFTER the commit (audit table has no tenant FKs).
     import time as _time
 
-    await revoke_jwt(current_user.jti, int(_time.time()) + settings.jwt_expire_hours * 3600)
+    expiry = int(_time.time()) + settings.jwt_expire_hours * 3600
+    try:
+        await revoke_org_sessions(org_id, expiry)
+        await revoke_jwt(current_user.jti, expiry)
+    except Exception as revoke_err:
+        # The deleted user row still invalidates every current-version token.
+        # Do not turn a successful irreversible deletion into a misleading 500.
+        logger.error("org_session_revocation_failed", org_id=org_id, error=str(revoke_err))
     try:
         await _audit_svc.write_audit_row(
             action="org.self_deleted",
@@ -359,14 +376,14 @@ def _verify_password(password: str, password_hash: str) -> bool:
 
 
 async def _founding_slots_left(db) -> int:
-    """Remaining one-time Founding 100 voice-credit slots."""
+    """Remaining Founding 100 unlimited-trial slots."""
     from sqlalchemy import func as _func
 
     from backend.models.schema import Organization
     from backend.services import billing_math as _bm
 
-    # Trial-for-all (#433 pricing change): the trial is unlimited, so there is
-    # always a slot. -1 signals "unlimited" to the public endpoint.
+    # A non-positive capacity disables the public founding offer. Positive
+    # capacity is counted from persisted members, not an in-process counter.
     if _bm.FOUNDING_CLINIC_SLOTS <= 0:
         return 0
     used = (
@@ -391,6 +408,8 @@ async def founding_slots():
         "slots_total": _bm.FOUNDING_CLINIC_SLOTS,
         "slots_left": left,
         "credit_minutes": _bm.FOUNDING_CREDIT_MINUTES,
+        "trial_days": _bm.PILOT_DAYS,
+        "trial_unlimited": _bm.TRIAL_UNLIMITED,
     }
 
 
@@ -428,6 +447,8 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         raise HTTPException(status_code=422, detail="Your name is required")
     if body.plan not in SELLABLE_PLANS:
         raise HTTPException(status_code=422, detail="Invalid plan")
+    if body.plan == "wa" and not settings.whatsapp_self_serve_live:
+        raise HTTPException(status_code=409, detail="WhatsApp onboarding is coming soon")
     # DPDP consent gate: the clinic is the Data Fiduciary; Vachanam processes
     # patient data only on its instructions. No consent, no account.
     if not body.accepted_terms:
@@ -489,14 +510,23 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
                 status_code=409, detail="Account already exists — sign in instead"
             )
 
-        # Founding 100 allocation is serialized across app instances. A member
-        # starts paused like every other clinic, then receives the credit in
-        # its first paid cycle; the platform fee is never waived.
+        # Founding 100 allocation is serialized across app instances. Their
+        # trial begins at account creation, carries no minute cap or automatic
+        # charge, and expires at an absolute timestamp even if a worker job is
+        # late. Clinics after the first 100 retain the normal payment-first flow.
         await db.execute(
             text("SELECT pg_advisory_xact_lock(hashtext('vachanam_founding_100'))")
         )
         _slots = await _founding_slots_left(db)
         founding = _slots > 0
+        if founding:
+            from datetime import datetime, timedelta, timezone
+
+            trial_ends_at = datetime.now(timezone.utc) + timedelta(
+                days=_bm.PILOT_DAYS
+            )
+        else:
+            trial_ends_at = None
         org = Organization(
             name=body.clinic_name.strip(),
             # Mobile is no longer collected at signup (email-only, Vinay
@@ -505,22 +535,18 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
             owner_phone="",
             owner_email=email,
             plan=body.plan,
-            # First payment activates the line. The founding offer is a minute
-            # credit, never a free service window.
-            status="paused",
-            trial_ends_at=None,
+            status="trial" if founding else "paused",
+            trial_ends_at=trial_ends_at,
             founding_member=founding,
-            founding_credit_minutes=(
-                _bm.FOUNDING_CREDIT_MINUTES if founding else 0
-            ),
+            founding_credit_minutes=0,
         )
         db.add(org)
         await db.flush()
         if founding:
             logger.info(
-                "founding_voice_credit_granted",
+                "founding_unlimited_trial_started",
                 org_id=str(org.id),
-                minutes=_bm.FOUNDING_CREDIT_MINUTES,
+                trial_ends_at=trial_ends_at.isoformat(),
             )
 
         branch = Branch(

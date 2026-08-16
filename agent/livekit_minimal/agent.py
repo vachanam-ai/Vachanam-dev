@@ -174,6 +174,18 @@ VAD_TURN_DETECTION_S = 0.06
 INCOMPLETE_CLARIFICATION_GRACE_S = 0.35
 
 
+def _decode_jsonb(value, fallback):
+    """Decode JSONB returned as text by raw/prewarm connections."""
+    if value is None:
+        return fallback
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return fallback
+    return value
+
+
 def _load_vad():
     return silero.VAD.load(min_silence_duration=VAD_TURN_DETECTION_S)
 
@@ -7290,7 +7302,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             from zoneinfo import ZoneInfo as _ZoneInfo
 
             from backend.models.schema import BillingCycle, CallLog, Organization
-            from backend.services.billing_math import add_month, call_blocked, cycle_window
+            from backend.services.billing_math import (
+                add_month,
+                allowance_adjustment,
+                call_blocked,
+                cycle_window,
+            )
 
             async with AsyncSessionLocal() as _s:
                 _org = (
@@ -7302,6 +7319,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     _last_status = (_org.status or "").lower()
                     _plan = _org.plan or "clinic"
                     _used_min = 0.0
+                    _cycle = None
                     if getattr(_org, "hard_block_on_exhaust", False):
                         # Cycle boundary in the BRANCH timezone, not server UTC.
                         try:
@@ -7377,9 +7395,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         bool(getattr(_org, "hard_block_on_exhaust", False)),
                         _used_min,
                         trial_ends_at=getattr(_org, "trial_ends_at", None),
-                        adjustment=(
-                            int(getattr(_org, "minutes_adjustment", 0) or 0)
-                            + int(getattr(_org, "founding_credit_minutes", 0) or 0)
+                        adjustment=allowance_adjustment(
+                            _org.plan,
+                            cycle_included=(
+                                _cycle.included_minutes if _cycle is not None else None
+                            ),
+                            org_adjustment=int(
+                                getattr(_org, "minutes_adjustment", 0) or 0
+                            ),
+                            founding_credit=int(
+                                getattr(_org, "founding_credit_minutes", 0) or 0
+                            ),
                         ),
                     )
         except Exception as e:  # noqa: BLE001

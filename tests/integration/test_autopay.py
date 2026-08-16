@@ -162,6 +162,7 @@ async def test_create_and_verify_real_autopay_mandate(
     assert provider.plan_payloads[0]["item"]["amount"] == body["amount"]
     assert provider.subscription_payloads[0]["total_count"] == 120
     assert provider.subscription_payloads[0]["customer_notify"] is True
+    assert "notify_info" not in provider.subscription_payloads[0]
 
     signature = hmac.new(
         b"autopay-secret",

@@ -296,3 +296,73 @@ async def test_existing_soniox_voice_id_is_verified_and_tenant_owned(
     foreign = await client.get(f"/branches/{branch_b.id}/voice-clones", headers=auth_b)
     assert [item["voice_id"] for item in own.json()["voices"]] == [provider_id]
     assert foreign.json()["voices"] == []
+
+
+async def test_first_ten_clinics_claim_permanent_custom_voice_access(
+    db, client, monkeypatch
+):
+    # Nine existing members leave exactly one launch slot. Merely creating an
+    # org/branch does not claim it.
+    for index in range(9):
+        await _clinic(db, f"launch-{index}")
+    orgs = (await db.execute(select(Organization).where(Organization.name.like("Voice Org launch-%")))).scalars().all()
+    for org in orgs:
+        org.custom_voice_member = True
+        org.custom_voice_granted_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    tenth, tenth_auth = await _clinic(db, "tenth")
+    eleventh, eleventh_auth = await _clinic(db, "eleventh")
+    provider_calls = []
+
+    async def create(**kwargs):
+        provider_calls.append(kwargs["provider_name"])
+        return _provider_voice(str(uuid.uuid4()), kwargs["provider_name"])
+
+    monkeypatch.setattr(soniox_voice, "create_provider_voice", create)
+    tenth_response = await client.post(
+        f"/branches/{tenth.id}/voice-clones", headers=tenth_auth,
+        data={"name": "Tenth clinic voice", "consent_confirmed": "true"},
+        files={"file": ("sample.webm", b"clean-audio", "audio/webm")},
+    )
+    assert tenth_response.status_code == 201, tenth_response.text
+
+    denied = await client.post(
+        f"/branches/{eleventh.id}/voice-clones", headers=eleventh_auth,
+        data={"name": "Eleventh clinic voice", "consent_confirmed": "true"},
+        files={"file": ("sample.webm", b"clean-audio", "audio/webm")},
+    )
+    assert denied.status_code == 409
+    assert "first-10 custom voice offer is full" in denied.json()["detail"]
+    assert len(provider_calls) == 1
+
+    tenth_org = await db.get(Organization, tenth.org_id)
+    assert tenth_org.custom_voice_member is True
+    availability = await client.get(f"/branches/{eleventh.id}/voice-clones", headers=eleventh_auth)
+    assert availability.status_code == 200
+    assert availability.json()["custom_voice_available"] is False
+    assert availability.json()["custom_voice_slots_left"] == 0
+
+
+async def test_provider_configuration_failure_does_not_consume_launch_slot(
+    db, client, monkeypatch
+):
+    branch, auth = await _clinic(db, "config")
+    org_id = branch.org_id
+
+    async def fail(**_kwargs):
+        raise soniox_voice.SonioxVoiceError(
+            503, "not_configured", "Voice cloning is not configured"
+        )
+
+    monkeypatch.setattr(soniox_voice, "create_provider_voice", fail)
+    response = await client.post(
+        f"/branches/{branch.id}/voice-clones", headers=auth,
+        data={"name": "Retry later", "consent_confirmed": "true"},
+        files={"file": ("sample.webm", b"clean-audio", "audio/webm")},
+    )
+    assert response.status_code == 503
+    db.expire_all()
+    org = await db.get(Organization, org_id)
+    assert org.custom_voice_member is False
+    assert org.custom_voice_granted_at is None
