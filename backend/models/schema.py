@@ -383,6 +383,25 @@ class Patient(Base):
     )
 
 
+class CallerPreference(Base):
+    """Branch-scoped preferences for a phone, even before it becomes a patient.
+
+    Keeping this separate from ``patients`` avoids creating fake patient rows
+    for callers who only ask a question.  The phone suffix matches the product's
+    existing family-phone identity rule; the branch key prevents tenant leaks.
+    """
+    __tablename__ = "caller_preferences"
+
+    branch_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("branches.id", ondelete="CASCADE"), primary_key=True
+    )
+    phone_last10: Mapped[str] = mapped_column(String(10), primary_key=True)
+    preferred_language: Mapped[str] = mapped_column(String(8), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ClinicQuestion(Base):
     """A clinic-info question a caller asked that the FAQ could NOT answer —
     logged by the voice agent so the doctor can answer it and (optionally) grow

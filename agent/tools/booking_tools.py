@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func, text, update
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from backend.models.schema import Doctor, Token, Patient, Branch
+from backend.models.schema import Branch, CallerPreference, Doctor, Patient, Token
 from backend.services.audit_service import write_audit_row
 from backend.services.doctor_schedule import (
     ResolvedDoctorSchedule,
@@ -1907,14 +1907,19 @@ async def caller_name_matches(
 async def get_preferred_language(
     branch_id: UUID, phone: str | None, db: AsyncSession
 ) -> str | None:
-    """The caller's mapped spoken language (Patient.preferred_language), matched
-    on the LAST 10 DIGITS of their phone. Primary record wins on a shared family
-    phone; falls back to any row with a mapping. None = use Branch.language.
-    RULE 1: branch-scoped."""
+    """The caller's branch-scoped spoken language, matched on last 10 digits.
+
+    CallerPreference works before a booking/patient row exists.  Patient is a
+    compatibility fallback for databases while the additive migration rolls
+    out.  None means use Branch.language.
+    """
     digits = _phone_digits(phone)
     if len(digits) < 10:
         return None
     last10 = digits[-10:]
+    mapped = await db.get(CallerPreference, (branch_id, last10))
+    if mapped is not None:
+        return mapped.preferred_language
     rows = (
         await db.execute(
             select(Patient.preferred_language, Patient.is_primary).where(
@@ -1931,11 +1936,11 @@ async def get_preferred_language(
 async def set_preferred_language(
     branch_id: UUID, phone: str | None, language: str, db: AsyncSession
 ) -> int:
-    """Map this phone to a spoken language (caller explicitly asked to switch).
-    Updates ALL patient rows on the phone so the mapping is consistent whichever
-    row later becomes primary. Commits. Returns rows updated (0 = no patient
-    record yet — the caller's confirm_booking persists it on the new row).
-    RULE 1: branch-scoped."""
+    """Persist a caller's explicit/detected language, booking or no booking.
+
+    The dedicated mapping is authoritative.  Existing family patient rows are
+    updated too for backwards compatibility.  Returns patient rows updated.
+    """
     from agent.i18n import LANGUAGES
 
     if language not in LANGUAGES:
@@ -1944,6 +1949,17 @@ async def set_preferred_language(
     if len(digits) < 10:
         return 0
     last10 = digits[-10:]
+    mapped = await db.get(CallerPreference, (branch_id, last10))
+    if mapped is None:
+        db.add(
+            CallerPreference(
+                branch_id=branch_id,
+                phone_last10=last10,
+                preferred_language=language,
+            )
+        )
+    else:
+        mapped.preferred_language = language
     result = await db.execute(
         update(Patient)
         .where(and_(Patient.branch_id == branch_id, Patient.phone.like(f"%{last10}")))

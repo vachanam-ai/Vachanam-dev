@@ -803,6 +803,7 @@ async def _hard_delete_org(db, org) -> list[str]:
         CalendarWriteTask as _CWT,
         CallLog as _CL,
         CallQuality as _CQ,
+        CallerPreference as _CallerPreference,
         ClinicQuestion as _ClinicQuestion,
         Consent as _Cons,
         Doctor as _Doc,
@@ -833,7 +834,7 @@ async def _hard_delete_org(db, org) -> list[str]:
         for model in (
             _FT, _TN, _CWT, _CQ, _CL, _Call, _Cons, _Tok, _DU,
             _DDS, _WD, _ClinicQuestion, _PM, _Rating, _BV,
-            _Pat, _Doc, _WA,
+            _CallerPreference, _Pat, _Doc, _WA,
         ):
             await db.execute(_delete(model).where(model.branch_id.in_(branch_ids)))
         await db.execute(_delete(_AP).where(_AP.branch_id.in_(branch_ids)))

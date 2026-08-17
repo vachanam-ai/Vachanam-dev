@@ -9,7 +9,7 @@ import uuid
 import pytest
 
 from agent.tools.booking_tools import get_preferred_language, set_preferred_language
-from backend.models.schema import Branch, Organization, Patient
+from backend.models.schema import Branch, CallerPreference, Organization, Patient
 
 pytestmark = pytest.mark.asyncio
 
@@ -100,4 +100,19 @@ async def test_set_rejects_unknown_code(db):
 
 async def test_set_returns_zero_without_patient_row(db):
     br = await _setup(db)
-    assert await set_preferred_language(br.id, "+919000000443", "en", db) == 0
+    phone = "+919000000443"
+    assert await set_preferred_language(br.id, phone, "en", db) == 0
+    # A caller does not have to book before their next call remembers English.
+    assert await get_preferred_language(br.id, phone, db) == "en"
+    stored = await db.get(CallerPreference, (br.id, "9000000443"))
+    assert stored is not None
+    assert stored.preferred_language == "en"
+
+
+async def test_caller_mapping_is_branch_scoped_without_patient_rows(db):
+    br1 = await _setup(db)
+    br2 = await _setup(db)
+    await set_preferred_language(br1.id, PHONE, "hi", db)
+
+    assert await get_preferred_language(br1.id, PHONE, db) == "hi"
+    assert await get_preferred_language(br2.id, PHONE, db) is None

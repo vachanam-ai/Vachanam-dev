@@ -7059,14 +7059,27 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     _early_intro_cache_key: str | None = None
     _early_route_id: str | None = None
     _early_voice: str | None = None
+    _early_language: str | None = None
     _recording_notice_handled = False
 
-    def _start_early_greeting(route: dict) -> None:
+    def _start_early_greeting(
+        route: dict, preferred_language: str | None = None
+    ) -> None:
         nonlocal _early_greeting_task, _early_greeting_texts
         nonlocal _early_intro_texts, _early_intro_cache_key
-        nonlocal _early_route_id, _early_voice
-        route_lang = (route.get("language") or "te").strip()
-        route_clinic = (route.get("name_spoken") or "").strip() or route["name"]
+        nonlocal _early_route_id, _early_voice, _early_language
+        default_lang = (route.get("language") or "te").strip()
+        route_lang = (preferred_language or default_lang).strip()
+        if route_lang not in supported_codes():
+            route_lang = default_lang
+        # name_spoken belongs to the clinic's configured language.  A returning
+        # Hindi/English caller gets the Latin clinic name rather than Telugu
+        # phonetics in an otherwise correctly switched opening.
+        route_clinic = (
+            (route.get("name_spoken") or "").strip()
+            if route_lang == default_lang
+            else ""
+        ) or route["name"]
         route_voice = (route.get("tts_voice") or "").strip()
         route_voice = route_voice or get_lang(route_lang).default_voice
         route_id = str(route["id"])
@@ -7081,6 +7094,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
         _early_route_id = route_id
         _early_voice = route_voice
+        _early_language = route_lang
         _early_intro_texts = intro
         _early_intro_cache_key = intro_key
         if _recording_active:
@@ -7122,8 +7136,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             None,
         )
         if cached_route is not None:
-            _start_early_greeting(cached_route)
-            logger.info("early_greeting_started source=prewarmed_route")
+            _caller_digits = re.sub(r"\D", "", caller or "")
+            _caller_key = (
+                f"{cached_route['id']}:{_caller_digits[-10:]}"
+                if len(_caller_digits) >= 10
+                else ""
+            )
+            _caller_lang = (
+                (ctx.proc.userdata.get("caller_languages") or {}).get(_caller_key)
+                if _caller_key
+                else None
+            )
+            _start_early_greeting(cached_route, _caller_lang)
+            logger.info(
+                "early_greeting_started source=prewarmed_route lang=%s caller_mapped=%s",
+                _early_language,
+                bool(_caller_lang),
+            )
 
     state.call_type = "outbound" if outbound_number else "inbound_booking"
     state.call_start = datetime_cls.now(timezone_utc)
@@ -7253,16 +7282,6 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         else:
             logger.error("early_greeting_route_mismatch authoritative_lookup_won=True")
 
-    # Cache miss / safe fallback: start immediately after authoritative tenant
-    # resolution, preserving the old behavior.
-    if not outbound_number and _early_greeting_task is None:
-        _start_early_greeting({
-            "id": str(branch.id),
-            "name": branch.name,
-            "name_spoken": getattr(branch, "name_spoken", None),
-            "language": branch_lang_code,
-            "tts_voice": getattr(branch, "tts_voice", None),
-        })
     # LATENCY (#390, real call 2026-07-17: lat_pre_session_build=4.66s → first
     # audio 5.81s): the three independent pre-call DB reads — per-caller
     # language, service gate, caller identification — used to run SERIALLY on
@@ -7465,6 +7484,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     lang_cfg = get_lang(lang_code)
     lines = get_lines(lang_code)
 
+    # A route-prewarm miss must not buy speed by speaking the wrong language.
+    # Start from the authoritative caller preference once the concurrent reads
+    # finish.  Normal calls already started above from the zero-wait map.
+    if not outbound_number and _early_greeting_task is None:
+        _start_early_greeting(
+            {
+                "id": str(branch.id),
+                "name": branch.name,
+                "name_spoken": getattr(branch, "name_spoken", None),
+                "language": branch_lang_code,
+                "tts_voice": getattr(branch, "tts_voice", None),
+            },
+            lang_code,
+        )
+
     # A doctor may write the follow-up note in English; speak it in the call's
     # language (clear Telugu), not fast English over a Telugu TTS (Vinay 2026-06-25).
     if (
@@ -7554,7 +7588,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # is unset, transliterate once and store it asynchronously (off the call
         # path) so later calls read it instantly. Best-effort — never blocks.
         _stored_spoken = (getattr(branch, "name_spoken", None) or "").strip()
-        if _stored_spoken:
+        if _stored_spoken and lang_code == branch_lang_code:
             branch_name = _stored_spoken
         else:
             try:
@@ -7575,7 +7609,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     except Exception as _e:  # noqa: BLE001
                         logger.warning("name_spoken_store_failed: %s", _e)
 
-                asyncio.create_task(_store_clinic_spoken())
+                # The stored spelling belongs to Branch.language. A returning
+                # Hindi/English caller must not overwrite it for every caller.
+                if lang_code == branch_lang_code:
+                    asyncio.create_task(_store_clinic_spoken())
         emergency_contact = branch.emergency_contact or ""
         # Soniox catalog voice (clinic-chosen); fall back to the language default.
         # Clinic's chosen voice, unless it's a clone registered for a different
@@ -7780,7 +7817,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                         ctx.room,
                         _early_intro_texts or [],
                         _early_voice,
-                        branch_lang_code,
+                        _early_language or lang_code,
                         cache_key=_early_intro_cache_key,
                     )
                 )
@@ -8105,6 +8142,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             state.call_type = "question_answer"
 
         instructions = _compose_instructions(lang_code)
+        # Start the shared-cache lookup as soon as the byte-stable prompt exists.
+        # It used to happen near AgentSession construction, serially adding an
+        # Upstash round trip even on a cache hit.  Prompt/calendar/runtime setup
+        # now hides that read completely on the normal path.
+        _main_cache_key = _prompt_cache_key(branch.id, lang_code, instructions)
+        _main_cache_task = asyncio.create_task(
+            _resolve_cached_primary_llm(_main_cache_key, instructions)
+        )
 
         # A saved Hindi preference can be corrected to the branch's Telugu
         # default on the first native-script turn. The handoff factory is sync,
@@ -8126,18 +8171,23 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 (_preload_key, _preload_instructions, _preload_lang)
             )
         if _handoff_cache_specs:
-            _handoff_hits = await asyncio.gather(
-                *(
-                    _load_shared_prompt_cache(key, prompt)
-                    for key, prompt, _ in _handoff_cache_specs
-                ),
-                return_exceptions=True,
-            )
-            logger.info(
-                "handoff_prompt_caches_loaded hits=%d requested=%d",
-                sum(hit is True for hit in _handoff_hits),
-                len(_handoff_cache_specs),
-            )
+            async def _load_handoff_caches() -> None:
+                _handoff_hits = await asyncio.gather(
+                    *(
+                        _load_shared_prompt_cache(key, prompt)
+                        for key, prompt, _ in _handoff_cache_specs
+                    ),
+                    return_exceptions=True,
+                )
+                logger.info(
+                    "handoff_prompt_caches_loaded hits=%d requested=%d",
+                    sum(hit is True for hit in _handoff_hits),
+                    len(_handoff_cache_specs),
+                )
+
+            # These entries are needed only if the caller switches language.
+            # Do not delay the current-language call to prepare a possible turn.
+            asyncio.create_task(_load_handoff_caches())
 
         # Reuse the prewarmed CalendarService (Google client build is the slow
         # part of pre-session setup); rebuild only if prewarm missed it.
@@ -8245,8 +8295,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             _seed_ctx.add_message(role="assistant", content="<context_ack/>")
         # Cache the stable clinic prompt. Private caller/date/outbound context
         # remains in _seed_ctx; byte equality below is the final safety guard.
-        _cache_key = _prompt_cache_key(branch.id, lang_code, instructions)
-        _cached_llm = await _resolve_cached_primary_llm(_cache_key, instructions)
+        _cache_key = _main_cache_key
+        _cached_llm = await _main_cache_task
         vachanam_agent = VachanamAgent(
             instructions=instructions,
             chat_ctx=_seed_ctx,
@@ -9598,36 +9648,62 @@ def _prewarm_greeting_routes(proc) -> None:
 
     The authoritative tenant query still runs on every call. This copy is used
     only to start the public clinic opening while Neon's first TLS/query round
-    trip is in flight. It contains no patient data and cannot select tools or
-    booking state.
+    trip is in flight.  A branch+phone-suffix language map lets returning
+    callers hear their saved language from the first word; it cannot select
+    tools, bookings, or another tenant.
     """
     try:
         import asyncpg
 
         dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
 
-        async def _load() -> list:
+        async def _load() -> tuple[list, list]:
             conn = await asyncpg.connect(dsn=dsn, timeout=10, ssl="require")
             try:
-                return await conn.fetch(
+                route_rows = await conn.fetch(
                     """
                     SELECT id::text, did_number, name, name_spoken, language, tts_voice
                     FROM branches
                     WHERE did_number IS NOT NULL AND status = 'active'
                     """
                 )
+                try:
+                    language_rows = await conn.fetch(
+                        """
+                        SELECT branch_id::text, phone_last10, preferred_language
+                        FROM caller_preferences
+                        """
+                    )
+                except asyncpg.UndefinedTableError:
+                    # Rolling deploy safety: the API migration may finish a few
+                    # seconds after an agent process starts.
+                    language_rows = []
+                return route_rows, language_rows
             finally:
                 await conn.close()
 
+        route_rows, language_rows = asyncio.run(_load())
         routes: dict[str, dict] = {}
-        for row in asyncio.run(_load()):
+        for row in route_rows:
             payload = dict(row)
             for key in _did_route_keys(payload.get("did_number")):
                 routes[key] = payload
+        serviceable = set(supported_codes())
+        caller_languages = {
+            f"{row['branch_id']}:{row['phone_last10']}": row["preferred_language"]
+            for row in language_rows
+            if row["preferred_language"] in serviceable
+        }
         proc.userdata["greeting_routes"] = routes
-        logger.info("greeting_routes_prewarmed count=%d", len(routes))
+        proc.userdata["caller_languages"] = caller_languages
+        logger.info(
+            "greeting_routes_prewarmed count=%d caller_languages=%d",
+            len(routes),
+            len(caller_languages),
+        )
     except Exception as exc:  # noqa: BLE001 -- authoritative query remains
         proc.userdata["greeting_routes"] = {}
+        proc.userdata["caller_languages"] = {}
         logger.warning("greeting_routes_prewarm_failed: %s", str(exc)[:140])
 
 
@@ -9665,8 +9741,7 @@ async def _warm_all_clinic_prompt_caches() -> None:
         preferences = await conn.fetch(
             """
             SELECT DISTINCT branch_id::text, preferred_language
-            FROM patients
-            WHERE preferred_language IS NOT NULL
+            FROM caller_preferences
             """
         )
     finally:
@@ -9723,6 +9798,24 @@ async def _warm_all_clinic_prompt_caches() -> None:
                 spoken_clinic = await spoken_text(raw_name, language)
             except Exception:  # noqa: BLE001 — cache warm is best effort
                 spoken_clinic = raw_name
+            # Returning callers hear their saved language in the inbound intro
+            # too.  Warm it alongside the outbound prefix so the preference
+            # changes language, not answer-to-first-audio latency.
+            inbound_intro = inbound_greeting_texts(
+                language, spoken_clinic, recording_active=False
+            )
+            inbound_key = _greeting_cache_key(
+                row["id"],
+                language,
+                _greeting_voice_key(voice),
+                inbound_intro,
+            )
+            greeting_requested += 1
+            greeting_ready += int(
+                await warm_greeting_cache(
+                    inbound_key, inbound_intro, voice, language
+                )
+            )
             prefix = outbound_greeting_texts(
                 language, spoken_clinic, "", "", {}, {},
                 recording_active=False,
