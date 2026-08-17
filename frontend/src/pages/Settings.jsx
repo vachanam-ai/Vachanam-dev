@@ -4,7 +4,7 @@ import { useGSAP } from "@gsap/react";
 import gsap from "gsap";
 import {
   ArrowRight, BookOpenText, Buildings, CalendarCheck, Check, CheckCircle,
-  GearSix, Heart, MapPin, PhoneCall, ShieldWarning, Sparkle, Stethoscope,
+  GearSix, MapPin, PhoneCall, ShieldWarning, Sparkle, Stethoscope,
   UsersThree, WhatsappLogo,
 } from "@phosphor-icons/react";
 import { toast } from "sonner";
@@ -101,17 +101,13 @@ function ClinicCompanion({ message, progress, signal }) {
   const root = useRef(null);
 
   useGSAP(() => {
-    const pupils = root.current?.querySelectorAll(".companion-pupil");
-    const face = root.current?.querySelector(".companion-face");
-    if (!pupils?.length || !face || prefersReducedMotion()) return undefined;
-    const moveX = [...pupils].map((node) => gsap.quickTo(node, "x", { duration: .32, ease: "power3.out" }));
-    const moveY = [...pupils].map((node) => gsap.quickTo(node, "y", { duration: .32, ease: "power3.out" }));
-    const tilt = gsap.quickTo(face, "rotation", { duration: .5, ease: "power3.out" });
+    const doctor = root.current?.querySelector(".companion-doctor");
+    if (!doctor || prefersReducedMotion()) return undefined;
+    const moveX = gsap.quickTo(doctor, "x", { duration: .45, ease: "power3.out" });
+    const tilt = gsap.quickTo(doctor, "rotation", { duration: .5, ease: "power3.out" });
     const onMove = (event) => {
       const nx = (event.clientX / window.innerWidth - .5) * 2;
-      const ny = (event.clientY / window.innerHeight - .5) * 2;
-      moveX.forEach((move) => move(nx * 4.5));
-      moveY.forEach((move) => move(ny * 3.2));
+      moveX(nx * 3);
       tilt(nx * 2.2);
     };
     window.addEventListener("pointermove", onMove, { passive: true });
@@ -120,7 +116,7 @@ function ClinicCompanion({ message, progress, signal }) {
 
   useGSAP(() => {
     if (!signal || prefersReducedMotion()) return;
-    gsap.fromTo(".companion-face", { scale: .94 }, { scale: 1, duration: .55, ease: "back.out(2)" });
+    gsap.fromTo(".companion-doctor", { scale: .96 }, { scale: 1, duration: .42, ease: "power3.out" });
     gsap.fromTo(".companion-message", { opacity: .45, y: 5 }, { opacity: 1, y: 0, duration: .28, ease: "power3.out" });
   }, { scope: root, dependencies: [signal], revertOnUpdate: true });
 
@@ -130,16 +126,8 @@ function ClinicCompanion({ message, progress, signal }) {
         <span><Sparkle size={13} weight="fill" /> Vaani</span>
         <p>{message}</p>
       </div>
-      <div className={`companion-face ${progress === 100 ? "is-complete" : ""}`} aria-hidden>
-        <span className="companion-ear companion-ear-left" />
-        <span className="companion-ear companion-ear-right" />
-        <div className="companion-brow companion-brow-left" />
-        <div className="companion-brow companion-brow-right" />
-        <div className="companion-eye"><i className="companion-pupil" /></div>
-        <div className="companion-eye"><i className="companion-pupil" /></div>
-        <div className="companion-mouth" />
-        <Heart className="companion-heart" size={18} weight="fill" />
-      </div>
+      <img className={`companion-doctor ${progress === 100 ? "is-complete" : ""}`}
+        src="/settings-doctor.png" alt="" aria-hidden />
     </div>
   );
 }
@@ -571,8 +559,17 @@ export default function Settings() {
           <div className="settings-faq-list">
           {(faqRows ?? []).map((row, i) => (
             <div key={i} className="settings-faq-card">
-              <div className="flex items-start justify-between gap-2">
-                <input className="field flex-1 !py-1.5 text-sm font-medium"
+              <div className="settings-faq-card-head">
+                <span>FAQ {String(i + 1).padStart(2, "0")}</span>
+                <button type="button" className="settings-remove-action"
+                  onClick={() => setFaqRows(faqRows.filter((_, j) => j !== i))}>
+                  Remove
+                </button>
+              </div>
+              <label className="settings-faq-field is-question">
+                <span><strong>Q</strong> Patient question</span>
+                <textarea className="settings-faq-control" rows={2}
+                  aria-label={`Patient question ${i + 1}`}
                   value={row.q}
                   placeholder="Question callers ask…"
                   onChange={(e) => {
@@ -580,19 +577,19 @@ export default function Settings() {
                     next[i] = { ...next[i], q: e.target.value };
                     setFaqRows(next);
                   }} />
-                <button type="button" className="settings-remove-action"
-                  onClick={() => setFaqRows(faqRows.filter((_, j) => j !== i))}>
-                  Remove
-                </button>
-              </div>
-              <textarea className="field mt-1.5 min-h-[40px] text-sm" rows={2}
-                value={row.a}
-                placeholder="Your clinic's answer (spoken by the agent)…"
-                onChange={(e) => {
-                  const next = [...faqRows];
-                  next[i] = { ...next[i], a: e.target.value };
-                  setFaqRows(next);
-                }} />
+              </label>
+              <label className="settings-faq-field is-answer">
+                <span><strong>A</strong> Approved answer</span>
+                <textarea className="settings-faq-control" rows={3}
+                  aria-label={`Approved answer ${i + 1}`}
+                  value={row.a}
+                  placeholder="Your clinic's answer (spoken by the agent)…"
+                  onChange={(e) => {
+                    const next = [...faqRows];
+                    next[i] = { ...next[i], a: e.target.value };
+                    setFaqRows(next);
+                  }} />
+              </label>
             </div>
           ))}
           </div>

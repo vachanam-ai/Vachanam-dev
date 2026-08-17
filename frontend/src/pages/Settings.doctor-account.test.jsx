@@ -17,7 +17,7 @@ vi.mock("../api/client.js", () => ({
   fetchStaff: vi.fn(() => Promise.resolve([])),
   fetchDoctors: vi.fn(() => Promise.resolve([doctor])),
   fetchPlan: vi.fn(() => Promise.resolve({ plan: "clinic", status: "active" })),
-  getBranchFaq: vi.fn(() => Promise.resolve([])),
+  getBranchFaq: vi.fn(() => Promise.resolve({ faq: [{ q: "What are your timings?", a: "9 am to 9 pm" }], template: [], asked: [] })),
   getBranchVoices: vi.fn(() => Promise.resolve([])),
   addStaff: vi.fn(),
   changePlan: vi.fn(),
@@ -54,6 +54,9 @@ describe("Settings — doctor account creation", () => {
 
     expect(await screen.findByRole("heading", { name: "Your path to the first perfect call" })).toBeInTheDocument();
     expect(screen.getByText("Vaani")).toBeInTheDocument();
+    expect(container.querySelector(".companion-doctor")).toHaveAttribute("src", "/settings-doctor.png");
+    expect(await screen.findByLabelText("Patient question 1")).toHaveValue("What are your timings?");
+    expect(screen.getByLabelText("Approved answer 1")).toHaveValue("9 am to 9 pm");
     expect(container.querySelectorAll(".settings-journey-card")).toHaveLength(5);
     expect(container.querySelector(".settings-danger-disclosure")).not.toHaveAttribute("open");
   });
