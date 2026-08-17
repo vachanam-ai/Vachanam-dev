@@ -77,6 +77,16 @@ def test_spa_does_not_persist_or_send_bearer_jwt():
     assert '"X-Vachanam-Session": "cookie"' in client
 
 
+def test_production_spa_uses_same_site_api_for_cookie_sessions():
+    root = Path(__file__).parents[2]
+    production_env = (root / "frontend" / ".env.production").read_text()
+    index = (root / "frontend" / "index.html").read_text()
+    headers = (root / "frontend" / "public" / "_headers").read_text()
+    assert "VITE_API_URL=https://api.vachanam.in" in production_env
+    assert 'href="https://api.vachanam.in"' in index
+    assert "vachanam-backend.onrender.com" not in production_env + index + headers
+
+
 def _make_jwt(
     user_id: str | None = None,
     branch_ids: list[str] | None = None,

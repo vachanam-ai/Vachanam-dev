@@ -46,7 +46,7 @@ flyctl deploy
 cd frontend
 npm run build
 # Cloudflare Pages: connect repo, build cmd "npm run build", output "dist"
-# add env vars: VITE_GOOGLE_OAUTH_CLIENT_ID, VITE_API_URL=https://vachanam-backend.onrender.com
+# add env vars: VITE_GOOGLE_OAUTH_CLIENT_ID, VITE_API_URL=https://api.vachanam.in
 ```
 
 ### 4. DNS + SSL
