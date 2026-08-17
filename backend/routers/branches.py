@@ -4,7 +4,7 @@ Rule 1: every query filters by branch_id; access enforced via assert_branch_acce
 Currently: voice selection for the clinic's AI agent.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 import structlog
@@ -15,7 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.database import get_db
-from backend.middleware.auth_middleware import CurrentUser, get_current_user
+from backend.middleware.auth_middleware import (
+    CurrentUser,
+    get_current_user,
+    revoke_user_version,
+)
 from backend.middleware.branch_guard import assert_branch_access
 from backend.middleware.rate_limit import queue_today_limit
 from backend.models.schema import Branch, BranchVoice
@@ -2037,8 +2041,11 @@ async def remove_staff(
         .where(Doctor.user_id == uid)
         .values(user_id=None)
     )
+    removed_token_version = int(target.token_version or 0)
     await db.execute(User.__table__.delete().where(User.id == uid))
     await db.commit()
+    expiry = int((datetime.now(timezone.utc) + timedelta(hours=settings.jwt_expire_hours)).timestamp())
+    await revoke_user_version(user_id, removed_token_version, expiry)
     request.state.audit_resource_id = user_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id

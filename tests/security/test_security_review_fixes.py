@@ -258,7 +258,8 @@ def test_delete_account_reverifies_google_token():
     # password branch still enforces step-up
     assert "_verify_password(body.password" in src
     # google-only branch now re-verifies a fresh ID token AND matches the email
-    assert "verify_oauth2_token(" in src
+    assert "google_id_token.verify_oauth2_token" in src
+    assert "asyncio.to_thread" in src  # network verification must not block FastAPI
     assert 'info.get("email")' in src
     assert "me.email" in src
 

@@ -47,7 +47,7 @@ const FAQ = [
 function Brand() {
   return (
     <span className="marketing-brand">
-      <span className="brand-symbol" aria-hidden><img src="/favicon.png" alt="" /></span>
+      <span className="brand-symbol" aria-hidden><img src="/vachanam-mark.svg" alt="" /></span>
       <span><strong>Vachanam</strong><small>AI clinic receptionist</small></span>
     </span>
   );

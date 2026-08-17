@@ -13,6 +13,29 @@ import {
 
 const AuthContext = createContext(null);
 
+/** JWT claims are already signed by our backend. Reading them locally lets the
+ * app render immediately; protected API calls still perform server-side
+ * signature, revocation, and account validation. */
+export const sessionFromToken = (token) => {
+  try {
+    const encoded = token?.split(".")[1];
+    if (!encoded) return null;
+    const padded = encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+    const claims = JSON.parse(atob(padded));
+    if (!claims.sub || !claims.email || !claims.role || Number(claims.exp) * 1000 <= Date.now()) return null;
+    return {
+      user_id: claims.sub,
+      email: claims.email,
+      role: claims.role,
+      org_id: claims.org_id ?? null,
+      branch_ids: claims.branch_ids ?? [],
+      is_admin: Boolean(claims.is_admin)
+    };
+  } catch {
+    return null;
+  }
+};
+
 /** Role → landing route. Single source of truth for role-based homes. */
 export const roleHome = (role) =>
   ({
@@ -24,21 +47,27 @@ export const roleHome = (role) =>
   })[role] ?? "/queue";
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(Boolean(getToken()));
+  const [user, setUser] = useState(() => sessionFromToken(getToken()));
+  const [loading] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState(null);
 
   useEffect(() => {
     if (!getToken()) return;
     fetchMe()
       .then(setUser)
-      .catch(() => clearToken())
-      .finally(() => setLoading(false));
+      .catch(() => {
+        clearToken();
+        setUser(null);
+      });
   }, []);
 
-  const finishLogin = useCallback(async (data) => {
+  const finishLogin = useCallback((data) => {
     setToken(data.access_token);
-    const me = await fetchMe();
+    const me = sessionFromToken(data.access_token);
+    if (!me) {
+      clearToken();
+      throw new Error("The server returned an invalid session");
+    }
     setUser(me);
     return me;
   }, []);

@@ -39,6 +39,22 @@ export default function Login() {
     revealStagger(pageRef.current);
   }, []);
 
+  // The clinic shell is the next screen for every user. Fetch its code while
+  // the browser is idle on the login form so a successful Google response can
+  // paint the dashboard immediately instead of starting another download.
+  useEffect(() => {
+    const preload = () => Promise.all([
+      import("../components/Shell.jsx"),
+      import("./Dashboard.jsx")
+    ]);
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(preload, { timeout: 1500 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(preload, 300);
+    return () => window.clearTimeout(id);
+  }, []);
+
   useEffect(() => {
     fetch(`${API_BASE}/auth/founding-slots`)
       .then((response) => (response.ok ? response.json() : null))

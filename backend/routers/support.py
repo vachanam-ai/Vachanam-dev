@@ -24,6 +24,7 @@ from backend.middleware.auth_middleware import (
     optional_current_user,
     require_support_admin,
     require_support_staff,
+    revoke_user_version,
 )
 from backend.middleware.rate_limit import default_limit
 from backend.models.schema import SupportMessage, SupportTicket, User
@@ -492,7 +493,10 @@ async def delete_staff(staff_id: uuid.UUID, _admin: CurrentUser = Depends(requir
     ).scalar_one_or_none()
     if u is None:
         raise HTTPException(status_code=404, detail="Support staff not found")
+    token_version = int(u.token_version or 0)
     await db.delete(u)
     await db.commit()
+    expiry = int((datetime.now(timezone.utc) + timedelta(hours=settings.jwt_expire_hours)).timestamp())
+    await revoke_user_version(str(staff_id), token_version, expiry)
     logger.info("support_staff_deleted", staff_id=str(staff_id))
     return {"ok": True}

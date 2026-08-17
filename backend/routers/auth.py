@@ -12,10 +12,13 @@ Flow:
 
 No password storage. Google handles password + 2FA.
 """
+import asyncio
 import uuid as uuid_mod
 from typing import Literal
 
+import requests
 import structlog
+from cachecontrol import CacheControl
 from fastapi import APIRouter, Depends, HTTPException, Request
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
@@ -28,10 +31,12 @@ from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.middleware.auth_middleware import (
     CurrentUser,
+    cache_active_user_version,
     create_access_token,
     get_current_user,
     revoke_jwt,
     revoke_org_sessions,
+    revoke_user_version,
 )
 from backend.middleware.rate_limit import (
     auth_google_limit,
@@ -45,6 +50,11 @@ from backend.services.turnstile import require_turnstile
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+# Google publishes long-lived signing certificates. Cache them according to
+# their HTTP headers and keep verification off FastAPI's event loop; a fresh
+# blocking certificate download was the dominant first-login stall.
+_GOOGLE_REQUEST = google_requests.Request(session=CacheControl(requests.Session()))
 
 
 class GoogleLoginRequest(BaseModel):
@@ -87,9 +97,10 @@ async def google_login(request: Request, body: GoogleLoginRequest) -> TokenRespo
         raise HTTPException(status_code=401, detail="OAuth not configured")
 
     try:
-        info = google_id_token.verify_oauth2_token(
+        info = await asyncio.to_thread(
+            google_id_token.verify_oauth2_token,
             body.id_token,
-            google_requests.Request(),
+            _GOOGLE_REQUEST,
             settings.google_oauth_client_id,
         )
     except ValueError as e:
@@ -146,6 +157,7 @@ async def google_login(request: Request, body: GoogleLoginRequest) -> TokenRespo
         user_email = user.email
         user_role = user.role
         token = create_access_token(user)
+        cache_active_user_version(user)
 
     logger.info("user_login", user_id=str(user_id), email=user_email, role=user_role)
 
@@ -267,8 +279,9 @@ async def delete_account(
                     status_code=401, detail="Google re-verification required to delete"
                 )
             try:
-                info = google_id_token.verify_oauth2_token(
-                    body.id_token, google_requests.Request(), settings.google_oauth_client_id
+                info = await asyncio.to_thread(
+                    google_id_token.verify_oauth2_token,
+                    body.id_token, _GOOGLE_REQUEST, settings.google_oauth_client_id
                 )
             except ValueError:
                 await record_failed_login(client_ip)
@@ -463,8 +476,9 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
         if not settings.google_oauth_client_id:
             raise HTTPException(status_code=401, detail="OAuth not configured")
         try:
-            info = google_id_token.verify_oauth2_token(
-                body.id_token, google_requests.Request(), settings.google_oauth_client_id
+            info = await asyncio.to_thread(
+                google_id_token.verify_oauth2_token,
+                body.id_token, _GOOGLE_REQUEST, settings.google_oauth_client_id
             )
         except ValueError:
             await record_failed_login(client_ip)
@@ -586,6 +600,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
 
         user_id = user.id
         token = create_access_token(user)
+        cache_active_user_version(user)
 
     logger.info("clinic_registered", user_id=str(user_id), org=body.clinic_name[:30])
     try:
@@ -635,6 +650,7 @@ async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
         user_id = user.id
         user_role = user.role
         token = create_access_token(user)
+        cache_active_user_version(user)
 
     logger.info("user_login", user_id=str(user_id), role=user_role, method="password")
     try:
@@ -805,11 +821,19 @@ async def reset_password(request: Request, body: ResetPasswordRequest) -> TokenR
             # Code verified but no user — should not happen; treat as failure.
             raise HTTPException(status_code=404, detail="Account not found")
         user.password_hash = _hash_password(body.new_password)
-        user.token_version = int(user.token_version or 0) + 1
+        old_token_version = int(user.token_version or 0)
+        user.token_version = old_token_version + 1
         await db.commit()
         await db.refresh(user)
         user_id = user.id
         token = create_access_token(user)
+        cache_active_user_version(user)
+
+    import time
+    await revoke_user_version(
+        str(user_id), old_token_version,
+        int(time.time()) + settings.jwt_expire_hours * 3600,
+    )
 
     await otp_service.clear_verified("email", email)  # one-shot — code can't be reused
     logger.info("password_reset", user_id=str(user_id))

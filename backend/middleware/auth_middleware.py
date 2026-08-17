@@ -13,6 +13,7 @@ Per CLAUDE.md and security spec:
 """
 import uuid
 from datetime import datetime, timedelta, timezone
+from time import monotonic
 
 import structlog
 from fastapi import Depends, HTTPException, Request
@@ -28,6 +29,35 @@ logger = structlog.get_logger()
 
 _ALGORITHM = "HS256"
 _bearer = HTTPBearer(auto_error=True)
+
+# A valid signed session is rechecked against the live user row at most once
+# every 30 seconds per API process. Login primes this cache; explicit account
+# mutations also write Redis revocations, so normal deletion/reset is still
+# immediate across horizontally scaled instances.
+_ACTIVE_USER_TTL_SECONDS = 30
+_active_user_versions: dict[tuple[str, int], float] = {}
+
+
+def cache_active_user_version(user: User) -> None:
+    """Prime the short auth cache after a successful database-backed login."""
+    now = monotonic()
+    if len(_active_user_versions) >= 4096:
+        expired = [key for key, expires in _active_user_versions.items() if expires <= now]
+        for key in expired:
+            _active_user_versions.pop(key, None)
+        if len(_active_user_versions) >= 4096:
+            _active_user_versions.pop(next(iter(_active_user_versions)))
+    key = (str(user.id), int(user.token_version or 0))
+    _active_user_versions[key] = now + _ACTIVE_USER_TTL_SECONDS
+
+
+def _active_user_cached(user_id: str, token_version: int) -> bool:
+    key = (user_id, token_version)
+    expires = _active_user_versions.get(key, 0)
+    if expires > monotonic():
+        return True
+    _active_user_versions.pop(key, None)
+    return False
 
 
 def _revocation_redis():
@@ -110,8 +140,12 @@ async def get_current_user(
         revocation_keys = [f"revoked_jwts:{jti}"]
         if payload.get("org_id"):
             revocation_keys.append(f"revoked_orgs:{payload['org_id']}")
-        # One Redis round-trip covers both ordinary logout and a whole-clinic
-        # erasure. This also invalidates older tokens that predate token_version.
+        if "tv" in payload:
+            revocation_keys.append(
+                f"revoked_user_versions:{payload['sub']}:{int(payload['tv'])}"
+            )
+        # One Redis round-trip covers logout, clinic deletion, staff deletion,
+        # and password-reset token versions.
         revoked = await _revocation_redis().exists(*revocation_keys)
     except HTTPException:
         raise
@@ -124,19 +158,23 @@ async def get_current_user(
         logger.warning("jwt_revoked", jti=jti)
         raise HTTPException(status_code=401, detail="Token revoked")
 
-    # App-issued tokens carry a version tied to the live user row. This makes
-    # staff deletion and password recovery invalidate every older session.
-    # Tokens issued before this rollout have no `tv` and expire naturally
-    # within the existing short JWT lifetime.
+    # App-issued tokens carry a version tied to the live user row. Avoid a
+    # remote Postgres round-trip on every dashboard request: successful login
+    # and a recent validation prime a bounded 30-second cache. Explicit staff
+    # deletion/password reset uses the Redis version key checked above, so the
+    # ordinary mutation paths invalidate immediately on every API instance.
     if "tv" in payload:
-        try:
-            user_uuid = uuid.UUID(str(payload["sub"]))
-        except (ValueError, TypeError):
-            raise HTTPException(status_code=401, detail="Invalid token subject")
-        async with AsyncSessionLocal() as db:
-            live = await db.get(User, user_uuid)
-        if live is None or int(live.token_version or 0) != int(payload["tv"]):
-            raise HTTPException(status_code=401, detail="Session no longer valid")
+        token_version = int(payload["tv"])
+        if not _active_user_cached(str(payload["sub"]), token_version):
+            try:
+                user_uuid = uuid.UUID(str(payload["sub"]))
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=401, detail="Invalid token subject")
+            async with AsyncSessionLocal() as db:
+                live = await db.get(User, user_uuid)
+            if live is None or int(live.token_version or 0) != token_version:
+                raise HTTPException(status_code=401, detail="Session no longer valid")
+            cache_active_user_version(live)
 
     return CurrentUser(
         user_id=payload["sub"],
@@ -249,3 +287,13 @@ async def revoke_org_sessions(org_id: str, exp_timestamp: int) -> None:
     ttl = max(exp_timestamp - now_ts, 1)
     await _revocation_redis().set(f"revoked_orgs:{org_id}", "1", ex=ttl)
     logger.info("org_sessions_revoked", org_id=org_id, ttl=ttl)
+
+
+async def revoke_user_version(user_id: str, token_version: int, exp_timestamp: int) -> None:
+    """Invalidate every token issued for one concrete user session version."""
+    _active_user_versions.pop((str(user_id), int(token_version)), None)
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    ttl = max(exp_timestamp - now_ts, 1)
+    key = f"revoked_user_versions:{user_id}:{int(token_version)}"
+    await _revocation_redis().set(key, "1", ex=ttl)
+    logger.info("user_sessions_revoked", user_id=str(user_id)[-4:], ttl=ttl)

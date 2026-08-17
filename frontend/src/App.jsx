@@ -5,7 +5,6 @@ import { roleHome, useAuth } from "./hooks/useAuth.jsx";
 // are route-split so marketing visitors do not download clinic operations UI.
 import Landing from "./pages/Landing.jsx";
 import NotFound from "./pages/NotFound.jsx";
-import SupportWidget from "./components/SupportWidget.jsx";
 
 // Everything behind login (plus kiosk/help) loads on demand: a public visitor
 // on the landing page should not download the dashboard, charts, or admin
@@ -31,6 +30,7 @@ const TvDisplay = lazy(() => import("./pages/TvDisplay.jsx"));
 const Help = lazy(() => import("./pages/Help.jsx"));
 const MyTickets = lazy(() => import("./pages/MyTickets.jsx"));
 const SupportAdmin = lazy(() => import("./pages/SupportAdmin.jsx"));
+const SupportWidget = lazy(() => import("./components/SupportWidget.jsx"));
 
 function FullScreenSpinner() {
   return (
@@ -214,7 +214,7 @@ export default function App() {
       <Route path="*" element={<NotFound />} />
     </Routes>
     </Suspense>
-    {showWidget && <SupportWidget />}
+    <Suspense fallback={null}>{showWidget && <SupportWidget />}</Suspense>
     </>
   );
 }
