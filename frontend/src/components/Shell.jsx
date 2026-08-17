@@ -62,7 +62,7 @@ function Avatar({ name, online = false, large = false }) {
 function BrandMark({ compact = false }) {
   return (
     <span className="brand-lockup">
-      <span className="brand-symbol" aria-hidden><img src="/vachanam-mark.svg" alt="" /></span>
+      <span className="brand-symbol" aria-hidden><img src="/vachanam-mark.png" alt="" /></span>
       {!compact && <span><strong>Vachanam</strong><small>Clinic intelligence</small></span>}
     </span>
   );
