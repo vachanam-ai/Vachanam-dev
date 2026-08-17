@@ -426,6 +426,53 @@ def _parse_time(value: str) -> time_cls | None:
     return None
 
 
+_PLACEHOLDER_PATIENT_NAMES = {
+    "name", "patient", "patient name", "the patient", "unknown",
+    "whatsapp patient",
+}
+
+
+def _booking_identity_is_grounded(
+    patient_messages: tuple[str, ...], patient_name: str, patient_age: int | None
+) -> bool:
+    """A booking identity must have appeared in the patient's own messages."""
+    import re
+
+    name = " ".join(str(patient_name or "").strip().split())
+    bare_name = name.casefold().strip("[](){}<>._- ")
+    if not bare_name or bare_name in _PLACEHOLDER_PATIENT_NAMES:
+        return False
+    try:
+        age = int(patient_age) if patient_age is not None else 0
+    except (TypeError, ValueError):
+        return False
+    if age < 1 or age > 120:
+        return False
+
+    name_words = set(re.findall(r"\w+", name.casefold()))
+    if not name_words:
+        return False
+    age_word = str(age)
+    name_seen = False
+    age_seen = False
+    age_markers = (
+        "age", "years", "year old", "yrs", "saal", "umar",
+        "vayasu", "samvatsar", "vayassu",
+    )
+    for message in patient_messages:
+        low = str(message or "").casefold()
+        words = set(re.findall(r"\w+", low))
+        has_name = name_words.issubset(words)
+        name_seen = name_seen or has_name
+        if age_word in words and (
+            has_name
+            or low.strip() == age_word
+            or any(marker in low for marker in age_markers)
+        ):
+            age_seen = True
+    return name_seen and age_seen
+
+
 async def _doctors(db: AsyncSession, branch: Branch) -> list[Doctor]:
     return list(
         (
@@ -498,6 +545,7 @@ class WaTools:
     def __init__(
         self, db: AsyncSession, branch: Branch, sender: str, plan: str,
         *, calendar_service=None, meta_service=None,
+        identity_evidence: tuple[str, ...] | None = None,
     ):
         self.db, self.branch, self.sender, self.plan = db, branch, sender, plan
         # None means "use the real thing" (wa_booking picks its own default).
@@ -505,6 +553,7 @@ class WaTools:
         # seam wa_booking.confirm already offers.
         self.calendar_service = calendar_service
         self.meta_service = meta_service
+        self.identity_evidence = identity_evidence
 
     def _booking_kwargs(self) -> dict:
         kw = {}
@@ -580,6 +629,16 @@ class WaTools:
         target, when = _parse_date(date), _parse_time(time)
         if target is None or when is None:
             return {"success": False, "error": "need date as YYYY-MM-DD and time as HH:MM"}
+        if self.identity_evidence is not None and not _booking_identity_is_grounded(
+            self.identity_evidence, patient_name, patient_age
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "The patient has not provided both their name and age. "
+                    "Ask for both; never guess or use placeholders."
+                ),
+            }
 
         slot = Slot(
             doctor_id=doc.id, doctor_name=doc.name,
@@ -628,9 +687,16 @@ class WaTools:
             return {"success": False, "error": "booking could not be completed"}
 
         if result.token is not None:
+            booked_name = (
+                await self.db.execute(
+                    select(Patient.name).where(Patient.id == result.token.patient_id)
+                )
+            ).scalar_one_or_none() or patient_name
             out = {
                 "success": True, "doctor": doc.name, "date": date,
                 "time": _ampm(when) if when else None,
+                "appointment_id": str(result.token.id),
+                "patient": booked_name,
             }
             # A token number is only meaningful for a QUEUE doctor. For an
             # appointment doctor it is the Redis slot counter, which is an
@@ -853,6 +919,20 @@ def _remember_tool_result(
 ) -> dict:
     """Keep verified booking IDs across WhatsApp messages."""
     state = dict(draft or {})
+    if (
+        tool == "book_appointment"
+        and result.get("success") is True
+        and result.get("appointment_id")
+    ):
+        state["appointments"] = [{
+            "appointment_id": str(result["appointment_id"]),
+            "patient": result.get("patient") or args.get("patient_name"),
+            "doctor": result.get("doctor") or args.get("doctor_name"),
+            "date": result.get("date") or args.get("date"),
+            "time": result.get("time") or args.get("time"),
+        }]
+        state.pop("pending", None)
+        return state
     if tool in _MUTATION_TOOLS and result.get("success") is True:
         return {}
 
@@ -930,6 +1010,38 @@ def _verified_booking_context(draft: dict) -> str:
         "my_appointments again; never invent an ID."
     )
     return "\n".join(lines)
+
+
+def _claims_no_booking(reply: str) -> bool:
+    low = (reply or "").casefold().replace("’", "'")
+    if "appointment" not in low and "booking" not in low:
+        return False
+    return any(marker in low for marker in (
+        "don't see", "do not see", "can't find", "cannot find",
+        "couldn't find", "could not find", "no appointment", "no booking",
+        "appointment nahi", "booking nahi", "appointment ledu", "booking ledu",
+    ))
+
+
+def _verified_appointments_reply(draft: dict) -> str:
+    rows = list((draft or {}).get("appointments") or [])
+    facts = []
+    for row in rows:
+        doctor = str(row.get("doctor") or "the doctor").strip()
+        doctor = doctor if doctor.casefold().startswith("dr") else f"Dr. {doctor}"
+        raw_date = str(row.get("date") or "").strip()
+        try:
+            parsed = date_cls.fromisoformat(raw_date)
+            spoken_date = f"{parsed.day} {parsed.strftime('%b')}"
+        except ValueError:
+            spoken_date = raw_date
+        facts.append(
+            f"{row.get('patient') or 'this patient'} with {doctor} on "
+            f"{spoken_date} at {row.get('time') or 'the booked time'}"
+        )
+    if len(facts) == 1:
+        return f"Your confirmed booking is under {facts[0]}."
+    return "Your confirmed bookings on this number are: " + "; ".join(facts) + "."
 
 
 def _history(turns: list[dict], text: str) -> list:
@@ -1014,21 +1126,27 @@ async def handle(
     await wa_session.append(db, branch.id, sender, "patient", text)
 
     now = await wa_booking._branch_now(branch.id, db)
-    tools = WaTools(db, branch, sender, plan)
-    if draft:
-        # A receptionist or voice call may have changed it since the previous
-        # message. Re-read before carrying any stored identifier forward.
-        refreshed = _remember_tool_result(
-            {}, "my_appointments", {}, await tools.my_appointments()
-        )
-        pending = draft.get("pending") or {}
-        valid_ids = {
-            row.get("appointment_id")
-            for row in refreshed.get("appointments", [])
-        }
-        if pending.get("appointment_id") in valid_ids:
-            refreshed["pending"] = pending
-        draft = refreshed
+    patient_messages = tuple(
+        str(turn.get("text") or "")
+        for turn in turns
+        if turn.get("role") == "patient"
+    ) + (text,)
+    tools = WaTools(
+        db, branch, sender, plan, identity_evidence=patient_messages
+    )
+    # Every turn sees the caller-owned DB truth, even if the model forgets to
+    # request it or the prior mutation cleared the in-memory draft.
+    refreshed = _remember_tool_result(
+        {}, "my_appointments", {}, await tools.my_appointments()
+    )
+    pending = draft.get("pending") or {}
+    valid_ids = {
+        row.get("appointment_id")
+        for row in refreshed.get("appointments", [])
+    }
+    if pending.get("appointment_id") in valid_ids:
+        refreshed["pending"] = pending
+    draft = refreshed
     system = SYSTEM_PROMPT.format(
         clinic=branch.name,
         today=now.date().isoformat(),
@@ -1117,6 +1235,12 @@ async def handle(
             # This correction is code, not another prompt: no successful tool
             # means the patient is never told a booking changed.
             reply = _unbacked_mutation_reply(text)
+        if draft.get("appointments") and _claims_no_booking(reply):
+            logger.warning(
+                "wa_agent_known_booking_denied",
+                branch_id=str(branch.id), phone_last4=(sender or "")[-4:],
+            )
+            reply = _verified_appointments_reply(draft)
     except Exception as e:  # noqa: BLE001 — RULE 8: never a dead end
         logger.warning(
             "wa_agent_failed", branch_id=str(branch.id),

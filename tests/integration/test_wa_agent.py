@@ -925,6 +925,107 @@ def test_completed_mutation_claims_are_detected_across_languages(reply):
     assert wa_agent._claims_a_mutation(reply)
 
 
+def test_booking_identity_must_come_from_patient_messages():
+    assert wa_agent._booking_identity_is_grounded(
+        ("My name is Vinay and my age is 24",), "Vinay", 24
+    )
+    assert wa_agent._booking_identity_is_grounded(("Vinay", "24"), "Vinay", 24)
+    assert not wa_agent._booking_identity_is_grounded(
+        ("Can I come at 7 pm?",), "[patient name]", 30
+    )
+    assert not wa_agent._booking_identity_is_grounded(
+        ("Can I come at 7 pm?",), "Vinay", 30
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_cannot_book_with_an_invented_name_and_age(db, monkeypatch):
+    """Exact 17 Aug production failure: 7 pm was booked under
+    '[patient name]', age 30, even though the patient supplied neither."""
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+    calls = 0
+    sent = []
+
+    class CallResponse:
+        function_calls = [SimpleNamespace(
+            name="book_appointment",
+            args={
+                "doctor_name": "Srinivas", "date": _tomorrow(),
+                "time": "09:00", "patient_name": "[patient name]",
+                "patient_age": 30,
+            },
+        )]
+        candidates = [SimpleNamespace(content=object())]
+
+    class TextResponse:
+        function_calls = []
+        candidates = []
+        text = "Please tell me the patient's name and age so I can book it."
+
+    async def fake_model(system, contents, tool_specs):
+        nonlocal calls
+        calls += 1
+        return CallResponse() if calls == 1 else TextResponse()
+
+    async def fake_send(branch, to, text, plan=None):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(wa_agent, "_call_model", fake_model)
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+    monkeypatch.setattr(wa_service, "send_text", fake_send)
+
+    await wa_agent.handle(db, br, "clinic", CALLER, "Can I come at 7 pm?")
+
+    assert sent == ["Please tell me the patient's name and age so I can book it."]
+    assert (await db.execute(select(Token))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_known_booking_cannot_be_denied_on_the_next_message(
+    db, redis, monkeypatch
+):
+    """A committed booking is preloaded every turn and outranks model prose."""
+    _org, br = await _clinic(db)
+    await _doctor(db, br)
+    booked = await _tools(db, br).book_appointment(
+        doctor_name="Srinivas", date=_tomorrow(), time="09:00",
+        patient_name="Vinay", patient_age=24,
+    )
+    assert booked["success"] is True
+    sent = []
+
+    class FalseDenial:
+        function_calls = []
+        candidates = []
+        text = "I'm sorry, I don't see a 9 am booking for you."
+
+    async def fake_model(system, contents, tool_specs):
+        assert "VERIFIED BOOKING STATE FROM THE DATABASE" in system
+        assert "patient=Vinay" in system
+        return FalseDenial()
+
+    async def fake_send(branch, to, text, plan=None):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(wa_agent, "_call_model", fake_model)
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+    monkeypatch.setattr(wa_service, "send_text", fake_send)
+
+    await wa_agent.handle(
+        db, br, "clinic", CALLER,
+        "By the way, under whose name is the 9 am booking?",
+    )
+
+    assert len(sent) == 1
+    assert "under Vinay" in sent[0]
+    assert "Dr. Srinivas" in sent[0]
+    assert "9 am" in sent[0]
+    assert "don't see" not in sent[0].lower()
+
+
 @pytest.mark.asyncio
 async def test_model_cannot_claim_a_booking_change_without_the_tool(db, monkeypatch):
     _org, br = await _clinic(db)
