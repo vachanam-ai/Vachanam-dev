@@ -559,13 +559,7 @@ export default function Settings() {
           <div className="settings-faq-list">
           {(faqRows ?? []).map((row, i) => (
             <div key={i} className="settings-faq-card">
-              <div className="settings-faq-card-head">
-                <span>FAQ {String(i + 1).padStart(2, "0")}</span>
-                <button type="button" className="settings-remove-action"
-                  onClick={() => setFaqRows(faqRows.filter((_, j) => j !== i))}>
-                  Remove
-                </button>
-              </div>
+              <span className="settings-faq-index">FAQ {String(i + 1).padStart(2, "0")}</span>
               <label className="settings-faq-field is-question">
                 <span><strong>Q</strong> Patient question</span>
                 <textarea className="settings-faq-control" rows={2}
@@ -580,7 +574,7 @@ export default function Settings() {
               </label>
               <label className="settings-faq-field is-answer">
                 <span><strong>A</strong> Approved answer</span>
-                <textarea className="settings-faq-control" rows={3}
+                <textarea className="settings-faq-control" rows={2}
                   aria-label={`Approved answer ${i + 1}`}
                   value={row.a}
                   placeholder="Your clinic's answer (spoken by the agent)…"
@@ -590,6 +584,10 @@ export default function Settings() {
                     setFaqRows(next);
                   }} />
               </label>
+              <button type="button" className="settings-remove-action"
+                onClick={() => setFaqRows(faqRows.filter((_, j) => j !== i))}>
+                Remove
+              </button>
             </div>
           ))}
           </div>

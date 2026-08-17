@@ -613,21 +613,20 @@ a.app-person-row:hover { background: rgba(236,255,248,.08); }
 .settings-state { display: inline-flex; min-height: 27px; align-items: center; gap: 4px; border-radius: 9px; padding: 5px 8px; color: rgb(var(--slate)); background: rgb(var(--pill)); font-size: 9px; font-weight: 700; }.settings-state.is-done { color: rgb(var(--good)); background: rgb(var(--good-bg)); }
 .settings-section-body { margin-top: 24px; }.settings-section .field { background: rgb(var(--surface)/.86); }.settings-section .label { margin-bottom: 7px; }
 .settings-info-box { margin-top: 18px; border: 0; border-radius: 16px; padding: 16px; color: rgb(var(--ink)); background: rgb(var(--surface)/.68); box-shadow: inset 0 0 0 1px rgb(var(--hairline)); font-size: 11px; line-height: 1.55; }
-.settings-faq-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
-.settings-faq-card { display: grid; min-width: 0; gap: 9px; border: 1px solid rgb(var(--hairline)); border-radius: 16px; padding: 13px; background: rgb(var(--surface)); transition: border-color 170ms ease,transform 170ms cubic-bezier(.23,1,.32,1); }
-.settings-faq-card-head { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 10px; padding-left: 3px; }
-.settings-faq-card-head > span { color: rgb(var(--slate)); font-size: 9px; font-weight: 750; letter-spacing: .08em; }
-.settings-faq-field { display: grid; gap: 7px; border-radius: 12px; padding: 11px 12px; }
+.settings-faq-list { display: grid; gap: 10px; }
+.settings-faq-card { display: grid; grid-template-columns: 54px minmax(0,1fr) minmax(0,1fr) auto; min-width: 0; align-items: start; gap: 10px; border: 1px solid rgb(var(--hairline)); border-radius: 14px; padding: 10px; background: rgb(var(--surface)); transition: border-color 170ms ease,transform 170ms cubic-bezier(.23,1,.32,1); }
+.settings-faq-index { align-self: center; color: rgb(var(--slate)); font-size: 9px; font-weight: 750; letter-spacing: .08em; }
+.settings-faq-field { display: grid; min-width: 0; gap: 5px; border-radius: 10px; padding: 8px 9px; }
 .settings-faq-field.is-question { color: rgb(var(--gold-ink)); background: rgb(var(--gold-soft)); }
 .settings-faq-field.is-answer { color: rgb(var(--teal-deep)); background: rgb(var(--teal-mint)); }
 .settings-faq-field > span { display: flex; align-items: center; gap: 7px; font-size: 10px; font-weight: 700; }
 .settings-faq-field > span strong { display: grid; width: 21px; height: 21px; place-items: center; border-radius: 7px; color: rgb(var(--surface)); font-size: 9px; }
 .settings-faq-field.is-question > span strong { background: rgb(var(--gold-ink)); }
 .settings-faq-field.is-answer > span strong { background: rgb(var(--teal-deep)); }
-.settings-faq-control { width: 100%; min-height: 48px; resize: vertical; border: 0; border-radius: 9px; padding: 10px 11px; color: rgb(var(--ink)); background: rgb(var(--surface)/.82); font-size: 13px; line-height: 1.45; outline: none; transition: box-shadow 150ms ease,background-color 150ms ease; }
+.settings-faq-control { width: 100%; min-height: 44px; resize: vertical; border: 0; border-radius: 8px; padding: 7px 9px; color: rgb(var(--ink)); background: rgb(var(--surface)/.82); font-size: 13px; line-height: 1.4; outline: none; transition: box-shadow 150ms ease,background-color 150ms ease; }
 .settings-faq-control::placeholder { color: rgb(var(--slate)); opacity: 1; }
 .settings-faq-control:focus-visible { background: rgb(var(--surface)); box-shadow: 0 0 0 2px currentColor; }
-.settings-remove-action { min-height: 38px; flex: none; border: 0; border-radius: 10px; padding: 7px 9px; color: rgb(var(--slate)); background: transparent; font-size: 10px; font-weight: 650; transition: color 150ms ease,background-color 150ms ease; }.settings-remove-action:hover { color: rgb(var(--danger)); background: rgb(var(--danger-bg)); }
+.settings-remove-action { min-height: 44px; flex: none; border: 0; border-radius: 10px; padding: 7px 9px; color: rgb(var(--slate)); background: transparent; font-size: 10px; font-weight: 650; transition: color 150ms ease,background-color 150ms ease; }.settings-remove-action:hover { color: rgb(var(--danger)); background: rgb(var(--danger-bg)); }
 .settings-team-layout { display: grid; grid-template-columns: minmax(0,1.05fr) minmax(330px,.95fr); gap: 24px; }.settings-team-roster,.settings-team-form { border: 1px solid rgb(var(--hairline)); border-radius: 18px; padding: 18px; background: rgb(var(--surface)/.72); }.settings-team-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-content: start; gap: 14px; }.settings-subhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }.settings-subhead span { color: rgb(var(--slate)); font-size: 9px; font-weight: 720; letter-spacing: .1em; text-transform: uppercase; }.settings-subhead strong { color: rgb(var(--teal-deep)); font-size: 10px; }.settings-team-member { display: flex; align-items: center; gap: 11px; border-bottom: 1px solid rgb(var(--hairline)); padding: 12px 2px; }.settings-team-member:last-child { border-bottom: 0; }.settings-member-avatar { display: grid; width: 38px; height: 38px; flex: none; place-items: center; border-radius: 12px; color: rgb(var(--teal-deep)); background: rgb(var(--teal-pale)); font-size: 11px; font-weight: 750; }.settings-empty-note { border-radius: 12px; padding: 20px; color: rgb(var(--slate)); background: rgb(var(--pill)); font-size: 11px; text-align: center; }
 .settings-danger-disclosure { border: 1px solid rgb(var(--hairline)); border-radius: 16px; background: rgb(var(--pill)); }.settings-danger-disclosure summary { display: flex; cursor: pointer; list-style: none; align-items: center; justify-content: space-between; gap: 18px; padding: 16px; }.settings-danger-disclosure summary::-webkit-details-marker { display: none; }.settings-danger-disclosure summary > span:first-child { display: grid; }.settings-danger-disclosure summary strong { font-size: 12px; }.settings-danger-disclosure summary small { margin-top: 3px; color: rgb(var(--slate)); font-size: 10px; }.settings-danger-disclosure summary > span:last-child { color: rgb(var(--danger)); font-size: 10px; font-weight: 700; }.settings-danger-body { border-top: 1px solid rgb(var(--hairline)); padding: 18px; }
 @media (hover: hover) and (pointer: fine) {
@@ -825,7 +824,10 @@ a.app-person-row:hover { background: rgba(236,255,248,.08); }
   .settings-section-icon { width: 42px; height: 42px; }
   .settings-state { grid-column: 2; justify-self: start; }
   .settings-content-heading { padding: 18px 2px 0; }
-  .settings-faq-list { grid-template-columns: 1fr; }
+  .settings-faq-card { grid-template-columns: 1fr auto; }
+  .settings-faq-index { min-height: 44px; display: flex; align-items: center; padding-left: 3px; }
+  .settings-faq-field { grid-column: 1 / -1; }
+  .settings-faq-card > .settings-remove-action { grid-column: 2; grid-row: 1; }
   .settings-team-form { grid-template-columns: 1fr; }
   .settings-team-form .sm\:col-span-2 { grid-column: auto; }
   .settings-danger-disclosure summary { align-items: flex-start; }
