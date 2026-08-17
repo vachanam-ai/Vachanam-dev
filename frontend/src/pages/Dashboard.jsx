@@ -328,7 +328,7 @@ export default function Dashboard() {
     enabled: Boolean(branchId),
     refetchInterval: 60_000
   });
-  const { data: an } = useQuery({
+  const { data: an, isLoading: analyticsLoading } = useQuery({
     queryKey: ["analytics", branchId, days],
     queryFn: () => fetchAnalytics(branchId, days),
     enabled: Boolean(branchId),
@@ -340,7 +340,7 @@ export default function Dashboard() {
   const { data: cq } = useQuery({
     queryKey: ["call-quality", branchId, days],
     queryFn: () => fetchCallQuality(branchId, days),
-    enabled: Boolean(branchId),
+    enabled: Boolean(branchId && queue && an),
     refetchInterval: 120_000
   });
 
@@ -350,7 +350,21 @@ export default function Dashboard() {
     // flips once leaves every later-mounting card at opacity 0 forever.
   }, [queue]);
 
-  if (isLoading) return <p className="font-ui text-slate">Reading today&rsquo;s ledger…</p>;
+  if (isLoading || analyticsLoading) {
+    return (
+      <div className="space-y-6" aria-busy="true">
+        <PageHeader eyebrow="Clinic overview" title="Today at a glance" />
+        <div className="band animate-pulse" role="status" aria-label="Loading today's clinic data">
+          <div className="h-32 rounded-2xl bg-teal-pale" />
+          <div className="h-32 rounded-2xl bg-teal-pale" />
+          <div className="h-32 rounded-2xl bg-teal-pale" />
+        </div>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((item) => <div key={item} className="h-24 animate-pulse rounded-2xl bg-teal-pale" />)}
+        </div>
+      </div>
+    );
+  }
 
   const s = queue?.summary ?? { total: 0, attended: 0, no_show: 0, remaining: 0 };
   const seenSoFar = s.attended + s.no_show;

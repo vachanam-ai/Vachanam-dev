@@ -132,8 +132,22 @@ export default function Shell() {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [branchNames, setBranchNames] = useState({});
+  const [loadSidebarData, setLoadSidebarData] = useState(false);
 
-  const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan, enabled: role === "org_admin", staleTime: 60_000 });
+  // Let the route's primary ledger request take the first available DB
+  // connection. Sidebar metadata is useful, but it must not delay the page the
+  // user actually opened on the deliberately small Supabase session pool.
+  useEffect(() => {
+    const start = () => setLoadSidebarData(true);
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(start, { timeout: 500 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(start, 300);
+    return () => window.clearTimeout(id);
+  }, []);
+
+  const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan, enabled: loadSidebarData && role === "org_admin", staleTime: 60_000 });
   const hasWhatsapp = WHATSAPP_SELF_SERVE_LIVE || Boolean(plan.data?.whatsapp_included || plan.data?.whatsapp_addon);
   const links = navFor(role).filter((item) => {
     if (item.to === "/whatsapp") return true;
@@ -143,11 +157,11 @@ export default function Shell() {
   const hasBranch = ["org_admin", "receptionist", "doctor"].includes(role);
   const { data: doctorsRaw } = useQuery({
     queryKey: ["doctors", branchId], queryFn: () => fetchDoctors(branchId),
-    enabled: Boolean(branchId && hasBranch), staleTime: 60_000,
+    enabled: Boolean(loadSidebarData && branchId && hasBranch), staleTime: 60_000,
   });
   const { data: team } = useQuery({
     queryKey: ["staff", branchId], queryFn: () => fetchStaff(branchId),
-    enabled: Boolean(branchId && role === "org_admin"), staleTime: 60_000,
+    enabled: Boolean(loadSidebarData && branchId && role === "org_admin"), staleTime: 60_000,
   });
   const doctors = Array.isArray(doctorsRaw) ? doctorsRaw : doctorsRaw?.doctors ?? [];
   const queue = queryClient.getQueryData(["queue", branchId]);

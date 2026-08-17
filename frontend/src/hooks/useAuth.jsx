@@ -46,10 +46,19 @@ export const roleHome = (role) =>
     support: "/support-admin"
   })[role] ?? "/queue";
 
+const initialBranch = (user) => {
+  const ids = user?.branch_ids ?? [];
+  if (!ids.length) return null;
+  const saved = localStorage.getItem(`vachanam_branch_${user.user_id}`);
+  return ids.includes(saved) ? saved : ids[0];
+};
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => sessionFromToken(getToken()));
   const [loading] = useState(false);
-  const [selectedBranchId, setSelectedBranchId] = useState(null);
+  const [selectedBranchId, setSelectedBranchId] = useState(() =>
+    initialBranch(sessionFromToken(getToken()))
+  );
 
   useEffect(() => {
     if (!getToken()) return;
@@ -69,6 +78,7 @@ export function AuthProvider({ children }) {
       throw new Error("The server returned an invalid session");
     }
     setUser(me);
+    setSelectedBranchId(initialBranch(me));
     return me;
   }, []);
 

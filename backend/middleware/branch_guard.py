@@ -60,8 +60,13 @@ async def assert_branch_access(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid branch_id format")
 
-    # Rule 2: org_admin auto-inherits all branches in own org
+    # Rule 2: org_admin auto-inherits all branches in own org. The backend
+    # already signed the user's current branch_ids into this JWT, so the common
+    # path needs no extra Postgres round-trip on every dashboard request. Keep
+    # the DB fallback for a branch created after this token was issued.
     if current_user.role == "org_admin":
+        if branch_id in (current_user.branch_ids or []):
+            return
         result = await db.execute(
             select(Branch.org_id).where(Branch.id == branch_uuid)
         )

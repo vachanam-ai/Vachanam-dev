@@ -7,6 +7,7 @@ import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
+import { loadGoogleIdentity } from "../lib/googleIdentity.js";
 import PasswordField from "../components/PasswordField.jsx";
 import { PLAN_CATALOG, PUBLIC_PLAN_KEYS, TRIAL_DAYS } from "../lib/plans.js";
 
@@ -92,7 +93,6 @@ export default function Register() {
     let cancelled = false;
     const mount = () => {
       if (cancelled) return;
-      if (!window.google?.accounts?.id) return void setTimeout(mount, 150);
       if (!GOOGLE_CLIENT_ID || !gsiRef.current) return;
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
@@ -141,7 +141,9 @@ export default function Register() {
         text: "signup_with"
       });
     };
-    mount();
+    loadGoogleIdentity().then(mount).catch(() => {
+      if (!cancelled) toast.error("Google signup could not load");
+    });
     const stopWatch = watchTheme(paint); // re-render when the theme toggles
     return () => {
       cancelled = true;

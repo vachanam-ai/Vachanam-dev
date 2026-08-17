@@ -302,7 +302,7 @@ export default function Landing() {
 
           <figure data-hero-visual className="marketing-hero-visual">
             <div className="marketing-image-frame">
-              <img src="/images/clinic-reception-hero.png" alt="A receptionist speaking with a patient in a contemporary Indian clinic" width="1536" height="1024" fetchPriority="high" />
+              <img src="/images/clinic-reception-hero.jpg" alt="A receptionist speaking with a patient in a contemporary Indian clinic" width="1586" height="992" fetchPriority="high" decoding="async" />
             </div>
             <figcaption>
               <span className="visual-signal"><i /><i /><i /><i /><i /></span>

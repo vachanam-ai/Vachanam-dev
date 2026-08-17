@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { roleHome, useAuth } from "../hooks/useAuth.jsx";
 import { revealStagger } from "../lib/motion.js";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
+import { loadGoogleIdentity } from "../lib/googleIdentity.js";
 import { API_BASE, forgotPassword } from "../api/client.js";
 import Turnstile, { TURNSTILE_ON } from "../components/Turnstile.jsx";
 import PasswordField from "../components/PasswordField.jsx";
@@ -73,7 +74,6 @@ export default function Login() {
     let cancelled = false;
     const mount = () => {
       if (cancelled) return;
-      if (!window.google?.accounts?.id) return void setTimeout(mount, 150);
       if (!GOOGLE_CLIENT_ID) return;
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
@@ -106,7 +106,9 @@ export default function Login() {
         text: "continue_with"
       });
     };
-    mount();
+    loadGoogleIdentity().then(mount).catch(() => {
+      if (!cancelled) toast.error("Google sign-in could not load");
+    });
     const stopWatch = watchTheme(paint); // re-render when the theme toggles
     return () => {
       cancelled = true;

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { gsiTheme, watchTheme } from "../lib/gsiTheme.js";
+import { loadGoogleIdentity } from "../lib/googleIdentity.js";
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
@@ -27,10 +28,6 @@ export default function GoogleReauth({ onToken, disabled }) {
     };
     const mount = () => {
       if (cancelled) return;
-      if (!window.google?.accounts?.id) {
-        window.setTimeout(mount, 150);
-        return;
-      }
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: (response) => response?.credential && handler.current?.(response.credential),
@@ -38,7 +35,7 @@ export default function GoogleReauth({ onToken, disabled }) {
       paint();
     };
 
-    mount();
+    loadGoogleIdentity().then(mount).catch(() => {});
     const stopWatching = watchTheme(paint);
     return () => {
       cancelled = true;

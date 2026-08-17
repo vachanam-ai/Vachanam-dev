@@ -1,5 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Warning, X } from "@phosphor-icons/react";
 
 const DialogContext = createContext({ ask: async () => false });
 
@@ -47,8 +46,8 @@ export function ActionDialogProvider({ children }) {
         <div className="action-dialog-layer" role="presentation">
           <button className="action-dialog-backdrop" type="button" aria-label="Close dialog" onClick={() => close(false)} />
           <section className={`action-dialog is-${dialog.tone ?? "default"}`} role="alertdialog" aria-modal="true" aria-labelledby="action-dialog-title" aria-describedby="action-dialog-description">
-            <div className="action-dialog-icon" aria-hidden><Warning size={22} weight="duotone" /></div>
-            <button className="action-dialog-close" type="button" aria-label="Close" onClick={() => close(false)}><X size={18} weight="bold" /></button>
+            <div className="action-dialog-icon" aria-hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M10.3 4.2 2.6 17.5A2 2 0 0 0 4.3 20h15.4a2 2 0 0 0 1.7-2.5L13.7 4.2a2 2 0 0 0-3.4 0Z" /><path d="M12 9v4M12 17h.01" strokeLinecap="round" /></svg></div>
+            <button className="action-dialog-close" type="button" aria-label="Close" onClick={() => close(false)}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden><path d="m6 6 12 12M18 6 6 18" strokeLinecap="round" /></svg></button>
             <div className="action-dialog-copy">
               <p className="action-dialog-kicker">{dialog.eyebrow ?? (dialog.tone === "danger" ? "Irreversible action" : "Please confirm")}</p>
               <h2 id="action-dialog-title">{dialog.title}</h2>

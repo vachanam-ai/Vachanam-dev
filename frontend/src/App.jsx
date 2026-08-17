@@ -1,15 +1,15 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { roleHome, useAuth } from "./hooks/useAuth.jsx";
-// Only the landing page is eager. Authentication and the authenticated shell
-// are route-split so marketing visitors do not download clinic operations UI.
-import Landing from "./pages/Landing.jsx";
 import NotFound from "./pages/NotFound.jsx";
 
 // Everything behind login (plus kiosk/help) loads on demand: a public visitor
 // on the landing page should not download the dashboard, charts, or admin
 // consoles (PSI: landing shipped the whole 550KB bundle, FIXLOG #338).
 const Shell = lazy(() => import("./components/Shell.jsx"));
+// Keep the marketing page out of authenticated reloads. It owns the large
+// hero/motion bundle and is never rendered once a signed JWT is available.
+const Landing = lazy(() => import("./pages/Landing.jsx"));
 const Login = lazy(() => import("./pages/Login.jsx"));
 const Register = lazy(() => import("./pages/Register.jsx"));
 const Settings = lazy(() => import("./pages/Settings.jsx"));
