@@ -291,8 +291,20 @@ jobs:
             git tag "$TAG"
             git push origin "$TAG"
           fi
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" --generate-notes --title "$TAG"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            for attempt in 1 2 3 4 5; do
+              if gh release create "$TAG" --generate-notes --title "$TAG"; then
+                break
+              fi
+              # A timed-out create can still have succeeded server-side.
+              gh release view "$TAG" >/dev/null 2>&1 && break
+              if [ "$attempt" -eq 5 ]; then
+                echo "::error::GitHub release API failed after 5 attempts"
+                exit 1
+              fi
+              sleep $((attempt * 5))
+            done
+          fi
 
       - name: Setup flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
