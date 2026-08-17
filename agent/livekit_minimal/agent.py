@@ -9755,7 +9755,7 @@ def _start_watchdog_heartbeat() -> None:
     every 60s — but ONLY while this worker is registered with LiveKit (#411).
     If the beacon goes >180s stale, the watchdog declares the voice plane
     down, emails Vinay, and auto-restarts this machine via the Fly API. Redis
-    only — never touches Neon (#299). Best-effort daemon thread, same pattern
+    only — never touches Postgres (#299). Best-effort daemon thread, same pattern
     as render_keepalive: a heartbeat failure must never affect a call."""
     global _heartbeat_started, _lk_registered
     if _heartbeat_started:
@@ -9773,7 +9773,6 @@ def _start_watchdog_heartbeat() -> None:
         import redis as _redis_sync
 
         client = None
-        _neon_tick = 0
         while True:
             try:
                 if client is None:
@@ -9791,40 +9790,6 @@ def _start_watchdog_heartbeat() -> None:
             except Exception as e:  # noqa: BLE001
                 client = None  # rebuild next round — never reuse a dead socket
                 logger.warning("watchdog_heartbeat_failed: %s", str(e)[:120])
-            # #437: keep Neon warm FROM THE AGENT — the always-on process. The
-            # #435 Render job failed because Render (free tier) sleeps, so it
-            # could not hold Neon awake. The agent (Fly) never sleeps. A trivial
-            # SELECT 1 every 4th tick (~240s, under Neon's 300s scale-to-zero)
-            # holds the compute warm so branch-resolve on the NEXT call is fast.
-            _neon_tick += 1
-            # Warm on the FIRST tick (immediately after a restart) AND every 4th
-            # (~240s) after. Without the first-tick ping a freshly-deployed agent
-            # waited up to 240s before warming Neon; a master push redeploys the
-            # agent AND the Render API together, so during that combined window
-            # neither warmer ran and Neon suspended → the next call paid the
-            # ~2-4s cold wake (Vinay live 2026-07-26, ~5s first reply).
-            if _neon_tick == 1 or _neon_tick % 4 == 0:
-                try:
-                    import asyncio as _aio
-
-                    import asyncpg as _apg
-
-                    # SQLAlchemy URL → plain asyncpg DSN: drop the +asyncpg
-                    # driver tag and the query string (sslmode/channel_binding
-                    # that asyncpg rejects). Supabase pooler needs ssl="require"
-                    # (encrypt, skip the cert verify that asyncpg's ssl=True does).
-                    _dsn = settings.database_url.replace("+asyncpg", "").split("?")[0]
-
-                    async def _ping():
-                        _c = await _apg.connect(dsn=_dsn, timeout=10, ssl="require")
-                        try:
-                            await _c.fetchval("SELECT 1")
-                        finally:
-                            await _c.close()
-
-                    _aio.run(_ping())
-                except Exception as e:  # noqa: BLE001 — warm ping is best-effort
-                    logger.warning("neon_warm_ping_failed: %s", str(e)[:120])
             _time.sleep(60)
 
     threading.Thread(target=_loop, name="watchdog-heartbeat", daemon=True).start()

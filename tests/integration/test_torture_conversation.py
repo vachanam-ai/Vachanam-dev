@@ -78,10 +78,12 @@ async def clinic(db):
     return {"branch": branch, "doc": doc}
 
 
-def _agent(db, branch_id):
+def _agent(db, branch_id, patient_id):
     state = SessionState(session_id="chaos")
     state.branch_id = branch_id
     state.patient_phone = CALLER
+    state.identity_verified = True
+    state.verified_patient_ids = {str(patient_id)}
     return VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=OkCalendar(), meta_service=NullMeta(), transfer_to="",
@@ -123,7 +125,7 @@ async def test_cancel_after_reschedule_with_stale_id(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(10, 0))
-    agent, state = _agent(db, branch.id)
+    agent, state = _agent(db, branch.id, booked["patient_id"])
 
     r = await agent._do_reschedule(booked["token_id"], day.isoformat(), "11:00")
     assert r["success"], r
@@ -144,7 +146,7 @@ async def test_cancel_after_reschedule_with_stale_id(clinic, db, redis):
 async def test_double_cancel_second_is_graceful(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     booked = await _book(db, branch, doc, time(12, 0))
-    agent, state = _agent(db, branch.id)
+    agent, state = _agent(db, branch.id, booked["patient_id"])
     state.token_confirmed = True
 
     c1 = await agent._do_cancel(booked["token_id"])
@@ -163,7 +165,7 @@ async def test_reschedule_after_cancel_gives_guided_recovery(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(13, 0))
-    agent, state = _agent(db, branch.id)
+    agent, state = _agent(db, branch.id, booked["patient_id"])
     state.token_confirmed = True
 
     c = await agent._do_cancel(booked["token_id"])
@@ -184,7 +186,7 @@ async def test_family_sibling_untouched_by_reschedule(clinic, db, redis):
     mine = await _book(db, branch, doc, time(10, 0), name="Chaos Vinay")
     await _book(db, branch, doc, time(10, 30), name="Amma",
                       phone="+919666888002", different_person=True)
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, mine["patient_id"])
 
     r = await agent._do_reschedule(mine["token_id"], day.isoformat(), "15:00")
     assert r["success"], r

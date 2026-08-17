@@ -25,7 +25,7 @@ _LIMIT_MARKERS = ("_limit", "limiter", "check_ip_blocklist")
 # FastAPI/OpenAPI plumbing, not our endpoints.
 _NOT_OURS = {"/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
 
-# THE ONLY ROUTE ALLOWED TO BE UNLIMITED.
+# THE ONLY ROUTES ALLOWED TO BE UNLIMITED.
 #
 # /health is what UptimeRobot, Render and Fly poll. A 429 there is read as a
 # dead instance: Render restarts the process, the restart makes the next probe
@@ -33,8 +33,9 @@ _NOT_OURS = {"/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"}
 # Redis by design, so an unauthenticated flood costs a dict lookup. Every
 # DETAILED probe (/health/redis, /health/ratelimit, /health/voice-plane,
 # /health/whatsapp) is both admin-gated and rate-limited — those leak recon,
-# this one returns {"status": "ok"}.
-_EXEMPT = {"/health"}
+# these return small in-memory health snapshots. Readiness is deliberately
+# exempt too: monitoring a degraded scheduler must not be hidden by a 429.
+_EXEMPT = {"/health", "/health/readiness"}
 
 
 def _app():
@@ -84,9 +85,9 @@ def test_every_route_is_rate_limited():
     )
 
 
-def test_the_exemption_list_stays_one_route_long():
+def test_the_exemption_list_stays_small_and_explicit():
     """An allowlist is only safe while it is small enough to read."""
-    assert _EXEMPT == {"/health"}, (
+    assert _EXEMPT == {"/health", "/health/readiness"}, (
         "the unlimited-route allowlist changed — every entry is an "
         "unauthenticated endpoint anyone may call without bound"
     )
