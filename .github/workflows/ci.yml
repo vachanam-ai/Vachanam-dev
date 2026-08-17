@@ -314,4 +314,4 @@ jobs:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         # Working tree == the just-pushed commit, so this ships the right ref
         # (flyctl builds the tree, not a git ref — see project memory).
-        run: flyctl deploy --config infra/fly.agent.toml --remote-only
+        run: flyctl deploy --config infra/fly.agent.toml --remote-only --strategy immediate
