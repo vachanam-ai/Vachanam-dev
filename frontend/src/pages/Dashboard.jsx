@@ -31,8 +31,10 @@ function BandKpi({ k, cap }) {
 
 export function voiceMinutesGaugeFraction(minutes) {
   const value = Math.max(Number(minutes) || 0, 0);
-  const percent = value <= 500 ? value * 0.06 : 30 + (value - 500) * 0.04;
-  return Math.min(percent / 100, 1);
+  if (value <= 1000) return value * 0.0003;
+  if (value <= 3000) return 0.3 + (value - 1000) * 0.0001;
+  if (value <= 7000) return 0.5 + (value - 3000) * 0.000075;
+  return Math.min(0.8 + (value - 7000) * (0.19 / 18000), 0.99);
 }
 
 function StatBand({ title, weekday, pct, pctCap, remaining, usageMinutes, waiting, booked }) {

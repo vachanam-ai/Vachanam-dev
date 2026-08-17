@@ -5,14 +5,18 @@ import { voiceMinutesGaugeFraction } from "./Dashboard.jsx";
 describe("billable voice minutes gauge", () => {
   it.each([
     [0, 0],
-    [500, 0.3],
-    [1000, 0.5],
-    [1500, 0.7],
-    [2000, 0.9],
-    [2250, 1],
-    [5000, 1],
+    [1000, 0.3],
+    [3000, 0.5],
+    [7000, 0.8],
+    [16000, 0.895],
+    [25000, 0.99],
+    [100000, 0.99],
     [-10, 0],
   ])("maps %s minutes to %s of the gauge", (minutes, expected) => {
     expect(voiceMinutesGaugeFraction(minutes)).toBeCloseTo(expected);
+  });
+
+  it("never reaches 100%", () => {
+    expect(voiceMinutesGaugeFraction(Number.MAX_SAFE_INTEGER)).toBeLessThan(1);
   });
 });
