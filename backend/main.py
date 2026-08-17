@@ -17,7 +17,6 @@ order (last-added = outermost). We add SecurityHeadersMiddleware AFTER
 CORSMiddleware so it executes FIRST (outermost), ensuring every response —
 including CORS preflight 204s — carries the security headers.
 """
-import asyncio
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -70,31 +69,9 @@ async def lifespan(app: FastAPI):
     logger.info("vachanam_starting", env=settings.app_env, base_url=settings.base_url)
     await init_rate_limiter()
 
-    # NEON WARM-KEEPER — UNCONDITIONAL, per-instance (#435; ungated 2026-07-26).
-    # A SELECT 1 every 240s (< Neon's 5-min scale-to-zero) keeps the SAME compute
-    # warm so the first call after idle skips the ~2-4s cold wake. It runs on
-    # EVERY instance, NOT only the scheduler leader: during a rolling Render
-    # redeploy the new instance is not leader yet (it retries every 60s while the
-    # old one drains), and that no-leader gap let Neon suspend → the next call
-    # paid the cold wake (Vinay live 2026-07-26, ~5s first reply). Ungated, a
-    # fresh instance warms Neon immediately at boot and every 240s regardless of
-    # leadership. Cost is unchanged — #435 already authorized 24/7 compute; a
-    # brief two-instance overlap during a deploy just pings the same compute
-    # twice. (The agent-side keepalive stays REMOVED — #299 outage.)
-    async def _neon_warm_loop() -> None:
-        from sqlalchemy import text as _text
-
-        from backend.database import AsyncSessionLocal as _SL
-
-        while True:
-            try:
-                async with _SL() as _s:
-                    await _s.execute(_text("SELECT 1"))
-            except Exception as e:  # noqa: BLE001 — a warm-ping failure is harmless
-                logger.warning("neon_warm_ping_failed", error=str(e)[:120])
-            await asyncio.sleep(240)
-
-    neon_warm_task = asyncio.create_task(_neon_warm_loop())
+    # Supabase replaced Neon on 2026-07-31 and does not suspend compute after
+    # five idle minutes. The old 240-second warm query only competed with real
+    # scheduler work for the backend's two session-pool connections.
 
     def _build_scheduler():
         from backend.jobs.cascade_rebook_caller import run_cascade_rebook_calls
@@ -115,7 +92,6 @@ async def lifespan(app: FastAPI):
             "next_visit_followups",
             "question_callbacks",
             "self_keepalive",
-            "hourly_maintenance",
             "watchdog_tick",
         }
 
@@ -130,12 +106,8 @@ async def lifespan(app: FastAPI):
             if id in immediate_jobs:
                 options["next_run_time"] = datetime.now(timezone.utc)
             return scheduler.add_job(leased_job(id, function), trigger, **options)
-        # #299: calendar_writer / pre_appt_reminders / cascade_rebook keep their
-        # fast ticks, but each now answers "is there work?" from Redis
-        # (backend/jobs/wake_gate.py) and touches Postgres only when there is.
-        # Neon's compute stays awake 5 min after ANY query, so an unconditional
-        # 30s poll pinned it on 24/7 (~$19/mo at 0.25 CU with zero calls) and
-        # exhausted the plan on 2026-07-09.
+        # Fast retry jobs first answer "is there work?" from Redis and touch
+        # Postgres only when necessary (backend/jobs/wake_gate.py).
         # 60s, not 30s: each tick is now a Redis GET, and this is only the RETRY
         # queue — a booking's calendar event is written inline at confirm_booking
         # (RULE 4). Halving the tick halves the Upstash command spend for no
@@ -238,13 +210,8 @@ async def lifespan(app: FastAPI):
             run_data_retention, IntervalTrigger(hours=24),
             id="data_retention", replace_existing=True,
         )
-        # #299 ONE HOURLY POSTGRES WAKE for everything unconditional:
-        # requeue_stale_in_progress (was 5 min), finalize_stale_calls (was
-        # 30 min), call_scoring (was 1 h) and vobiz_cdr_sync (was 3 min — on its
-        # own enough to pin Neon's compute on permanently). Neon keeps compute
-        # running 5 min after ANY query, so what costs money is the NUMBER of
-        # distinct wakes, not the frequency: four staggered jobs burned ~20 min
-        # of compute per hour, one shared tick burns ~5.
+        # Group unconditional maintenance into one hourly job so it cannot
+        # compete with booking/reminder work through the small runtime pool.
         _add_job(
             run_hourly_maintenance, IntervalTrigger(hours=1),
             id="hourly_maintenance", replace_existing=True,
@@ -252,18 +219,13 @@ async def lifespan(app: FastAPI):
         # #306 autonomous watchdog: 60s Redis-only tick (agent heartbeat,
         # redis, own memory) with auto-remediation (Fly restart / clean
         # self-restart) + change-triggered email. Deep checks (DB probe,
-        # calendar backlog) ride the hourly maintenance wake — zero extra
-        # Neon wakes.
+        # calendar backlog) ride the hourly maintenance job.
         from backend.watchdog import run_watchdog_tick
 
         _add_job(
             run_watchdog_tick, IntervalTrigger(seconds=60),
             id="watchdog_tick", replace_existing=True,
         )
-        # (Neon warm-keeper moved OUT of the leader scheduler 2026-07-26 — it now
-        # runs unconditionally per-instance in the lifespan startup above, so a
-        # rolling Render redeploy's no-leader window can no longer let Neon
-        # suspend. See _neon_warm_loop.)
         scheduler.start()
         return scheduler
 
@@ -275,7 +237,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    neon_warm_task.cancel()
     scheduler.shutdown(wait=False)
     await close_rate_limiter()
     logger.info("vachanam_shutdown")
@@ -332,7 +293,12 @@ app.add_middleware(
     # save (the app's only PUT) died client-side while tests (no Origin
     # header → CORS not enforced) stayed green.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Turnstile-Token"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Turnstile-Token",
+        "X-Vachanam-Session",
+    ],
 )
 
 # SecurityHeadersMiddleware must be added AFTER CORSMiddleware.
@@ -424,7 +390,7 @@ async def dev_razorpay_test():
 
 
 @app.get("/health", tags=["health"], response_model=None)
-async def health() -> dict | JSONResponse:
+async def health() -> dict:
     """Health check for UptimeRobot + Render + Fly probes.
 
     Returns 200 with env tag. Does NOT touch DB or Redis — health endpoint
@@ -458,6 +424,21 @@ async def health() -> dict | JSONResponse:
     out["scheduler"] = scheduler_health
     if settings.app_env == "production" and not scheduler_health["ok"]:
         out["status"] = "degraded"
+    return out
+
+
+@app.get("/health/readiness", tags=["health"], response_model=None)
+async def readiness() -> dict | JSONResponse:
+    """Dependency readiness for monitoring; never use as Render liveness.
+
+    A transient database/pooler error can make a scheduler tick fail. Turning
+    that into Render's liveness 503 caused a restart loop: every restart ran
+    all recovery jobs together and increased pool pressure. `/health` proves
+    the process can serve HTTP; this endpoint reports scheduler degradation
+    without making the platform kill an otherwise recoverable process.
+    """
+    out = await health()
+    if settings.app_env == "production" and not out["scheduler"]["ok"]:
         return JSONResponse(status_code=503, content=out)
     return out
 

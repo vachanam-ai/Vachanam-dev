@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { CaretDown, ChatCircleDots, PaperPlaneRight, Sparkle, X } from "@phosphor-icons/react";
-import { getToken } from "../api/client";
 import { sendChat } from "../api/support";
+import { useAuth } from "../hooks/useAuth.jsx";
 import { chatErrorMessage, TypedText, TypingDots } from "./ChatBits.jsx";
 import Turnstile, { TURNSTILE_ON } from "./Turnstile.jsx";
 
 export default function SupportWidget() {
+  const { user } = useAuth();
   const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
@@ -15,7 +16,7 @@ export default function SupportWidget() {
   const [busy, setBusy] = useState(false);
   const [captcha, setCaptcha] = useState("");
   const listRef = useRef(null);
-  const needCaptcha = TURNSTILE_ON && !getToken();
+  const needCaptcha = TURNSTILE_ON && !user;
 
   const scrollToEnd = (smooth) => {
     const list = listRef.current;

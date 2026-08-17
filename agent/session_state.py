@@ -187,10 +187,13 @@ class SessionState:
     # (FIXLOG #281, live call 2026-07-06).
     existing_booking_intent: bool = False
 
-    # The verified incoming SIP number is the appointment authorization
-    # boundary. Spoken-name matching is optional family-member disambiguation
-    # and must never block lookup, cancellation, or rescheduling.
-    identity_verified: bool = True
+    # ANI can be spoofed. Inbound callers must also name a patient stored on
+    # that branch+number before any booking is read or changed. Outbound calls
+    # are verified because Vachanam dialled the stored number itself.
+    identity_verified: bool = False
+    # Exact patient rows authorized by the spoken-name check. A shared family
+    # phone must never turn one matched name into access to every family member.
+    verified_patient_ids: set[UUID] = field(default_factory=set)
 
     # Set when the caller is booking for someone else (friend/family). Like the
     # flag above, it suppresses the caller's own ALREADY_BOOKED surface — a

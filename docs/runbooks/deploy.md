@@ -22,12 +22,12 @@ Everything else (dashboard, payments) is not on the call path.
 ## 1. Backend → Render
 
 1. Render → New → Blueprint → point at the repo (auto-detects `render.yaml` at the repo root).
-2. Set every `sync: false` env var in the Render dashboard (secrets + `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `FIELD_ENCRYPTION_KEY`, `SMALLEST_API_KEY`, `RESEND_API_KEY`, `BASE_URL=https://api.vachanam.in`, `FRONTEND_URL=https://vachanam.in`, `ADMIN_PHONE`). Razorpay vars can wait (trial).
+2. Set every `sync: false` env var in the Render dashboard (secrets + `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `FIELD_ENCRYPTION_KEY`, `SMALLEST_API_KEY`, `RESEND_API_KEY`, `BASE_URL=https://api.vachanam.in`, `FRONTEND_URL=https://vachanam.in`, `ADMIN_PHONE`). Use the Supabase **transaction pooler** URL (port 6543) for Render's `DATABASE_URL`; keep the direct/session URL only for migrations and long-lived workers. Razorpay vars can wait (trial).
 3. Upload `google-service-account.json` as a **Secret File** at `/etc/secrets/google-service-account.json`.
 4. Run `alembic upgrade head` manually against production before code that
    depends on a new schema becomes live. The Render free-plan blueprint has no
    `preDeployCommand`; a push alone does **not** migrate the database.
-5. Deploy and confirm `/health` returns 200.
+5. Deploy and confirm `/health` returns 200. Monitor `/health/readiness` for scheduler/dependency degradation; Render's liveness probe must remain on `/health` so a transient database slowdown does not create a restart loop.
 6. Push-to-deploy is automatic thereafter, but every migration-bearing release
    still requires the manual migration step above.
 

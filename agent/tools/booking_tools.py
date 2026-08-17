@@ -1542,6 +1542,7 @@ async def confirm_booking(
                 # B12: use the doctor's real slot length so the calendar block
                 # matches the appointment (the shim hardcoded 30 min).
                 slot_duration_minutes=doctor.slot_duration_minutes,
+                timezone_name=branch.timezone or "Asia/Kolkata",
             )
 
         # RULE 8: never let a slow/misconfigured calendar hang the LIVE call. A
@@ -1621,6 +1622,7 @@ async def confirm_booking(
     return {
         "success": True,
         "token_id": str(token.id),
+        "patient_id": str(patient.id),
         "booking_type": doctor.booking_type,
         "announce": "token_number" if is_token else "time_only",
         "instruction": (
@@ -1683,7 +1685,10 @@ async def find_bookings_by_phone(
 
 
 async def queue_position_by_phone(
-    branch_id: UUID, phone: str | None, db: AsyncSession
+    branch_id: UUID,
+    phone: str | None,
+    db: AsyncSession,
+    patient_ids: set[UUID] | None = None,
 ) -> dict:
     """Live queue position for the caller's TODAY token-queue bookings.
 
@@ -1699,6 +1704,19 @@ async def queue_position_by_phone(
         return {"found": False, "reason": "caller number unknown"}
     last10 = digits[-10:]
     today_local = (await _branch_now(branch_id, db)).date()
+    if patient_ids is not None and not patient_ids:
+        return {"found": False, "reason": "patient identity not verified"}
+
+    filters = [
+        Token.branch_id == branch_id,
+        Patient.phone.like(f"%{last10}"),
+        Token.date == today_local,
+        Token.status == "confirmed",
+        Doctor.booking_type == "token",
+        Token.token_number.is_not(None),
+    ]
+    if patient_ids is not None:
+        filters.append(Token.patient_id.in_(patient_ids))
 
     rows = (
         await db.execute(
@@ -1706,14 +1724,7 @@ async def queue_position_by_phone(
             .join(Doctor, Token.doctor_id == Doctor.id)
             .join(Patient, Token.patient_id == Patient.id)
             .where(
-                and_(
-                    Token.branch_id == branch_id,  # RULE 1
-                    Patient.phone.like(f"%{last10}"),
-                    Token.date == today_local,
-                    Token.status == "confirmed",
-                    Doctor.booking_type == "token",
-                    Token.token_number.is_not(None),
-                )
+                and_(*filters)  # RULE 1 + exact verified family member
             )
             .order_by(Token.token_number)
         )
@@ -1840,6 +1851,59 @@ async def _romanize_name(name: str | None) -> str:
     return out
 
 
+async def _patient_name_matches(
+    spoken_name: str | None, stored_name: str | None
+) -> bool:
+    """Compare one spoken name with one stored name, including cross-script."""
+    from agent.i18n.transliterate import _detect_script, consonant_skeleton
+
+    spoken = _normalize_name(spoken_name)
+    stored = _normalize_name(stored_name)
+    if len(spoken) < 2 or not stored:
+        return False
+    if _names_overlap(spoken, stored):
+        return True
+    spoken_skeleton = consonant_skeleton(spoken_name)
+    stored_skeleton = consonant_skeleton(stored_name)
+    if (
+        len(spoken_skeleton) >= 3
+        and len(stored_skeleton) >= 3
+        and spoken_skeleton == stored_skeleton
+    ):
+        return True
+    if (_detect_script(spoken_name or "") == "en-IN") == (
+        _detect_script(stored_name or "") == "en-IN"
+    ):
+        return False
+    spoken_roman = _normalize_name(await _romanize_name(spoken_name))
+    stored_roman = _normalize_name(await _romanize_name(stored_name))
+    return len(spoken_roman) >= 2 and _names_overlap(spoken_roman, stored_roman)
+
+
+async def caller_patient_ids_matching_name(
+    branch_id: UUID, phone: str | None, spoken_name: str | None, db: AsyncSession
+) -> set[UUID]:
+    """Return only patient rows authorized by ANI plus the spoken name."""
+    digits = _phone_digits(phone)
+    if len(digits) < 10 or len(_normalize_name(spoken_name)) < 2:
+        return set()
+    rows = (
+        await db.execute(
+            select(Patient.id, Patient.name).where(
+                and_(
+                    Patient.branch_id == branch_id,
+                    Patient.phone.like(f"%{digits[-10:]}"),
+                )
+            )
+        )
+    ).all()
+    matched: set[UUID] = set()
+    for patient_id, stored_name in rows:
+        if await _patient_name_matches(spoken_name, stored_name):
+            matched.add(patient_id)
+    return matched
+
+
 async def caller_name_matches(
     branch_id: UUID, phone: str | None, spoken_name: str | None, db: AsyncSession
 ) -> bool:
@@ -1864,7 +1928,7 @@ async def caller_name_matches(
     Note _names_match (booking dedup) already fails OPEN across scripts, so this
     only brings the identity gate in line with the rest of the name matching.
     """
-    from agent.i18n.transliterate import _detect_script
+    from agent.i18n.transliterate import _detect_script, consonant_skeleton
 
     digits = _phone_digits(phone)
     spoken = _normalize_name(spoken_name)
@@ -1885,6 +1949,16 @@ async def caller_name_matches(
     for stored_raw in stored_raws:
         if _names_overlap(spoken, _normalize_name(stored_raw)):
             return True
+
+    # Deterministic cross-script path: common Indian names reduce to the same
+    # consonant fingerprint (e.g. Srinivas/శ్రీనివాస్ -> srnvs). This keeps
+    # cancel/reschedule available even when the transliteration API is down.
+    spoken_skeleton = consonant_skeleton(spoken_name)
+    if len(spoken_skeleton) >= 3:
+        for stored_raw in stored_raws:
+            stored_skeleton = consonant_skeleton(stored_raw)
+            if len(stored_skeleton) >= 3 and stored_skeleton == spoken_skeleton:
+                return True
 
     # Cross-script fallback — only when at least one stored name is in a
     # DIFFERENT script than what the caller spoke (else there is nothing a

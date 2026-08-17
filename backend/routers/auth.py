@@ -7,7 +7,7 @@ Flow:
 4. Server looks up the user (first by google_sub, then by email)
 5. If user not found → 403 "Not registered" (admin must add them first)
 6. If found → issue a Vachanam JWT, return it
-7. Frontend stores JWT in localStorage; sends Authorization: Bearer on every request
+7. Browser sessions use a Secure HttpOnly cookie; API clients may use Bearer
 8. /auth/logout adds the JWT jti to Redis revocation set
 
 No password storage. Google handles password + 2FA.
@@ -19,7 +19,7 @@ from typing import Literal
 import requests
 import structlog
 from cachecontrol import CacheControl
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel
@@ -34,6 +34,7 @@ from backend.middleware.auth_middleware import (
     cache_active_user_version,
     create_access_token,
     get_current_user,
+    SESSION_COOKIE,
     revoke_jwt,
     revoke_org_sessions,
     revoke_user_version,
@@ -62,9 +63,33 @@ class GoogleLoginRequest(BaseModel):
 
 
 class TokenResponse(BaseModel):
-    access_token: str
+    # Browser callers request cookie mode so the JWT never enters JavaScript.
+    # Bearer remains for non-browser/API clients and existing integrations.
+    access_token: str | None
     token_type: str = "bearer"
     expires_in: int  # seconds until expiration
+
+
+def _issue_session(
+    request: Request, response: Response, token: str
+) -> TokenResponse:
+    max_age = settings.jwt_expire_hours * 3600
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=max_age,
+        expires=max_age,
+        path="/",
+        secure=settings.app_env == "production",
+        httponly=True,
+        samesite="strict",
+    )
+    browser_cookie_mode = request.headers.get("X-Vachanam-Session") == "cookie"
+    return TokenResponse(
+        access_token=None if browser_cookie_mode else token,
+        token_type="bearer",
+        expires_in=max_age,
+    )
 
 
 @router.post(
@@ -72,7 +97,9 @@ class TokenResponse(BaseModel):
     response_model=TokenResponse,
     dependencies=[Depends(check_ip_blocklist), Depends(auth_google_limit)],
 )
-async def google_login(request: Request, body: GoogleLoginRequest) -> TokenResponse:
+async def google_login(
+    request: Request, response: Response, body: GoogleLoginRequest
+) -> TokenResponse:
     """Verify Google ID token, look up user, issue Vachanam JWT.
 
     Returns 403 if the IP is in the Redis blocklist (spec §5.6).
@@ -173,11 +200,7 @@ async def google_login(request: Request, body: GoogleLoginRequest) -> TokenRespo
     except Exception as audit_err:
         logger.error("audit_write_failed", action="user.login.success", error=str(audit_err))
 
-    return TokenResponse(
-        access_token=token,
-        token_type="bearer",
-        expires_in=settings.jwt_expire_hours * 3600,
-    )
+    return _issue_session(request, response, token)
 
 
 class MeResponse(BaseModel):
@@ -204,7 +227,10 @@ async def get_me(current_user: CurrentUser = Depends(get_current_user)) -> MeRes
 
 
 @router.post("/logout", status_code=204, dependencies=[Depends(default_limit)])
-async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
+async def logout(
+    response: Response,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> None:
     """Revoke the current JWT by adding its jti to the Redis revocation set.
 
     The middleware checks this set on every request, so the token becomes
@@ -222,6 +248,13 @@ async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
     exp_timestamp = int(time.time()) + ttl_seconds
 
     await revoke_jwt(current_user.jti, exp_timestamp)
+    response.delete_cookie(
+        SESSION_COOKIE,
+        path="/",
+        secure=settings.app_env == "production",
+        httponly=True,
+        samesite="strict",
+    )
     logger.info("user_logout", user_id=current_user.user_id, jti=current_user.jti)
 
 
@@ -398,7 +431,9 @@ async def founding_slots():
     status_code=201,
     dependencies=[Depends(auth_google_limit), Depends(require_turnstile)],
 )
-async def register_clinic(request: Request, body: RegisterRequest) -> TokenResponse:
+async def register_clinic(
+    request: Request, response: Response, body: RegisterRequest
+) -> TokenResponse:
     """Self-serve clinic signup: creates Organization (paused until first payment, #392) + Branch +
     org_admin User in one transaction, then signs the user in.
 
@@ -583,11 +618,7 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
     except Exception as audit_err:
         logger.error("audit_write_failed", action="user.register", error=str(audit_err))
 
-    return TokenResponse(
-        access_token=token,
-        token_type="bearer",
-        expires_in=settings.jwt_expire_hours * 3600,
-    )
+    return _issue_session(request, response, token)
 
 
 @router.post(
@@ -595,7 +626,9 @@ async def register_clinic(request: Request, body: RegisterRequest) -> TokenRespo
     response_model=TokenResponse,
     dependencies=[Depends(auth_google_limit), Depends(require_turnstile)],
 )
-async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
+async def email_login(
+    request: Request, response: Response, body: LoginRequest
+) -> TokenResponse:
     """Email + password sign-in. Same blocklist + failed-login accounting as
     the Google path (5 failures/IP → 1h block)."""
     client_ip = _client_ip(request)  # iter1 #6: proxy-aware trusted client IP
@@ -630,11 +663,7 @@ async def email_login(request: Request, body: LoginRequest) -> TokenResponse:
     except Exception as audit_err:
         logger.error("audit_write_failed", action="user.login.success", error=str(audit_err))
 
-    return TokenResponse(
-        access_token=token,
-        token_type="bearer",
-        expires_in=settings.jwt_expire_hours * 3600,
-    )
+    return _issue_session(request, response, token)
 
 
 @router.post(
@@ -742,7 +771,9 @@ async def forgot_password(request: Request, body: ForgotPasswordRequest) -> OtpR
     response_model=TokenResponse,
     dependencies=[Depends(auth_google_limit)],
 )
-async def reset_password(request: Request, body: ResetPasswordRequest) -> TokenResponse:
+async def reset_password(
+    request: Request, response: Response, body: ResetPasswordRequest
+) -> TokenResponse:
     """Verify the email code, set a new bcrypt password, and sign the user in.
 
     422 on a malformed email / weak password; 401 on a wrong/expired code
@@ -814,8 +845,4 @@ async def reset_password(request: Request, body: ResetPasswordRequest) -> TokenR
     except Exception as audit_err:
         logger.error("audit_write_failed", action="user.password_reset", error=str(audit_err))
 
-    return TokenResponse(
-        access_token=token,
-        token_type="bearer",
-        expires_in=settings.jwt_expire_hours * 3600,
-    )
+    return _issue_session(request, response, token)

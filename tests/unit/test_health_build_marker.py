@@ -89,8 +89,8 @@ def test_diagnostics_require_admin_in_prod(monkeypatch):
 def _tick_critical_jobs(monkeypatch, *, status: str = "ok"):
     """Give this process the scheduler ticks a real API process would have.
 
-    /health returns 503 in production when the critical jobs stop ticking, so
-    Render restarts a process serving HTTP with dead reminders. In a test
+    /health/readiness returns 503 when the critical jobs stop ticking. Render's
+    liveness path remains 200 to avoid a dependency-driven restart loop. In a test
     process no scheduler ever runs, so the jobs read "starting" for 180s and
     "missing" after that — meaning this test passed alone (2s) and failed
     inside the full suite (26 min), purely on elapsed wall-clock time
@@ -114,12 +114,7 @@ def test_public_health_still_open_in_prod(monkeypatch):
     assert r.status_code == 200 and r.json()["status"] == "ok"
 
 
-def test_prod_health_goes_503_when_the_schedulers_stop(monkeypatch):
-    """The other half of the contract: HTTP alive + jobs dead must NOT read ok.
-
-    Without this, the fix above could be "assert 200 no matter what" and the
-    restart signal Render depends on would be untested.
-    """
+def test_prod_liveness_stays_up_while_readiness_reports_stale_scheduler(monkeypatch):
     import time
 
     import backend.config as cfg
@@ -130,9 +125,11 @@ def test_prod_health_goes_503_when_the_schedulers_stop(monkeypatch):
     for state in ticks.values():
         state["at_monotonic"] = time.monotonic() - 10_000
 
-    r = _client().get("/health")
-    assert r.status_code == 503
-    body = r.json()
+    live = _client().get("/health")
+    ready = _client().get("/health/readiness")
+    assert live.status_code == 200
+    assert ready.status_code == 503
+    body = ready.json()
     assert body["status"] == "degraded"
     assert body["scheduler"]["ok"] is False
 
@@ -144,6 +141,7 @@ def test_a_failing_job_status_is_degraded_even_when_fresh(monkeypatch):
 
     monkeypatch.setattr(cfg.settings, "app_env", "production")
     _tick_critical_jobs(monkeypatch, status="lease_error")
-    r = _client().get("/health")
+    assert _client().get("/health").status_code == 200
+    r = _client().get("/health/readiness")
     assert r.status_code == 503
     assert r.json()["scheduler"]["ok"] is False

@@ -70,7 +70,7 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(patient.phone, "next_visit"):
+    if not await claim_outbound_call(patient.phone, "next_visit", branch.id):
         return False
     try:
         from livekit import api as lk_api
@@ -78,9 +78,7 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
         try:
             meta = {"call_type": task.task_type, "branch_id": str(branch.id),
                     "outbound_trunk_id": outbound_trunk_id,
-                    "phone_number": patient.phone, "task_id": str(task.id),
-                    "patient_name": patient.name, "doctor_name": doctor.name,
-                    "doctor_id": str(doctor.id), "message": task.what_to_ask or ""}
+                    "task_id": str(task.id)}
             # RULE 9: the NOTE's date is a booking concern belonging to the
             # next_visit_book task — never leak it onto a doctor_advice call
             # linked to the same note. A date the DOCTOR typed on this reply is
@@ -106,7 +104,7 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
             if not await verify_or_cleanup(lkapi, room, f"followup:{task.id}"):
                 # No call happened — hand the number back so a real retry
                 # does not have to wait out the guard TTL.
-                await release_outbound_call(patient.phone)
+                await release_outbound_call(patient.phone, branch.id)
                 return False
             logger.info("followup_call_dispatched", task_id=str(task.id),
                         call_type=task.task_type, room=room,
@@ -116,7 +114,7 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
             await lkapi.aclose()
     except Exception as e:  # noqa: BLE001
         logger.error("followup_dispatch_failed", task_id=str(task.id), error=str(e)[:160])
-        await release_outbound_call(patient.phone)
+        await release_outbound_call(patient.phone, branch.id)
         return False
 
 

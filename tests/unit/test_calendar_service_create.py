@@ -61,6 +61,24 @@ async def test_create_event_summary_format(svc) -> None:
     assert body.get("description", "") == ""
 
 
+@pytest.mark.asyncio
+async def test_create_event_uses_branch_timezone(svc) -> None:
+    s, mock = svc
+    mock.events().insert().execute.return_value = {"id": "evt_tz"}
+    await s.create_booking_event(
+        calendar_id="cal_id",
+        patient_first_name="Asha",
+        patient_phone_last4="1234",
+        appointment_dt=datetime(2026, 6, 20, 15, 0),
+        duration_minutes=30,
+        doctor_name="Dr Rao",
+        timezone_name="Asia/Dubai",
+    )
+    body = mock.events().insert.call_args.kwargs["body"]
+    assert body["start"]["timeZone"] == "Asia/Dubai"
+    assert body["end"]["timeZone"] == "Asia/Dubai"
+
+
 # ── Test 2: no full phone number in summary ────────────────────────────────────
 
 

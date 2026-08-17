@@ -44,6 +44,7 @@ def _build_payload(
     calendar_id: str,
     patient_first_name: str,
     patient_phone_last4: str,
+    timezone_name: str = "Asia/Kolkata",
 ) -> dict:
     """Build the JSONB payload dict stored in CalendarWriteTask.payload_json.
 
@@ -63,6 +64,7 @@ def _build_payload(
         "appointment_dt": appointment_dt.isoformat(),
         "duration_minutes": doctor.slot_duration_minutes or 30,
         "doctor_name": doctor.name,
+        "timezone_name": timezone_name,
     }
 
 
@@ -113,6 +115,7 @@ async def write_booking_calendar(
     calendar_id_or_none: Optional[str],
     patient_first_name: str = "",
     patient_phone_last4: str = "",
+    timezone_name: str = "Asia/Kolkata",
 ) -> None:
     """Hybrid Calendar write — sync inline for slot-doctor, skip for token-doctor.
 
@@ -147,7 +150,7 @@ async def write_booking_calendar(
         # (status is already terminal). Admin must configure calendar and manually
         # re-process if needed.
         payload = _build_payload(
-            token, doctor, "", patient_first_name, patient_phone_last4
+            token, doctor, "", patient_first_name, patient_phone_last4, timezone_name
         )
         await _enqueue_calendar_task(
             db, token, "create", payload, status="failed_permanent"
@@ -163,7 +166,8 @@ async def write_booking_calendar(
 
     # ── Path 3: Slot-doctor with calendar_id — sync inline retry ─────────────
     payload = _build_payload(
-        token, doctor, calendar_id_or_none, patient_first_name, patient_phone_last4
+        token, doctor, calendar_id_or_none, patient_first_name, patient_phone_last4,
+        timezone_name,
     )
     svc = GoogleCalendarService()
     last_err: Optional[Exception] = None
@@ -179,6 +183,7 @@ async def write_booking_calendar(
                 appointment_dt=datetime.fromisoformat(payload["appointment_dt"]),
                 duration_minutes=payload["duration_minutes"],
                 doctor_name=doctor.name,
+                timezone_name=timezone_name,
             )
             # Inline success — write event_id to Token and commit.
             token.google_calendar_event_id = event_id

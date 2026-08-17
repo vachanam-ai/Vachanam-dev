@@ -335,7 +335,9 @@ async def _dispatch_reminder_call(
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(patient.phone, f"reminder_{reminder_kind}"):
+    if not await claim_outbound_call(
+        patient.phone, f"reminder_{reminder_kind}", branch.id
+    ):
         return False
     try:
         from livekit import api as lk_api
@@ -353,16 +355,7 @@ async def _dispatch_reminder_call(
                             "reminder_kind": reminder_kind,
                             "branch_id": str(branch.id),  # outbound: no dialed DID
                             "outbound_trunk_id": outbound_trunk_id,
-                            "phone_number": patient.phone,
                             "token_id": str(token.id),
-                            "patient_name": patient.name,
-                            "doctor_name": doctor.name,
-                            "doctor_id": str(doctor.id),
-                            "appointment_time": token.appointment_time.strftime("%H:%M"),
-                            # The worker rechecks this token immediately before
-                            # dialing; DB state, not dispatch metadata, wins.
-                            "appointment_date": token.date.isoformat(),
-                            "branch_timezone": branch.timezone or "Asia/Kolkata",
                         }
                     ),
                 )
@@ -374,7 +367,7 @@ async def _dispatch_reminder_call(
             if not await verify_or_cleanup(lkapi, room, f"reminder:{token.id}"):
                 # Nobody claimed the dispatch, so no call happened — hand the
                 # number back rather than making a real retry wait out the TTL.
-                await release_outbound_call(patient.phone)
+                await release_outbound_call(patient.phone, branch.id)
                 return False
             logger.info(
                 "reminder_call_dispatched",
@@ -388,5 +381,5 @@ async def _dispatch_reminder_call(
             await lkapi.aclose()
     except Exception as e:
         logger.error("reminder_dispatch_failed", token_id=str(token.id), error=str(e))
-        await release_outbound_call(patient.phone)
+        await release_outbound_call(patient.phone, branch.id)
         return False

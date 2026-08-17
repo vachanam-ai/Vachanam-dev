@@ -52,6 +52,7 @@ def redis(monkeypatch):
 
 
 PHONE = "+919876543210"
+BRANCH = "branch-a"
 
 
 @pytest.mark.asyncio
@@ -121,9 +122,15 @@ async def test_an_unusable_number_is_never_blocked(redis):
 
 def test_the_key_carries_no_name_and_no_full_number():
     """RULE 9."""
-    key = outbound_guard.lock_key(PHONE)
-    assert key == "outbound:call:9876543210"
+    key = outbound_guard.lock_key(PHONE, BRANCH)
+    assert key == "outbound:call:branch-a:9876543210"
     assert "+91" not in key
+
+
+@pytest.mark.asyncio
+async def test_same_number_at_another_clinic_is_unaffected(redis):
+    assert await outbound_guard.claim_outbound_call(PHONE, "reminder", "branch-a")
+    assert await outbound_guard.claim_outbound_call(PHONE, "reminder", "branch-b")
 
 
 # ── every dialer is behind the guard ─────────────────────────────────────────

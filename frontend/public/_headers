@@ -1,6 +1,15 @@
 # Keep search engines OFF the raw Cloudflare Pages URLs (#359): old
 # *.pages.dev deployment snapshots stay reachable forever and were feeding
 # scrapers stale pricing. Only vachanam.in should be indexed.
+/*
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'sha256-f6htbcm2NufJCL+ie2pdv1HBOzibmvJRZ003Clzv1xg=' 'sha256-iazNLCcNAsNJ8utGO/FW+opKPXJldcRGkQi8PMG8Fh0=' https://accounts.google.com https://connect.facebook.net https://checkout.razorpay.com https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' https://api.vachanam.in https://vachanam-backend.onrender.com https://accounts.google.com https://graph.facebook.com https://*.facebook.com https://*.razorpay.com https://challenges.cloudflare.com; frame-src https://accounts.google.com https://*.facebook.com https://*.razorpay.com https://challenges.cloudflare.com; worker-src 'self' blob:; manifest-src 'self'; upgrade-insecure-requests
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), geolocation=(), payment=(self), microphone=(self), usb=(), browsing-topics=()
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+
 https://:project.pages.dev/*
   X-Robots-Tag: noindex
 

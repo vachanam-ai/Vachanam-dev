@@ -28,7 +28,8 @@ from backend.models.schema import User
 logger = structlog.get_logger()
 
 _ALGORITHM = "HS256"
-_bearer = HTTPBearer(auto_error=True)
+SESSION_COOKIE = "vachanam_session"
+_bearer = HTTPBearer(auto_error=False)
 
 # A valid signed session is rechecked against the live user row at most once
 # every 30 seconds per API process. Login primes this cache; explicit account
@@ -114,8 +115,21 @@ class CurrentUser:
         self.jti = jti
 
 
+async def _session_credentials(
+    request: Request,
+    bearer: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> HTTPAuthorizationCredentials:
+    """Prefer an explicit API Bearer token, otherwise use the HttpOnly SPA cookie."""
+    if bearer is not None:
+        return bearer
+    token = request.cookies.get(SESSION_COOKIE, "").strip()
+    if token:
+        return HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
+    credentials: HTTPAuthorizationCredentials = Depends(_session_credentials),
 ) -> CurrentUser:
     """Decode JWT, check revocation list, return CurrentUser. 401 on any failure."""
     token = credentials.credentials
@@ -195,9 +209,9 @@ async def optional_current_user(request: Request) -> "CurrentUser | None":
     clinic data, so a near-expiry token resolving to a benign identity is fine.
     """
     header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return None
-    token = header[7:].strip()
+    token = header[7:].strip() if header.startswith("Bearer ") else ""
+    if not token:
+        token = getattr(request, "cookies", {}).get(SESSION_COOKIE, "").strip()
     if not token:
         return None
     try:

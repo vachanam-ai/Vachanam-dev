@@ -138,13 +138,12 @@ from agent.tools.booking_tools import (  # noqa: E402
     assign_token,
     booking_is_actionable,
     booking_is_upcoming,
-    caller_name_matches,
+    caller_patient_ids_matching_name,
     check_availability,
     confirm_booking,
     find_bookings_by_phone,
     get_preferred_language,
     queue_position_by_phone,
-    recognize_caller_name,
     route_to_doctor,
     set_preferred_language,
 )
@@ -743,6 +742,17 @@ def _require_caller_phone(state: SessionState) -> tuple[str, str]:
     return phone, digits[-10:]
 
 
+def _require_verified_identity(state: SessionState) -> set[UUID]:
+    """Fail closed before exposing or mutating an existing appointment."""
+    if not state.identity_verified or not state.verified_patient_ids:
+        raise ToolError(
+            "Before reading or changing an existing booking, ask for the exact "
+            "patient name it was booked under, then call verify_caller_identity. "
+            "Do not reveal any stored name, doctor, date, time, or token first."
+        )
+    return state.verified_patient_ids
+
+
 _PEER_AGENT_IDENTITIES = (
     "ai assistant",
     "ఏఐ అసిస్టెంట్",
@@ -874,7 +884,7 @@ KNOWN_CALLER_BOOKING_EXTRA = (
 # NAME ONLY: verify_caller_identity still gates every booking mutation, and no
 # appointment, doctor, date, or medical detail is disclosed in the greeting.
 # Set VOICE_GREET_BY_NAME=0 to turn it back off without a redeploy.
-_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "1") != "0"
+_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"
 
 # On a language switch, append a recency-salient language-lock to the carried
 # history so the old-language turns cannot pull the model back (see
@@ -4866,6 +4876,14 @@ class VachanamAgent(Agent):
             except Exception:  # noqa: BLE001
                 pass
             self._state.patient_name = patient_name
+            # The caller supplied this name and the DB just committed a booking
+            # under the verified ANI. Authorize only that exact patient row;
+            # other family members sharing the phone remain private.
+            try:
+                self._state.verified_patient_ids.add(UUID(str(result["patient_id"])))
+                self._state.identity_verified = True
+            except (KeyError, TypeError, ValueError):
+                logger.error("confirmed_booking_missing_patient_id")
             # The caller now HAS a booking this call — any further "change it"
             # is a reschedule, not a new booking. Suppress the #279 upfront
             # existing-booking surface so an immediate same-call change isn't
@@ -5014,17 +5032,14 @@ class VachanamAgent(Agent):
 
     @function_tool()
     async def verify_caller_identity(self, context: RunContext, name: str) -> dict:
-        """Optionally match a spoken name to disambiguate family members.
-
-        Appointment authorization comes from the verified incoming SIP number;
-        name transcription must never be treated as an authentication factor.
-        """
+        """Match the spoken patient name before exposing/changing bookings."""
         _require_caller_phone(self._state)  # no caller ID → cannot verify
-        matched = await caller_name_matches(
+        matched_ids = await caller_patient_ids_matching_name(
             self._state.branch_id, self._state.patient_phone, name, self._db
         )
-        if matched:
-            self._state.identity_verified = True
+        self._state.verified_patient_ids = matched_ids
+        self._state.identity_verified = bool(matched_ids)
+        if matched_ids:
             return {
                 "verified": True,
                 "instruction": (
@@ -5060,12 +5075,16 @@ class VachanamAgent(Agent):
         self._state.quality_intent = 'existing_bookings'
         _guard_human_booking(self._state)
         phone, _ = _require_caller_phone(self._state)
+        verified_patient_ids = _require_verified_identity(self._state)
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
         # the #279 upfront existing-booking surface so it doesn't flag the very
         # booking being moved (FIXLOG #281).
         _say_wait_filler(context)  # slow: booking lookup (#361 dead air; silent-minute 07-20)
         self._state.existing_booking_intent = True
         rows = await find_bookings_by_phone(self._state.branch_id, phone, self._db)
+        rows = [
+            row for row in rows if row[0].patient_id in verified_patient_ids
+        ]
         confirmed_rows = [r for r in rows if r[0].status == "confirmed"]
         if len(confirmed_rows) == 1:
             rows_single = confirmed_rows
@@ -5101,8 +5120,13 @@ class VachanamAgent(Agent):
         Token-queue doctors only — for a slot-doctor booking just restate
         their appointment time from find_my_bookings instead."""
         _guard_human_booking(self._state)
+        _require_caller_phone(self._state)
+        verified_patient_ids = _require_verified_identity(self._state)
         result = await queue_position_by_phone(
-            self._state.branch_id, self._state.patient_phone, self._db
+            self._state.branch_id,
+            self._state.patient_phone,
+            self._db,
+            patient_ids=verified_patient_ids,
         )
         if result.get("found"):
             result["instruction"] = (
@@ -5529,6 +5553,7 @@ class VachanamAgent(Agent):
             )
         self._state.pending_confirmation = None
         _guard_human_booking(self._state)
+        _require_verified_identity(self._state)
         # mutation_in_flight = "reschedule" is owned by @_tracks_mutation.
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
@@ -5554,6 +5579,7 @@ class VachanamAgent(Agent):
         from backend.models.schema import Token
 
         _, caller_last10 = _require_caller_phone(self._state)
+        verified_patient_ids = _require_verified_identity(self._state)
 
         try:
             old_uuid = UUID(old_token_id)
@@ -5569,6 +5595,7 @@ class VachanamAgent(Agent):
                     and_(
                         Token.id == old_uuid,
                         Token.branch_id == self._state.branch_id,  # RULE 1
+                        Token.patient_id.in_(verified_patient_ids),
                         _PatientModel.phone.like(f"%{caller_last10}"),
                     )
                 )
@@ -5856,6 +5883,7 @@ class VachanamAgent(Agent):
                     if assigned.get("token_number") else "-"
                 ),
                 token_id=str(new_id),
+                background_delivery=True,
             )
         except Exception as e:  # noqa: BLE001 — notification only
             logger.warning("reschedule_whatsapp_notify_failed: %s", e)
@@ -5941,6 +5969,7 @@ class VachanamAgent(Agent):
                     requested_id[-8:], token_id[-8:],
                 )
         _guard_human_booking(self._state)
+        _require_verified_identity(self._state)
         # mutation_in_flight = "cancel" is owned by @_tracks_mutation.
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
@@ -6065,6 +6094,7 @@ class VachanamAgent(Agent):
         from backend.models.schema import Patient, Token
 
         _, caller_last10 = _require_caller_phone(self._state)
+        verified_patient_ids = _require_verified_identity(self._state)
 
         try:
             token_uuid = UUID(token_id)
@@ -6080,6 +6110,7 @@ class VachanamAgent(Agent):
                 _and(
                     Token.id == token_uuid,
                     Token.branch_id == self._state.branch_id,
+                    Token.patient_id.in_(verified_patient_ids),
                     Patient.phone.like(f"%{caller_last10}"),
                 )
             )
@@ -6276,6 +6307,7 @@ class VachanamAgent(Agent):
                     clinic_name=await self._clinic_name(),
                     doctor_name=await self._doctor_name_for(token.doctor_id),
                     on_date=on_date, at_time=at_time, token_id=str(token.id),
+                    background_delivery=True,
                 )
             except Exception as e:  # noqa: BLE001 — notification only
                 logger.warning("cancel_whatsapp_notify_failed: %s", e)
@@ -6724,6 +6756,121 @@ async def _validated_outbound_trunk(meta: dict, sip_api) -> tuple[str, str]:
         return "", ""
 
 
+async def _hydrate_outbound_meta(meta: dict) -> dict:
+    """Resolve outbound PII from branch-scoped DB references inside the worker.
+
+    LiveKit dispatch metadata carries only opaque booking/task IDs. The dial
+    number, patient name, doctor and message stay in Vachanam's database until
+    the assigned worker needs them.
+    """
+    call_type = meta.get("call_type")
+    if not opens_with_prepared_message(call_type):
+        return meta
+    try:
+        branch_id = UUID(str(meta.get("branch_id")))
+    except (TypeError, ValueError):
+        return meta
+
+    from backend.models.schema import (
+        ClinicQuestion,
+        FollowupTask,
+        Patient,
+        TreatmentNote,
+    )
+
+    hydrated = dict(meta)
+    try:
+        async with AsyncSessionLocal() as db:
+            if call_type == "reminder":
+                token_id = UUID(str(meta.get("token_id")))
+                row = (
+                    await db.execute(
+                        select(Token, _PatientModel, Doctor, Branch)
+                        .join(_PatientModel, Token.patient_id == _PatientModel.id)
+                        .join(Doctor, Token.doctor_id == Doctor.id)
+                        .join(Branch, Token.branch_id == Branch.id)
+                        .where(Token.id == token_id, Token.branch_id == branch_id)
+                    )
+                ).first()
+                if row is None:
+                    return meta
+                token, patient, doctor, branch = row
+                hydrated.update(
+                    phone_number=patient.phone,
+                    patient_name=patient.name,
+                    patient_id=str(patient.id),
+                    doctor_name=doctor.name,
+                    doctor_id=str(doctor.id),
+                    appointment_time=(
+                        token.appointment_time.strftime("%H:%M")
+                        if token.appointment_time else ""
+                    ),
+                    appointment_date=token.date.isoformat(),
+                    branch_timezone=branch.timezone or "Asia/Kolkata",
+                )
+            elif call_type in _FOLLOWUP_CALLTYPES | {"cascade_rebook"}:
+                raw_task_id = meta.get("task_id") or meta.get("followup_task_id")
+                task_id = UUID(str(raw_task_id))
+                row = (
+                    await db.execute(
+                        select(FollowupTask, Patient, Doctor)
+                        .join(Patient, FollowupTask.patient_id == Patient.id)
+                        .join(Doctor, FollowupTask.doctor_id == Doctor.id)
+                        .where(
+                            FollowupTask.id == task_id,
+                            FollowupTask.branch_id == branch_id,
+                        )
+                    )
+                ).first()
+                if row is None:
+                    return meta
+                task, patient, doctor = row
+                hydrated.update(
+                    phone_number=patient.phone,
+                    patient_name=patient.name,
+                    patient_id=str(patient.id),
+                    doctor_name=doctor.name,
+                    doctor_id=str(doctor.id),
+                    message=task.what_to_ask or "",
+                )
+                if call_type == "cascade_rebook" and task.token_id:
+                    old = await db.get(Token, task.token_id)
+                    if old is not None and old.branch_id == branch_id:
+                        hydrated["cancelled_date"] = old.date.isoformat()
+                elif task.target_date:
+                    hydrated.update(target_date=task.target_date.isoformat(), window=2)
+                elif call_type == "next_visit_book" and task.treatment_note_id:
+                    note = await db.get(TreatmentNote, task.treatment_note_id)
+                    if note is not None and note.next_reporting_date:
+                        hydrated.update(
+                            target_date=note.next_reporting_date.isoformat(), window=2
+                        )
+            elif call_type == "question_answer":
+                question_id = UUID(str(meta.get("question_id")))
+                question = await db.get(ClinicQuestion, question_id)
+                if question is None or question.branch_id != branch_id:
+                    return meta
+                patient = await db.get(Patient, question.patient_id) if question.patient_id else None
+                hydrated.update(
+                    phone_number=question.caller_phone,
+                    patient_name=patient.name if patient is not None else "",
+                    patient_id=str(patient.id) if patient is not None else "",
+                    message=(
+                        f"You had asked us about {(question.question or '').strip().rstrip('?')}. "
+                        f"I checked with the clinic, and here is the answer. "
+                        f"{(question.answer or '').strip()}"
+                    ),
+                )
+    except Exception as exc:  # noqa: BLE001 - an unverifiable outbound call must not dial
+        logger.error(
+            "outbound_metadata_hydration_failed type=%s call_type=%s",
+            type(exc).__name__,
+            call_type,
+        )
+        return meta
+    return hydrated
+
+
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
     logger.info("Joined room: %s", ctx.room.name)
@@ -6734,9 +6881,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     if ctx.job.metadata:
         try:
             meta = json.loads(ctx.job.metadata)
-            outbound_number = meta.get("phone_number")
         except json.JSONDecodeError:
             pass
+    meta = await _hydrate_outbound_meta(meta)
+    outbound_number = meta.get("phone_number")
+    if opens_with_prepared_message(meta.get("call_type")) and not outbound_number:
+        logger.error(
+            "outbound_blocked_missing_hydrated_recipient call_type=%s",
+            meta.get("call_type"),
+        )
+        ctx.shutdown()
+        return
     is_reminder = meta.get("call_type") == "reminder"
     is_rebook_call = meta.get("call_type") == "cascade_rebook"
     # Treatment follow-up loop (M2): next_visit_book / doctor_advice.
@@ -7033,6 +7188,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
 
     state = SessionState(session_id=ctx.room.name)
     state.patient_phone = caller or None
+    if outbound_number and meta.get("patient_id"):
+        try:
+            state.verified_patient_ids.add(UUID(str(meta["patient_id"])))
+        except (TypeError, ValueError):
+            pass
+    state.identity_verified = bool(state.verified_patient_ids)
     _recording_active = settings.recording_allowed_for(state.patient_phone)
     logger.info(
         "recording_scope active=%s scope=admin_only caller=...%s",
@@ -7040,12 +7201,59 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         (state.patient_phone or "")[-4:] or "????",
     )
 
-    # Open the persistent Soniox session socket while tenant/data reads run.
-    # This is a connection-only warmup (no synthesis stream, so no 429 race).
-    _warm_tts = ctx.proc.userdata.get("tts_soniox")
-    if _warm_tts is not None:
+    # Open the persistent Soniox session socket while tenant/data reads run. Resolve the
+    # exact clinic voice from the process's read-only DID route first: warming
+    # the platform default (Priya) did nothing for clinics configured as Meera,
+    # leaving their first real reply to pay the complete WS/cold-voice cost.
+    # This is connection-only (no dummy synthesis stream, so no 429 race).
+    _call_warm_tts = ctx.proc.userdata.get("tts_soniox")
+    _warm_route = None
+    _warm_routes = ctx.proc.userdata.get("greeting_routes") or {}
+    if outbound_number and meta.get("branch_id"):
+        _warm_route = next(
+            (
+                route
+                for route in _warm_routes.values()
+                if str(route.get("id")) == str(meta["branch_id"])
+            ),
+            None,
+        )
+    elif not did_from_fallback:
+        _warm_route = next(
+            (_warm_routes[key] for key in _did_route_keys(did) if key in _warm_routes),
+            None,
+        )
+    if _warm_route is not None:
+        _warm_default_lang = (_warm_route.get("language") or DEFAULT_LANG).strip()
+        _warm_phone = outbound_number or caller or ""
+        _warm_digits = re.sub(r"\D", "", _warm_phone)
+        _warm_preference_key = (
+            f"{_warm_route['id']}:{_warm_digits[-10:]}"
+            if len(_warm_digits) >= 10
+            else ""
+        )
+        _warm_lang = (
+            (ctx.proc.userdata.get("caller_languages") or {}).get(_warm_preference_key)
+            if _warm_preference_key
+            else None
+        ) or _warm_default_lang
+        if _warm_lang not in supported_codes():
+            _warm_lang = _warm_default_lang
+        _warm_voice = (_warm_route.get("tts_voice") or "").strip()
+        _warm_voice = _warm_voice or get_lang(_warm_lang).default_voice
+        _call_warm_tts = _build_session_tts(
+            _warm_voice,
+            get_lang(_warm_lang).tts_code,
+            _call_warm_tts,
+        )
+        logger.info(
+            "early_soniox_prewarm_exact voice=%s lang=%s",
+            _warm_voice,
+            _warm_lang,
+        )
+    elif _call_warm_tts is not None:
         try:
-            _warm_tts.prewarm()
+            _call_warm_tts.prewarm()
         except Exception as exc:  # noqa: BLE001 -- later TTS build retries
             logger.debug("early_soniox_prewarm_skipped: %s", exc)
 
@@ -7443,17 +7651,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # patient by name. Raw reads only — language-dependent localization
         # happens after the preferred language is known. RULE 1 branch-scoped;
         # a failure never blocks answering (RULE 8).
-        if outbound_number or is_reminder or is_rebook_call or not state.patient_phone:
-            return None
-        try:
-            async with AsyncSessionLocal() as _s:
-                _rows = await find_bookings_by_phone(branch.id, state.patient_phone, _s)
-                _known = await recognize_caller_name(branch.id, state.patient_phone, _s)
-                _pending = await _inbound_pending_followup(branch.id, state.patient_phone, _s)
-                return _rows, _known, _pending
-        except Exception as e:  # noqa: BLE001
-            logger.warning("caller_lookup_failed: %s", e)
-            return None
+        # Never preload a stored name or appointment into the prompt. ANI is
+        # spoofable; verify_caller_identity is the only inbound read boundary.
+        return None
 
     # #432: start the roster fetch HERE (cache-first) so it overlaps the other
     # pre-call reads instead of blocking the prompt build later. Its own DB
@@ -7549,7 +7749,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             tts=_build_session_tts(
                 (getattr(branch, "tts_voice", None) or "").strip() or lang_cfg.default_voice,
                 lang_cfg.tts_code,
-                ctx.proc.userdata.get("tts_soniox"),
+                _call_warm_tts,
             ),
             vad=ctx.proc.userdata.get("vad") or _load_vad(),
         )
@@ -8244,7 +8444,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 tts=_build_session_tts(
                     _voice_for_lang(branch, lc),
                     cfg2.tts_code,
-                    ctx.proc.userdata.get("tts_soniox"),
+                    _call_warm_tts,
                 ),
                 llm=switched_cached_llm,
                 doctor_contexts=doctor_contexts,
@@ -8392,7 +8592,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # greeting cover window. Priming the Soniox streaming connection while
         # the clip plays keeps its cold handshake off the first real response.
         _session_tts = _build_session_tts(
-            tts_voice, lang_cfg.tts_code, ctx.proc.userdata.get("tts_soniox")
+            tts_voice, lang_cfg.tts_code, _call_warm_tts
         )
         _session_llm = ctx.proc.userdata.get("llm") or _build_fallback_llm()
 

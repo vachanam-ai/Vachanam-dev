@@ -105,6 +105,7 @@ async def _do_calendar_op(
             appointment_dt=datetime.fromisoformat(p["appointment_dt"]),
             duration_minutes=p["duration_minutes"],
             doctor_name=p["doctor_name"],
+            timezone_name=p.get("timezone_name", "Asia/Kolkata"),
         )
 
     if task.operation == "delete":
@@ -133,6 +134,7 @@ async def _do_calendar_op(
             task.google_event_id,
             datetime.fromisoformat(p["appointment_dt"]),
             p["duration_minutes"],
+            p.get("timezone_name", "Asia/Kolkata"),
         )
         return None
 

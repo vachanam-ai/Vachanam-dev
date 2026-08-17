@@ -55,6 +55,7 @@ def wa_capture(monkeypatch):
             "name": "vachanam_booking_confirm",
             "language": "en",
             "params": 5,
+            "buttons": 2,
         }
 
     monkeypatch.setattr(wa_template_registry, "resolve", _resolve)

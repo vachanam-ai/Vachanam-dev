@@ -21,6 +21,7 @@ Per tester.md rule 5: no hardcoded URLs, phones, or secrets.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 import pytest_asyncio
@@ -42,6 +43,38 @@ REQUIRED_HEADERS = {
     "permissions-policy",
     "content-security-policy",
 }
+
+
+def test_cloudflare_spa_origin_has_security_headers():
+    """The API middleware cannot protect the separately hosted SPA."""
+    headers = (Path(__file__).parents[2] / "frontend" / "public" / "_headers").read_text()
+    global_block = headers.split("https://:project.pages.dev/*", 1)[0]
+    for required in (
+        "/*",
+        "Content-Security-Policy:",
+        "frame-ancestors 'none'",
+        "Strict-Transport-Security:",
+        "X-Frame-Options: DENY",
+        "X-Content-Type-Options: nosniff",
+        "Referrer-Policy:",
+        "Permissions-Policy:",
+    ):
+        assert required in global_block
+    assert "'unsafe-eval'" not in global_block
+
+
+def test_spa_does_not_persist_or_send_bearer_jwt():
+    root = Path(__file__).parents[2]
+    client = (root / "frontend" / "src" / "api" / "client.js").read_text(
+        encoding="utf-8"
+    )
+    auth = (root / "frontend" / "src" / "hooks" / "useAuth.jsx").read_text(
+        encoding="utf-8"
+    )
+    assert "localStorage.getItem(LEGACY_TOKEN_KEY)" not in client
+    assert "headers.Authorization" not in client
+    assert "setToken(" not in auth
+    assert '"X-Vachanam-Session": "cookie"' in client
 
 
 def _make_jwt(

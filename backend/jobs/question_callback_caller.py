@@ -64,7 +64,7 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(q.caller_phone, "question_answer"):
+    if not await claim_outbound_call(q.caller_phone, "question_answer", branch.id):
         return False
     try:
         from livekit import api as lk_api
@@ -75,9 +75,6 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
                 "call_type": "question_answer",
                 "branch_id": str(branch.id),
                 "outbound_trunk_id": outbound_trunk_id,
-                "phone_number": q.caller_phone,
-                "patient_name": patient_name or "",
-                "message": compose_message(q.question, q.answer or ""),
                 "question_id": str(q.id),
             }
             room = f"qanswer-{uuid.uuid4().hex[:10]}"
@@ -89,7 +86,7 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
             from backend.services.dispatch_verify import verify_or_cleanup
 
             if not await verify_or_cleanup(lkapi, room, f"question:{q.id}"):
-                await release_outbound_call(q.caller_phone)
+                await release_outbound_call(q.caller_phone, branch.id)
                 return False
             logger.info(
                 "question_callback_dispatched",
@@ -103,7 +100,7 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
     except Exception as e:  # noqa: BLE001 — RULE 8
         logger.error("question_callback_dispatch_failed", question_id=str(q.id),
                      error=str(e)[:160])
-        await release_outbound_call(q.caller_phone)
+        await release_outbound_call(q.caller_phone, branch.id)
         return False
 
 

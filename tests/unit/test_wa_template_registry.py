@@ -96,6 +96,17 @@ def test_the_language_the_clinic_registered_is_carried():
     assert m["booking_confirm"]["language"] == "en_US"
 
 
+def test_buttons_are_sent_only_when_the_registered_template_has_them():
+    without = _t("appointment_confirmation")
+    with_button = _t("vachanam_booking_confirm")
+    with_button["components"].append({
+        "type": "BUTTONS",
+        "buttons": [{"type": "QUICK_REPLY", "text": "Cancel"}],
+    })
+    assert reg.build_map([without])["booking_confirm"]["buttons"] == 0
+    assert reg.build_map([with_button])["booking_confirm"]["buttons"] == 1
+
+
 # ── fitting our arguments to their template ──────────────────────────────────
 
 def test_extra_arguments_are_dropped_from_the_end():

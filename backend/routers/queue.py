@@ -659,6 +659,7 @@ async def create_walkin(
         # trailing space / formatting in the input otherwise put junk like
         # "345 " into the calendar summary.
         patient_phone_last4=(norm_phone or "")[-4:],
+        timezone_name=branch_row.timezone or "Asia/Kolkata",
     )
 
     # WhatsApp confirmation — same call the voice path makes in

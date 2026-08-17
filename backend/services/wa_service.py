@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 import httpx
 import structlog
 from tenacity import (
-    retry, retry_if_exception_type, stop_after_attempt, wait_exponential,
+    retry, retry_if_exception, stop_after_attempt, wait_exponential,
 )
 
 from backend.config import settings
@@ -109,10 +109,18 @@ def wa_enabled(branch, plan: str | None) -> bool:
     return True
 
 
+def _retryable_meta_error(error: BaseException) -> bool:
+    if isinstance(error, httpx.TransportError):
+        return True
+    if isinstance(error, httpx.HTTPStatusError) and error.response is not None:
+        return error.response.status_code == 429 or error.response.status_code >= 500
+    return False
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=4),
-    retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
+    retry=retry_if_exception(_retryable_meta_error),
     reraise=True,
 )
 async def _post(phone_number_id: str, payload: dict, token: str) -> None:

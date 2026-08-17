@@ -430,6 +430,7 @@ async def _maybe_upsert_recurring_cal_event(
                 doctor_name=doc.name,
                 windows=windows,
                 existing_event_ids=old_ids,
+                timezone_name=branch.timezone or "Asia/Kolkata",
             )
             doc.calendar_event_ids_recurring = new_ids
             doc.calendar_event_id_recurring = None  # superseded by the list
@@ -503,6 +504,7 @@ async def _maybe_upsert_recurring_cal_event(
             working_hours_end=doc.working_hours_end,
             available_weekdays=doc.available_weekdays or [0, 1, 2, 3, 4, 5, 6],
             existing_event_id=existing_event_id,
+            timezone_name=branch.timezone or "Asia/Kolkata",
         )
         doc.calendar_event_id_recurring = event_id
         await db.commit()

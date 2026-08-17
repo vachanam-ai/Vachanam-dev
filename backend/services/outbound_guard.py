@@ -10,8 +10,9 @@ natural key anywhere that says "this patient is already being rung". A patient
 with an appointment reminder and a treatment follow-up due in the same minute
 gets two calls at once, and on a retry a single job can do it alone.
 
-The guard is a Redis SET NX per phone number, not per token: what a patient
-experiences is two phones ringing, and they do not care which job caused it.
+The guard is a Redis SET NX per branch + phone number, not per token: jobs for
+one clinic collide, while an unrelated clinic using the same shared family
+number is never delayed.
 
 WHY A SHORT TTL AND NOT A DELETE. The lock is a collision window, not a
 lifecycle — nothing here observes when a call ends, and a lock that had to be
@@ -42,18 +43,20 @@ def _last10(phone: str | None) -> str:
     return digits[-10:] if len(digits) >= 10 else ""
 
 
-def lock_key(phone: str | None) -> str:
-    return f"outbound:call:{_last10(phone)}"
+def lock_key(phone: str | None, branch_id: object | None = None) -> str:
+    return f"outbound:call:{branch_id or 'unscoped'}:{_last10(phone)}"
 
 
-async def claim_outbound_call(phone: str | None, kind: str) -> bool:
+async def claim_outbound_call(
+    phone: str | None, kind: str, branch_id: object | None = None
+) -> bool:
     """True when THIS job may dial ``phone`` now.
 
     False means another outbound call to that number is already in flight and
     this one must be skipped — the caller leaves its own 'sent' flag unset so
     the next tick retries, exactly as it does for a failed dispatch.
     """
-    key = lock_key(phone)
+    key = lock_key(phone, branch_id)
     if not _last10(phone):
         return True  # nothing to key on; never block a dial over a parse miss
     try:
@@ -73,7 +76,9 @@ async def claim_outbound_call(phone: str | None, kind: str) -> bool:
     return True
 
 
-async def release_outbound_call(phone: str | None) -> None:
+async def release_outbound_call(
+    phone: str | None, branch_id: object | None = None
+) -> None:
     """Hand the number back early — only for a dispatch that FAILED, so a
     genuine retry is not made to wait out the TTL."""
     if not _last10(phone):
@@ -81,6 +86,6 @@ async def release_outbound_call(phone: str | None) -> None:
     try:
         from backend.redis_client import get_redis
 
-        await get_redis().delete(lock_key(phone))
+        await get_redis().delete(lock_key(phone, branch_id))
     except Exception as e:  # noqa: BLE001 — best effort; the TTL is the backstop
         logger.warning("outbound_guard_release_failed", error=str(e)[:200])

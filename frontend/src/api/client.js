@@ -1,10 +1,10 @@
 import axios from "axios";
 
-const TOKEN_KEY = "vachanam_jwt";
+const LEGACY_TOKEN_KEY = "vachanam_jwt";
 
-export const getToken = () => localStorage.getItem(TOKEN_KEY);
-export const setToken = (t) => localStorage.setItem(TOKEN_KEY, t);
-export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+// Authentication is a Secure HttpOnly cookie. Keep only this cleanup helper so
+// users upgrading from the former localStorage build lose the exposed token.
+export const clearToken = () => localStorage.removeItem(LEGACY_TOKEN_KEY);
 
 // In dev, VITE_API_URL is unset → baseURL "" → relative paths hit the Vite proxy
 // (/auth,/api,… → uvicorn:8000). In prod (Cloudflare Pages, a static CDN with no
@@ -31,12 +31,6 @@ const notifyCaptchaConsumed = (config) => {
   if (token) window.dispatchEvent(new CustomEvent("vachanam:captcha-consumed", { detail: token }));
 };
 
-api.interceptors.request.use((config) => {
-  const token = getToken();
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
-
 api.interceptors.response.use(
   (res) => {
     notifyCaptchaConsumed(res.config);
@@ -44,7 +38,7 @@ api.interceptors.response.use(
   },
   (err) => {
     notifyCaptchaConsumed(err.config);
-    if (err.response?.status === 401) {
+    if (err.response?.status === 401 && !err.config?._skipAuthRedirect) {
       clearToken();
       if (!window.location.pathname.startsWith("/login")) {
         window.location.assign("/login");
@@ -56,19 +50,19 @@ api.interceptors.response.use(
 
 // ── Auth ──
 export const loginWithGoogle = (id_token) =>
-  api.post("/auth/google", { id_token }).then((r) => r.data);
+  api.post("/auth/google", { id_token }, { headers: { "X-Vachanam-Session": "cookie" } }).then((r) => r.data);
 export const loginWithPassword = (email, password, captchaToken) =>
-  api.post("/auth/login", { email, password }, captchaConfig(captchaToken)).then((r) => r.data);
+  api.post("/auth/login", { email, password }, captchaConfig(captchaToken, { headers: { "X-Vachanam-Session": "cookie" } })).then((r) => r.data);
 export const registerClinic = (payload, captchaToken) =>
-  api.post("/auth/register", payload, captchaConfig(captchaToken)).then((r) => r.data);
+  api.post("/auth/register", payload, captchaConfig(captchaToken, { headers: { "X-Vachanam-Session": "cookie" } })).then((r) => r.data);
 export const requestOtp = (payload, captchaToken) =>
   api.post("/auth/request-otp", payload, captchaConfig(captchaToken)).then((r) => r.data);
 export const forgotPassword = (email, captchaToken) =>
   api.post("/auth/forgot-password", { email }, captchaConfig(captchaToken)).then((r) => r.data);
 export const resetPassword = (email, code, new_password) =>
-  api.post("/auth/reset-password", { email, code, new_password }).then((r) => r.data);
+  api.post("/auth/reset-password", { email, code, new_password }, { headers: { "X-Vachanam-Session": "cookie" } }).then((r) => r.data);
 export const fetchMe = () =>
-  api.get("/auth/me").then((r) => {
+  api.get("/auth/me", { _skipAuthRedirect: true }).then((r) => {
     const d = r.data;
     // Guard: if the wrong backend (a misrouted proxy, another app on the port)
     // answers /auth/me with a 200 HTML body, axios hands us that string. Treat

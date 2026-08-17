@@ -104,6 +104,7 @@ class GoogleCalendarService:
         appointment_dt: datetime,
         duration_minutes: int,
         doctor_name: str,
+        timezone_name: str = "Asia/Kolkata",
     ) -> str:
         """Create a per-patient blocking event for a slot-based booking.
 
@@ -148,11 +149,11 @@ class GoogleCalendarService:
             "description": "",
             "start": {
                 "dateTime": appointment_dt.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": timezone_name,
             },
             "end": {
                 "dateTime": end_dt.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": timezone_name,
             },
         }
 
@@ -206,6 +207,7 @@ class GoogleCalendarService:
         working_hours_end: time,
         available_weekdays: list[int],
         existing_event_id: Optional[str],
+        timezone_name: str = "Asia/Kolkata",
     ) -> str:
         """Create or update a recurring 'clinic hours' event for a token-based doctor.
 
@@ -241,11 +243,11 @@ class GoogleCalendarService:
             "description": "",
             "start": {
                 "dateTime": start_dt.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": timezone_name,
             },
             "end": {
                 "dateTime": end_dt.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": timezone_name,
             },
             "recurrence": [f"RRULE:FREQ=WEEKLY;BYDAY={weekday_codes}"],
         }
@@ -292,6 +294,7 @@ class GoogleCalendarService:
         doctor_name: str,
         windows: list[tuple[time, time, list[int]]],
         existing_event_ids: list[str],
+        timezone_name: str = "Asia/Kolkata",
     ) -> list[str]:
         """Publish a doctor's WHOLE week — one recurring event per window.
 
@@ -321,11 +324,11 @@ class GoogleCalendarService:
                 "description": "",
                 "start": {
                     "dateTime": datetime.combine(anchor, start).isoformat(),
-                    "timeZone": "Asia/Kolkata",
+                    "timeZone": timezone_name,
                 },
                 "end": {
                     "dateTime": datetime.combine(anchor, end).isoformat(),
-                    "timeZone": "Asia/Kolkata",
+                    "timeZone": timezone_name,
                 },
                 "recurrence": [f"RRULE:FREQ=WEEKLY;BYDAY={codes}"],
             }
@@ -366,6 +369,7 @@ class GoogleCalendarService:
         summary: str,
         start_dt: datetime,
         end_dt: datetime,
+        timezone_name: str = "Asia/Kolkata",
     ) -> str:
         """A single non-recurring block. Used for date-specific sessions, where
         a weekly RRULE would be wrong — "next Tuesday I sit 10-1" describes
@@ -377,8 +381,8 @@ class GoogleCalendarService:
         body = {
             "summary": summary,
             "description": "",
-            "start": {"dateTime": start_dt.isoformat(), "timeZone": "Asia/Kolkata"},
-            "end": {"dateTime": end_dt.isoformat(), "timeZone": "Asia/Kolkata"},
+            "start": {"dateTime": start_dt.isoformat(), "timeZone": timezone_name},
+            "end": {"dateTime": end_dt.isoformat(), "timeZone": timezone_name},
         }
         try:
             event = await asyncio.to_thread(
@@ -438,6 +442,7 @@ class GoogleCalendarService:
         event_id: str,
         new_dt: datetime,
         duration_minutes: int,
+        timezone_name: str = "Asia/Kolkata",
     ) -> None:
         """Patch the start/end time of an existing event.
 
@@ -447,11 +452,11 @@ class GoogleCalendarService:
         patch_body = {
             "start": {
                 "dateTime": new_dt.isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": timezone_name,
             },
             "end": {
                 "dateTime": (new_dt + timedelta(minutes=duration_minutes)).isoformat(),
-                "timeZone": "Asia/Kolkata",
+                "timeZone": timezone_name,
             },
         }
         try:
@@ -498,6 +503,7 @@ class CalendarService(GoogleCalendarService):
         appointment_time: Optional[time],
         doctor_name: str,
         slot_duration_minutes: Optional[int] = None,
+        timezone_name: str = "Asia/Kolkata",
     ) -> str:
         """Legacy signature shim — delegates to real impl with PII stripping.
 
@@ -520,4 +526,5 @@ class CalendarService(GoogleCalendarService):
             appointment_dt=appointment_dt,
             duration_minutes=slot_duration_minutes or 30,
             doctor_name=doctor_name,
+            timezone_name=timezone_name,
         )

@@ -115,7 +115,7 @@ async def send_purpose(
         return await wa_service.send_template(
             branch, to, spec["name"], spec["language"],
             wa_template_registry.fit_params(values, spec["params"]),
-            buttons or [], plan=plan,
+            (buttons or [])[:spec.get("buttons", 0)], plan=plan,
         )
     except Exception as e:  # noqa: BLE001 — RULE 4
         logger.warning(
@@ -127,6 +127,7 @@ async def send_purpose(
 async def _queue_or_send(
     branch_id, to: str, purpose: str, values: list[str], *,
     event_key: str | None = None, buttons: list[dict] | None = None,
+    background_delivery: bool = False,
     accept_when_queued: bool = False,
 ) -> bool:
     try:
@@ -136,6 +137,7 @@ async def _queue_or_send(
             return await enqueue(
                 branch_id, to, purpose, values,
                 event_key=event_key, buttons=buttons,
+                background_delivery=background_delivery,
                 accept_when_queued=accept_when_queued,
             )
         return await send_purpose(branch_id, to, purpose, values, buttons)
@@ -153,6 +155,7 @@ class MetaService:
         self, to: str, *, branch_id=None, clinic_name: str = "",
         doctor_name: str = "", when: str = "", token_id: str = "",
         patient_name: str = "", on_date: str = "", at_time: str = "",
+        background_delivery: bool = False,
     ) -> None:
         """Told the patient their appointment moved. Sent from BOTH channels:
         a reschedule agreed on the phone must land in WhatsApp too (Vinay
@@ -162,18 +165,21 @@ class MetaService:
             _values("reschedule", patient=patient_name, clinic=clinic_name,
                     doctor=doctor_name, on_date=on_date or when, at_time=at_time),
             event_key=(f"reschedule:{token_id}" if token_id else None),
+            background_delivery=background_delivery,
         )
 
     async def send_cancellation_confirmation(
         self, to: str, *, branch_id=None, clinic_name: str = "",
         doctor_name: str = "", when: str = "", patient_name: str = "",
         on_date: str = "", at_time: str = "", token_id: str = "",
+        background_delivery: bool = False,
     ) -> None:
         await _queue_or_send(
             branch_id, to, "cancel",
             _values("cancel", patient=patient_name, clinic=clinic_name,
                     doctor=doctor_name, on_date=on_date or when, at_time=at_time),
             event_key=(f"cancel:{token_id}" if token_id else None),
+            background_delivery=background_delivery,
         )
 
     async def send_feedback_request(

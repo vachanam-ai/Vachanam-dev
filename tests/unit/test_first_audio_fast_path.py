@@ -45,3 +45,13 @@ def test_startup_does_not_open_competing_soniox_warm_stream():
     filler = SRC[SRC.index("async def _cache_tool_fillers"):]
     filler = filler[: filler.index("_filler_cache_task =")]
     assert filler.count("await cache_filler_clips(") == 2
+
+
+def test_startup_prewarms_and_reuses_the_clinic_voice():
+    """A non-default clinic voice must not pay a cold socket on turn one."""
+    early = SRC[SRC.index("# Open the persistent Soniox session socket"):]
+    early = early[: early.index("# A job process already loaded this public DID")]
+    assert '_warm_voice = (_warm_route.get("tts_voice") or "").strip()' in early
+    assert "_call_warm_tts = _build_session_tts(" in early
+    session_build = SRC[SRC.index("_session_tts = _build_session_tts("):]
+    assert "tts_voice, lang_cfg.tts_code, _call_warm_tts" in session_build

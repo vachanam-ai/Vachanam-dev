@@ -62,6 +62,8 @@ async def test_failed_reschedule_clears_in_flight(monkeypatch):
         patient_phone='+919999999999',
         last_user_utterance='please reschedule it',
         caller_asked_to_reschedule=True,
+        identity_verified=True,
+        verified_patient_ids={uuid4()},
     )
     agent = _agent(state)
     monkeypatch.setattr(
@@ -86,6 +88,8 @@ async def test_failed_cancel_clears_in_flight(monkeypatch):
         patient_phone='+919999999999',
         last_user_utterance='please cancel my appointment',
         caller_asked_to_cancel=True,
+        identity_verified=True,
+        verified_patient_ids={uuid4()},
     )
     agent = _agent(state)
     monkeypatch.setattr(
@@ -107,6 +111,8 @@ async def test_unexpected_mutation_exception_also_clears_in_flight(monkeypatch):
         branch_id=uuid4(),
         patient_phone='+919999999999',
         last_user_utterance='please reschedule it',
+        identity_verified=True,
+        verified_patient_ids={uuid4()},
     )
     agent = _agent(state)
     monkeypatch.setattr(

@@ -210,13 +210,15 @@ async def test_preflight_allows_required_headers(client):
         headers={
             "Origin": settings.frontend_url,
             "Access-Control-Request-Method": "GET",
-            "Access-Control-Request-Headers": "Authorization, Content-Type",
+            "Access-Control-Request-Headers": (
+                "Authorization, Content-Type, X-Vachanam-Session"
+            ),
         },
     )
     acah = r.headers.get("access-control-allow-headers", "")
     # Parse comma-separated headers, normalize to lowercase
     allowed_headers = {h.strip().lower() for h in acah.split(",") if h.strip()}
-    required = {"authorization", "content-type"}
+    required = {"authorization", "content-type", "x-vachanam-session"}
     missing = required - allowed_headers
     assert not missing, (
         f"Access-Control-Allow-Headers missing required headers: {missing}. "

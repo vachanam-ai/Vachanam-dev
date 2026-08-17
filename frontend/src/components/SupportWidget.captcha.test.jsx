@@ -8,8 +8,8 @@ import { MemoryRouter } from "react-router-dom";
 // rendered the captcha. Anonymous + TURNSTILE_ON must show the captcha and
 // keep Send disabled until it solves; a signed-in user must see no captcha.
 
-let token = null;
-vi.mock("../api/client", () => ({ getToken: () => token }));
+let user = null;
+vi.mock("../hooks/useAuth.jsx", () => ({ useAuth: () => ({ user }) }));
 vi.mock("../api/support", () => ({ sendChat: vi.fn() }));
 vi.mock("./Turnstile.jsx", () => ({
   TURNSTILE_ON: true,
@@ -36,7 +36,7 @@ function openWidget() {
 
 describe("SupportWidget captcha gate (#413)", () => {
   it("anonymous: captcha shown, Send disabled until solved", () => {
-    token = null;
+    user = null;
     openWidget();
     expect(screen.getByTestId("captcha")).toBeTruthy();
     const input = screen.getByPlaceholderText("Type your question…");
@@ -47,7 +47,7 @@ describe("SupportWidget captcha gate (#413)", () => {
   });
 
   it("signed-in: no captcha, Send enabled with text", () => {
-    token = "jwt";
+    user = { user_id: "signed-in" };
     openWidget();
     expect(screen.queryByTestId("captcha")).toBeNull();
     fireEvent.change(screen.getByPlaceholderText("Type your question…"), {

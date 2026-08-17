@@ -150,6 +150,7 @@ async def sync_date_schedule_events(db, branch_id, doctor_id, target_date) -> in
                 summary=f"Dr {doctor.name} — clinic hours",
                 start_dt=datetime.combine(target_date, start),
                 end_dt=datetime.combine(target_date, end),
+                timezone_name=branch.timezone or "Asia/Kolkata",
             )
             written += 1
         except Exception as exc:  # noqa: BLE001 — one bad session is not fatal

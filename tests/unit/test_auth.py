@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import jwt
+from starlette.requests import Request
+from starlette.responses import Response
 
 from backend.config import settings
 from backend.middleware.auth_middleware import create_access_token
@@ -109,3 +111,36 @@ def test_expired_token_rejected():
     from jwt import PyJWTError as JWTError
     with pytest.raises(JWTError):
         jwt.decode(expired_token, settings.jwt_secret, algorithms=["HS256"])
+
+
+def test_browser_session_is_httponly_and_token_is_redacted():
+    from backend.routers.auth import _issue_session
+
+    request = Request({
+        "type": "http",
+        "method": "POST",
+        "path": "/auth/login",
+        "headers": [(b"x-vachanam-session", b"cookie")],
+    })
+    response = Response()
+    result = _issue_session(request, response, "signed.jwt.value")
+    cookie = response.headers["set-cookie"]
+    assert result.access_token is None
+    assert "vachanam_session=signed.jwt.value" in cookie
+    assert "HttpOnly" in cookie
+    assert "SameSite=strict" in cookie
+    assert "Path=/" in cookie
+
+
+@pytest.mark.asyncio
+async def test_cookie_is_an_authentication_source():
+    from backend.middleware.auth_middleware import _session_credentials
+
+    request = Request({
+        "type": "http",
+        "method": "GET",
+        "path": "/auth/me",
+        "headers": [(b"cookie", b"vachanam_session=cookie.jwt")],
+    })
+    credentials = await _session_credentials(request, None)
+    assert credentials.credentials == "cookie.jwt"

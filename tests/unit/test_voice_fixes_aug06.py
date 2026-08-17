@@ -327,10 +327,10 @@ def test_time_and_daypart_words_are_dropped_on_an_english_call():
 # ── change 2: greet a known caller by name ───────────────────────────────────
 
 
-def test_known_caller_is_greeted_by_name():
+def test_known_caller_is_not_greeted_by_name_by_default():
     import agent.livekit_minimal.agent as agent_mod
 
-    assert agent_mod._GREET_BY_NAME is True
+    assert agent_mod._GREET_BY_NAME is False
 
 
 def test_caller_language_is_remembered_across_calls():

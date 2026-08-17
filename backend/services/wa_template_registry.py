@@ -99,6 +99,17 @@ def _body_param_count(components: list[dict]) -> int:
     return 0
 
 
+def _quick_reply_count(components: list[dict]) -> int:
+    for comp in components or []:
+        if (comp.get("type") or "").upper() == "BUTTONS":
+            return sum(
+                1
+                for button in comp.get("buttons") or []
+                if (button.get("type") or "").upper() == "QUICK_REPLY"
+            )
+    return 0
+
+
 def _pick(
     templates: list[dict], canonical: str, keywords: tuple[str, ...],
     excludes: tuple[str, ...] = (),
@@ -135,6 +146,7 @@ def build_map(templates: list[dict]) -> dict[str, dict]:
             "name": chosen["name"],
             "language": chosen.get("language") or "en",
             "params": _body_param_count(chosen.get("components") or []),
+            "buttons": _quick_reply_count(chosen.get("components") or []),
         }
     return out
 

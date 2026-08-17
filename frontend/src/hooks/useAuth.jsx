@@ -2,20 +2,17 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import {
   clearToken,
   fetchMe,
-  getToken,
   loginWithGoogle,
   loginWithPassword,
   logoutSession,
   registerClinic,
-  resetPassword,
-  setToken
+  resetPassword
 } from "../api/client";
 
 const AuthContext = createContext(null);
 
-/** JWT claims are already signed by our backend. Reading them locally lets the
- * app render immediately; protected API calls still perform server-side
- * signature, revocation, and account validation. */
+/** Legacy decoder retained only for old unit/API consumers. Browser sessions
+ * never call it: their JWT stays inside the HttpOnly cookie. */
 export const sessionFromToken = (token) => {
   try {
     const encoded = token?.split(".")[1];
@@ -54,49 +51,40 @@ const initialBranch = (user) => {
 };
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => sessionFromToken(getToken()));
-  const [loading] = useState(false);
-  const [selectedBranchId, setSelectedBranchId] = useState(() =>
-    initialBranch(sessionFromToken(getToken()))
-  );
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedBranchId, setSelectedBranchId] = useState(null);
 
   useEffect(() => {
-    if (!getToken()) return;
+    clearToken();
     fetchMe()
       .then(setUser)
-      .catch(() => {
-        clearToken();
-        setUser(null);
-      });
+      .catch(() => setUser(null))
+      .finally(() => setLoading(false));
   }, []);
 
-  const finishLogin = useCallback((data) => {
-    setToken(data.access_token);
-    const me = sessionFromToken(data.access_token);
-    if (!me) {
-      clearToken();
-      throw new Error("The server returned an invalid session");
-    }
+  const finishLogin = useCallback(async () => {
+    const me = await fetchMe();
     setUser(me);
     setSelectedBranchId(initialBranch(me));
     return me;
   }, []);
 
   const login = useCallback(
-    async (idToken) => finishLogin(await loginWithGoogle(idToken)),
+    async (idToken) => { await loginWithGoogle(idToken); return finishLogin(); },
     [finishLogin]
   );
   const loginPassword = useCallback(
     async (email, password, captchaToken) =>
-      finishLogin(await loginWithPassword(email, password, captchaToken)),
+      { await loginWithPassword(email, password, captchaToken); return finishLogin(); },
     [finishLogin]
   );
   const register = useCallback(
-    async (payload, captchaToken) => finishLogin(await registerClinic(payload, captchaToken)),
+    async (payload, captchaToken) => { await registerClinic(payload, captchaToken); return finishLogin(); },
     [finishLogin]
   );
   const completePasswordReset = useCallback(
-    async (email, code, password) => finishLogin(await resetPassword(email, code, password)),
+    async (email, code, password) => { await resetPassword(email, code, password); return finishLogin(); },
     [finishLogin]
   );
 

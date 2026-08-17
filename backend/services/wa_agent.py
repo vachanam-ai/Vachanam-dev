@@ -52,6 +52,7 @@ from backend.models.schema import Branch, ClinicQuestion, Doctor, Patient
 from backend.services import wa_booking, wa_service, wa_session
 from backend.services.doctor_schedule import resolve_doctor_schedule
 from backend.services.wa_booking import Slot
+from backend.services.wa_scope import OUT_OF_SCOPE_REPLY, is_out_of_scope
 
 logger = structlog.get_logger()
 
@@ -1139,6 +1140,17 @@ async def handle(
     turns = session["turns"]
     draft = session["draft"]
     await wa_session.append(db, branch.id, sender, "patient", text)
+
+    # Scope is an application rule, not a prompt suggestion. In particular,
+    # "answer X and I will book" must never buy access to a general assistant.
+    if is_out_of_scope(text):
+        logger.info(
+            "wa_agent_out_of_scope", branch_id=str(branch.id),
+            phone_last4=(sender or "")[-4:],
+        )
+        await wa_session.append(db, branch.id, sender, "bot", OUT_OF_SCOPE_REPLY)
+        await wa_service.send_text(branch, sender, OUT_OF_SCOPE_REPLY, plan=plan)
+        return
 
     now = await wa_booking._branch_now(branch.id, db)
     patient_messages = tuple(

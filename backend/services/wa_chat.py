@@ -58,6 +58,7 @@ from backend.services.doctor_schedule import (
 from backend.services.resilience import guard
 from backend.services.support_bot import _call_gemini
 from backend.services.wa_booking import Slot
+from backend.services.wa_scope import OUT_OF_SCOPE_REPLY, is_out_of_scope
 
 logger = structlog.get_logger()
 
@@ -547,6 +548,16 @@ async def handle_text(
     session = await wa_session.load(db, branch.id, sender)
     turns = session["turns"]  # history only — does NOT include this message
     await wa_session.append(db, branch.id, sender, "patient", text)
+
+    # The rollback router must enforce the same boundary as the live agent.
+    if is_out_of_scope(text):
+        logger.info(
+            "wa_chat_out_of_scope", branch_id=str(branch.id),
+            phone_last4=_last4(sender),
+        )
+        await wa_session.append(db, branch.id, sender, "bot", OUT_OF_SCOPE_REPLY)
+        await wa_service.send_text(branch, sender, OUT_OF_SCOPE_REPLY, plan=plan)
+        return
 
     now = await wa_booking._branch_now(branch.id, db)
     try:

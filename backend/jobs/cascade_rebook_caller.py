@@ -146,7 +146,9 @@ async def _dispatch_rebook_call(
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(getattr(patient, "phone", None), "rebook"):
+    if not await claim_outbound_call(
+        getattr(patient, "phone", None), "rebook", branch.id
+    ):
         return
     try:
         from livekit import api as lk_api
@@ -166,12 +168,7 @@ async def _dispatch_rebook_call(
                             # or a multi-clinic deploy resolves the wrong tenant.
                             "branch_id": str(task.branch_id),
                             "outbound_trunk_id": outbound_trunk_id,
-                            "phone_number": patient.phone,
                             "followup_task_id": str(task.id),
-                            "patient_name": patient.name,
-                            "doctor_name": doctor.name,
-                            "doctor_id": str(doctor.id),
-                            "cancelled_date": token.date.isoformat(),
                         }
                     ),
                 )
@@ -193,4 +190,4 @@ async def _dispatch_rebook_call(
             await lkapi.aclose()
     except Exception as e:
         logger.error("cascade_rebook_dispatch_failed", task_id=str(task.id), error=str(e))
-        await release_outbound_call(getattr(patient, "phone", None))
+        await release_outbound_call(getattr(patient, "phone", None), branch.id)

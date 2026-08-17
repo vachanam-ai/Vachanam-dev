@@ -208,6 +208,8 @@ async def test_cancelled_token_number_never_reissued(clinic, db, redis):
     state.branch_id = branch.id
     state.patient_phone = "+919666444428"  # caller owns the booking (472bbe4 gate)
     state.token_confirmed = True
+    state.identity_verified = True
+    state.verified_patient_ids = {uuid.UUID(confirmed["patient_id"])}
     agent = VachanamAgent(
         instructions="t",
         state=state,
@@ -281,6 +283,8 @@ async def test_past_same_day_slot_can_still_be_cancelled_or_rescheduled(
     monkeypatch.setattr(agent_module, "_branch_now", fixed_now)
     state = SessionState(session_id="past-slot", branch_id=branch.id,
                          patient_phone="+919777000111")  # caller owns the booking
+    state.identity_verified = True
+    state.verified_patient_ids = {patient.id}
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         # A real calendar stub: the reschedule now gets far enough to WRITE
@@ -326,6 +330,8 @@ async def test_a_previous_day_booking_still_cannot_be_mutated(
     monkeypatch.setattr(agent_module, "_branch_now", fixed_now)
     state = SessionState(session_id="old-slot", branch_id=branch.id,
                          patient_phone="+919777000222")
+    state.identity_verified = True
+    state.verified_patient_ids = {patient.id}
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=None, meta_service=NullMeta(), transfer_to="",
@@ -373,6 +379,8 @@ async def test_reschedule_atomic_one_confirmed_booking(clinic, db, redis):
     state = SessionState(session_id="t2")
     state.branch_id = branch.id
     state.patient_phone = "+919666444428"  # caller owns the booking (472bbe4 gate)
+    state.identity_verified = True
+    state.verified_patient_ids = {uuid.UUID(confirmed["patient_id"])}
     agent = VachanamAgent(
         instructions="t",
         state=state,
@@ -430,6 +438,8 @@ async def test_reschedule_old_cancel_failure_compensates_replacement(
     state = SessionState(session_id="reschedule-compensation")
     state.branch_id = branch.id
     state.patient_phone = "+919666444427"
+    state.identity_verified = True
+    state.verified_patient_ids = {uuid.UUID(confirmed["patient_id"])}
     agent = VachanamAgent(
         instructions="t",
         state=state,
@@ -495,6 +505,8 @@ async def test_reschedule_twice_in_one_call_with_stale_token(clinic, db, redis):
     state = SessionState(session_id="t3")
     state.branch_id = branch.id
     state.patient_phone = "+919666444429"  # caller owns the booking (472bbe4 gate)
+    state.identity_verified = True
+    state.verified_patient_ids = {uuid.UUID(confirmed["patient_id"])}
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
@@ -609,6 +621,8 @@ async def test_reschedule_failure_keeps_old_booking(clinic, db, redis):
     state = SessionState(session_id="t3")
     state.branch_id = branch.id
     state.patient_phone = "+919666444428"  # caller owns the booking (472bbe4 gate)
+    state.identity_verified = True
+    state.verified_patient_ids = {uuid.UUID(confirmed["patient_id"])}
     agent = VachanamAgent(
         instructions="t",
         state=state,
@@ -1068,6 +1082,8 @@ async def test_cancelled_token_frees_seat_for_rebooking(clinic, db, redis):
     state = SessionState(session_id="seat")
     state.branch_id = branch.id
     state.patient_phone = "+919666444401"  # Seat One cancels their own booking
+    state.identity_verified = True
+    state.verified_patient_ids = {(await db.get(Token, uuid.UUID(t1))).patient_id}
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=None, meta_service=NullMeta(), transfer_to="",
@@ -1251,6 +1267,8 @@ async def test_cancel_commits_and_queues_calendar_cleanup_on_delete_failure(
     state = SessionState(session_id="cancel-calendar-retry")
     state.branch_id = branch.id
     state.patient_phone = "+919666444477"
+    state.identity_verified = True
+    state.verified_patient_ids = {uuid.UUID(confirmed["patient_id"])}
     agent = VachanamAgent(
         instructions="t",
         state=state,

@@ -69,10 +69,12 @@ async def clinic(db):
     return {"branch": branch, "doc": doc}
 
 
-def _agent(db, branch_id):
+def _agent(db, branch_id, patient_id):
     state = SessionState(session_id="torture")
     state.branch_id = branch_id
     state.patient_phone = CALLER
+    state.identity_verified = True
+    state.verified_patient_ids = {str(patient_id)}
     return VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=OkCalendar(), meta_service=NullMeta(), transfer_to="",
@@ -110,7 +112,7 @@ async def test_flipflop_back_to_original_time(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(10, 0))
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, booked["patient_id"])
 
     r1 = await agent._do_reschedule(booked["token_id"], day.isoformat(), "11:00")
     assert r1["success"], r1
@@ -132,7 +134,7 @@ async def test_reschedule_to_own_current_time_is_graceful(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(12, 30))
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, booked["patient_id"])
 
     r = await agent._do_reschedule(booked["token_id"], day.isoformat(), "12:30")
     assert r["success"], r
@@ -148,7 +150,7 @@ async def test_same_reschedule_repeated_is_idempotent(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(10, 0))
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, booked["patient_id"])
 
     r1 = await agent._do_reschedule(booked["token_id"], day.isoformat(), "11:00")
     assert r1["success"], r1
@@ -167,7 +169,7 @@ async def test_five_reschedules_chain_ends_clean(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(10, 0))
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, booked["patient_id"])
 
     for t in ("11:00", "12:00", "13:00", "14:00", "10:00"):
         r = await agent._do_reschedule(booked["token_id"], day.isoformat(), t)
@@ -215,7 +217,7 @@ async def test_cancel_then_rebook_same_slot_immediately(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(16, 0))
-    agent, state = _agent(db, branch.id)
+    agent, state = _agent(db, branch.id, booked["patient_id"])
     state.token_confirmed = True
 
     cancel = await agent._do_cancel(booked["token_id"])
@@ -244,7 +246,7 @@ async def test_reschedule_to_full_slot_keeps_old_booking(clinic, db, redis):
     assert other["success"]
 
     booked = await _book(db, branch, doc, time(10, 0))
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, booked["patient_id"])
     r = await agent._do_reschedule(booked["token_id"], day.isoformat(), "11:00")
     assert r["success"] is False  # full — clean refusal
 
@@ -262,7 +264,7 @@ async def test_cross_date_reschedule_and_back(clinic, db, redis):
     while day2.weekday() == 6:
         day2 += timedelta(days=1)
     booked = await _book(db, branch, doc, time(10, 0), day=day1)
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, booked["patient_id"])
 
     r1 = await agent._do_reschedule(booked["token_id"], day2.isoformat(), "10:00")
     assert r1["success"], r1
@@ -281,7 +283,7 @@ async def test_availability_updates_after_reschedule(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     day = _tomorrow()
     booked = await _book(db, branch, doc, time(10, 0))
-    agent, _ = _agent(db, branch.id)
+    agent, _ = _agent(db, branch.id, booked["patient_id"])
     r = await agent._do_reschedule(booked["token_id"], day.isoformat(), "11:00")
     assert r["success"], r
 

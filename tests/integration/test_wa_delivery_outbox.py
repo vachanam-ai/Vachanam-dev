@@ -100,6 +100,88 @@ async def test_transient_failure_is_persisted_then_retried(db, monkeypatch):
     assert task.sent_at is not None
 
 
+async def test_provider_send_does_not_hold_an_outbox_db_connection(db, monkeypatch):
+    """A two-slot production pool must have room for Meta's own DB lookup."""
+    branch = await _branch(db)
+    real_factory = wa_delivery._db_module.AsyncSessionLocal
+    active = 0
+
+    class TrackedSession:
+        def __init__(self):
+            self._context = real_factory()
+
+        async def __aenter__(self):
+            nonlocal active
+            session = await self._context.__aenter__()
+            active += 1
+            return session
+
+        async def __aexit__(self, *args):
+            nonlocal active
+            try:
+                return await self._context.__aexit__(*args)
+            finally:
+                active -= 1
+
+    monkeypatch.setattr(
+        wa_delivery._db_module, "AsyncSessionLocal", lambda: TrackedSession()
+    )
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+
+    async def sent(*args, **kwargs):
+        assert active == 0
+        return True
+
+    monkeypatch.setattr(meta_service, "send_purpose", sent)
+    assert await wa_delivery.enqueue(
+        branch.id,
+        "+919876500020",
+        "cancel",
+        ["Anjali", "Srinivas", "12 August", "10:30 AM"],
+        event_key="cancel:no-held-pool-slot",
+    ) is True
+
+
+async def test_background_delivery_does_not_hold_the_voice_tool(db, monkeypatch):
+    branch = await _branch(db)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+
+    async def slow_send(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return True
+
+    monkeypatch.setattr(meta_service, "send_purpose", slow_send)
+    assert await wa_delivery.enqueue(
+        branch.id,
+        "+919876500021",
+        "reschedule",
+        ["Anjali", "Clinic", "Srinivas", "12 August", "11:00 AM"],
+        event_key="reschedule:background-voice",
+        background_delivery=True,
+    ) is True
+    await asyncio.wait_for(entered.wait(), timeout=1)
+
+    # enqueue returned while the provider is still blocked; voice can respond.
+    release.set()
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        db.expire_all()
+        row = (
+            await db.execute(
+                select(WhatsAppDelivery).where(
+                    WhatsAppDelivery.event_key == "reschedule:background-voice"
+                )
+            )
+        ).scalar_one()
+        if row.status == "sent":
+            break
+    assert row.status == "sent"
+
+
 async def test_concurrent_enqueue_claims_event_once(db, monkeypatch):
     branch = await _branch(db)
     sends = 0

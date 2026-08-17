@@ -135,6 +135,8 @@ async def test_a_meta_error_body_reaches_the_log(monkeypatch):
     """
     import httpx
 
+    posts = 0
+
     class _Resp:
         status_code = 400
         is_error = True
@@ -156,6 +158,8 @@ async def test_a_meta_error_body_reaches_the_log(monkeypatch):
             return False
 
         async def post(self, *a, **k):
+            nonlocal posts
+            posts += 1
             return _Resp()
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _Client())
@@ -167,3 +171,4 @@ async def test_a_meta_error_body_reaches_the_log(monkeypatch):
     assert "131030" in text
     assert "not in allowed list" in text
     assert "Add the number to the app's recipients" in text
+    assert posts == 1  # permanent 4xx errors must not create a retry storm

@@ -22,7 +22,10 @@ from fastapi import HTTPException
 
 
 # ── Fix #1: caller_name_matches (the second factor's matching logic) ──────────
-from agent.tools.booking_tools import caller_name_matches
+from agent.tools.booking_tools import (
+    caller_name_matches,
+    caller_patient_ids_matching_name,
+)
 
 
 def _db_returning_names(names: list[str]) -> AsyncMock:
@@ -53,6 +56,20 @@ async def test_matching_name_tolerates_honorific_and_case():
 async def test_family_member_on_shared_phone_passes_with_own_name():
     db = _db_returning_names(["Ravi Kumar", "Sita Devi"])
     assert await caller_name_matches(BRANCH, PHONE, "Sita", db) is True
+
+
+@pytest.mark.asyncio
+async def test_shared_phone_authorizes_only_the_named_family_member():
+    ravi_id, sita_id = uuid.uuid4(), uuid.uuid4()
+    result = MagicMock()
+    result.all.return_value = [(ravi_id, "Ravi Kumar"), (sita_id, "Sita Devi")]
+    db = AsyncMock()
+    db.execute.return_value = result
+
+    matched = await caller_patient_ids_matching_name(BRANCH, PHONE, "Sita", db)
+
+    assert matched == {sita_id}
+    assert ravi_id not in matched
 
 
 @pytest.mark.asyncio
@@ -150,31 +167,40 @@ def _method_src(name: str) -> str:
 
 def test_verify_caller_identity_sets_flag_on_match():
     src = _method_src("verify_caller_identity")
-    assert "caller_name_matches(" in src
-    assert "self._state.identity_verified = True" in src
+    assert "caller_patient_ids_matching_name(" in src
+    assert "self._state.verified_patient_ids = matched_ids" in src
+    assert "self._state.identity_verified = bool(matched_ids)" in src
 
 
-def test_find_my_bookings_uses_verified_inbound_number_without_name_gate():
+def test_find_my_bookings_requires_name_verification():
     src = _method_src("find_my_bookings")
-    assert "identity_verified" not in src
+    assert "_require_verified_identity(" in src
     assert "find_bookings_by_phone(" in src
+    assert "row[0].patient_id in verified_patient_ids" in src
 
 
-def test_get_queue_status_uses_verified_inbound_number_without_name_gate():
+def test_get_queue_status_requires_name_verification():
     src = _method_src("get_queue_status")
-    assert "identity_verified" not in src
+    assert "_require_verified_identity(" in src
     assert "queue_position_by_phone(" in src
 
 
-def test_reschedule_booking_has_no_spoken_name_gate():
+def test_reschedule_booking_requires_name_verification():
     src = _method_src("reschedule_booking")
-    assert "identity_not_verified" not in src
+    assert "_require_verified_identity(" in src
     assert "_do_reschedule(" in src
 
 
-def test_cancel_booking_has_no_spoken_name_gate():
+def test_mutation_queries_are_scoped_to_verified_family_member():
+    reschedule_src = inspect.getsource(VachanamAgent._do_reschedule)
+    cancel_src = inspect.getsource(VachanamAgent._do_cancel)
+    assert "Token.patient_id.in_(verified_patient_ids)" in reschedule_src
+    assert "Token.patient_id.in_(verified_patient_ids)" in cancel_src
+
+
+def test_cancel_booking_requires_name_verification():
     src = _method_src("cancel_booking")
-    assert "identity_not_verified" not in src
+    assert "_require_verified_identity(" in src
     assert "_do_cancel(" in src
 
 
@@ -193,7 +219,7 @@ def test_cold_open_greeting_by_name_is_switchable_and_name_only():
     src = inspect.getsource(agent_mod)
     # Reversible without a redeploy.
     assert 'os.getenv("VOICE_GREET_BY_NAME"' in src
-    assert getattr(agent_mod, "_GREET_BY_NAME") is True
+    assert getattr(agent_mod, "_GREET_BY_NAME") is False
     # The suppression branch still exists, so flipping the env var truly
     # silences the name rather than leaving dead code behind.
     assert "if not _GREET_BY_NAME:\n                    caller_greeting_name = None" in src
@@ -210,16 +236,16 @@ def test_greet_by_name_kill_switch_semantics():
     so a reload would be both slow and flaky.
     """
     src = inspect.getsource(agent_mod)
-    assert '_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "1") != "0"' in src
+    assert '_GREET_BY_NAME = os.getenv("VOICE_GREET_BY_NAME", "0") == "1"' in src
     # Prove the semantics of that expression rather than trusting the reading.
-    assert (os.getenv("VOICE_GREET_BY_NAME", "1") != "0") is True
-    assert ("0" != "0") is False
+    assert (os.getenv("VOICE_GREET_BY_NAME", "0") == "1") is False
+    assert ("1" == "1") is True
 
 
-def test_session_state_uses_verified_inbound_number_by_default():
+def test_session_state_fails_closed_before_identity_check():
     from agent.session_state import SessionState
 
-    assert SessionState().identity_verified is True
+    assert SessionState().identity_verified is False
 
 
 # ── Fix #2: owner analytics denies non-org_admin (deny path is pure) ──────────

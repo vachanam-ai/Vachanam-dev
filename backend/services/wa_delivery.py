@@ -1,6 +1,7 @@
 """Durable WhatsApp patient notifications with event-level idempotency."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -68,6 +69,7 @@ async def enqueue(
     event_key: str,
     buttons: list[dict] | None = None,
     send_now: bool = True,
+    background_delivery: bool = False,
     accept_when_queued: bool = False,
 ) -> bool:
     """Persist one clinic event, then attempt it immediately.
@@ -125,6 +127,13 @@ async def enqueue(
         await wake_gate.clear_next_at("wa_notifications")
     except Exception as exc:  # noqa: BLE001
         logger.debug("wa_delivery_gate_clear_failed", error=str(exc)[:120])
+    if background_delivery:
+        # The durable row is already committed. Start promptly, but never make
+        # a live voice tool wait for Meta's network response. If this process
+        # exits, the scheduled outbox worker recovers the pending/in-progress
+        # row and retries it.
+        asyncio.create_task(deliver(task_id))
+        return True
     if not send_now:
         return True
     delivered = await deliver(task_id)
@@ -138,6 +147,7 @@ async def deliver(task_id) -> bool:
     """Attempt one pending task; never raises into the booking mutation."""
     from backend.services.meta_service import send_purpose
 
+    payload = None
     async with _db_module.AsyncSessionLocal() as db:
         # Lock the row while claiming it. enqueue() and the scheduled worker
         # can race on the same event; without this lock both sessions could
@@ -164,13 +174,36 @@ async def deliver(task_id) -> bool:
         if await _cancel_if_disconnected(db, task, lock=False):
             return False
 
-        ok = await send_purpose(
+        # Do not retain a database checkout while Meta resolves the branch and
+        # performs network I/O. The production transaction pool has two slots;
+        # holding one here while send_purpose opens another can starve the live
+        # voice session and add the pool's full three-second timeout before the
+        # agent confirms a cancellation or reschedule.
+        payload = (
             task.branch_id,
             task.recipient_phone,
             task.purpose,
             list(task.values_json or []),
             list(task.buttons_json or []),
         )
+
+    ok = await send_purpose(*payload)
+    failed_permanently = False
+    failed_branch_id = None
+    async with _db_module.AsyncSessionLocal() as db:
+        task = (
+            await db.execute(
+                select(WhatsAppDelivery)
+                .where(WhatsAppDelivery.id == task_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if task is None:
+            return False
+        # Disconnect/delete may have made the task terminal while Meta was in
+        # flight. Never resurrect it as sent or pending.
+        if task.status != "in_progress":
+            return task.status == "sent"
         if ok:
             task.status = "sent"
             task.sent_at = datetime.now(timezone.utc)
@@ -206,19 +239,22 @@ async def deliver(task_id) -> bool:
             attempt=task.attempts,
             status=task.status,
         )
-        if task.status == "failed_permanent":
-            try:
-                from backend.services.admin_alert import alert_admin
+        failed_permanently = task.status == "failed_permanent"
+        failed_branch_id = task.branch_id
 
-                await alert_admin(
-                    "whatsapp_delivery_failed_permanent",
-                    branch_id=task.branch_id,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "wa_delivery_failure_alert_failed", error=str(exc)[:120]
-                )
-        return False
+    if failed_permanently:
+        try:
+            from backend.services.admin_alert import alert_admin
+
+            await alert_admin(
+                "whatsapp_delivery_failed_permanent",
+                branch_id=failed_branch_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "wa_delivery_failure_alert_failed", error=str(exc)[:120]
+            )
+    return False
 
 
 async def _next_pending_epoch(db) -> float | None:

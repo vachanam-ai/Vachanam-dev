@@ -37,7 +37,13 @@ async def test_followup_without_branch_trunk_never_dispatches():
 
 
 @pytest.mark.asyncio
-async def test_question_callback_without_branch_trunk_never_dispatches():
+async def test_question_callback_without_shared_trunk_never_dispatches(monkeypatch):
+    def missing_trunk(_branch):
+        raise RuntimeError("shared trunk is not configured")
+
+    monkeypatch.setattr(
+        question_callback_caller, "branch_outbound_trunk_id", missing_trunk
+    )
     result = await question_callback_caller._dispatch(
         NS(id="question", caller_phone="+910000000000"), _branch(), ""
     )

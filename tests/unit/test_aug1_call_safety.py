@@ -142,8 +142,10 @@ async def test_accidental_reversal_is_pinned_to_exact_in_call_booking(monkeypatc
     state = SessionState(
         branch_id=uuid4(), patient_phone='+919999999999',
         last_user_utterance='బుక్ చేయమని చెప్పలేదు',
-        token_confirmed=True, last_confirmed_token_id=uuid4(),
-    )
+            token_confirmed=True, last_confirmed_token_id=uuid4(),
+            identity_verified=True,
+            verified_patient_ids={uuid4()},
+        )
     agent = _agent(state)
     do_cancel = AsyncMock(return_value={'success': True})
     monkeypatch.setattr(agent, '_do_cancel', do_cancel)
