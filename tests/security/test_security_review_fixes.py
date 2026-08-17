@@ -250,18 +250,16 @@ async def test_analytics_call_quality_forbidden_for_non_owner(role):
     assert e.value.status_code == 403
 
 
-# ── Fix #3: Google-only self-delete requires fresh Google re-verification ─────
-def test_delete_account_reverifies_google_token():
+# ── Fix #3: self-delete stays owner-only and requires typed DELETE ────────
+def test_delete_account_is_owner_only_typed_delete():
     from backend.routers import auth as auth_mod
 
     src = inspect.getsource(auth_mod.delete_account)
-    # password branch still enforces step-up
-    assert "_verify_password(body.password" in src
-    # google-only branch now re-verifies a fresh ID token AND matches the email
-    assert "google_id_token.verify_oauth2_token" in src
-    assert "asyncio.to_thread" in src  # network verification must not block FastAPI
-    assert 'info.get("email")' in src
-    assert "me.email" in src
+    assert 'current_user.role != "org_admin"' in src
+    assert '.upper() != "DELETE"' in src
+    assert "_hard_delete_org" in src
+    assert "_verify_password(body.password" not in src
+    assert "google_id_token.verify_oauth2_token" not in src
 
 
 # ── Fix #4: diag guard routes through get_current_user (revocation + tv) ───────
