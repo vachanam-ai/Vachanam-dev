@@ -1,13 +1,13 @@
 """Persist caller language before a patient record exists.
 
-Revision ID: kkkk57_caller_language_preferences
+Revision ID: kkkk57_caller_lang
 Revises: jjjj56_founding_unlimited_trial
 """
 import sqlalchemy as sa
 from alembic import op
 
 
-revision = "kkkk57_caller_language_preferences"
+revision = "kkkk57_caller_lang"
 down_revision = "jjjj56_founding_unlimited_trial"
 branch_labels = None
 depends_on = None
