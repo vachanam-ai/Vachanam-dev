@@ -2993,25 +2993,20 @@ def _reminder_policy_text(language: str, policy: str) -> str:
             "hi": "इस डॉक्टर के लिए ऑटोमैटिक रिमाइंडर कॉल चालू नहीं है जी, इसलिए मैं रिमाइंडर आने का वादा नहीं कर सकती.",
             "en": "Automatic reminder calls are not enabled for this doctor, so I cannot promise a reminder.",
         },
-        "close_only": {
-            "te": "ఆరు గంటల ముందు కాదండి. ఈ అపాయింట్‌మెంట్ ఇరవై నాలుగు గంటల లోపే బుక్ అయింది, కాబట్టి సుమారు ముప్పై నిమిషాల ముందు రిమైండర్ షెడ్యూల్ అవుతుంది.",
-            "hi": "छह घंटे पहले नहीं जी. यह अपॉइंटमेंट चौबीस घंटे के अंदर बुक हुआ है, इसलिए रिमाइंडर लगभग तीस मिनट पहले निर्धारित है.",
-            "en": "Not six hours before. This appointment was booked less than twenty-four hours ahead, so its reminder is scheduled for about thirty minutes before.",
+        "enabled": {
+            "te": "ఆటోమేటిక్ రిమైండర్లు ఆన్‌లో ఉంటే, అపాయింట్‌మెంట్‌కు సుమారు ముప్పై నిమిషాల ముందు మాత్రమే రిమైండర్ వస్తుంది.",
+            "hi": "ऑटोमैटिक रिमाइंडर चालू हों तो अपॉइंटमेंट से लगभग तीस मिनट पहले ही रिमाइंडर आता है.",
+            "en": "When automatic reminders are enabled, the reminder is sent only about thirty minutes before the appointment.",
         },
         "none_close": {
             "te": "ఆరు గంటల ముందు కాదండి. అపాయింట్‌మెంట్ గంటలోపే బుక్ అయితే ఆటోమేటిక్ రిమైండర్ కాల్ ఉండదు.",
             "hi": "छह घंटे पहले नहीं जी. अपॉइंटमेंट एक घंटे के अंदर बुक हुआ हो तो ऑटोमैटिक रिमाइंडर कॉल नहीं किया जाता.",
             "en": "Not six hours before. An appointment booked within one hour of its time does not get an automatic reminder call.",
         },
-        "day_and_close": {
-            "te": "ఆరు గంటల ముందు కాదండి. కనీసం ఇరవై నాలుగు గంటల ముందే బుక్ చేసిన అపాయింట్‌మెంట్‌కి సుమారు ఒక రోజు ముందు, అలాగే సుమారు ముప్పై నిమిషాల ముందు రిమైండర్లు షెడ్యూల్ అవుతాయి.",
-            "hi": "छह घंटे पहले नहीं जी. कम से कम चौबीस घंटे पहले बुक किए अपॉइंटमेंट के रिमाइंडर लगभग एक दिन पहले और लगभग तीस मिनट पहले निर्धारित होते हैं.",
-            "en": "Not six hours before. An appointment booked at least twenty-four hours ahead has reminders scheduled about one day before and about thirty minutes before.",
-        },
         "generic": {
-            "te": "ఆరు గంటల ముందు అనేది మా రిమైండర్ విధానం కాదండి. రిమైండర్లు ఆన్‌లో ఉంటే, బుకింగ్ సమయాన్ని బట్టి సుమారు ఒక రోజు ముందు మరియు ముప్పై నిమిషాల ముందు షెడ్యూల్ అవుతాయి.",
-            "hi": "छह घंटे पहले हमारी रिमाइंडर नीति नहीं है जी. रिमाइंडर चालू हों तो बुकिंग के समय के अनुसार लगभग एक दिन और तीस मिनट पहले निर्धारित होते हैं.",
-            "en": "Six hours before is not our reminder policy. Where reminders are enabled, they are scheduled about one day and thirty minutes before, depending on when the appointment was booked.",
+            "te": "ఆటోమేటిక్ రిమైండర్లు ఆన్‌లో ఉంటే, అపాయింట్‌మెంట్‌కు సుమారు ముప్పై నిమిషాల ముందు మాత్రమే రిమైండర్ వస్తుంది.",
+            "hi": "ऑटोमैटिक रिमाइंडर चालू हों तो अपॉइंटमेंट से लगभग तीस मिनट पहले ही रिमाइंडर आता है.",
+            "en": "When automatic reminders are enabled, the reminder is sent only about thirty minutes before the appointment.",
         },
     }
     selected = lines.get(policy, lines["generic"])
@@ -3428,10 +3423,8 @@ class VachanamAgent(Agent):
             ).total_seconds()
             if lead_seconds <= 60 * 60:
                 policy = "none_close"
-            elif lead_seconds >= 24 * 60 * 60:
-                policy = "day_and_close"
             else:
-                policy = "close_only"
+                policy = "enabled"
             return _reminder_policy_text(language, policy)
         except Exception as exc:  # noqa: BLE001 — fail closed, never invent timing
             logger.error("reminder_policy_lookup_failed: %s", str(exc)[:160])
@@ -6509,6 +6502,8 @@ async def _reminder_dial_state(meta: dict) -> tuple[str, int | None]:
     cancelled, moved, or already over. The scheduler's earlier read is never
     sufficient; this is the final authoritative DB guard before SIP.
     """
+    if meta.get("reminder_kind", "30m") != "30m":
+        return "disabled", None
     token_id = meta.get("token_id")
     branch_id = meta.get("branch_id")
     if not token_id or not branch_id:
@@ -6541,8 +6536,7 @@ async def _reminder_dial_state(meta: dict) -> tuple[str, int | None]:
         lead_seconds = int((appointment - now).total_seconds())
         if lead_seconds < 0:
             return "expired", lead_seconds
-        max_lead_seconds = 25 * 60 * 60 if meta.get("reminder_kind") == "24h" else 31 * 60
-        if lead_seconds > max_lead_seconds:
+        if lead_seconds > 31 * 60:
             return "too_early", lead_seconds
         return "ready", lead_seconds
     except Exception as exc:  # noqa: BLE001 - patient calls fail closed
@@ -6572,10 +6566,7 @@ async def _requeue_early_reminder(meta: dict) -> None:
                 )
             ).scalar_one_or_none()
             if row is not None and row.status == "confirmed":
-                if meta.get("reminder_kind") == "24h":
-                    row.reminder_24h_sent = False
-                else:
-                    row.reminder_sent = False
+                row.reminder_sent = False
                 await db.commit()
         await wake_gate.clear_next_at("reminders")
     except Exception as exc:  # noqa: BLE001 - later scheduler pass self-heals
@@ -6622,18 +6613,10 @@ async def _reminder_retry_on_dial_fail(meta: dict) -> None:
             ).scalar_one_or_none()
             if row is None or row.status != "confirmed":
                 return
-            is_day_before = meta.get("reminder_kind") == "24h"
-            attempts_field = (
-                "reminder_24h_dial_attempts" if is_day_before
-                else "reminder_30m_dial_attempts"
-            )
-            attempts = (getattr(row, attempts_field, 0) or 0) + 1
-            setattr(row, attempts_field, attempts)
+            attempts = (row.reminder_30m_dial_attempts or 0) + 1
+            row.reminder_30m_dial_attempts = attempts
             if attempts <= _REMINDER_MAX_DIAL_ATTEMPTS:
-                if is_day_before:
-                    row.reminder_24h_sent = False
-                else:
-                    row.reminder_sent = False
+                row.reminder_sent = False
             await _db.commit()
         if attempts > _REMINDER_MAX_DIAL_ATTEMPTS:
             logger.warning(

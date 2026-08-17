@@ -117,8 +117,8 @@ async def test_reminder_dial_guard_rejects_expired_or_early_dispatches(db, redis
 
 
 @pytest.mark.asyncio
-async def test_24h_reminder_guard_uses_its_own_window(db, redis):
-    """The old universal 31-minute guard silently rejected every 24h call."""
+async def test_24h_reminder_dispatch_is_disabled(db, redis):
+    """Old or stale metadata cannot resurrect the removed day-before call."""
     from agent.livekit_minimal.agent import _reminder_dial_state
 
     tok = await _seed_in_window(db)
@@ -130,9 +130,7 @@ async def test_24h_reminder_guard_uses_its_own_window(db, redis):
         "call_type": "reminder", "reminder_kind": "24h",
         "token_id": str(tok.id), "branch_id": str(tok.branch_id),
     }
-    state, lead = await _reminder_dial_state(meta)
-    assert state == "ready"
-    assert 23 * 3600 <= lead <= 25 * 3600
+    assert await _reminder_dial_state(meta) == ("disabled", None)
 
 
 # ── prod 2026-07-27: a reminder marked sent on agent-JOIN but whose outbound

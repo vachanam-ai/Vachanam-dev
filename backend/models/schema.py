@@ -568,10 +568,8 @@ class Token(Base):
     reminder_30m_dial_attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
-    # The day-before reminder, sent only when the booking was made ≥24h ahead
-    # (Vinay 2026-08-04). Its own flag: one boolean cannot say "the day-before
-    # call went, the half-hour one has not", and sharing it would mean the
-    # first reminder silently cancels the second.
+    # Legacy day-before reminder audit fields. Kept for migration compatibility;
+    # day-before reminders were disabled on 2026-08-17.
     reminder_24h_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     reminder_24h_dispatched_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

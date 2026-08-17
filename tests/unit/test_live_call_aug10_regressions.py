@@ -100,11 +100,11 @@ def test_reminder_questions_are_intercepted_before_the_llm():
     assert _is_reminder_policy_question("Will I get a reminder?")
 
 
-def test_scheduler_policy_never_promises_six_hour_reminder():
-    english = _reminder_policy_text("en", "close_only").casefold()
-    assert "not six hours" in english
+def test_scheduler_policy_promises_only_thirty_minute_reminder():
+    english = _reminder_policy_text("en", "enabled").casefold()
     assert "thirty minutes" in english
-    assert "six hours before" not in english.replace("not six hours before", "")
+    assert "one day" not in english
+    assert "twenty-four" not in english
 
 
 @pytest.mark.asyncio

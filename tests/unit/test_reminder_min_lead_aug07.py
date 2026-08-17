@@ -5,10 +5,9 @@ call not needed. say it for 1hr. like if i book at 5 for 6 then appointment
 call not needed."
 
 The 30-minute reminder assumed every appointment was arranged well in advance.
-A booking made at 17:40 for 18:00 got a reminder call at ~17:30 — twenty
-minutes after the patient hung up from arranging it. Eligibility is now
-measured from when the booking was MADE, the same way the day-before call
-already measures it (booked_far_enough_ahead).
+A booking made at 17:40 for 18:00 got another call shortly after the patient
+hung up from arranging it. Eligibility is measured from when the booking was
+made.
 
 Inclusive at exactly one hour, which is the case he named: booked at 5 for 6
 gets no call.
@@ -20,7 +19,6 @@ import pytest
 
 from backend.jobs.pre_appt_reminder import (
     MIN_LEAD_MINUTES,
-    booked_far_enough_ahead,
     booked_too_close,
 )
 
@@ -69,15 +67,6 @@ def test_unknown_booking_time_still_gets_its_reminder():
     assert booked_too_close(_made_at(17, 40), APPT_DATE, None, IST) is False
 
 
-def test_the_two_lead_rules_do_not_contradict_each_other():
-    """The day-before call needs >=24h of lead; this one needs >1h. A booking
-    can legitimately fail both (same-day, well ahead) — it then gets only the
-    30-minute call, which is the documented behaviour."""
-    same_day_early = _made_at(9, 0)
-    assert booked_far_enough_ahead(same_day_early, APPT_DATE, SIX_PM, IST) is False
-    assert booked_too_close(same_day_early, APPT_DATE, SIX_PM, IST) is False
-
-
 def test_the_window_is_one_hour():
     assert MIN_LEAD_MINUTES == 60
 
@@ -93,3 +82,13 @@ def test_the_job_skips_and_marks_so_it_is_not_rescanned():
     assert "booked_too_close" in src
     block = src.split("booked_too_close")[1].split("continue")[0]
     assert "reminder_sent = True" in block
+
+
+def test_scheduler_has_no_day_before_dispatch_path():
+    import inspect
+
+    from backend.jobs import pre_appt_reminder
+
+    src = inspect.getsource(pre_appt_reminder.run_pre_appt_reminders)
+    assert 'reminder_kind="24h"' not in src
+    assert "reminder_24h_sent" not in src

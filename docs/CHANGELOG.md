@@ -13,6 +13,14 @@ Format per session:
 
 ---
 
+## 2026-08-17 - Single 30-minute appointment reminder
+
+Removed the day-before voice and WhatsApp reminder. Appointment reminders now
+run only about 30 minutes before the appointment and remain skipped for bookings
+made within one hour of their appointment. The voice worker also rejects stale
+24-hour reminder dispatches, and deterministic reminder-policy answers in
+Telugu, Hindi, and English now state the 30-minute-only policy.
+
 ## 2026-08-16 - Clinic-launch hardening and founding trial
 
 Prepared the combined production release for deterministic appointment

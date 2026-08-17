@@ -75,9 +75,8 @@ def booked_too_close(created_at, token_date, appointment_time, tz) -> bool:
     """True when the booking was made within MIN_LEAD_MINUTES of its own
     appointment — i.e. there is nothing to remind them about yet.
 
-    Same shape as booked_far_enough_ahead, and the same principle: eligibility
-    is measured from when the booking was MADE, not only from when the
-    appointment is. A missing created_at returns False so an unknown booking
+    Eligibility is measured from when the booking was made, not only from when
+    the appointment is. A missing created_at returns False so an unknown booking
     time still gets its reminder — losing a reminder is worse than one extra.
     """
     if created_at is None or appointment_time is None:
@@ -89,47 +88,6 @@ def booked_too_close(created_at, token_date, appointment_time, tz) -> bool:
 
         created = created.replace(tzinfo=_tz.utc)
     return (appt - created) <= timedelta(minutes=MIN_LEAD_MINUTES)
-
-
-# ── the day-before reminder ──────────────────────────────────────────────────
-# Vinay 2026-08-04: "for appointments schedule a call 24hrs before if booked
-# days before. and 30mins before as is."
-#
-# "If booked days before" is the load-bearing half. Someone who books at 3pm
-# for 10am tomorrow must NOT be rung at 10am today about it — they just spoke
-# to us. So eligibility is measured from when the booking was MADE, not only
-# from when the appointment is.
-LEAD_HOURS = 24
-# Same resilient shape as the 30-minute window: a band, not an instant, so a
-# missed scheduler tick produces a slightly-late call rather than none at all.
-DAY_BEFORE_WINDOW_MIN = 22 * 60   # no earlier than 22h before
-DAY_BEFORE_WINDOW_MAX = 25 * 60   # no later than 25h before
-
-
-def day_before_window(now_local: datetime) -> tuple[datetime, datetime]:
-    """[lo, hi] an appointment must fall in to get its day-before call now."""
-    return (
-        now_local + timedelta(minutes=DAY_BEFORE_WINDOW_MIN),
-        now_local + timedelta(minutes=DAY_BEFORE_WINDOW_MAX),
-    )
-
-
-def booked_far_enough_ahead(created_at, token_date, appointment_time, tz) -> bool:
-    """True when the booking was made at least LEAD_HOURS before the
-    appointment — i.e. "booked days before" rather than same-day.
-
-    A same-day booking gets only the 30-minute reminder: the patient arranged
-    it hours ago and does not need a call telling them about tomorrow.
-    """
-    if created_at is None or appointment_time is None:
-        return False
-    appt = datetime.combine(token_date, appointment_time, tzinfo=tz)
-    created = created_at
-    if created.tzinfo is None:
-        from datetime import timezone as _tz
-
-        created = created.replace(tzinfo=_tz.utc)
-    return (appt - created) >= timedelta(hours=LEAD_HOURS)
 
 
 def _plan_has_voice(plan: str | None) -> bool:
@@ -279,61 +237,6 @@ async def run_pre_appt_reminders() -> None:
                     # (spec 2026-07-13 — not replacing it yet). Independent
                     # guard: a WhatsApp hiccup never touches the voice path
                     # (RULE 4/8); no-ops unless branch linked + plan gated.
-
-        # The day-before pass. Deliberately a SECOND loop rather than a widened
-        # window on the first: the two reminders have different eligibility
-        # (this one only for bookings made ≥24h ahead), different flags, and
-        # must be able to both fire for the same booking.
-        for branch in branches:
-            tz = ZoneInfo(branch.timezone or "Asia/Kolkata")
-            now_local = datetime.now(tz)
-            lo, hi = day_before_window(now_local)
-
-            rows = (
-                await db.execute(
-                    select(Token, Doctor, Patient)
-                    .join(Doctor, Token.doctor_id == Doctor.id)
-                    .join(Patient, Token.patient_id == Patient.id)
-                    .where(
-                        and_(
-                            Token.branch_id == branch.id,  # RULE 1
-                            Token.date.in_({lo.date(), hi.date()}),
-                            Token.status == "confirmed",
-                            Token.reminder_24h_sent.is_(False),
-                            Token.appointment_time.is_not(None),
-                            Doctor.booking_type == "appointment",
-                            Doctor.pre_appointment_reminder.is_(True),
-                        )
-                    )
-                )
-            ).all()
-
-            for token, doctor, patient in rows:
-                if not appointment_in_window(token.date, token.appointment_time, lo, hi):
-                    continue
-                if not booked_far_enough_ahead(
-                    token.created_at, token.date, token.appointment_time, tz
-                ):
-                    # Booked today for tomorrow — they already know. Mark it so
-                    # this row is not rescanned every minute until it passes.
-                    token.reminder_24h_sent = True
-                    await db.commit()
-                    continue
-                if not patient.phone:
-                    token.reminder_24h_sent = True
-                    await db.commit()
-                    continue
-
-                plan = plan_by_branch_id.get(branch.id)
-                ok = await _deliver_reminder(
-                    branch, plan, token, doctor, patient,
-                    reminder_kind="24h",
-                    voice_plane_configured=_settings.voice_plane_configured,
-                )
-                if ok:
-                    token.reminder_24h_sent = True
-                    token.reminder_24h_dispatched_at = datetime.now(timezone.utc)
-                    await db.commit()
 
         # #299: park until the next reminder is genuinely due, so every tick
         # before then is a Redis read and Postgres can suspend. Capped by

@@ -185,7 +185,6 @@ product constraints, not model instructions.
 ### 5.2 Outbound calls
 
 - **30-minute pre-appointment reminder** — confirms attendance or moves the visit
-- **24-hour day-before reminder** — only for bookings made ≥24h ahead
 - **Treatment follow-up** — the retention loop described in §3
 - **Cascade rebook** — when a doctor takes leave, affected patients are called and offered new slots
 - **Question callback** — the caller gets rung back with the doctor's answer

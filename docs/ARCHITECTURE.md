@@ -139,7 +139,7 @@ so one patient's phone rings once no matter how many jobs come due together.
 
 | Job | Cadence | Purpose |
 |---|---|---|
-| `pre_appt_reminder` | 60 s | Day-before and 30-minute reminders. Skipped when the booking was made within 60 minutes of the appointment |
+| `pre_appt_reminder` | 60 s | One reminder about 30 minutes before the appointment. Skipped when the booking was made within 60 minutes of the appointment |
 | `next_visit_followup_caller` | 5 min | Treatment follow-up — booking nudge, or relaying the doctor's reply |
 | `cascade_rebook_caller` | 60 s | Doctor went on leave → rebook the affected patients |
 | `question_callback_caller` | 5 min | Deliver the clinic's answer to a question the AI could not answer |
