@@ -226,12 +226,7 @@ async def logout(current_user: CurrentUser = Depends(get_current_user)) -> None:
 
 
 class DeleteAccountRequest(BaseModel):
-    # Password for password accounts; Google-only accounts must re-verify a
-    # FRESH Google ID token (id_token) AND type DELETE — a stolen session alone
-    # must not suffice to destroy the clinic (parity with the password step-up).
-    password: str | None = None
     confirm: str | None = None
-    id_token: str | None = None  # Google re-verification for password-less accounts
 
 
 @router.post("/delete-account", dependencies=[Depends(default_limit)])
@@ -241,9 +236,8 @@ async def delete_account(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> dict:
     """Owner permanently deletes their clinic and ALL its data (DPDP erasure,
-    Vinay 2026-07-17). Irreversible. Requires the owner's password (or the
-    typed word DELETE for Google-only accounts). Reuses the FK-safe admin
-    cascade; audited (no-FK audit table survives the deletion)."""
+    Vinay 2026-07-17). Irreversible. The authenticated clinic owner types
+    DELETE; the FK-safe admin cascade performs the erasure."""
     from backend.models.schema import Organization as _Org
     from backend.routers.admin import _hard_delete_org, _unwire_deleted_dids
 
@@ -259,36 +253,8 @@ async def delete_account(
         ).scalar_one_or_none()
         if me is None:
             raise HTTPException(status_code=404, detail="Account not found")
-        # Re-authenticate the destructive action (a stolen session must not
-        # suffice): password when one exists, else explicit typed DELETE.
-        if me.password_hash:
-            if not (body.password and _verify_password(body.password, me.password_hash)):
-                await record_failed_login(client_ip)
-                raise HTTPException(status_code=401, detail="Password incorrect")
-        else:
-            # Google-only account (no password): the typed DELETE is a UI guard,
-            # not authentication. Re-verify a FRESH Google ID token so a stolen
-            # session cannot destroy the clinic on its own (SEC: parity with the
-            # password step-up — the old code trusted the session + a constant).
-            if (body.confirm or "").strip().upper() != "DELETE":
-                raise HTTPException(status_code=422, detail='Type DELETE to confirm')
-            if not settings.google_oauth_client_id:
-                raise HTTPException(status_code=401, detail="OAuth not configured")
-            if not body.id_token:
-                raise HTTPException(
-                    status_code=401, detail="Google re-verification required to delete"
-                )
-            try:
-                info = await asyncio.to_thread(
-                    google_id_token.verify_oauth2_token,
-                    body.id_token, _GOOGLE_REQUEST, settings.google_oauth_client_id
-                )
-            except ValueError:
-                await record_failed_login(client_ip)
-                raise HTTPException(status_code=401, detail="Invalid Google token")
-            if (info.get("email") or "").lower() != (me.email or "").lower():
-                await record_failed_login(client_ip)
-                raise HTTPException(status_code=401, detail="Google account does not match")
+        if (body.confirm or "").strip().upper() != "DELETE":
+            raise HTTPException(status_code=422, detail="Type DELETE to confirm")
 
         org = (
             await db.execute(select(_Org).where(_Org.id == uuid_mod.UUID(current_user.org_id)))

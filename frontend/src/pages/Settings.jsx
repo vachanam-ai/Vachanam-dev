@@ -34,7 +34,6 @@ const WA_STATUS_LABEL = {
   error: { label: "Connection error", chip: "chip-danger" }
 };
 
-import GoogleReauth from "../components/GoogleReauth.jsx";
 import WaConnectCard from "../components/WaConnectCard.jsx";
 import { useActionDialog } from "../components/ActionDialog.jsx";
 import { useAuth } from "../hooks/useAuth.jsx";
@@ -272,13 +271,9 @@ export default function Settings() {
 
   // DPDP erasure: delete the whole clinic, then sign out to the landing page.
   const [delConfirm, setDelConfirm] = useState("");
-  const wantsGoogleDelete = delConfirm.trim().toUpperCase() === "DELETE";
+  const deletionConfirmed = delConfirm.trim().toUpperCase() === "DELETE";
   const nukeClinic = useMutation({
-    mutationFn: (googleToken) => deleteAccount(
-      wantsGoogleDelete
-        ? { confirm: "DELETE", id_token: googleToken }
-        : { password: delConfirm }
-    ),
+    mutationFn: () => deleteAccount({ confirm: "DELETE" }),
     onSuccess: () => {
       toast.success("Clinic deleted — goodbye");
       // Clear locally before the best-effort remote logout. The user row no
@@ -728,48 +723,17 @@ export default function Settings() {
           <summary><span><strong>Delete clinic and all data</strong><small>Patients, bookings, notes, logins and billing</small></span><span>Open controls</span></summary>
         <div className="settings-danger-body grid gap-3 sm:grid-cols-2">
           <div>
-            <label className="label">Your password (or type DELETE if you sign in with Google)</label>
-            <input className="field" type="password" autoComplete="current-password" value={delConfirm}
-              onChange={(e) => setDelConfirm(e.target.value)} placeholder="Password or DELETE" />
-            {wantsGoogleDelete && (
-              <p className="mt-2 font-ui text-xs text-slate">
-                Confirm once with Google to authorize permanent deletion.
-              </p>
-            )}
+            <label className="label" htmlFor="delete-clinic-confirmation">Type DELETE to permanently erase the clinic</label>
+            <input id="delete-clinic-confirmation" className="field" type="text" autoComplete="off" value={delConfirm}
+              onChange={(e) => setDelConfirm(e.target.value)} placeholder="DELETE" />
           </div>
           <div className="flex items-end">
-            {wantsGoogleDelete ? (
-              <div className="w-full">
-                <GoogleReauth
-                  disabled={nukeClinic.isPending}
-                  onToken={async (token) => {
-                    const confirmed = await ask({
-                      title: "Permanently delete this clinic?",
-                      description: "Every patient, booking, treatment note, login, billing record and clinic configuration will be erased. This cannot be undone.",
-                      confirmLabel: "Delete everything",
-                      tone: "danger",
-                    });
-                    if (confirmed) nukeClinic.mutate(token);
-                  }}
-                />
-                {nukeClinic.isPending && <p className="mt-2 font-ui text-xs text-slate">Deleting…</p>}
-              </div>
-            ) : (
-              <button type="button"
-                className="btn-danger w-full"
-                disabled={nukeClinic.isPending || !delConfirm.trim()}
-                onClick={async () => {
-                  const confirmed = await ask({
-                    title: "Permanently delete this clinic?",
-                    description: "Every patient, booking, treatment note, login, billing record and clinic configuration will be erased. This cannot be undone.",
-                    confirmLabel: "Delete everything",
-                    tone: "danger",
-                  });
-                  if (confirmed) nukeClinic.mutate();
-                }}>
-                {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
-              </button>
-            )}
+            <button type="button"
+              className="btn-danger w-full"
+              disabled={nukeClinic.isPending || !deletionConfirmed}
+              onClick={() => nukeClinic.mutate()}>
+              {nukeClinic.isPending ? "Deleting…" : "Delete clinic permanently"}
+            </button>
           </div>
         </div>
         </details>

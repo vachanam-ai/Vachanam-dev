@@ -1,6 +1,4 @@
-"""DPDP self-serve deletion (Vinay 2026-07-17): owner removes staff logins and
-can erase the whole clinic. Destructive paths must be re-authenticated and
-tenant-scoped (RULE 1)."""
+"""DPDP self-serve deletion: the owner types DELETE; erasure is tenant-scoped."""
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -91,20 +89,20 @@ async def test_owner_removes_staff_login_doctor_unlinked_records_stay(client, db
 
 
 @pytest.mark.asyncio
-async def test_delete_clinic_requires_password_then_erases_everything(client, db):
+async def test_delete_clinic_requires_delete_then_erases_everything(client, db):
     org, b, owner, staffu, doc = await _seed(db, password="Own3r@Pass!")
     owner_email = owner.email
     tok = _jwt("org_admin", org.id, b.id, owner.id)
 
-    # Wrong password -> 401, nothing deleted.
+    # Anything other than DELETE leaves the clinic intact.
     r = await client.post("/auth/delete-account", headers=_auth(tok),
-                          json={"password": "wrong"})
-    assert r.status_code == 401
+                          json={"confirm": "wrong"})
+    assert r.status_code == 422
     assert (await db.execute(select(Organization).where(Organization.id == org.id))).scalar_one_or_none() is not None
 
-    # Correct password -> org + branches + users + patients + doctors all gone.
+    # DELETE -> org + branches + users + patients + doctors all gone.
     r2 = await client.post("/auth/delete-account", headers=_auth(tok),
-                           json={"password": "Own3r@Pass!"})
+                           json={"confirm": "DELETE"})
     assert r2.status_code == 200, r2.text
     for model, cond in [
         (Organization, Organization.id == org.id),
@@ -134,38 +132,21 @@ async def test_delete_clinic_requires_password_then_erases_everything(client, db
 
 
 @pytest.mark.asyncio
-async def test_delete_clinic_staff_forbidden_and_google_needs_DELETE(client, db, monkeypatch):
+async def test_delete_clinic_staff_forbidden_and_owner_only_needs_delete(client, db):
     org, b, owner, staffu, doc = await _seed(db, password=None)  # Google-only owner
-    org_id, owner_email = org.id, owner.email  # capture before commit expiry
+    org_id = org.id  # capture before commit expiry
     staff_tok = _jwt("doctor", org.id, b.id, staffu.id)
     r = await client.post("/auth/delete-account", headers=_auth(staff_tok),
                           json={"confirm": "DELETE"})
     assert r.status_code == 403  # only the owner
 
-    monkeypatch.setattr(settings, "google_oauth_client_id", "test-client-id")
     own_tok = _jwt("org_admin", org.id, b.id, owner.id)
     r2 = await client.post("/auth/delete-account", headers=_auth(own_tok), json={})
     assert r2.status_code == 422  # must type DELETE
 
-    # SEC (d133c40): typing DELETE is only a UI guard — a Google-only owner must
-    # ALSO re-verify a FRESH Google ID token, so a stolen session cannot destroy
-    # the clinic on its own. No token -> 401.
+    # DELETE is the complete confirmation for Google and password owners.
     r3 = await client.post("/auth/delete-account", headers=_auth(own_tok),
                            json={"confirm": "delete"})
-    assert r3.status_code == 401  # reauth required
-
-    # A token for a DIFFERENT Google account is rejected (email must match).
-    monkeypatch.setattr("backend.routers.auth.google_id_token.verify_oauth2_token",
-                        lambda *a, **k: {"email": "attacker@t.test"})
-    r4 = await client.post("/auth/delete-account", headers=_auth(own_tok),
-                           json={"confirm": "DELETE", "id_token": "x"})
-    assert r4.status_code == 401
-
-    # Fresh Google ID token matching the owner email -> erases the clinic.
-    monkeypatch.setattr("backend.routers.auth.google_id_token.verify_oauth2_token",
-                        lambda *a, **k: {"email": owner_email})
-    r5 = await client.post("/auth/delete-account", headers=_auth(own_tok),
-                           json={"confirm": "delete", "id_token": "good"})
-    assert r5.status_code == 200, r5.text
+    assert r3.status_code == 200, r3.text
     assert (await db.execute(
         select(Organization).where(Organization.id == org_id))).scalar_one_or_none() is None

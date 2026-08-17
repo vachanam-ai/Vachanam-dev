@@ -21,7 +21,9 @@ vi.mock("../api/client.js", () => ({
   getBranchVoices: vi.fn(() => Promise.resolve([])),
   addStaff: vi.fn(),
   changePlan: vi.fn(),
+  clearToken: vi.fn(),
   createPaymentOrder: vi.fn(),
+  deleteAccount: vi.fn(() => new Promise(() => {})),
   registerClonedVoice: vi.fn(),
   removeClonedVoice: vi.fn(),
   saveBranchFaq: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock("../hooks/useAuth.jsx", () => ({
 vi.mock("../lib/recorder.js", () => ({ startRecording: vi.fn() }));
 
 import Settings from "./Settings.jsx";
+import { deleteAccount } from "../api/client.js";
 
 afterEach(cleanup);
 
@@ -73,5 +76,23 @@ describe("Settings — doctor account creation", () => {
     // The doctor dropdown (unlinkedDoctors) must render our unlinked doctor —
     // this throws if unlinkedDoctors/allDoctors are undefined again.
     await waitFor(() => expect(screen.getByText("Dr Meera")).toBeInTheDocument());
+  });
+
+  it("deletes with typed DELETE and no password or Google validation", async () => {
+    const { container } = renderSettings();
+    await screen.findByRole("heading", { name: "Your path to the first perfect call" });
+
+    fireEvent.click(container.querySelector(".settings-danger-disclosure > summary"));
+    const button = screen.getByRole("button", { name: "Delete clinic permanently" });
+    expect(button).toBeDisabled();
+
+    fireEvent.change(
+      screen.getByLabelText("Type DELETE to permanently erase the clinic"),
+      { target: { value: "DELETE" } },
+    );
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalledWith({ confirm: "DELETE" }));
   });
 });
