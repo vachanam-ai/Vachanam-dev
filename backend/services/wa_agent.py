@@ -41,6 +41,7 @@ Hard rules that still bind, tools or not:
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import date as date_cls, datetime, time as time_cls
 
 import structlog
@@ -865,31 +866,45 @@ class WaTools:
 
 
 async def _call_model(system: str, contents: list, tools: list[dict]) -> object:
-    """One Gemini turn with tools available. Isolated so tests swap it out."""
+    """One Gemini turn with one bounded retry for a transient outage."""
     from google.genai import types
 
     from backend.services.support_bot import _genai_client
 
-    return await _genai_client().aio.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            tools=[types.Tool(function_declarations=tools)],
-            # Warm, not loose. At 0.7 the model chatted past its instructions
-            # and told a patient "I've made a note for the doctor" without
-            # calling the tool that makes the note.
-            temperature=0.4,
-            # gemini-2.5-flash is a THINKING model and its reasoning tokens are
-            # charged against max_output_tokens. With thinking on, a long think
-            # ate the budget and the reply was guillotined mid-sentence —
-            # "I don't have specific appointment slots for the plastic surgeon
-            # to" (Vinay 2026-08-04). Every other Gemini call in this repo
-            # already runs thinking_budget=0; this one was the exception.
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-            max_output_tokens=800,
-        ),
+    config = types.GenerateContentConfig(
+        system_instruction=system,
+        tools=[types.Tool(function_declarations=tools)],
+        # Warm, not loose. At 0.7 the model chatted past its instructions
+        # and told a patient "I've made a note for the doctor" without
+        # calling the tool that makes the note.
+        temperature=0.4,
+        # gemini-2.5-flash is a THINKING model and its reasoning tokens are
+        # charged against max_output_tokens. With thinking on, a long think
+        # ate the budget and the reply was guillotined mid-sentence —
+        # "I don't have specific appointment slots for the plastic surgeon
+        # to" (Vinay 2026-08-04). Every other Gemini call in this repo
+        # already runs thinking_budget=0; this one was the exception.
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        max_output_tokens=800,
     )
+    for attempt in range(2):
+        try:
+            return await _genai_client().aio.models.generate_content(
+                model="gemini-2.5-flash", contents=contents, config=config,
+            )
+        except Exception as exc:
+            code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+            transient = code in {429, 500, 502, 503, 504} or isinstance(
+                exc, (TimeoutError, ConnectionError)
+            )
+            if attempt or not transient:
+                raise
+            logger.warning(
+                "wa_agent_model_retry", code=code,
+                error=f"{type(exc).__name__}: {exc}"[:160],
+            )
+            await asyncio.sleep(0.15)
+    raise RuntimeError("unreachable")
 
 
 def _whole_sentences(reply: str) -> str:

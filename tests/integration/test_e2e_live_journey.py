@@ -192,6 +192,45 @@ async def test_full_patient_journey(db, redis, captured):
 
 
 @pytest.mark.asyncio
+async def test_booking_never_invents_identity_and_is_found_next_turn(
+    db, redis, captured
+):
+    """Live reproduction of the 17 Aug WhatsApp screenshot."""
+    _org, br = await _clinic(db)
+    await _doctor(db, br, "Srinivas", "dental")
+
+    async def say(text: str) -> str:
+        await wa_agent.handle(db, br, "clinic", CALLER, text)
+        reply = captured[-1] if captured else "(no reply)"
+        print(f"\n  PATIENT> {text}\n  CLINIC > {reply}")
+        return reply
+
+    tmr = _tomorrow()
+    await say(f"Can you book me an appointment with the dentist on {tmr}?")
+    awaiting_identity = await say("Can I come at 10 am?")
+    before_identity = (await db.execute(
+        select(Token).where(Token.branch_id == br.id, Token.status == "confirmed")
+    )).scalars().all()
+    assert before_identity == [], "a model-invented identity must never create a booking"
+    assert "name" in awaiting_identity.lower() and "age" in awaiting_identity.lower()
+
+    booked_reply = await say("My name is Vinay and my age is 24")
+    booked = (await db.execute(
+        select(Token, Patient.name).join(Patient, Patient.id == Token.patient_id)
+        .where(Token.branch_id == br.id, Token.status == "confirmed")
+    )).all()
+    assert len(booked) == 1
+    assert booked[0][1] == "Vinay"
+    assert booked[0][0].appointment_time == time(10, 0)
+    assert "vinay" in booked_reply.lower()
+
+    lookup = await say("By the way, under whose name is the 10 am booking?")
+    assert "vinay" in lookup.lower()
+    assert "don't see" not in lookup.lower()
+    assert "can't find" not in lookup.lower()
+
+
+@pytest.mark.asyncio
 async def test_existing_booking_move_survives_next_message_live(db, redis, captured):
     """Production 2026-08-16: the UUID used to disappear before "Yes please"."""
     _org, br = await _clinic(db)

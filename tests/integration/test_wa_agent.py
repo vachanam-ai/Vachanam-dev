@@ -24,7 +24,7 @@ from backend.models.schema import (
     Branch, CalendarWriteTask, ClinicQuestion, Doctor, DoctorUnavailability,
     Organization, Patient, Token,
 )
-from backend.services import wa_agent, wa_booking, wa_service
+from backend.services import support_bot, wa_agent, wa_booking, wa_service
 
 
 async def _clinic(db):
@@ -62,6 +62,31 @@ async def _doctor(db, branch, name="Srinivas"):
 
 
 CALLER = "919876500011"
+
+
+@pytest.mark.asyncio
+async def test_model_call_retries_one_transient_503(monkeypatch):
+    expected = object()
+
+    class Models:
+        calls = 0
+
+        async def generate_content(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                error = RuntimeError("temporarily unavailable")
+                error.code = 503
+                raise error
+            return expected
+
+    models = Models()
+    client = SimpleNamespace(aio=SimpleNamespace(models=models))
+    monkeypatch.setattr(support_bot, "_genai_client", lambda: client)
+
+    result = await wa_agent._call_model("system", [], [])
+
+    assert result is expected
+    assert models.calls == 2
 
 
 class StubCalendar:
