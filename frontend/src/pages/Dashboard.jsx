@@ -29,11 +29,19 @@ function BandKpi({ k, cap }) {
   );
 }
 
+export function voiceMinutesGaugeFraction(minutes) {
+  const value = Math.max(Number(minutes) || 0, 0);
+  const percent = value <= 500 ? value * 0.06 : 30 + (value - 500) * 0.04;
+  return Math.min(percent / 100, 1);
+}
+
 function StatBand({ title, weekday, pct, pctCap, remaining, usageMinutes, waiting, booked }) {
   const days = weekday?.length ? weekday : [];
   const max = Math.max(1, ...days.map((w) => w.bookings));
   const usageOnly = usageMinutes != null;
-  const target = usageOnly ? 0 : Math.min(Math.max((pct ?? 0) / 100, 0), 1);
+  const target = usageOnly
+    ? voiceMinutesGaugeFraction(usageMinutes)
+    : Math.min(Math.max((pct ?? 0) / 100, 0), 1);
   const N = 46, cx = 85, cy = 84, ri = 52, ro = 68;
   const ticks = Array.from({ length: N }, (_, i) => {
     const f = i / (N - 1), a = Math.PI - f * Math.PI, on = f <= target;
