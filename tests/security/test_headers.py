@@ -155,9 +155,10 @@ async def test_health_endpoint_has_all_security_headers(client):
 
 
 async def test_landing_page_has_all_security_headers(client):
-    """GET / (landing page, unauthenticated) must carry all 6 headers."""
+    """The API root redirects to the canonical frontend with all security headers."""
     r = await client.get("/")
-    # Landing page returns 200 if index.html exists, 404 if not -- both are fine
+    assert r.status_code == 308
+    assert r.headers["location"] == settings.frontend_url
     _assert_security_headers_present(r, f"GET / ({r.status_code})")
 
 

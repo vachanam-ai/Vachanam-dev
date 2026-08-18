@@ -27,7 +27,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent.logging_config import configure_structlog
@@ -367,14 +367,11 @@ if _STATIC.exists():
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False,
+@app.get("/", response_class=RedirectResponse, include_in_schema=False,
          response_model=None, dependencies=[Depends(default_limit)])
 async def landing():
-    """Serve the legacy static mirror with canonical Basic/Growth/Scale pricing."""
-    index = _STATIC / "index.html"
-    if index.exists():
-        return FileResponse(index)
-    return HTMLResponse("<h1>Vachanam</h1><p>Landing page not found.</p>", status_code=404)
+    """Keep the API origin from presenting a stale second product website."""
+    return RedirectResponse(settings.frontend_url, status_code=308)
 
 
 @app.get("/dev/test", response_class=HTMLResponse, include_in_schema=False,
