@@ -150,6 +150,8 @@ async def get_current_user(
 
     # Revocation check — Redis SET key per revoked jti, TTL = remaining exp.
     # Shared client: do NOT aclose/async-with it (#305).
+    revocation_store_available = True
+    revoked = 0
     try:
         revocation_keys = [f"revoked_jwts:{jti}"]
         if payload.get("org_id"):
@@ -163,11 +165,12 @@ async def get_current_user(
         revoked = await _revocation_redis().exists(*revocation_keys)
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         from backend.redis_client import drop
 
         drop()  # dead socket must not poison every later request
-        raise
+        revocation_store_available = False
+        logger.error("jwt_revocation_store_unavailable", error=str(exc))
     if revoked:
         logger.warning("jwt_revoked", jti=jti)
         raise HTTPException(status_code=401, detail="Token revoked")
@@ -179,7 +182,14 @@ async def get_current_user(
     # ordinary mutation paths invalidate immediately on every API instance.
     if "tv" in payload:
         token_version = int(payload["tv"])
-        if not _active_user_cached(str(payload["sub"]), token_version):
+        # Redis revocation is the fast path. If it is unavailable, validate the
+        # signed token against the authoritative user row even when the local
+        # 30-second cache is warm. This preserves deletion/password-reset
+        # invalidation without turning a Redis outage into a login outage.
+        if (
+            not revocation_store_available
+            or not _active_user_cached(str(payload["sub"]), token_version)
+        ):
             try:
                 user_uuid = uuid.UUID(str(payload["sub"]))
             except (ValueError, TypeError):
@@ -189,6 +199,12 @@ async def get_current_user(
             if live is None or int(live.token_version or 0) != token_version:
                 raise HTTPException(status_code=401, detail="Session no longer valid")
             cache_active_user_version(live)
+    elif not revocation_store_available:
+        # Legacy tokens have no database-backed version to validate safely.
+        raise HTTPException(
+            status_code=503,
+            detail="Session verification temporarily unavailable",
+        )
 
     return CurrentUser(
         user_id=payload["sub"],

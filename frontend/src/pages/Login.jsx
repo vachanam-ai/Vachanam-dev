@@ -123,7 +123,13 @@ export default function Login() {
       const me = await loginPassword(email.trim(), password, ts);
       navigate(roleHome(me.role), { replace: true });
     } catch (err) {
-      toast.error(err?.response?.data?.detail ?? "Invalid email or password");
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail;
+      toast.error(
+        status === 401
+          ? (detail ?? "Invalid email or password")
+          : (detail ?? "Sign-in succeeded, but the clinic workspace could not load. Please retry."),
+      );
     } finally {
       setBusy(false);
     }
