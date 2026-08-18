@@ -616,6 +616,53 @@ WAIT_FILLERS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Spoken and fully played before SIP REFER removes the caller from the AI room.
+# Urgent wording is deliberately separate: a routine request for a receptionist
+# must never be described as a medical emergency.
+TRANSFER_NOTICE: dict[str, tuple[str, str]] = {
+    "te": (
+        "ఇది అత్యవసర పరిస్థితి కాబట్టి, ఇప్పుడే మీ కాల్‌ను మా సిబ్బందికి ట్రాన్స్‌ఫర్ చేస్తున్నానండి.",
+        "ఇప్పుడే మీ కాల్‌ను మా సిబ్బందికి ట్రాన్స్‌ఫర్ చేస్తున్నానండి.",
+    ),
+    "en": (
+        "This is an extreme emergency, so I’m transferring your call to a human now.",
+        "I’m transferring your call to a human now.",
+    ),
+    "hi": (
+        "यह बेहद आपात स्थिति है, इसलिए मैं अभी आपका कॉल हमारे स्टाफ को ट्रांसफर कर रही हूँ।",
+        "मैं अभी आपका कॉल हमारे स्टाफ को ट्रांसफर कर रही हूँ।",
+    ),
+    "ta": (
+        "இது மிகவும் அவசரமான நிலை. அதனால் இப்போது உங்கள் அழைப்பை எங்கள் பணியாளரிடம் மாற்றுகிறேன்.",
+        "இப்போது உங்கள் அழைப்பை எங்கள் பணியாளரிடம் மாற்றுகிறேன்.",
+    ),
+    "kn": (
+        "ಇದು ತೀವ್ರ ತುರ್ತು ಪರಿಸ್ಥಿತಿ. ಆದ್ದರಿಂದ ಈಗ ನಿಮ್ಮ ಕರೆಯನ್ನು ನಮ್ಮ ಸಿಬ್ಬಂದಿಗೆ ವರ್ಗಾಯಿಸುತ್ತಿದ್ದೇನೆ.",
+        "ಈಗ ನಿಮ್ಮ ಕರೆಯನ್ನು ನಮ್ಮ ಸಿಬ್ಬಂದಿಗೆ ವರ್ಗಾಯಿಸುತ್ತಿದ್ದೇನೆ.",
+    ),
+    "ml": (
+        "ഇത് അതീവ അടിയന്തര സാഹചര്യമാണ്. അതിനാൽ ഇപ്പോൾ നിങ്ങളുടെ കോൾ ഞങ്ങളുടെ ജീവനക്കാരനിലേക്ക് മാറ്റുകയാണ്.",
+        "ഇപ്പോൾ നിങ്ങളുടെ കോൾ ഞങ്ങളുടെ ജീവനക്കാരനിലേക്ക് മാറ്റുകയാണ്.",
+    ),
+    "mr": (
+        "ही अत्यंत आपत्कालीन परिस्थिती आहे, म्हणून तुमचा कॉल आता आमच्या कर्मचाऱ्याकडे ट्रान्सफर करत आहे.",
+        "तुमचा कॉल आता आमच्या कर्मचाऱ्याकडे ट्रान्सफर करत आहे.",
+    ),
+    "bn": (
+        "এটি অত্যন্ত জরুরি পরিস্থিতি, তাই এখন আপনার কলটি আমাদের কর্মীর কাছে ট্রান্সফার করছি।",
+        "এখন আপনার কলটি আমাদের কর্মীর কাছে ট্রান্সফার করছি।",
+    ),
+}
+
+
+def get_transfer_notice(code: str | None, *, urgent: bool) -> str:
+    """Localized pre-transfer notice; falls back to Telugu."""
+    lines = TRANSFER_NOTICE.get(
+        (code or "").lower().strip(), TRANSFER_NOTICE[DEFAULT_LANG]
+    )
+    return lines[0 if urgent else 1]
+
+
 def get_wait_fillers(code: str | None) -> tuple[str, ...]:
     """Natural Soniox hold lines for slow tools (falls back to Telugu)."""
     return WAIT_FILLERS.get((code or "").lower().strip(), WAIT_FILLERS[DEFAULT_LANG])

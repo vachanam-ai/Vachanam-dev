@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 
+from agent.i18n.lines import TRANSFER_NOTICE, get_transfer_notice
 from agent.livekit_minimal.agent import VachanamAgent
 from agent.prompts.system_prompt import build_system_prompt
 from agent.session_state import SessionState
@@ -76,3 +77,70 @@ async def test_transfer_failed_returns_emergency_number():
     if out["error"] == "transfer_failed":
         assert out["emergency_contact"] == "+911234567890"
         assert "digit by digit" in out["next"]
+
+
+def test_every_call_language_has_urgent_and_routine_transfer_notices():
+    assert set(TRANSFER_NOTICE) == {"te", "en", "hi", "ta", "kn", "ml", "mr", "bn"}
+    for code in TRANSFER_NOTICE:
+        urgent = get_transfer_notice(code, urgent=True)
+        routine = get_transfer_notice(code, urgent=False)
+        assert urgent and routine and urgent != routine
+        assert "{" not in urgent + routine
+
+
+@pytest.mark.asyncio
+async def test_urgent_notice_finishes_before_sip_transfer(monkeypatch):
+    events = []
+
+    class _Speech:
+        async def wait_for_playout(self):
+            events.append("playout")
+
+    class _Session:
+        userdata = {}
+
+        async def say(self, text, **kwargs):
+            events.append(("say", text, kwargs))
+            return _Speech()
+
+    class _Room:
+        name = "urgent-room"
+        remote_participants = {"sip_patient": object()}
+
+    class _SIP:
+        async def transfer_sip_participant(self, request):
+            events.append("transfer")
+
+    class _LiveKit:
+        sip = _SIP()
+
+        async def aclose(self):
+            return None
+
+    class _Agent(VachanamAgent):
+        @property
+        def session(self):
+            return self._test_session
+
+    agent = _Agent(
+        instructions="x",
+        state=SessionState(branch_id=uuid.uuid4()),
+        db=None,
+        room=_Room(),
+        calendar_service=None,
+        meta_service=None,
+        transfer_to="+911234567890",
+        lang_code="te",
+    )
+    agent._test_session = _Session()
+    monkeypatch.setattr(
+        "agent.livekit_minimal.agent.api.LiveKitAPI", lambda: _LiveKit()
+    )
+
+    out = await agent.request_human_transfer(None, reason="urgent")
+
+    assert out["success"] is True
+    assert events[0][0] == "say"
+    assert events[0][1] == get_transfer_notice("te", urgent=True)
+    assert events[0][2]["allow_interruptions"] is False
+    assert events[1:] == ["playout", "transfer"]

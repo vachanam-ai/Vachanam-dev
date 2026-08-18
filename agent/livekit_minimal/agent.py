@@ -84,6 +84,7 @@ from agent.i18n.languages import DEFAULT_LANG  # noqa: E402
 from agent.i18n.lines import (  # noqa: E402
     get_line_check,
     get_reconnect,
+    get_transfer_notice,
     get_wait_fillers,
 )
 from agent.i18n.backchannels import is_lone_hello, suppress_backchannel  # noqa: E402
@@ -7280,6 +7281,27 @@ class VachanamAgent(Agent):
             self._transfer_to[-4:],
         )
         self._state.transfer_requested = True  # quality signal (CallLog)
+        # SIP REFER immediately removes the caller from this room. Speak and
+        # finish the deterministic notice first; otherwise the first thing an
+        # unavailable destination produces is an unexplained busy tone.
+        try:
+            notice = get_transfer_notice(
+                self._lang_code,
+                urgent=(reason or "").strip().casefold().startswith("urgent"),
+            )
+            speech = await self.session.say(
+                sanitize_for_tts(notice), allow_interruptions=False
+            )
+            wait = getattr(speech, "wait_for_playout", None)
+            if callable(wait):
+                await wait()
+            else:
+                current = getattr(self.session, "current_speech", None)
+                wait = getattr(current, "wait_for_playout", None)
+                if callable(wait):
+                    await wait()
+        except Exception as e:  # noqa: BLE001 — notice failure cannot block urgent help
+            logger.warning("transfer_notice_failed: %s", str(e)[:120])
         try:
             lkapi = api.LiveKitAPI()
             await lkapi.sip.transfer_sip_participant(
