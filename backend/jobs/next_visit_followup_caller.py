@@ -172,13 +172,12 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
                 logger.warning("followup_skipped_missing_data", task_id=str(t.id))
                 await db.commit()   # COMMIT PER TASK — one task can't roll back the batch
                 continue
-            # CONSENT GATE (FIXLOG #303, DPDP): follow-up calls are consent-based
-            # (privacy policy §9 promises withdrawal works). followup_consent is
-            # captured at booking and clearable by the clinic / a DSAR — a False
-            # here must actually stop the phone from ringing. Reminders and
-            # cascade-rebook are NOT gated: they are part of the booked service.
+            # Consent remains fail-closed. Never label this as completed: an
+            # operator must be able to distinguish a delivered callback from
+            # one that was deliberately not attempted.
             if patient.followup_consent is False:
-                t.status = "completed"
+                t.status = "unreachable"
+                t.response_summary = "not_called_no_followup_consent"
                 logger.info("followup_skipped_no_consent", task_id=str(t.id),
                             phone_last4=(patient.phone or "")[-4:])
                 await db.commit()

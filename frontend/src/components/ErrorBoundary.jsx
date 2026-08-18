@@ -3,7 +3,26 @@ import React from "react";
 export default class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false }; }
   static getDerivedStateFromError() { return { hasError: true }; }
-  componentDidCatch(error, info) { console.error("Unhandled UI error:", error, info?.componentStack); }
+  componentDidMount() {
+    // A successful boot clears the one-shot stale-bundle recovery marker.
+    this.clearRecovery = window.setTimeout(
+      () => window.sessionStorage.removeItem("vachanam_chunk_reload"),
+      10_000,
+    );
+  }
+  componentWillUnmount() { window.clearTimeout(this.clearRecovery); }
+  componentDidCatch(error, info) {
+    console.error("Unhandled UI error:", error, info?.componentStack);
+    const message = String(error?.message || error || "");
+    const staleBundle = /dynamically imported module|loading chunk|failed to fetch/i.test(message);
+    if (staleBundle && !window.sessionStorage.getItem("vachanam_chunk_reload")) {
+      // Cloudflare deploys replace hashed lazy-route files. An already-open
+      // tab can request the previous hash and crash even though the app and
+      // API are healthy. One reload fetches the new HTML + asset manifest.
+      window.sessionStorage.setItem("vachanam_chunk_reload", "1");
+      window.location.reload();
+    }
+  }
   handleReload = () => { this.setState({ hasError: false }); window.location.reload(); };
   render() {
     if (!this.state.hasError) return this.props.children;

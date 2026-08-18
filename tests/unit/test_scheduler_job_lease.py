@@ -60,19 +60,46 @@ async def test_contended_lease_skips_duplicate_execution(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_redis_failure_fails_closed(monkeypatch):
+async def test_redis_failure_runs_once_under_local_lock(monkeypatch):
     redis = FakeRedis()
     redis.fail_set = True
     monkeypatch.setattr(lease, "get_redis", lambda: redis)
-    called = False
+    monkeypatch.setattr(lease, "_REDIS_RETRY_AFTER", 0.0)
+    called = 0
 
     async def work():
         nonlocal called
-        called = True
+        called += 1
+        return 9
 
-    assert await lease.leased_job("reminder-test", work)() is None
-    assert called is False
-    assert lease._LOCAL_TICKS["reminder-test"]["status"] == "lease_error"
+    assert await lease.leased_job("reminder-test", work)() == 9
+    assert called == 1
+    assert lease._LOCAL_TICKS["reminder-test"]["status"] == "ok_local"
+
+
+@pytest.mark.asyncio
+async def test_redis_circuit_avoids_repeated_quota_calls(monkeypatch):
+    redis = FakeRedis()
+    redis.fail_set = True
+    attempts = 0
+
+    async def counted_set(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        raise ConnectionError("quota exhausted")
+
+    redis.set = counted_set
+    monkeypatch.setattr(lease, "get_redis", lambda: redis)
+    monkeypatch.setattr(lease, "_REDIS_RETRY_AFTER", 0.0)
+
+    async def work():
+        return None
+
+    await lease.leased_job("first", work)()
+    await lease.leased_job("second", work)()
+    assert attempts == 1
+    assert lease._LOCAL_TICKS["first"]["status"] == "ok_local"
+    assert lease._LOCAL_TICKS["second"]["status"] == "ok_local"
 
 
 def test_health_detects_stale_or_failed_critical_jobs(monkeypatch):

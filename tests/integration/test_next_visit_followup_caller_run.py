@@ -111,9 +111,9 @@ async def test_run_final_note_completes_without_dialing(db, monkeypatch, redis):
 
 
 @pytest.mark.asyncio
-async def test_no_consent_skips_call_and_completes_task(db, monkeypatch, redis):
-    """#303 (DPDP): followup_consent=False must actually stop the phone from
-    ringing — policy §9 promises withdrawal works. Task closes, zero dispatch."""
+async def test_no_consent_skips_call_with_truthful_terminal_state(db, monkeypatch, redis):
+    """Consent remains fail-closed, but an unattempted call must never look
+    successfully completed in the operator audit trail."""
     br, doc, pat, note, task = await _seed(db, consent=False)
     called = {"n": 0}
 
@@ -126,7 +126,9 @@ async def test_no_consent_skips_call_and_completes_task(db, monkeypatch, redis):
     assert n == 0
     assert called["n"] == 0
     await db.refresh(task)
-    assert task.status == "completed"
+    assert task.status == "unreachable"
+    assert task.response_summary == "not_called_no_followup_consent"
+    assert task.attempt_count == 0
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,10 @@ from backend.redis_client import get_redis
 logger = structlog.get_logger()
 LEASE_SECONDS = 180
 _LOCAL_TICKS: dict[str, dict[str, Any]] = {}
+_LOCAL_LOCKS: dict[str, asyncio.Lock] = {}
+_REDIS_RETRY_AFTER = 0.0
 _STARTED_AT = time.monotonic()
+REDIS_RETRY_SECONDS = 300
 
 _RENEW_LUA = """
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -60,22 +63,62 @@ def leased_job(
 
     @wraps(function)
     async def run() -> Any | None:
+        global _REDIS_RETRY_AFTER
         _mark(job_id, "tick")
-        redis = get_redis()
+        redis = None
         key = f"scheduler:lease:{job_id}"
         owner = uuid.uuid4().hex
-        try:
-            acquired = await redis.set(key, owner, nx=True, ex=lease_seconds)
-        except Exception as exc:
-            _mark(job_id, "lease_error", error=type(exc).__name__)
-            logger.error("scheduler_lease_unavailable", job=job_id, error=str(exc)[:120])
-            return None
+        acquired = False
+        lease_error: Exception | None = None
+        if time.monotonic() >= _REDIS_RETRY_AFTER:
+            try:
+                redis = get_redis()
+                acquired = bool(await redis.set(key, owner, nx=True, ex=lease_seconds))
+            except Exception as exc:
+                lease_error = exc
+                _REDIS_RETRY_AFTER = time.monotonic() + REDIS_RETRY_SECONDS
+                logger.error(
+                    "scheduler_lease_unavailable_using_local_lock",
+                    job=job_id,
+                    error=str(exc)[:120],
+                    retry_seconds=REDIS_RETRY_SECONDS,
+                )
+        else:
+            lease_error = RuntimeError("redis lease circuit open")
+
+        if lease_error is not None:
+            # Render currently runs exactly one uvicorn worker on one instance.
+            # Keeping its scheduler alive is safer than missing every reminder
+            # and follow-up when Upstash is unavailable. The local lock still
+            # prevents overlapping ticks in this process. Before horizontal
+            # scaling, replace this fallback with a durable cross-instance
+            # lease; render.yaml deliberately pins the current topology.
+            local_lock = _LOCAL_LOCKS.setdefault(job_id, asyncio.Lock())
+            if local_lock.locked():
+                _mark(job_id, "contended_local")
+                return None
+            started = time.monotonic()
+            async with local_lock:
+                _mark(job_id, "running_local")
+                try:
+                    result = await function()
+                except Exception as exc:
+                    _mark(job_id, "error", error=type(exc).__name__)
+                    logger.exception("scheduled_job_failed", job=job_id, lease="local")
+                    raise
+                _mark(
+                    job_id,
+                    "ok_local",
+                    duration_ms=round((time.monotonic() - started) * 1000),
+                )
+                return result
         if not acquired:
             _mark(job_id, "contended")
             return None
 
         started = time.monotonic()
         _mark(job_id, "running")
+        assert redis is not None
         renew_task = asyncio.create_task(_renew_lease(key, owner, lease_seconds))
         work_task = asyncio.create_task(function())
         try:
