@@ -13,10 +13,11 @@ class Settings(BaseSettings):
     smallest_api_key: str = ""    # Pulse STT sandbox; production remains Soniox
     smallest_model: str = "pulse"
     smallest_eou_timeout_ms: int = 100
-    # Vertex explicit context caching is demand-created by the first matching
-    # clinic-language call from 09:00-21:00 IST and expires at 21:00. Outside
-    # that window calls use the identical uncached path.
-    voice_prompt_cache: bool = True
+    # Explicit Vertex CachedContent is opt-in. Production evidence over 2,028
+    # turns found effectively no latency win, while every clinic/language cache
+    # accrues token-hour storage charges until its TTL expires. Gemini's normal
+    # uncached path remains identical and may still receive implicit cache hits.
+    voice_prompt_cache: bool = False
     # One throwaway Vertex generation per job subprocess at prewarm. The first
     # request to asia-south1 costs +567 to +668ms over a warm one (measured
     # 2026-08-12), which the caller hears on turn 1. Off = turn 1 pays it.

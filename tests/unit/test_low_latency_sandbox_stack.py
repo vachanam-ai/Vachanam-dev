@@ -13,6 +13,12 @@ def test_production_provider_defaults_are_unchanged():
     assert cfg.stt_provider == "auto"
     assert cfg.tts_provider == "soniox"
     assert cfg.llm_provider == "gemini"
+    assert cfg.voice_prompt_cache is False
+
+
+def test_production_disables_paid_explicit_prompt_storage():
+    prod = Path("infra/fly.agent.toml").read_text(encoding="utf-8")
+    assert 'VOICE_PROMPT_CACHE = "0"' in prod
 
 
 def test_pulse_alias_and_minimum_eou_are_validated():

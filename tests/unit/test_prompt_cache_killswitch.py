@@ -51,10 +51,10 @@ def test_builder_ignores_an_already_warm_entry(cache_off):
         ag._PROMPT_CACHE.pop(KEY, None)
 
 
-def test_switch_defaults_on_so_production_is_unchanged():
+def test_switch_defaults_off_so_new_deployments_do_not_bill_storage():
     from backend.config import Settings
 
-    assert Settings.model_fields["voice_prompt_cache"].default is True
+    assert Settings.model_fields["voice_prompt_cache"].default is False
 
 
 def test_every_cache_entry_point_checks_the_switch():

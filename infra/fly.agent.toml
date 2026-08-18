@@ -43,6 +43,11 @@ primary_region = "sin"
   # Keep four processes prewarmed: concurrent callers must never wait for the
   # roughly minute-long model/process initialization observed on a cold spawn.
   VOICE_NUM_IDLE_PROCESSES = "4"
+  # Explicit Vertex CachedContent costs token-hours per clinic/language. Latest
+  # production cohort: cached p50 1623ms vs uncached 1579ms, so it is both more
+  # expensive and no faster here. Keep the feature available for a future
+  # high-volume A/B, but make this deployment decision explicit.
+  VOICE_PROMPT_CACHE = "0"
   VOICE_TOOL_PREFETCH = "true"
   VOICE_DETERMINISTIC_CONFIRM = "true"
 

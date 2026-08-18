@@ -30,6 +30,9 @@ def setup_function(_):
 
 @pytest.fixture(autouse=True)
 def _inside_cache_window(monkeypatch):
+    # The paid cache is production-off by default; this file exercises the
+    # explicitly enabled feature and its tenant-safety boundaries.
+    monkeypatch.setattr(agent_mod.settings, "voice_prompt_cache", True)
     monkeypatch.setattr(
         agent_mod, "_prompt_cache_ttl_seconds", lambda now=None: 3600
     )

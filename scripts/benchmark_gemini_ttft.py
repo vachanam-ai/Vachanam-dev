@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import statistics
 import sys
 import time
@@ -117,10 +118,25 @@ async def main() -> None:
     )
     parser.add_argument("--cached", action="store_true")
     parser.add_argument("--priority", action="store_true")
+    parser.add_argument(
+        "--vertex",
+        action="store_true",
+        help="benchmark Vertex asia-south1 using the local service account",
+    )
     args = parser.parse_args()
 
     load_dotenv(ROOT / ".env", override=False)
-    client = genai.Client()
+    if args.vertex:
+        credential = ROOT / "google-service-account.json"
+        project = json.loads(credential.read_text(encoding="utf-8"))["project_id"]
+        import os
+
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(credential)
+        client = genai.Client(
+            vertexai=True, project=project, location="asia-south1"
+        )
+    else:
+        client = genai.Client()
     prompt, tools = _fixture()
     counted = await client.aio.models.count_tokens(model=args.models[0], contents=prompt)
     print(f"prompt_tokens={counted.total_tokens} tools={len(tools[0].get('function_declarations', []))}")
