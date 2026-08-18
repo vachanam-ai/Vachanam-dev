@@ -80,7 +80,11 @@ PURPOSES: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     ),
 }
 
-_CACHE_TTL = 3600  # an hour: templates change when a clinic edits them, rarely
+# Template mutations made through Vachanam explicitly invalidate this cache.
+# Twelve hours covers a clinic day, so a quiet clinic does not pay Meta's
+# multi-second discovery call on its first booking every hour; the TTL remains
+# a safety net for edits made directly in Meta's dashboard.
+_CACHE_TTL = 12 * 60 * 60
 _BODY_VAR = re.compile(r"\{\{(\d+)\}\}")
 
 
