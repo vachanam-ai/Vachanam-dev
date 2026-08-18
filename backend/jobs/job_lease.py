@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -70,7 +71,12 @@ def leased_job(
         owner = uuid.uuid4().hex
         acquired = False
         lease_error: Exception | None = None
-        if time.monotonic() >= _REDIS_RETRY_AFTER:
+        distributed = os.getenv("SCHEDULER_DISTRIBUTED_LEASES", "false").lower() in {
+            "1", "true", "yes",
+        }
+        if not distributed:
+            lease_error = RuntimeError("distributed leases disabled")
+        elif time.monotonic() >= _REDIS_RETRY_AFTER:
             try:
                 redis = get_redis()
                 acquired = bool(await redis.set(key, owner, nx=True, ex=lease_seconds))

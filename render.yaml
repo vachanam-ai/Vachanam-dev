@@ -21,6 +21,11 @@ services:
     envVars:
       - key: APP_ENV
         value: production
+      # One Render instance + one uvicorn worker: local APScheduler locks are
+      # sufficient and avoid >648k idle Redis lease commands/month. Set true
+      # only when horizontally scaling to multiple Render instances.
+      - key: SCHEDULER_DISTRIBUTED_LEASES
+        value: "false"
       - key: LOG_LEVEL
         value: info
       - key: OPENAI_API_KEY

@@ -29,6 +29,7 @@ class FakeRedis:
 
 @pytest.mark.asyncio
 async def test_job_executes_and_releases_owned_lease(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_DISTRIBUTED_LEASES", "true")
     redis = FakeRedis()
     monkeypatch.setattr(lease, "get_redis", lambda: redis)
     calls = []
@@ -45,6 +46,7 @@ async def test_job_executes_and_releases_owned_lease(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_contended_lease_skips_duplicate_execution(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_DISTRIBUTED_LEASES", "true")
     redis = FakeRedis()
     redis.values["scheduler:lease:reminder-test"] = "other-process"
     monkeypatch.setattr(lease, "get_redis", lambda: redis)
@@ -61,6 +63,7 @@ async def test_contended_lease_skips_duplicate_execution(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_redis_failure_runs_once_under_local_lock(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_DISTRIBUTED_LEASES", "true")
     redis = FakeRedis()
     redis.fail_set = True
     monkeypatch.setattr(lease, "get_redis", lambda: redis)
@@ -79,6 +82,7 @@ async def test_redis_failure_runs_once_under_local_lock(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_redis_circuit_avoids_repeated_quota_calls(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_DISTRIBUTED_LEASES", "true")
     redis = FakeRedis()
     redis.fail_set = True
     attempts = 0
@@ -100,6 +104,22 @@ async def test_redis_circuit_avoids_repeated_quota_calls(monkeypatch):
     assert attempts == 1
     assert lease._LOCAL_TICKS["first"]["status"] == "ok_local"
     assert lease._LOCAL_TICKS["second"]["status"] == "ok_local"
+
+
+@pytest.mark.asyncio
+async def test_single_instance_mode_never_touches_redis(monkeypatch):
+    monkeypatch.setenv("SCHEDULER_DISTRIBUTED_LEASES", "false")
+
+    def unexpected_redis():
+        raise AssertionError("single-instance scheduler must not consume Redis")
+
+    monkeypatch.setattr(lease, "get_redis", unexpected_redis)
+
+    async def work():
+        return 11
+
+    assert await lease.leased_job("local-only", work)() == 11
+    assert lease._LOCAL_TICKS["local-only"]["status"] == "ok_local"
 
 
 def test_health_detects_stale_or_failed_critical_jobs(monkeypatch):
