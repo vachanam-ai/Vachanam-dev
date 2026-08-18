@@ -118,7 +118,13 @@ async def init_rate_limiter() -> None:
     because httpx.ASGITransport does not trigger ASGI lifespan; the lazy
     path handles that case transparently.
     """
-    await _get_script_hash()
+    try:
+        await _get_script_hash()
+    except Exception as exc:
+        # Request dependencies already use the bounded in-process fallback.
+        # Redis exhaustion must not prevent an otherwise healthy API boot.
+        logger.error("rate_limiter_startup_degraded", error=str(exc))
+        return
     logger.info("rate_limiter_initialized")
 
 

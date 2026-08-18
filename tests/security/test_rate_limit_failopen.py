@@ -45,6 +45,11 @@ async def test_rate_limit_dep_fails_open_when_redis_down(monkeypatch):
     assert await dep(_Req(), _Resp()) is None
 
 
+async def test_rate_limiter_startup_does_not_kill_api_when_redis_down(monkeypatch):
+    monkeypatch.setattr(rl, "_get_script_hash", _boom)
+    assert await rl.init_rate_limiter() is None
+
+
 async def test_fallback_throttle_caps_redis_outage_flood(monkeypatch):
     """SEC #8: fail-open must not mean UNLIMITED. During an outage the
     per-worker in-memory window still 429s past the limit."""
