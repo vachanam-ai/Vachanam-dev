@@ -79,12 +79,14 @@ def test_spa_does_not_persist_or_send_bearer_jwt():
 
 def test_production_spa_uses_same_site_api_for_cookie_sessions():
     root = Path(__file__).parents[2]
-    production_env = (root / "frontend" / ".env.production").read_text()
-    index = (root / "frontend" / "index.html").read_text()
-    headers = (root / "frontend" / "public" / "_headers").read_text()
+    production_env = (root / "frontend" / ".env.production").read_text(encoding="utf-8")
+    client = (root / "frontend" / "src" / "api" / "client.js").read_text(encoding="utf-8")
+    index = (root / "frontend" / "index.html").read_text(encoding="utf-8")
+    headers = (root / "frontend" / "public" / "_headers").read_text(encoding="utf-8")
     assert "VITE_API_URL=https://api.vachanam.in" in production_env
+    assert 'import.meta.env.PROD\n  ? "https://api.vachanam.in"' in client
     assert 'href="https://api.vachanam.in"' in index
-    assert "vachanam-backend.onrender.com" not in production_env + index + headers
+    assert "vachanam-backend.onrender.com" not in production_env + client + index + headers
 
 
 def _make_jwt(

@@ -11,7 +11,12 @@ export const clearToken = () => localStorage.removeItem(LEGACY_TOKEN_KEY);
 // backend on its origin) set VITE_API_URL to the API host (e.g.
 // https://api.vachanam.in) so calls go cross-origin to Render. CORS is allowed
 // there via the backend's FRONTEND_URL. Trailing slash trimmed to avoid “//path”.
-export const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+// A production browser session must stay on the vachanam.in site boundary.
+// Cloudflare once injected the raw Render origin here, so the browser correctly
+// withheld our SameSite=Strict cookie and /auth/me failed after login.
+export const API_BASE = import.meta.env.PROD
+  ? "https://api.vachanam.in"
+  : (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 export const api = axios.create({ baseURL: API_BASE, timeout: 15000, withCredentials: true });
 
 // A Turnstile token belongs to one widget and one request. Keeping it in the

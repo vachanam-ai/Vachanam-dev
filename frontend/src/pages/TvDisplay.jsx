@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-
-const API_BASE = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+import { API_BASE } from "../api/client.js";
 
 /**
  * Waiting-room TV board (PUBLIC — no login; open /tv/<branchId> on the TV
