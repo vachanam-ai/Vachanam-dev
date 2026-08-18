@@ -98,6 +98,28 @@ async def test_answer_with_faq_opt_in_appends_and_queues_callback(db):
 
 
 @pytest.mark.asyncio
+async def test_answer_appends_to_legacy_serialized_faq_without_corrupting_it(db):
+    org_id, br, _pat, q = await _seed(db, "+910000000081")
+    br.faq = '[{"q":"What is the consultation fee?","a":"1000"}]'
+    await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            response = await ac.post(
+                f"/branches/{br.id}/questions/{q.id}/answer",
+                json={"answer": "Yes, one sitting is available.", "add_to_faq": True},
+            )
+            assert response.status_code == 200, response.text
+            faq = (await ac.get(f"/branches/{br.id}/faq")).json()["faq"]
+            assert faq == [
+                {"q": "What is the consultation fee?", "a": "1000"},
+                {"q": q.question, "a": "Yes, one sitting is available."},
+            ]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_answer_without_faq_still_queues_callback(db):
     """The doctor said "don't add to FAQ" — the FAQ stays empty, but the
     patient is still called back with the answer."""

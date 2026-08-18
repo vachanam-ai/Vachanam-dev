@@ -64,6 +64,25 @@ async def test_faq_save_and_roundtrip(db):
 
 
 @pytest.mark.asyncio
+async def test_legacy_double_encoded_faq_is_returned_as_rows(db):
+    org_id, br = await _seed(db, "+910000000089")
+    # The oldest production rows have one JSON string inside the JSONB value.
+    # Use the exact one-level representation the API must normalize.
+    br.faq = '[{"q":"What is the consultation fee?","a":"1000"}]'
+    await db.commit()
+    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
+            response = await ac.get(f"/branches/{br.id}/faq")
+            assert response.status_code == 200
+            assert response.json()["faq"] == [
+                {"q": "What is the consultation fee?", "a": "1000"}
+            ]
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.asyncio
 async def test_faq_long_answer_saves_and_overlong_names_the_row(db):
     """Vinay 2026-07-17 ("unable to save FAQs"): 500-char answers are normal
     for real clinics — cap is now 1000, and an over-cap 422 must NAME the

@@ -644,7 +644,13 @@ def _faq_block(faq: list[dict] | None) -> str:
     if not rows:
         return ""
     return (
-        "<clinic_faq>Answer only from these rows; never contradict or extend one.\n"
+        "<clinic_faq>These rows are authoritative INTENTS, not exact-word matches. "
+        "Semantically match paraphrases and every supported language. A generic fee "
+        "row answers doctor/specialty-specific fee wording unless the row itself says "
+        "it is limited. When an answer is terse (for example 1000 or yes), speak one "
+        "natural self-contained sentence with its subject and obvious unit; never read "
+        "the raw value alone. If any row covers the meaning, answer it and NEVER call "
+        "log_clinic_question; never contradict or extend a row, and never invent.\n"
         + "\n".join(rows)
         + "\n</clinic_faq>"
     )

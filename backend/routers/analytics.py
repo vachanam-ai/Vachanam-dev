@@ -432,7 +432,31 @@ async def analytics_overview(
             .group_by(_call_day)
         )
     ).all()
+    # Agent quality rows land immediately at hangup; provider CDR rows are the
+    # billing authority but arrive on the hourly reconciliation wake. Use the
+    # larger per-day count so a new clinic never sees "0 calls" after a real
+    # conversation, without double-counting once the CDR catches up.
+    _quality_day = func.date(func.timezone(_tzname, CallQuality.created_at))
+    quality_call_rows = (
+        await db.execute(
+            select(
+                _quality_day,
+                func.count(),
+                func.sum(cast(CallQuality.booking_made, Integer)),
+            )
+            .where(
+                and_(
+                    CallQuality.branch_id == branch_uuid,
+                    _quality_day >= start,
+                )
+            )
+            .group_by(_quality_day)
+        )
+    ).all()
     calls_by_day = {d: (n, int(b or 0)) for d, n, b in call_rows}
+    for d, n, b in quality_call_rows:
+        old_n, old_b = calls_by_day.get(d, (0, 0))
+        calls_by_day[d] = (max(old_n, n), max(old_b, int(b or 0)))
     calls_daily = [
         CallsDay(
             date=(start + timedelta(days=i)).isoformat(),
@@ -494,6 +518,14 @@ async def analytics_overview(
             )
         )
     ).scalar_one()
+    lifetime_quality_calls = (
+        await db.execute(
+            select(func.count()).select_from(CallQuality).where(
+                CallQuality.branch_id == branch_uuid
+            )
+        )
+    ).scalar_one()
+    lifetime_calls = max(lifetime_calls, lifetime_quality_calls)
     lifetime_patients = (
         await db.execute(
             select(func.count()).select_from(Patient).where(
@@ -536,6 +568,17 @@ async def analytics_overview(
             )
         )
     ).scalar_one()
+    month_quality_calls = (
+        await db.execute(
+            select(func.count()).select_from(CallQuality).where(
+                and_(
+                    CallQuality.branch_id == branch_uuid,
+                    _quality_day >= month_start,
+                )
+            )
+        )
+    ).scalar_one()
+    month_calls = max(month_calls, month_quality_calls)
     month_new_patients = (
         await db.execute(
             select(func.count()).select_from(Patient).where(
@@ -566,9 +609,28 @@ async def analytics_overview(
             .group_by(_dow, _hr)
         )
     ).all()
+    _quality_local_ts = func.timezone(_tzname, CallQuality.created_at)
+    _quality_dow = cast(func.extract("isodow", _quality_local_ts), Integer)
+    _quality_hr = cast(func.extract("hour", _quality_local_ts), Integer)
+    quality_hour_rows = (
+        await db.execute(
+            select(_quality_dow, _quality_hr, func.count())
+            .where(
+                and_(
+                    CallQuality.branch_id == branch_uuid,
+                    _quality_day >= start,
+                )
+            )
+            .group_by(_quality_dow, _quality_hr)
+        )
+    ).all()
+    hourly_counts = {(int(d) - 1, int(h)): n for d, h, n in hour_rows}
+    for dow, hour, count in quality_hour_rows:
+        key = (int(dow) - 1, int(hour))
+        hourly_counts[key] = max(hourly_counts.get(key, 0), count)
     hourly_by_weekday = [
-        HourCell(weekday=int(dow) - 1, hour=int(h), calls=n)
-        for dow, h, n in hour_rows
+        HourCell(weekday=dow, hour=hour, calls=count)
+        for (dow, hour), count in sorted(hourly_counts.items())
     ]
 
     # ── Attendance rate + weekday load over the period ──

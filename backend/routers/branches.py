@@ -3,6 +3,7 @@
 Rule 1: every query filters by branch_id; access enforced via assert_branch_access.
 Currently: voice selection for the clinic's AI agent.
 """
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -28,6 +29,20 @@ from backend.services.wa_lifecycle import is_connected as whatsapp_is_connected
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+def _faq_rows(value) -> list[dict]:
+    """Normalize current JSONB and the legacy double-encoded FAQ format."""
+    for _ in range(2):
+        if not isinstance(value, str):
+            break
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return []
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [row for row in value if isinstance(row, dict)]
 
 # Soniox is the sole TTS provider. A clinic's chosen catalog voice lives in
 # branches.tts_voice; legacy values resolve to the configured Soniox default.
@@ -391,7 +406,7 @@ async def get_faq(
         )
     ).scalars().all()
     return {
-        "faq": getattr(branch, "faq", None) or [],
+        "faq": _faq_rows(getattr(branch, "faq", None)),
         "template": FAQ_TEMPLATE,
         "asked": [
             {"question": a.question, "at": a.created_at.isoformat() if a.created_at else None}
@@ -591,7 +606,7 @@ async def answer_question(
         ).scalar_one_or_none()
         if branch is None:
             raise HTTPException(status_code=404, detail="Branch not found")
-        faq = list(getattr(branch, "faq", None) or [])
+        faq = _faq_rows(getattr(branch, "faq", None))
         if len(faq) >= _FAQ_MAX_ITEMS:
             raise HTTPException(
                 status_code=422,

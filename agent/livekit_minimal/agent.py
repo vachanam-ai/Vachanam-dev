@@ -126,6 +126,12 @@ from agent.livekit_minimal.turn_trace import (  # noqa: E402
     TurnLatencyTrace,
     format_summary_line,
 )
+from agent.livekit_minimal.faq_grounding import (  # noqa: E402
+    FaqMatch,
+    decode_faq,
+    find_faq_match,
+    natural_fallback,
+)
 from agent.services.tts_sanitizer import (  # noqa: E402
     internal_trace_match,
     internal_trace_prefix_len,
@@ -1093,8 +1099,10 @@ def _followup_meta_safe(meta: dict) -> dict:
     """RULE 9: the ONLY metadata fields allowed to reach the LLM/agent for a
     follow-up call. Private clinical notes (steps_performed/next_steps) must never
     appear here even if a future caller accidentally includes them."""
-    allowed = ("call_type", "message", "target_date", "window",
-               "patient_name", "doctor_name", "doctor_id", "task_id")
+    allowed = (
+        "call_type", "message", "question", "answer", "target_date", "window",
+        "patient_name", "doctor_name", "doctor_id", "task_id",
+    )
     return {k: meta[k] for k in allowed if k in meta}
 
 
@@ -1135,35 +1143,80 @@ def _followup_date_block(raw: str, lang_code: str) -> str:
     )
 
 
-async def _localize_message(message: str, lang_code: str) -> str:
-    """Speak the doctor's follow-up note in the CALL's language. If the doctor wrote
-    it in English (mostly Latin), translate to natural spoken <lang> (so it's clear,
-    not fast English over a Telugu TTS); if already in an Indic script, keep it.
-    Best-effort — returns the original on any failure."""
+_NATURAL_MESSAGE_CACHE: dict[str, str] = {}
+
+
+def _verified_message_fallback(
+    message: str,
+    lang_code: str,
+    purpose: str,
+    question: str,
+    answer: str,
+) -> str:
+    if purpose in {"faq", "question_answer"} and answer:
+        match = find_faq_match(question, [{"q": question, "a": answer}])
+        if match is None:
+            match = FaqMatch(question, answer, "custom")
+        return natural_fallback(match, lang_code)
+    note = (message or "").strip()
+    if lang_code == "te":
+        return f"డాక్టర్ గారు మీకు ఇలా చెప్పమన్నారు అండి: {note}"
+    if lang_code == "hi":
+        return f"डॉक्टर ने आपके लिए यह संदेश दिया है जी: {note}"
+    if lang_code == "ta":
+        return f"டாக்டர் உங்களுக்காக இந்த செய்தியைச் சொன்னாங்க: {note}"
+    if lang_code == "kn":
+        return f"ಡಾಕ್ಟರ್ ನಿಮಗಾಗಿ ಈ ಸಂದೇಶ ಹೇಳಿದ್ದಾರೆ ರೀ: {note}"
+    return f"The doctor asked me to tell you: {note}"
+
+
+async def _localize_message(
+    message: str,
+    lang_code: str,
+    *,
+    purpose: str = "doctor_followup",
+    question: str = "",
+    answer: str = "",
+) -> str:
+    """Turn verified clinic data into a self-contained spoken message.
+
+    Outbound calls run this while the phone is ringing. The FAQ fast path uses
+    it with a strict timeout. On any model failure the verified input is kept;
+    the model is never allowed to create a clinic fact.
+    """
     msg = (message or "").strip()
-    letters = [c for c in msg if c.isalpha()]
-    if not letters:
+    if not msg and not answer:
         return message
-    if sum(1 for c in letters if c.isascii()) / len(letters) < 0.5:
-        return message  # already mostly non-Latin → assume the call's language
     cfg = get_lang(lang_code)
-    if cfg.code == "en":
-        return message
+    fallback = _verified_message_fallback(msg, cfg.code, purpose, question, answer)
+    material = "\x1f".join((purpose, cfg.code, question, answer, msg))
+    cache_key = hashlib.sha256(material.encode("utf-8")).hexdigest()
+    cached = _NATURAL_MESSAGE_CACHE.get(cache_key)
+    if cached:
+        return cached
     try:
         from google import genai
         from google.genai import types as gt
 
         client = genai.Client(api_key=settings.gemini_api_key)
-        prompt = (
-            f"Translate this clinic follow-up note into natural, warm, SPOKEN "
-            f"{cfg.name} for a phone call to a patient. Keep common English everyday "
-            f"loanwords as people actually say them. CRITICAL: medicine / tablet / "
-            f"brand names (e.g. Cytrizine, Dolo, Augmentin) are NOT regular words — "
-            f"transliterate each one accurately into {cfg.name} script so the patient "
-            f"hears the SAME medicine name clearly and can recognize it at the "
-            f"pharmacy; never translate or alter a drug name's meaning. Output ONLY "
-            f"the translation, nothing else:\n\n{msg}"
-        )
+        if purpose in {"faq", "question_answer"}:
+            prompt = f"""You are a warm clinic receptionist speaking on a phone call.
+Turn the VERIFIED database fact below into ONE short, self-contained sentence in
+natural spoken {cfg.name}. State the subject and unit: a bare numeric consultation
+fee means Indian rupees. Do not read a raw value alone. Do not ask a question.
+Use ONLY the supplied answer; never add, infer, diagnose, or change any fact.
+Keep everyday English loanwords natural. Output only the exact sentence to speak.
+Patient question: {question or msg}
+Verified clinic answer: {answer or msg}"""
+        else:
+            prompt = f"""You are a warm clinic receptionist speaking on a follow-up call.
+Rewrite the VERIFIED doctor's note below as one or two short, self-contained spoken
+sentences in natural {cfg.name}. Introduce it naturally as what the doctor said or
+asked; do not read a fragment or raw value alone. Preserve whether it is a question,
+instruction, or information. Use ONLY the note; never add medical advice or facts.
+Keep medicine and brand names unchanged in meaning and transliterate them accurately.
+Output only the exact words to speak.
+Doctor's note: {msg}"""
         resp = await client.aio.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
@@ -1173,12 +1226,41 @@ async def _localize_message(message: str, lang_code: str) -> str:
         )
         out = (resp.text or "").strip()
         if out:
-            logger.info("localized_doctor_msg lang=%s", cfg.code)
+            if len(_NATURAL_MESSAGE_CACHE) >= 256:
+                _NATURAL_MESSAGE_CACHE.pop(next(iter(_NATURAL_MESSAGE_CACHE)))
+            _NATURAL_MESSAGE_CACHE[cache_key] = out
+            logger.info(
+                "naturalized_clinic_message lang=%s purpose=%s", cfg.code, purpose
+            )
             return out
-        return message
+        return fallback
     except Exception as e:  # noqa: BLE001 — never block a call
         logger.warning("localize_message_failed: %s", str(e)[:120])
-        return message
+        return fallback
+
+
+async def _naturalize_faq_match(match: FaqMatch, lang_code: str) -> str:
+    """Natural LLM realization over one selected DB row, bounded to 450 ms.
+
+    A timeout falls back to a complete localized sentence. That keeps the
+    common FAQ path under the full-agent latency while never returning a raw
+    value such as "1000" or logging a question the clinic already answered.
+    """
+    fallback = natural_fallback(match, lang_code)
+    try:
+        return await asyncio.wait_for(
+            _localize_message(
+                fallback,
+                lang_code,
+                purpose="faq",
+                question=match.question,
+                answer=match.answer,
+            ),
+            timeout=0.45,
+        )
+    except TimeoutError:
+        logger.info("faq_naturalize_timeout intent=%s", match.intent)
+        return fallback
 
 
 async def _inbound_pending_followup(branch_id, phone: str, db) -> dict | None:
@@ -3268,6 +3350,7 @@ class VachanamAgent(Agent):
         chat_ctx=None,        # conversation history carried across the handoff
         llm=None,             # #417 per-agent LLM (prompt-cache-backed primary)
         doctor_contexts=None, # authoritative active roster for deterministic replies
+        faq_rows=None,        # authoritative branch FAQ for fast grounded replies
         timezone_name: str = 'Asia/Kolkata',
     ) -> None:
         # Only pass stt/tts to livekit when actually overriding — an explicit
@@ -3308,6 +3391,7 @@ class VachanamAgent(Agent):
         # (livekit's Agent.tts is not a stable public accessor across versions).
         self._tts_override = tts
         self._doctor_contexts = tuple(doctor_contexts or ())
+        self._faq_rows = tuple(decode_faq(faq_rows))
         self._timezone_name = timezone_name or 'Asia/Kolkata'
         # Native-script auto-correction hands the current turn to a freshly
         # configured language agent. on_enter consumes exactly one of these.
@@ -3718,6 +3802,19 @@ class VachanamAgent(Agent):
         legal_threat = _is_legal_threat(utterance)
         hostile_or_frustrated = _is_hostile_or_frustrated(utterance)
         response_language = detected_language or self._lang_code
+        faq_match = (
+            None
+            if incomplete_fragment
+            or _caller_authorized_booking(utterance)
+            or _caller_authorized_reschedule(utterance)
+            or _caller_authorized_cancellation(utterance)
+            else find_faq_match(utterance, self._faq_rows)
+        )
+        faq_speech = (
+            await _naturalize_faq_match(faq_match, response_language)
+            if faq_match is not None
+            else None
+        )
         reminder_policy_speech = (
             await self._reminder_policy_speech(response_language)
             if reminder_policy_question
@@ -3740,6 +3837,7 @@ class VachanamAgent(Agent):
             incomplete_fragment,
             control_token_request,
             reminder_policy_question,
+            faq_match is not None,
             current_doctors_question,
             specialty_query is not None,
             roster_question,
@@ -3762,6 +3860,8 @@ class VachanamAgent(Agent):
                 deterministic_speech = _incomplete_clarification(
                     detected_language, clarification_attempt
                 )
+            elif faq_match is not None:
+                deterministic_speech = faq_speech
             elif current_doctors_question:
                 deterministic_speech = current_doctors_speech
             elif specialty_query is not None:
@@ -3784,6 +3884,8 @@ class VachanamAgent(Agent):
                 self._state.quality_intent = 'specialty_roster'
             elif roster_question:
                 self._state.quality_intent = 'doctor_roster'
+            elif faq_match is not None:
+                self._state.quality_intent = 'clinic_faq'
             elif legal_threat:
                 self._state.quality_intent = 'clinic_complaint'
             if incomplete_fragment:
@@ -3816,6 +3918,15 @@ class VachanamAgent(Agent):
             self._defer_incomplete_clarification(
                 _incomplete_clarification(self._lang_code, clarification_attempt)
             )
+            raise StopResponse()
+
+        if faq_match is not None:
+            self._state.quality_intent = "clinic_faq"
+            await self.session.say(
+                sanitize_for_tts(faq_speech),
+                allow_interruptions=True,
+            )
+            logger.info("faq_answered_direct intent=%s", faq_match.intent)
             raise StopResponse()
 
         if current_doctors_question:
@@ -5152,6 +5263,29 @@ class VachanamAgent(Agent):
         q = " ".join((question or "").split())[:300]
         if not q:
             return {"logged": False}
+        # DB-grounded fail-closed guard. The model may decide that a doctor-
+        # specific wording is "new" even when the clinic's generic fee/timing
+        # row answers it. Never create duplicate work in that case; speak the
+        # stored answer and stop this tool turn before any INSERT.
+        faq_match = find_faq_match(q, self._faq_rows)
+        if faq_match is not None:
+            speech = await _naturalize_faq_match(faq_match, self._lang_code)
+            try:
+                sess = getattr(context, "session", None)
+                if isinstance(sess, AgentSession):
+                    await sess.say(sanitize_for_tts(speech), allow_interruptions=True)
+                    logger.info("clinic_question_resolved_from_faq intent=%s", faq_match.intent)
+                    raise StopResponse()
+            except StopResponse:
+                raise
+            except Exception as exc:  # noqa: BLE001 — let the LLM speak the row
+                logger.warning("faq_direct_speech_failed: %s", str(exc)[:120])
+            return {
+                "logged": False,
+                "answered_from_faq": True,
+                "faq_answer": faq_match.answer,
+                "instruction": "Answer this verified FAQ naturally; do not say it was logged.",
+            }
         try:
             # Identity is stored so the doctor's answer can be CALLED BACK
             # (2026-08-02) — same lookup take_message uses; a miss just means
@@ -6860,6 +6994,8 @@ async def _hydrate_outbound_meta(meta: dict) -> dict:
                         f"I checked with the clinic, and here is the answer. "
                         f"{(question.answer or '').strip()}"
                     ),
+                    question=(question.question or "").strip(),
+                    answer=(question.answer or "").strip(),
                 )
     except Exception as exc:  # noqa: BLE001 - an unverifiable outbound call must not dial
         logger.error(
@@ -7010,7 +7146,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 await asyncio.gather(*prefix_items)
                 if (is_followup or is_qa_call) and followup_meta.get("message"):
                     followup_meta["message"] = await _localize_message(
-                        followup_meta["message"], _glang
+                        followup_meta["message"],
+                        _glang,
+                        purpose="question_answer" if is_qa_call else "doctor_followup",
+                        question=followup_meta.get("question", ""),
+                        answer=followup_meta.get("answer", ""),
                     )
                     followup_meta["_localized"] = True
                 all_texts = outbound_greeting_texts(
@@ -7707,7 +7847,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         and not followup_meta.get("_localized")  # ring-time prep already did it
     ):
         followup_meta["message"] = await _localize_message(
-            followup_meta["message"], lang_code
+            followup_meta["message"],
+            lang_code,
+            purpose="question_answer" if is_qa_call else "doctor_followup",
+            question=followup_meta.get("question", ""),
+            answer=followup_meta.get("answer", ""),
         )
 
     # Gate result from the concurrent read above (#390) — same decision point:
@@ -8198,6 +8342,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         # (their Telugu sample phrases are style references under the PRIMARY
         # LANGUAGE directive).
         extra_tail = ""
+        _branch_faq = decode_faq(getattr(branch, "faq", None))
 
         # One controller per Soniox call. Language handoffs share it, while
         # concurrent clinic calls remain isolated. Never run vendor-specific
@@ -8222,9 +8367,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             11 August. Only the calendar day is here — the wall clock stays in
             the runtime block, because instructions are the prompt-cache key.
             """
-            _faq = _decode_branch_faq(getattr(branch, "faq", None))
             _fp = _prompt_inputs_fingerprint(
-                branch_name, doctor_contexts, _faq, state.plan, _recording_active,
+                branch_name, doctor_contexts, _branch_faq, state.plan, _recording_active,
             )
             _built = compose_clinic_instructions(
                 clinic_name=branch_name,
@@ -8235,7 +8379,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 clinic_address=getattr(branch, "address", None),
                 # The warmer decodes; the live path used to pass the ORM value
                 # straight through. Same decode both sides or the strings differ.
-                faq=_faq,
+                faq=_branch_faq,
                 recording_active=_recording_active,
                 today=now_b.date(),
             )
@@ -8448,6 +8592,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 ),
                 llm=switched_cached_llm,
                 doctor_contexts=doctor_contexts,
+                faq_rows=_branch_faq,
                 timezone_name=branch.timezone or 'Asia/Kolkata',
             )
             if switched_cached_llm is None and switched_key not in _PROMPT_CACHE_PENDING:
@@ -8510,6 +8655,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             agent_factory=_agent_for_lang,
             llm=_cached_llm,
             doctor_contexts=doctor_contexts,
+            faq_rows=_branch_faq,
             timezone_name=branch.timezone or 'Asia/Kolkata',
         )
         # Native-script doctor names/roles for THIS clinic + language. Cached in
@@ -9874,14 +10020,7 @@ def _prewarm_greeting_routes(proc) -> None:
 
 def _decode_branch_faq(value) -> list[dict]:
     """Normalize JSONB returned as either decoded rows or raw JSON text."""
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            return []
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, dict)]
+    return decode_faq(value)
 
 
 async def _warm_all_clinic_prompt_caches() -> None:
