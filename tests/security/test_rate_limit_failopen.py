@@ -50,6 +50,29 @@ async def test_rate_limiter_startup_does_not_kill_api_when_redis_down(monkeypatc
     assert await rl.init_rate_limiter() is None
 
 
+async def test_rate_limit_redis_hot_path_does_not_ping(monkeypatch):
+    """The limiter must not add a second Upstash round trip to every request."""
+    class _Redis:
+        ping_calls = 0
+
+        async def ping(self):
+            self.ping_calls += 1
+
+        async def aclose(self):
+            return None
+
+    redis = _Redis()
+    monkeypatch.setattr(rl, "_redis", None)
+    monkeypatch.setattr(rl, "_redis_loop", None)
+    monkeypatch.setattr(rl, "_script_hash", None)
+    monkeypatch.setattr(rl, "_init_lock", None)
+    monkeypatch.setattr(rl.aioredis, "from_url", lambda *_a, **_k: redis)
+
+    assert await rl._get_rate_limit_redis() is redis
+    assert await rl._get_rate_limit_redis() is redis
+    assert redis.ping_calls == 0
+
+
 async def test_fallback_throttle_caps_redis_outage_flood(monkeypatch):
     """SEC #8: fail-open must not mean UNLIMITED. During an outage the
     per-worker in-memory window still 429s past the limit."""

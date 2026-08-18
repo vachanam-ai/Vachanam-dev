@@ -59,6 +59,7 @@ logger = structlog.get_logger()
 # mirrors FastAPILimiter's own init/close contract. Initialized lazily on
 # the first async call so the event loop is already running.
 _redis: aioredis.Redis | None = None
+_redis_loop: asyncio.AbstractEventLoop | None = None
 _script_hash: str | None = None
 _init_lock: asyncio.Lock | None = None
 
@@ -70,30 +71,20 @@ def _get_settings():
 
 
 async def _get_rate_limit_redis() -> aioredis.Redis:
-    """Return the module-level Redis client, creating it on first call.
-
-    If the existing client is closed (e.g., pytest-asyncio created a new event
-    loop for the current test), recreate it.  When the client is replaced we
-    also clear ``_script_hash`` so the Lua script is reloaded on the new
-    connection — a fresh client never has the previously loaded scripts in
-    scope.
-    """
-    global _redis, _script_hash
-    if _redis is not None:
-        # Detect a stale client from a closed event loop (test isolation).
-        # ping() raises RuntimeError("Event loop is closed") or ConnectionError.
-        try:
-            await _redis.ping()
-        except Exception:
+    """Reuse one loop-bound client without a remote PING on every request."""
+    global _redis, _redis_loop, _script_hash, _init_lock
+    loop = asyncio.get_running_loop()
+    if _redis is None or _redis_loop is not loop:
+        if _redis is not None:
             try:
                 await _redis.aclose()
             except Exception:
                 pass
-            _redis = None
-            _script_hash = None  # script is gone with the old connection
-    if _redis is None:
         s = _get_settings()
         _redis = aioredis.from_url(s.redis_url, decode_responses=True)
+        _redis_loop = loop
+        _script_hash = None
+        _init_lock = None
     return _redis
 
 
@@ -130,13 +121,14 @@ async def init_rate_limiter() -> None:
 
 async def close_rate_limiter() -> None:
     """Explicit shutdown (called from app lifespan)."""
-    global _redis, _script_hash, _init_lock
+    global _redis, _redis_loop, _script_hash, _init_lock
     if _redis is not None:
         try:
             await _redis.aclose()
         except Exception:
             pass
     _redis = None
+    _redis_loop = None
     _script_hash = None
     _init_lock = None
     logger.info("rate_limiter_closed")

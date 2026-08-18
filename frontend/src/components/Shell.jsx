@@ -43,6 +43,32 @@ const ROLE_LABEL = {
   super_admin: "Vachanam operations", support: "Vachanam support",
 };
 
+// The app is route-split, so warm the small page modules while the browser is
+// idle. Navigation then starts the API request immediately instead of waiting
+// for a second Cloudflare round trip before React can mount the page.
+const ROUTE_PRELOADERS = {
+  "/dashboard": () => import("../pages/Dashboard.jsx"),
+  "/queue": () => import("../pages/Queue.jsx"),
+  "/walk-in": () => import("../pages/WalkIn.jsx"),
+  "/treatments": () => import("../pages/Treatments.jsx"),
+  "/patients": () => import("../pages/Patients.jsx"),
+  "/availability": () => import("../pages/Availability.jsx"),
+  "/my-schedule": () => import("../pages/DoctorSchedule.jsx"),
+  "/settings": () => import("../pages/Settings.jsx"),
+  "/billing": () => import("../pages/Billing.jsx"),
+  "/voices": () => import("../pages/Voices.jsx"),
+  "/whatsapp": () => import("../pages/WhatsApp.jsx"),
+  "/whatsapp/chats": () => import("../pages/WhatsAppChats.jsx"),
+  "/tickets": () => import("../pages/MyTickets.jsx"),
+  "/admin": () => import("../pages/Admin.jsx"),
+  "/admin/monitoring": () => import("../pages/Monitoring.jsx"),
+  "/support-admin": () => import("../pages/SupportAdmin.jsx"),
+};
+
+function preloadRoute(to) {
+  return ROUTE_PRELOADERS[to]?.().catch(() => undefined);
+}
+
 const navFor = (role) => (NAV[role] ?? []).map(([to, label, Icon]) => ({ to, label, Icon }));
 
 function initials(value) {
@@ -79,7 +105,14 @@ function SidebarContent({ role, links, user, logout, branchChooser, onNavigate, 
         <p className="app-nav-label">Workspace</p>
         <nav className="app-nav" aria-label="Primary navigation">
           {links.map(({ to, label, Icon }) => (
-            <NavLink key={to} to={to} onClick={onNavigate} className={({ isActive }) => `app-nav-item ${isActive ? "is-active" : ""}`}>
+            <NavLink
+              key={to}
+              to={to}
+              onClick={onNavigate}
+              onPointerEnter={() => preloadRoute(to)}
+              onFocus={() => preloadRoute(to)}
+              className={({ isActive }) => `app-nav-item ${isActive ? "is-active" : ""}`}
+            >
               <Icon size={20} weight="duotone" aria-hidden />
               <span>{label}</span>
               {!WHATSAPP_SELF_SERVE_LIVE && to === "/whatsapp" && <span className="app-nav-count">Soon</span>}
@@ -146,6 +179,18 @@ export default function Shell() {
     const id = window.setTimeout(start, 300);
     return () => window.clearTimeout(id);
   }, []);
+
+  useEffect(() => {
+    const warmRoutes = () => {
+      navFor(role).forEach(({ to }) => { void preloadRoute(to); });
+    };
+    if ("requestIdleCallback" in window) {
+      const id = window.requestIdleCallback(warmRoutes, { timeout: 2500 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(warmRoutes, 1500);
+    return () => window.clearTimeout(id);
+  }, [role]);
 
   const plan = useQuery({ queryKey: ["plan"], queryFn: fetchPlan, enabled: loadSidebarData && role === "org_admin", staleTime: 60_000 });
   const hasWhatsapp = WHATSAPP_SELF_SERVE_LIVE || Boolean(plan.data?.whatsapp_included || plan.data?.whatsapp_addon);

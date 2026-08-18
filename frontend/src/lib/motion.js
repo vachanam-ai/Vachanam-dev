@@ -1,62 +1,28 @@
-import gsap from "gsap";
-
-const reduced = () =>
-  typeof window !== "undefined" &&
-  window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-
-/** Staggered entrance for everything marked [data-reveal] inside `scope`.
- *  One orchestrated load beats scattered micro-motion.
- *  #355: animated nodes get [data-revealed] so (a) re-running only reveals
- *  NEW nodes (cards that mount after their query lands) and (b) the CSS
- *  pre-hide releases them — before this, a card mounting after the one-shot
- *  reveal stayed at opacity 0 forever (invisible, space reserved). */
+/** Product pages render immediately. `data-revealed` remains as the stable
+ * contract for late-mounting cards, without loading GSAP or delaying work. */
 export function revealStagger(scope) {
   const targets = scope?.querySelectorAll?.("[data-reveal]:not([data-revealed])");
   if (!targets?.length) return;
   targets.forEach((el) => el.setAttribute("data-revealed", ""));
-  if (reduced()) { gsap.set(targets, { opacity: 1, y: 0 }); return; }
-  gsap.fromTo(
-    targets,
-    { opacity: 0, y: 14 },
-    { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", stagger: 0.07, clearProps: "transform" }
-  );
 }
 
-/** Reveal ONE late-mounting element (a card that renders only once its own
- *  query resolves). Idempotent via the same [data-revealed] mark. */
+/** Reveal one late-mounting element. */
 export function revealNow(el) {
   if (!el || el.hasAttribute("data-revealed")) return;
   el.setAttribute("data-revealed", "");
-  if (reduced()) { gsap.set(el, { opacity: 1, y: 0 }); return; }
-  gsap.fromTo(
-    el,
-    { opacity: 0, y: 14 },
-    { opacity: 1, y: 0, duration: 0.55, ease: "power3.out", clearProps: "transform" }
-  );
 }
 
-/** Count a numeral element up to `value` (Spectral tabular nums hold width). */
-export function countUp(el, value, { duration = 0.9, suffix = "" } = {}) {
+/** Paint data immediately; clinic staff should never wait for a count-up. */
+export function countUp(el, value, { suffix = "" } = {}) {
   if (!el) return;
-  if (reduced()) { el.textContent = Math.round(value).toString() + suffix; return; }
-  const obj = { v: 0 };
-  gsap.to(obj, {
-    v: value,
-    duration,
-    ease: "power2.out",
-    onUpdate: () => {
-      el.textContent = Math.round(obj.v).toString() + suffix;
-    }
-  });
+  el.textContent = Math.round(value).toString() + suffix;
 }
 
-/** Soft press-confirm pulse on a card row after an optimistic action.
- *  Sage-band flash (the design's one warm note), fades to transparent. */
+/** Keep short action feedback using the native browser animation API. */
 export function pulseRow(el) {
-  if (!el || reduced()) return;
-  gsap.fromTo(
-    el,
-    { backgroundColor: "rgba(236,238,225,0.9)" },
-    { backgroundColor: "rgba(236,238,225,0)", duration: 0.8, ease: "power2.out", clearProps: "backgroundColor" }
+  if (!el || !el.animate || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  el.animate(
+    [{ backgroundColor: "rgba(236,238,225,0.9)" }, { backgroundColor: "rgba(236,238,225,0)" }],
+    { duration: 450, easing: "cubic-bezier(.22,1,.36,1)" },
   );
 }
