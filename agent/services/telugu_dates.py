@@ -61,9 +61,31 @@ def telugu_time(t: time) -> str:
     else:
         part = "రాత్రి"
     h12 = h24 % 12 or 12
-    hour_word = telugu_number(h12)
+    # Clock-hour Telugu is not the same as the counting form.  A receptionist
+    # says "ఒంటి గంట", not "ఒకటి గంట".  Keeping this at the shared date/time
+    # boundary also fixes greetings, reminders and booking confirmations.
+    hour_word = "ఒంటి" if h12 == 1 else telugu_number(h12)
     if minute == 0:
-        return f"{part} {hour_word} గంటలకి"
+        suffix = "గంటకి" if h12 == 1 else "గంటలకి"
+        return f"{part} {hour_word} {suffix}"
     if minute == 30:
         return f"{part} {hour_word}న్నర"  # "X-and-a-half"
-    return f"{part} {hour_word} {telugu_number(minute)}"
+    return f"{part} {hour_word} గంటల {telugu_number(minute)} నిమిషాలకి"
+
+
+def telugu_time_range(start: time, end: time) -> str:
+    """A natural spoken appointment range, without A.M./P.M. duplication."""
+
+    def point(value: time) -> str:
+        spoken = telugu_time(value)
+        for suffix in (" గంటలకి", " గంటకి", " నిమిషాలకి"):
+            if spoken.endswith(suffix):
+                replacement = {
+                    " గంటలకి": " గంటల",
+                    " గంటకి": " గంట",
+                    " నిమిషాలకి": " నిమిషాల",
+                }[suffix]
+                return spoken[: -len(suffix)] + replacement
+        return spoken
+
+    return f"{point(start)} నుంచి {point(end)} వరకు"

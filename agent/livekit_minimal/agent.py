@@ -28,7 +28,12 @@ import re
 import sys
 import unicodedata
 import weakref
-from datetime import date as date_cls, datetime as datetime_cls, time as time_cls
+from datetime import (
+    date as date_cls,
+    datetime as datetime_cls,
+    time as time_cls,
+    timedelta,
+)
 from datetime import timezone as _tz
 from functools import wraps
 
@@ -108,7 +113,11 @@ from agent.prompts.grounded_prompt import (  # noqa: E402
 # booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
 from agent.services.meta_stub import MetaService  # noqa: E402
-from agent.services.telugu_dates import telugu_date  # noqa: E402
+from agent.services.telugu_dates import (  # noqa: E402
+    telugu_date,
+    telugu_time,
+    telugu_time_range,
+)
 from agent.livekit_minimal.greeting import (  # noqa: E402
     _greeting_cache_get,
     _greeting_cache_key,
@@ -371,6 +380,36 @@ def _say_lookup_filler(context) -> None:
 # several slow tools back to back (availability → confirm), and hearing
 # "ఒక్క నిమిషం" on each one is exactly the repetition Vinay banned (#428).
 WAIT_FILLER_COOLDOWN_S = 12.0
+DETERMINISTIC_DUPLICATE_WINDOW_S = 1.5
+
+
+async def _say_deterministic_once(session, text: str, **kwargs) -> bool:
+    """Queue one grounded line, suppressing only simultaneous duplicate work.
+
+    A genuine caller asking again arrives outside this narrow window and is
+    repeated normally.  The guard targets two speculative/deterministic paths
+    scheduling the same sentence for one committed turn.
+    """
+    import time as _t
+
+    speech = sanitize_for_tts(text)
+    normalized = re.sub(r"[\s\W_]+", "", speech.casefold())
+    userdata = getattr(session, "userdata", None)
+    userdata = userdata if isinstance(userdata, dict) else {}
+    now = _t.monotonic()
+    previous = userdata.get("_last_grounded_speech")
+    if (
+        normalized
+        and isinstance(previous, tuple)
+        and len(previous) == 2
+        and previous[0] == normalized
+        and now - float(previous[1]) < DETERMINISTIC_DUPLICATE_WINDOW_S
+    ):
+        logger.info("duplicate_grounded_speech_suppressed")
+        return False
+    userdata["_last_grounded_speech"] = (normalized, now)
+    await session.say(speech, **kwargs)
+    return True
 
 
 def _say_wait_filler(context) -> None:
@@ -1247,6 +1286,12 @@ async def _naturalize_faq_match(match: FaqMatch, lang_code: str) -> str:
     value such as "1000" or logging a question the clinic already answered.
     """
     fallback = natural_fallback(match, lang_code)
+    # These two high-volume facts already have complete deterministic spoken
+    # renderers (including Telugu currency/clock grammar).  Sending them to a
+    # second LLM only added up to 450 ms and, on timeout, exposed the raw
+    # English FAQ row that triggered this fix.
+    if match.intent in {"consultation_fee", "clinic_hours"}:
+        return fallback
     try:
         return await asyncio.wait_for(
             _localize_message(
@@ -2884,6 +2929,103 @@ _SPECIALTY_SCHEDULE_TERMS = (
 )
 
 
+_DOCTOR_SCOPE_PATTERNS = (
+    re.compile(r"\bwhat\s+(?:does|do)\b.{0,45}\b(?:doctor|dr\.?|treat|see)", re.I),
+    re.compile(r"\bwhat\s+(?:problems?|conditions?)\b.{0,45}\b(?:treat|see)", re.I),
+    re.compile(r"(?:ఏం|ఏమి|ఎలాంటి|ఏ)\s*(?:చేస్తారు|చూస్తారు|సమస్యలు|జబ్బులు)", re.I),
+    re.compile(r"(?:ఏ సమస్యలు|ఏ జబ్బులు).{0,35}(?:చూస్తారు|చికిత్స)", re.I),
+    re.compile(r"\bem\s+(?:chestaru|chustaru)\b", re.I),
+)
+
+
+def _is_doctor_scope_question(text: str) -> bool:
+    """Whether the caller asks what one named/selected doctor treats."""
+    clean = " ".join((text or "").split())
+    return bool(clean) and any(pattern.search(clean) for pattern in _DOCTOR_SCOPE_PATTERNS)
+
+
+def _canonical_specialty(doctor) -> str | None:
+    blob = " ".join([
+        str(getattr(doctor, "specialization", "") or ""),
+        " ".join(getattr(doctor, "routing_keywords", ()) or ()),
+    ]).casefold()
+    for specialty, aliases in _SPECIALTY_ALIASES.items():
+        if specialty in blob or any(alias in blob for alias in aliases):
+            return specialty
+    if "plastic" in blob:
+        return "plastic surgery"
+    return None
+
+
+_DOCTOR_SCOPE_TE = {
+    "dermatology": "చర్మం, జుట్టు, గోళ్లకు సంబంధించిన సమస్యలు",
+    "orthopedics": "ఎముకలు, కీళ్లు, కండరాలకు సంబంధించిన సమస్యలు",
+    "pediatrics": "పిల్లల ఆరోగ్య సమస్యలు",
+    "gynecology": "మహిళల ఆరోగ్యానికి సంబంధించిన సమస్యలు",
+    "ent": "చెవి, ముక్కు, గొంతుకు సంబంధించిన సమస్యలు",
+    "dentistry": "పళ్లు, చిగుళ్లు, నోటికి సంబంధించిన సమస్యలు",
+    "ophthalmology": "కళ్లకు సంబంధించిన సమస్యలు",
+    "cardiology": "గుండెకు సంబంధించిన సమస్యలు",
+    "general medicine": "సాధారణ ఆరోగ్య సమస్యలు",
+    "plastic surgery": "ప్లాస్టిక్ సర్జరీకి సంబంధించిన సమస్యలు",
+}
+
+
+def _doctor_scope_text(doctor, language: str) -> str:
+    """Explain one DB-selected doctor's scope; never diagnose or invent a service."""
+    name = re.sub(
+        r"^(?:dr\.?|doctor)\s+", "", str(getattr(doctor, "name", "") or ""),
+        flags=re.I,
+    ).strip()
+    specialty = str(getattr(doctor, "specialization", "") or "").strip()
+    canonical = _canonical_specialty(doctor)
+    if language == "te" and canonical in _DOCTOR_SCOPE_TE:
+        return f"డాక్టర్ {name} గారు {_DOCTOR_SCOPE_TE[canonical]} చూస్తారండి."
+    if language == "en":
+        return f"Dr. {name} treats problems related to {specialty}." if specialty else (
+            f"The clinic has not published Dr. {name}'s specialty yet."
+        )
+    # For languages without a verified specialty phrase, repeat only the DB
+    # value; the full LLM remains out of the factual decision.
+    return _doctor_roster_text((doctor,), language)
+
+
+_AVAIL_CLOCK = re.compile(
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*(?P<meridian>AM|PM)", re.I
+)
+
+
+def _parse_availability_clock(match: re.Match) -> time_cls:
+    hour = int(match.group("hour")) % 12
+    if match.group("meridian").casefold() == "pm":
+        hour += 12
+    return time_cls(hour, int(match.group("minute")))
+
+
+def _telugu_availability_ranges(value: str) -> str | None:
+    """Turn the verified tool's AM/PM ranges into natural Telugu once."""
+    text = value or ""
+    if "BOOKABLE APPOINTMENT STARTS:" in text:
+        text = text.split("BOOKABLE APPOINTMENT STARTS:", 1)[1]
+    elif " is available at " in text:
+        text = text.split(" is available at ", 1)[1]
+    text = re.split(r"\s+on\s+\d{1,2}\s+[A-Za-z]+", text, maxsplit=1)[0]
+    parts = re.split(r"\s+and\s+", text)
+    spoken: list[str] = []
+    for part in parts:
+        clocks = list(_AVAIL_CLOCK.finditer(part))
+        if len(clocks) == 2 and re.search(r"\bto\b", part, re.I):
+            spoken.append(
+                telugu_time_range(
+                    _parse_availability_clock(clocks[0]),
+                    _parse_availability_clock(clocks[1]),
+                )
+            )
+        elif len(clocks) == 1:
+            spoken.append(telugu_time(_parse_availability_clock(clocks[0])))
+    return "; అలాగే ".join(spoken) if spoken else None
+
+
 def _specialty_roster_query(text: str, doctors) -> tuple[str, tuple] | None:
     """Resolve a plain `do you have a <specialty> doctor?` from loaded DB data.
 
@@ -3603,8 +3745,8 @@ class VachanamAgent(Agent):
         if self._handoff_speech:
             speech = self._handoff_speech
             self._handoff_speech = None
-            await self.session.say(
-                sanitize_for_tts(speech), allow_interruptions=True
+            await _say_deterministic_once(
+                self.session, speech, allow_interruptions=True
             )
             return
         if self._handoff_user_input:
@@ -3799,12 +3941,24 @@ class VachanamAgent(Agent):
         specialty_query = _specialty_roster_query(
             utterance, self._doctor_contexts
         )
+        doctor_scope_context = None
+        if _is_doctor_scope_question(utterance):
+            selected_id = explicit_doctor_id or self._state.caller_named_doctor_id
+            if selected_id is not None:
+                doctor_scope_context = next(
+                    (
+                        doctor for doctor in self._doctor_contexts
+                        if str(getattr(doctor, "id", "")) == str(selected_id)
+                    ),
+                    None,
+                )
         legal_threat = _is_legal_threat(utterance)
         hostile_or_frustrated = _is_hostile_or_frustrated(utterance)
         response_language = detected_language or self._lang_code
         faq_match = (
             None
             if incomplete_fragment
+            or doctor_scope_context is not None
             or _caller_authorized_booking(utterance)
             or _caller_authorized_reschedule(utterance)
             or _caller_authorized_cancellation(utterance)
@@ -3839,6 +3993,7 @@ class VachanamAgent(Agent):
             reminder_policy_question,
             faq_match is not None,
             current_doctors_question,
+            doctor_scope_context is not None,
             specialty_query is not None,
             roster_question,
             legal_threat,
@@ -3864,6 +4019,10 @@ class VachanamAgent(Agent):
                 deterministic_speech = faq_speech
             elif current_doctors_question:
                 deterministic_speech = current_doctors_speech
+            elif doctor_scope_context is not None:
+                deterministic_speech = _doctor_scope_text(
+                    doctor_scope_context, detected_language
+                )
             elif specialty_query is not None:
                 deterministic_speech = _specialty_roster_text(
                     specialty_query, detected_language
@@ -3880,6 +4039,8 @@ class VachanamAgent(Agent):
                 deterministic_speech = _hostile_recovery(detected_language)
             if current_doctors_question:
                 self._state.quality_intent = 'current_doctor_availability'
+            elif doctor_scope_context is not None:
+                self._state.quality_intent = 'doctor_scope'
             elif specialty_query is not None:
                 self._state.quality_intent = 'specialty_roster'
             elif roster_question:
@@ -3899,7 +4060,8 @@ class VachanamAgent(Agent):
                 raise StopResponse()
 
         if control_token_request:
-            await self.session.say(
+            await _say_deterministic_once(
+                self.session,
                 _control_token_refusal(self._lang_code),
                 allow_interruptions=True,
             )
@@ -3907,8 +4069,8 @@ class VachanamAgent(Agent):
 
         if reminder_policy_question:
             self._state.quality_intent = "reminder_policy"
-            await self.session.say(
-                sanitize_for_tts(reminder_policy_speech),
+            await _say_deterministic_once(
+                self.session, reminder_policy_speech,
                 allow_interruptions=True,
             )
             raise StopResponse()
@@ -3922,8 +4084,8 @@ class VachanamAgent(Agent):
 
         if faq_match is not None:
             self._state.quality_intent = "clinic_faq"
-            await self.session.say(
-                sanitize_for_tts(faq_speech),
+            await _say_deterministic_once(
+                self.session, faq_speech,
                 allow_interruptions=True,
             )
             logger.info("faq_answered_direct intent=%s", faq_match.intent)
@@ -3931,18 +4093,26 @@ class VachanamAgent(Agent):
 
         if current_doctors_question:
             self._state.quality_intent = 'current_doctor_availability'
-            await self.session.say(
-                sanitize_for_tts(current_doctors_speech),
+            await _say_deterministic_once(
+                self.session, current_doctors_speech,
+                allow_interruptions=True,
+            )
+            raise StopResponse()
+
+        if doctor_scope_context is not None:
+            self._state.quality_intent = 'doctor_scope'
+            await _say_deterministic_once(
+                self.session,
+                _doctor_scope_text(doctor_scope_context, self._lang_code),
                 allow_interruptions=True,
             )
             raise StopResponse()
 
         if specialty_query is not None:
             self._state.quality_intent = 'specialty_roster'
-            await self.session.say(
-                sanitize_for_tts(
-                    _specialty_roster_text(specialty_query, self._lang_code)
-                ),
+            await _say_deterministic_once(
+                self.session,
+                _specialty_roster_text(specialty_query, self._lang_code),
                 allow_interruptions=True,
             )
             raise StopResponse()
@@ -3961,10 +4131,9 @@ class VachanamAgent(Agent):
         # clarification loop.
         if roster_question:
             self._state.quality_intent = 'doctor_roster'
-            await self.session.say(
-                sanitize_for_tts(
-                    _doctor_roster_text(self._doctor_contexts, self._lang_code)
-                ),
+            await _say_deterministic_once(
+                self.session,
+                _doctor_roster_text(self._doctor_contexts, self._lang_code),
                 allow_interruptions=True,
             )
             raise StopResponse()
@@ -4626,6 +4795,36 @@ class VachanamAgent(Agent):
                 )
             except Exception as e:  # noqa: BLE001 — RULE 8: hours still answerable
                 logger.warning("get_doctor_schedule_free_failed: %s", e)
+
+        # A timings-only Telugu question has no creative step left once the DB
+        # lookup returns.  Speak the verified free ranges directly so neither
+        # Gemini nor Soniox can produce "సాయంత్రం one P.M. ... P.M.".  Booking
+        # requests still return to the model because it must continue collecting
+        # patient details and confirmation.
+        if (
+            self._lang_code == "te"
+            and free
+            and not _caller_authorized_booking(self._state.last_user_utterance or "")
+        ):
+            ranges = _telugu_availability_ranges(free)
+            sess = getattr(context, "session", None)
+            if ranges and isinstance(sess, AgentSession):
+                from zoneinfo import ZoneInfo
+
+                today = datetime_cls.now(ZoneInfo(self._timezone_name)).date()
+                day = "ఈరోజు" if when == today else (
+                    "రేపు" if when == today + timedelta(days=1) else telugu_date(when)
+                )
+                name = re.sub(r"^(?:dr\.?|doctor)\s+", "", doctor.name, flags=re.I)
+                speech = (
+                    f"డాక్టర్ {name} గారికి {day} {ranges} "
+                    "అపాయింట్‌మెంట్ టైమ్స్ ఖాళీగా ఉన్నాయండి."
+                )
+                await _say_deterministic_once(
+                    sess, speech, allow_interruptions=True
+                )
+                logger.info("doctor_schedule_spoken_direct lang=te")
+                raise StopResponse()
 
         return {
             "doctor": doctor.name, "date": str(when), "available": True,

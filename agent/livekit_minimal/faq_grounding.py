@@ -10,6 +10,9 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import time
+
+from agent.services.telugu_dates import telugu_time_range
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,10 @@ def natural_fallback(match: FaqMatch, lang_code: str) -> str:
     if match.intent == "consultation_fee" and re.fullmatch(r"[\d,]+(?:\.\d+)?", answer):
         answer = f"{answer} rupees" if lang_code == "en" else f"{answer} రూపాయలు"
     if lang_code == "te":
+        if match.intent == "clinic_hours":
+            localized = _telugu_clinic_hours(answer)
+            if localized:
+                return localized
         subject = {
             "consultation_fee": "కన్సల్టేషన్ ఫీజు", "clinic_hours": "మా క్లినిక్ టైమింగ్స్",
             "location": "మా క్లినిక్ లొకేషన్", "parking": "పార్కింగ్ గురించి",
@@ -156,3 +163,59 @@ def natural_fallback(match: FaqMatch, lang_code: str) -> str:
     if lang_code == "mr":
         return f"क्लिनिकच्या माहितीनुसार, {answer}."
     return f"According to the clinic, {answer}."
+
+
+_CLOCK_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12,
+}
+_CLOCK_TOKEN = r"(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+_HOURS_RANGE = re.compile(
+    rf"(?P<start>{_CLOCK_TOKEN})(?::(?P<start_min>\d{{2}}))?\s*"
+    r"(?P<start_mer>a\.?\s*m\.?|p\.?\s*m\.?)?\s*"
+    r"(?:to|until|till|[-–—])\s*"
+    rf"(?P<end>{_CLOCK_TOKEN})(?::(?P<end_min>\d{{2}}))?\s*"
+    r"(?P<end_mer>a\.?\s*m\.?|p\.?\s*m\.?)?",
+    re.I,
+)
+
+
+def _clock_hour(raw: str) -> int:
+    return int(raw) if raw.isdigit() else _CLOCK_WORDS[raw.casefold()]
+
+
+def _clock_value(hour_raw: str, minute_raw: str | None, meridiem: str | None) -> time:
+    hour = _clock_hour(hour_raw)
+    minute = int(minute_raw or 0)
+    mer = re.sub(r"[^amp]", "", (meridiem or "").casefold())
+    if mer == "pm" and hour < 12:
+        hour += 12
+    elif mer == "am" and hour == 12:
+        hour = 0
+    return time(hour, minute)
+
+
+def _telugu_clinic_hours(answer: str) -> str | None:
+    """Localize the common English DB-hours shape without an LLM round trip."""
+    found = _HOURS_RANGE.search(answer or "")
+    if found is None:
+        return None
+    start_mer = found.group("start_mer")
+    end_mer = found.group("end_mer")
+    start = _clock_value(
+        found.group("start"), found.group("start_min"), start_mer
+    )
+    # Clinic rows often say "9 AM to 5".  A smaller closing hour after an AM
+    # opening is unambiguously afternoon; treating it as 5 AM is the old bug.
+    inferred_end_mer = end_mer
+    if not inferred_end_mer and start_mer:
+        end_hour = _clock_hour(found.group("end"))
+        inferred_end_mer = "pm" if start.hour < 12 and end_hour < start.hour else start_mer
+    end = _clock_value(
+        found.group("end"), found.group("end_min"), inferred_end_mer
+    )
+    speech = f"మా క్లినిక్ {telugu_time_range(start, end)} తెరిచి ఉంటుందండి."
+    if re.search(r"sundays?\s+(?:is\s+)?(?:closed?|close)|closed?\s+on\s+sundays?", answer, re.I):
+        speech += " Sunday రోజు సెలవు అండి."
+    return speech

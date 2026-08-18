@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from livekit.agents import StopResponse
 
-from agent.livekit_minimal.agent import VachanamAgent
+from agent.livekit_minimal.agent import VachanamAgent, _naturalize_faq_match
 from agent.livekit_minimal.faq_grounding import (
     FaqMatch,
     decode_faq,
@@ -69,6 +69,30 @@ def test_bare_fee_value_gets_subject_and_currency_in_fallback():
     speech = natural_fallback(match, "te")
     assert "కన్సల్టేషన్ ఫీజు" in speech
     assert "1000 రూపాయలు" in speech
+
+
+def test_english_clinic_hours_row_has_complete_natural_telugu_fallback():
+    match = FaqMatch(
+        "What are the clinic timings? Are you open on Sundays?",
+        "clinic timings are nine A.M. to 5. sundays close",
+        "clinic_hours",
+    )
+    speech = natural_fallback(match, "te")
+    assert speech == (
+        "మా క్లినిక్ ఉదయం తొమ్మిది గంటల నుంచి సాయంత్రం ఐదు గంటల వరకు "
+        "తెరిచి ఉంటుందండి. Sunday రోజు సెలవు అండి."
+    )
+    assert "clinic timings" not in speech.casefold()
+    assert "a.m" not in speech.casefold()
+
+
+@pytest.mark.asyncio
+async def test_common_faq_renderer_skips_second_llm_hop():
+    match = FaqMatch("Clinic timings?", "9 AM to 5 PM", "clinic_hours")
+    with patch("agent.livekit_minimal.agent._localize_message", new=AsyncMock()) as localize:
+        speech = await _naturalize_faq_match(match, "te")
+    localize.assert_not_awaited()
+    assert "ఉదయం" in speech and "సాయంత్రం" in speech
 
 
 @pytest.mark.asyncio

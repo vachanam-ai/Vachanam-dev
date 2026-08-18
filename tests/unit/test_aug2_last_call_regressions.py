@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from livekit.agents import StopResponse
@@ -8,6 +9,7 @@ from livekit.agents.llm import ChatContext
 from agent.livekit_minimal.agent import (
     VachanamAgent,
     _doctor_roster_text,
+    _doctor_scope_text,
     _current_doctors_text,
     _control_token_refusal,
     _dominant_native_language,
@@ -16,6 +18,7 @@ from agent.livekit_minimal.agent import (
     _is_incomplete_fragment,
     _is_current_doctor_availability_question,
     _is_doctor_roster_question,
+    _is_doctor_scope_question,
     _is_control_token_request,
     _is_legal_threat,
     _is_hostile_or_frustrated,
@@ -24,6 +27,8 @@ from agent.livekit_minimal.agent import (
     _privacy_safe_session_id,
     _specialty_roster_query,
     _specialty_roster_text,
+    _say_deterministic_once,
+    _telugu_availability_ranges,
 )
 from agent.services.meta_stub import MetaService
 from agent.session_state import SessionState
@@ -36,8 +41,13 @@ class _SessionAgent(VachanamAgent):
         return self._test_session
 
 
-def _doctor(name, specialization):
-    return SimpleNamespace(name=name, specialization=specialization)
+def _doctor(name, specialization, doctor_id=None):
+    return SimpleNamespace(
+        id=doctor_id,
+        name=name,
+        specialization=specialization,
+        routing_keywords=(),
+    )
 
 
 def _agent(*, language='en', doctors=(), factory=None):
@@ -242,6 +252,56 @@ def test_specialty_question_is_resolved_only_from_loaded_roster():
     assert ortho is not None and ortho[1] == ()
     assert 'Srinivas' in _specialty_roster_text(skin, 'en')
     assert 'does not include' in _specialty_roster_text(ortho, 'en')
+
+
+def test_named_orthopedic_scope_is_a_useful_telugu_answer_not_a_label_echo():
+    doctor = _doctor('Satya', 'Orthopedic')
+    question = 'డాక్టర్ సత్య గారు ఏం చేస్తారు?'
+    assert _is_doctor_scope_question(question)
+    answer = _doctor_scope_text(doctor, 'te')
+    assert answer == (
+        'డాక్టర్ Satya గారు ఎముకలు, కీళ్లు, కండరాలకు సంబంధించిన సమస్యలు చూస్తారండి.'
+    )
+    assert answer != 'డాక్టర్ Satya గారు ఆర్థోపెడిక్ అండి.'
+
+
+def test_telugu_availability_range_has_no_am_pm_or_conflicting_daypart():
+    speech = _telugu_availability_ranges(
+        'Satya has these BOOKABLE APPOINTMENT STARTS: '
+        '1:00 PM to 4:45 PM on 18 August.'
+    )
+    assert speech == (
+        'మధ్యాహ్నం ఒంటి గంట నుంచి సాయంత్రం నాలుగు గంటల '
+        'నలభై ఐదు నిమిషాల వరకు'
+    )
+    assert 'PM' not in speech
+
+
+@pytest.mark.asyncio
+async def test_named_doctor_scope_turn_bypasses_gemini_and_speaks_once():
+    doctor_id = uuid4()
+    doctors = (_doctor('Satya', 'Orthopedic', doctor_id),)
+    agent, state, session = _agent(language='te', doctors=doctors)
+
+    with pytest.raises(StopResponse):
+        await agent.on_user_turn_completed(
+            ChatContext.empty(),
+            SimpleNamespace(content=['డాక్టర్ సత్య గారు ఏం చేస్తారు?']),
+        )
+
+    session.say.assert_awaited_once()
+    assert 'ఎముకలు' in session.say.await_args.args[0]
+    assert 'కీళ్లు' in session.say.await_args.args[0]
+    assert state.quality_intent == 'doctor_scope'
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_identical_grounded_lines_are_queued_once():
+    session = SimpleNamespace(userdata={}, say=AsyncMock())
+    speech = 'డాక్టర్ Satya గారు ఆర్థోపెడిక్ అండి.'
+    assert await _say_deterministic_once(session, speech)
+    assert not await _say_deterministic_once(session, speech)
+    session.say.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
