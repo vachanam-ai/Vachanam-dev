@@ -2850,6 +2850,59 @@ def _dominant_native_language(text: str) -> str | None:
     return code
 
 
+_CLEAR_ENGLISH_WORDS = frozenset({
+    'a', 'about', 'am', 'an', 'and', 'are', 'at', 'available', 'book',
+    'can', 'cancel', 'come', 'could', 'day', 'do', 'doctor', 'for',
+    'have', 'help', 'i', 'is', 'it', 'me', 'my', 'need', 'on',
+    'please', 'repeat', 'reschedule', 'sure', 'thankyou', 'thanks', 'thats',
+    'the', 'this', 'time', 'today', 'tomorrow', 'welcome', 'want', 'what',
+    'when', 'where', 'which', 'with', 'would', 'you', 'english', 'much',
+})
+_CLEAR_ENGLISH_SKELETONS = frozenset(
+    consonant_skeleton(word) for word in _CLEAR_ENGLISH_WORDS
+    if len(consonant_skeleton(word)) >= 2
+) | {'tky'}  # థాంక్యూ: Soniox's common Telugu-script spelling of "thank you"
+
+
+def _clearly_english_utterance(text: str) -> bool:
+    """Conservative evidence for one complete English caller turn.
+
+    Latin script alone is not English: Telugu, Hindi and the other supported
+    languages are often transcribed in Latin letters. Require several words
+    and a majority of ordinary English vocabulary. Two consecutive matches
+    are still required before the live pipeline switches.
+    """
+    value = (text or '').casefold()
+    has_indic = any(
+        ord(char) > 127 and unicodedata.category(char).startswith('L')
+        for char in value
+    )
+    # Indic vowel signs/viramas are Unicode marks rather than ``\w`` letters,
+    # so a regex word class splits one spoken word into pieces. Whitespace is
+    # the reliable boundary in an STT sentence; consonant_skeleton ignores the
+    # punctuation attached to each token.
+    words = value.split() if has_indic else re.findall(r"[a-z]+(?:'[a-z]+)?", value)
+    if len(words) < 3:
+        return False
+    if not has_indic:
+        matches = sum(word in _CLEAR_ENGLISH_WORDS for word in words)
+        return matches >= 2 and matches / len(words) >= 0.5
+
+    # Soniox can write spoken English phonetically in the active Indic script:
+    # "can you repeat that in English" -> "కెన్ యు రిపీట్ ...". Compare
+    # script-independent consonant fingerprints; this is offline and adds no
+    # network/LLM latency. Require either three matches, or two including a
+    # strong English discourse word, to avoid treating ordinary code-mixing as
+    # a language switch.
+    skeletons = [consonant_skeleton(word) for word in words]
+    matched = [value for value in skeletons if value in _CLEAR_ENGLISH_SKELETONS]
+    strong = {
+        consonant_skeleton(word)
+        for word in ('english', 'please', 'repeat', 'sure', 'thankyou', 'thanks', 'welcome')
+    } | {'tky'}
+    return len(matched) >= 3 or (len(matched) >= 2 and any(v in strong for v in matched))
+
+
 _ROSTER_PATTERNS = (
     re.compile(r'\b(?:who|what|which)\b.{0,50}\bdoctors?\b', re.I),
     re.compile(r'\b(?:list|tell me).{0,35}\bdoctors?\b', re.I),
@@ -3882,6 +3935,16 @@ class VachanamAgent(Agent):
         self._state.last_user_utterance = utterance
         _cancel_deferred_clarification(self._state, "next_turn_committed")
 
+        # The model may ask the required confirmation itself, before a tool
+        # guard has had a chance to arm `pending_confirmation`. Record that
+        # audible question now. Otherwise a plain "yes" goes back through an
+        # unconstrained model turn and it can ask "shall I book?" again.
+        if (
+            self._state.pending_confirmation is None
+            and self._last_assistant_requested_booking_confirmation()
+        ):
+            self._state.pending_confirmation = 'book'
+
         # Semantic normalization before generation: in ordinary clinic speech
         # bare "12" is noon.  Midnight is accepted only when the caller says it
         # explicitly.  The note is private per-turn context; tools still decide
@@ -3932,6 +3995,7 @@ class VachanamAgent(Agent):
                 self._state.caller_asked_to_book = False
                 self._state.caller_asked_to_reschedule = False
                 self._state.caller_asked_to_cancel = False
+                self._state.pending_confirmation = None
                 # A flat no ends the mutation too, or the hangup guard would
                 # hold the line open for work the caller just called off.
                 self._state.mutation_in_flight = None
@@ -3942,6 +4006,30 @@ class VachanamAgent(Agent):
                     self._state.caller_asked_to_reschedule = True
                 if _caller_authorized_cancellation(utterance):
                     self._state.caller_asked_to_cancel = True
+                if (
+                    self._state.pending_confirmation == 'book'
+                    and _caller_affirmed(utterance)
+                ):
+                    self._state.caller_asked_to_book = True
+
+        # Keep this instruction current until the write succeeds. The model
+        # sometimes asked confirmation too early, together with name/age; its
+        # first confirm_booking call then failed schema validation for the
+        # missing detail, and on the following name/age turn it asked the same
+        # confirmation again. Consent remains valid while details are filled.
+        if (
+            self._state.pending_confirmation == 'book'
+            and self._state.caller_asked_to_book
+        ):
+            turn_ctx.add_message(
+                role='system',
+                content=(
+                    'Deterministic booking state: the caller already answered '
+                    'YES to the one booking confirmation question. Collect '
+                    'only any missing detail, then call confirm_booking '
+                    'immediately. Do not ask any confirmation question again.'
+                ),
+            )
 
         # Language selection is infrastructure state, not a creative LLM choice.
         # Switch the active prompt/STT/TTS agent before generating any reply.
@@ -3960,6 +4048,29 @@ class VachanamAgent(Agent):
         # language the caller is actually speaking now. Unique native scripts
         # are deterministic; correct the full pipeline before any model reply.
         detected_language = _dominant_native_language(utterance)
+        clearly_english = _clearly_english_utterance(utterance)
+        if self._lang_code != 'en' and clearly_english:
+            if self._state.language_candidate == 'en':
+                self._state.language_candidate_turns += 1
+            else:
+                self._state.language_candidate = 'en'
+                self._state.language_candidate_turns = 1
+            if self._state.language_candidate_turns >= 2:
+                detected_language = 'en'
+                self._state.language_candidate = None
+                self._state.language_candidate_turns = 0
+            else:
+                # Phonetic English in an Indic script must not immediately
+                # count as that script and erase the first English turn.
+                detected_language = None
+        elif detected_language:
+            self._state.language_candidate = None
+            self._state.language_candidate_turns = 0
+        elif len(re.findall(r'[A-Za-z]+', utterance)) >= 3:
+            # A complete Latin-script turn that is not clearly English is
+            # probably romanised Telugu/Hindi/etc.; it breaks the streak.
+            self._state.language_candidate = None
+            self._state.language_candidate_turns = 0
         explicit_doctor_id = _explicit_roster_doctor_id(
             utterance, self._doctor_contexts
         )

@@ -178,6 +178,12 @@ class SessionState:
     # call start; updated by the switch_language tool; confirm_booking persists
     # it on a patient row created later in the same call.
     preferred_language: str | None = None
+    # Language switching is an infrastructure decision. Native scripts are
+    # unambiguous in one turn; English needs two clear, complete turns so a few
+    # borrowed words do not flip a Telugu/Hindi call. The streak is shared
+    # across Agent handoffs because SessionState lives for the whole call.
+    language_candidate: str | None = None
+    language_candidate_turns: int = 0
     transfer_requested: bool = False     # set when request_human_transfer fires
     fail_reason: str | None = None       # set by tools on a known miss (out_of_scope, no_slot, ...)
     # Set when find_my_bookings runs — the caller is on the EXISTING-booking
