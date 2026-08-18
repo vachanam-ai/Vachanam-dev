@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import gsap from "gsap";
 import { getKb, sendChat, submitContact } from "../api/support";
 import { chatErrorMessage, TypedText, TypingDots } from "../components/ChatBits.jsx";
 import ThemeToggle from "../components/ThemeToggle.jsx";
@@ -23,7 +22,6 @@ export default function Help() {
   const [busy, setBusy] = useState(false);
   const [chatCaptcha, setChatCaptcha] = useState("");
   const endRef = useRef(null);
-  const pageRef = useRef(null);
 
   useEffect(() => {
     getKb().then((d) => setKb(d.markdown || "")).catch(() => setKb(""));
@@ -51,26 +49,6 @@ export default function Help() {
     ? sections.filter((s) =>
         (s.title + " " + s.body).toLowerCase().includes(filter.toLowerCase()))
     : sections;
-
-  // One orchestrated entrance once the KB has landed (keyed on load, not
-  // mount — a mount-only reveal misses late content, FIXLOG #334).
-  useEffect(() => {
-    if (!sections.length || !pageRef.current) return undefined;
-    const mm = gsap.matchMedia();
-    mm.add(
-      { reduce: "(prefers-reduced-motion: reduce)", ok: "(prefers-reduced-motion: no-preference)" },
-      (ctx) => {
-        if (ctx.conditions.reduce) return;
-        gsap.fromTo(
-          pageRef.current.querySelectorAll("[data-help-reveal]"),
-          { opacity: 0, y: 16 },
-          { opacity: 1, y: 0, duration: 0.5, ease: "power3.out", stagger: 0.06, clearProps: "transform" }
-        );
-      }
-    );
-    return () => mm.revert();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sections.length]);
 
   const ask = async (e) => {
     e.preventDefault();
@@ -124,7 +102,7 @@ export default function Help() {
   };
 
   return (
-    <div ref={pageRef} className="min-h-[100dvh] bg-cream text-ink">
+    <div className="min-h-[100dvh] bg-cream text-ink">
       <header className="border-b border-hairline">
         <div className="mx-auto flex h-14 max-w-3xl items-center px-4">
           <Link to="/" className="font-brand text-xl text-teal">Vachanam</Link>

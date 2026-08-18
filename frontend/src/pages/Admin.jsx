@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import gsap from "gsap";
 import { toast } from "sonner";
 import {
   addOwner,
@@ -69,32 +68,7 @@ function ProviderCard({ provider }) {
 
 /* Animated numeral — counts up once data lands; respects reduced motion. */
 function Numeral({ value, format = (v) => Math.round(v).toLocaleString("en-IN"), className = "" }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || value == null) return;
-    const mm = gsap.matchMedia();
-    mm.add(
-      { motionOK: "(prefers-reduced-motion: no-preference)", reduce: "(prefers-reduced-motion: reduce)" },
-      (ctx) => {
-        if (ctx.conditions.reduce) {
-          el.textContent = format(value);
-          return;
-        }
-        const obj = { v: 0 };
-        gsap.to(obj, {
-          v: value,
-          duration: 0.9,
-          ease: "power2.out",
-          onUpdate: () => {
-            el.textContent = format(obj.v);
-          }
-        });
-      }
-    );
-    return () => mm.revert();
-  }, [value]);
-  return <span ref={ref} className={className}>—</span>;
+  return <span className={className}>{value == null ? "—" : format(value)}</span>;
 }
 
 function GrowthChip({ pct }) {
@@ -109,31 +83,11 @@ function GrowthChip({ pct }) {
 
 /* 6-month money + minutes chart: revenue/expense bars, minutes as a line. */
 function MoneyTrend({ monthly }) {
-  const ref = useRef(null);
   const W = 560, H = 150, PAD = 8;
   const pts = monthly ?? [];
   const maxMoney = Math.max(1, ...pts.map((p) => Math.max(p.revenue, p.expense)));
   const maxMin = Math.max(1, ...pts.map((p) => p.minutes));
   const bw = pts.length ? (W - PAD * 2) / pts.length : 0;
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || !pts.length) return;
-    const mm = gsap.matchMedia();
-    mm.add("(prefers-reduced-motion: no-preference)", () => {
-      gsap.fromTo(
-        el.querySelectorAll("[data-bar]"),
-        { scaleY: 0, transformOrigin: "bottom" },
-        { scaleY: 1, duration: 0.5, ease: "power3.out", stagger: 0.04 }
-      );
-      gsap.fromTo(
-        el.querySelector("[data-minline]"),
-        { autoAlpha: 0 },
-        { autoAlpha: 1, duration: 0.6, delay: 0.45, ease: "power1.out" }
-      );
-    });
-    return () => mm.revert();
-  }, [monthly]);
 
   if (!pts.length) return null;
   const minPath = pts
@@ -145,7 +99,7 @@ function MoneyTrend({ monthly }) {
     .join(" ");
 
   return (
-    <svg ref={ref} viewBox={`0 0 ${W} ${H + 18}`} className="w-full" role="img"
+    <svg viewBox={`0 0 ${W} ${H + 18}`} className="w-full" role="img"
       aria-label="Revenue, expense and minutes by month">
       {pts.map((p, i) => {
         const x = PAD + i * bw;
@@ -179,22 +133,11 @@ function MoneyTrend({ monthly }) {
 }
 
 function UsageBar({ row }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const mm = gsap.matchMedia();
-    mm.add("(prefers-reduced-motion: no-preference)", () => {
-      gsap.fromTo(el, { scaleX: 0, transformOrigin: "left" },
-        { scaleX: 1, duration: 0.6, ease: "power3.out" });
-    });
-    return () => mm.revert();
-  }, [row.pct_used]);
   const tone = row.exhausted ? "bg-danger" : row.approaching_limit ? "bg-gold-ink" : "bg-teal-deep";
   return (
     <div title={`${row.minutes_used} of ${row.minutes_included} min used (${row.pct_used}%) · ${row.minutes_left} left`}>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-hairline">
-        <div ref={ref} className={`h-full rounded-full ${tone}`} style={{ width: `${row.pct_used}%` }} />
+        <div className={`h-full rounded-full ${tone}`} style={{ width: `${row.pct_used}%` }} />
       </div>
       <p className="mt-1 font-ui text-[11px] text-slate">
         {row.minutes_used} / {row.minutes_included} min · {row.minutes_left} left

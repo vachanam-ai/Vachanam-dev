@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 /* Bookings chart v6 (2026-07-29 — Vinay picked "C · minimal pills" + the
    222831/393E46/948979/DFD0B8 taupe palette). Fully-rounded pill columns
    lifted off the baseline, generous spacing, two faint gridlines, muted
    totals. Colours come from theme tokens (--book-*) so dark stays readable.
-   GSAP grows the pills up; reduced motion = instant. */
+   Values render immediately so the dashboard is useful on first paint. */
 
 const C = {
   seen: "var(--book-seen)",
@@ -66,31 +66,6 @@ export default function TrendChart({ daily, calls }) {
 
     return { bars, ticks, axisMax };
   }, [daily, bw]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    let mm;
-    import("gsap").then(({ gsap }) => {
-      mm = gsap.matchMedia();
-      const grids = svg.querySelectorAll("[data-grid]");
-      const bars = svg.querySelectorAll("[data-bar]");
-      const labels = svg.querySelectorAll("[data-blabel]");
-
-      mm.add("(prefers-reduced-motion: no-preference)", () => {
-        const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
-        tl.fromTo(grids, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.25, stagger: 0.04 });
-        tl.fromTo(bars, { scaleY: 0, transformOrigin: "center bottom" },
-          { scaleY: 1, duration: 0.6, ease: "power3.out", stagger: 0.07 }, 0.1);
-        tl.fromTo(labels, { y: 6, autoAlpha: 0 },
-          { y: 0, autoAlpha: 1, duration: 0.3, stagger: 0.07 }, 0.45);
-      });
-      mm.add("(prefers-reduced-motion: reduce)", () => {
-        gsap.set([grids, bars, labels], { clearProps: "all", autoAlpha: 1 });
-      });
-    });
-    return () => mm?.revert();
-  }, [model]);
 
   const onMove = (e) => {
     const rect = svgRef.current.getBoundingClientRect();

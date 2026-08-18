@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useGSAP } from "@gsap/react";
-import gsap from "gsap";
 import {
   ArrowRight, BookOpenText, Buildings, CalendarCheck, Check, CheckCircle,
   GearSix, MapPin, PhoneCall, ShieldWarning, Sparkle, Stethoscope,
@@ -42,8 +40,6 @@ const SA_EMAIL = "vachanam-events@vachanam-498912.iam.gserviceaccount.com";
 // Runtime deployment flag: build with VITE_WHATSAPP_LIVE=true only after Meta
 // onboarding is available. The backend independently enforces credentials and plan.
 const WHATSAPP_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
-
-gsap.registerPlugin(useGSAP);
 
 const prefersReducedMotion = () => !window.matchMedia || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -99,25 +95,35 @@ function InfoBox({ title, children }) {
 function ClinicCompanion({ message, progress, signal }) {
   const root = useRef(null);
 
-  useGSAP(() => {
+  useEffect(() => {
     const doctor = root.current?.querySelector(".companion-doctor");
     if (!doctor || prefersReducedMotion()) return undefined;
-    const moveX = gsap.quickTo(doctor, "x", { duration: .45, ease: "power3.out" });
-    const tilt = gsap.quickTo(doctor, "rotation", { duration: .5, ease: "power3.out" });
+    let frame;
     const onMove = (event) => {
       const nx = (event.clientX / window.innerWidth - .5) * 2;
-      moveX(nx * 3);
-      tilt(nx * 2.2);
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        doctor.style.transform = `translateX(${nx * 3}px) rotate(${nx * 2.2}deg)`;
+      });
     };
     window.addEventListener("pointermove", onMove, { passive: true });
-    return () => window.removeEventListener("pointermove", onMove);
-  }, { scope: root });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("pointermove", onMove);
+    };
+  }, []);
 
-  useGSAP(() => {
+  useEffect(() => {
     if (!signal || prefersReducedMotion()) return;
-    gsap.fromTo(".companion-doctor", { scale: .96 }, { scale: 1, duration: .42, ease: "power3.out" });
-    gsap.fromTo(".companion-message", { opacity: .45, y: 5 }, { opacity: 1, y: 0, duration: .28, ease: "power3.out" });
-  }, { scope: root, dependencies: [signal], revertOnUpdate: true });
+    root.current?.querySelector(".companion-doctor")?.animate?.(
+      [{ scale: .96 }, { scale: 1 }],
+      { duration: 280, easing: "cubic-bezier(.22,1,.36,1)" },
+    );
+    root.current?.querySelector(".companion-message")?.animate?.(
+      [{ opacity: .55, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }],
+      { duration: 220, easing: "cubic-bezier(.22,1,.36,1)" },
+    );
+  }, [signal]);
 
   return (
     <div ref={root} className="clinic-companion" aria-live="polite">
@@ -161,7 +167,6 @@ export default function Settings() {
   const [newStaff, setNewStaff] = useState({ name: "", email: "", password: "", role: "receptionist", doctor_id: "" });
   const [companionMessage, setCompanionMessage] = useState("Let’s make your receptionist clinic-ready.");
   const [companionSignal, setCompanionSignal] = useState(0);
-  const pageRef = useRef(null);
   const react = (message) => {
     setCompanionMessage(message);
     setCompanionSignal((value) => value + 1);
@@ -284,12 +289,6 @@ export default function Settings() {
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not delete the clinic")
   });
 
-  useGSAP(() => {
-    if (!data || !form || !pageRef.current || prefersReducedMotion()) return;
-    gsap.from(".settings-masthead > *", { opacity: 0, y: 12, duration: .5, stagger: .06, ease: "power3.out" });
-    gsap.from(".settings-journey-card", { opacity: 0, y: 10, duration: .4, stagger: .045, ease: "power3.out", delay: .12 });
-  }, { scope: pageRef, dependencies: [Boolean(data && form)], revertOnUpdate: true });
-
   const steps = checklist(data, calOk);
   const doneCount = steps.filter((s) => s.done).length;
   const progress = Math.round((doneCount / steps.length) * 100);
@@ -305,7 +304,7 @@ export default function Settings() {
     return <p className="font-ui text-slate">Loading settings…</p>;
 
   return (
-    <div ref={pageRef} className="settings-page">
+    <div className="settings-page">
       <header className="settings-masthead">
         <div className="settings-hero-copy">
           <p className="settings-kicker"><Sparkle size={13} weight="fill" /> {data?.name} · clinic launch studio</p>

@@ -384,12 +384,10 @@ function timingSummary(doctor) {
 }
 
 /** One doctor as a compact card. Clicking Edit expands the card horizontally
- *  (GSAP, driven from DoctorsBoard) and fades in the day-wise editor + exact-
- *  date publisher; the other cards compress to make room. */
-function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, onChanged, setRef }) {
+ *  and reveals the day-wise editor plus exact-date publisher. */
+function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, onChanged, grow }) {
   const qc = useQueryClient();
   const ask = useActionDialog();
-  const editorRef = useRef(null);
   const isAdmin = role === "org_admin";
 
   const stop = useMutation({
@@ -403,21 +401,8 @@ function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, o
     onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not remove doctor")
   });
 
-  // Fade the day-wise editor in AFTER the horizontal expand settles.
-  useEffect(() => {
-    if (!expanded || !editorRef.current) return;
-    let cancelled = false;
-    import("gsap").then(({ gsap }) => {
-      if (cancelled || !editorRef.current) return;
-      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      gsap.fromTo(editorRef.current, { opacity: 0, y: 8 },
-        { opacity: 1, y: 0, duration: reduce ? 0 : 0.4, delay: reduce ? 0 : 0.28, ease: "power2.out" });
-    });
-    return () => { cancelled = true; };
-  }, [expanded]);
-
   return (
-    <div ref={setRef} data-docid={id} style={{ flexGrow: 1 }} className="min-w-0 md:basis-0">
+    <div data-docid={id} style={{ flexGrow: grow }} className="min-w-0 transition-[flex-grow] duration-300 md:basis-0">
       <section data-reveal className={`card overflow-hidden ${expanded ? "ring-1 ring-accent/40" : ""}`}>
         <div className="flex items-start gap-3 p-4">
           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-line2 bg-pill font-ui text-sm font-semibold text-ink-soft">
@@ -467,7 +452,7 @@ function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, o
         </div>
 
         {expanded && (
-          <div ref={editorRef} className="space-y-4 border-t border-hairline p-4">
+          <div className="space-y-4 border-t border-hairline p-4">
             {isAdmin && (
               <div className="rounded-2xl border border-hairline bg-pill/40 p-4 sm:p-5">
                 <AddDoctorForm branchId={branchId} doctorId={id} initial={doctor}
@@ -483,28 +468,9 @@ function DoctorCard({ doctor, id, waiting, role, branchId, expanded, onToggle, o
   );
 }
 
-/** Side-by-side doctor board. One editing card grows and the others compress,
- *  animated with GSAP flex-grow tweens (instant under reduced-motion). */
+/** Side-by-side doctor board. One editing card grows and the others compress. */
 function DoctorsBoard({ doctors, queue, role, branchId, onChanged }) {
   const [editingId, setEditingId] = useState(null);
-  const cardRefs = useRef({});
-  const setRef = (id) => (el) => { if (el) cardRefs.current[id] = el; else delete cardRefs.current[id]; };
-
-  useEffect(() => {
-    let cancelled = false;
-    import("gsap").then(({ gsap }) => {
-      if (cancelled) return;
-      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      for (const d of doctors) {
-        const id = d.id ?? d.doctor_id;
-        const el = cardRefs.current[id];
-        if (!el) continue;
-        const target = editingId ? (id === editingId ? 2.6 : 0.7) : 1;
-        gsap.to(el, { flexGrow: target, duration: reduce ? 0 : 0.5, ease: "power3.out" });
-      }
-    });
-    return () => { cancelled = true; };
-  }, [editingId, doctors.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="flex flex-col gap-4 md:flex-row md:items-start">
@@ -512,9 +478,10 @@ function DoctorsBoard({ doctors, queue, role, branchId, onChanged }) {
         const id = d.id ?? d.doctor_id;
         const todayEntry = queue?.doctors?.find((q) => q.doctor_id === id);
         const waiting = todayEntry?.patients?.filter((p) => p.status === "confirmed").length ?? 0;
+        const grow = editingId ? (id === editingId ? 2.6 : 0.7) : 1;
         return (
           <DoctorCard key={id} doctor={d} id={id} waiting={waiting} role={role} branchId={branchId}
-            expanded={editingId === id} onChanged={onChanged} setRef={setRef(id)}
+            expanded={editingId === id} onChanged={onChanged} grow={grow}
             onToggle={() => setEditingId((cur) => (cur === id ? null : id))} />
         );
       })}
