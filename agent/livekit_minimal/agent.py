@@ -733,6 +733,66 @@ async def _guard_internal_speech_stream(text):
         yield pending
 
 
+_STALE_BOOKING_SPEECH = re.compile(
+    r"(?:"
+    r"\b(?:shall|should|can|may)\s+i\s+(?:go ahead and\s+)?book\b|"
+    r"\bwould you like me to\s+(?:go ahead and\s+)?book\b|"
+    r"\bdo you want me to\s+(?:go ahead and\s+)?book\b|"
+    r"\b(?:i\s+)?(?:did not|didn't|haven't|wasn't|couldn't|failed to)\s+book\b|"
+    r"\bit\s+(?:failed previously|wasn't booked|was not booked)\b|"
+    r"\bbooking\s+(?:was\s+)?(?:not\s+confirmed|failed)\b|"
+    r"బుక్\s+(?:చేయనా|చేయమంటారా|కాలేదు|అవ్వలేదు)|"
+    r"बुक\s+(?:कर दूँ|कर दूं|नहीं हुई|नहीं हो पाई)|"
+    r"புக்\s+(?:செய்யவா|ஆகவில்லை)|"
+    r"ಬುಕ್\s+(?:ಮಾಡಲಾ|ಆಗಿಲ್ಲ)"
+    r")",
+    re.I,
+)
+
+
+def _confirmed_booking_status(lang_code: str) -> str:
+    return {
+        "te": "మీ అపాయింట్‌మెంట్ ఇప్పటికే కన్ఫర్మ్ అయిందండి. ఇంకేమైనా సహాయం కావాలా?",
+        "hi": "आपकी अपॉइंटमेंट पहले ही कन्फर्म हो चुकी है। और कोई मदद चाहिए?",
+        "ta": "உங்கள் அப்பாயின்ட்மென்ட் ஏற்கனவே உறுதி செய்யப்பட்டுள்ளது. வேறு உதவி வேண்டுமா?",
+        "kn": "ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಈಗಾಗಲೇ ದೃಢವಾಗಿದೆ. ಇನ್ನೇನಾದರೂ ಸಹಾಯ ಬೇಕೇ?",
+        "mr": "तुमची अपॉइंटमेंट आधीच कन्फर्म झाली आहे. आणखी काही मदत हवी आहे का?",
+        "en": "Your appointment is already confirmed. Is there anything else I can help with?",
+    }.get(lang_code, "Your appointment is already confirmed. Is there anything else I can help with?")
+
+
+async def _guard_closed_booking_speech_stream(text, lang_code: str):
+    """Replace a stale booking retry before any of it reaches TTS.
+
+    This firewall is enabled only while the latest booking transaction is
+    durably closed and the caller has not requested another booking. Buffering
+    by sentence lets us discard the whole false claim rather than leaking its
+    first few streamed tokens before the phrase "shall I book" arrives.
+    """
+    pending = ""
+    replaced = False
+    async for chunk in text:
+        pending += chunk
+        while True:
+            boundary = _SPEECH_BOUNDARY.search(pending)
+            if boundary is None:
+                break
+            sentence = pending[:boundary.end()]
+            pending = pending[boundary.end():].lstrip()
+            if _STALE_BOOKING_SPEECH.search(sanitize_for_tts(sentence)):
+                if not replaced:
+                    yield _confirmed_booking_status(lang_code)
+                    replaced = True
+                continue
+            yield sentence
+    if pending:
+        if _STALE_BOOKING_SPEECH.search(sanitize_for_tts(pending)):
+            if not replaced:
+                yield _confirmed_booking_status(lang_code)
+        else:
+            yield pending
+
+
 async def _end_call_with_notice(ctx, reason: str, t_answer: float | None = None) -> None:
     """RULE 8: never leave a caller with dead ringing. When the database is
     unreachable we cannot resolve the branch, its language, or anything else —
@@ -1296,7 +1356,7 @@ async def _naturalize_faq_match(match: FaqMatch, lang_code: str) -> str:
     # renderers (including Telugu currency/clock grammar).  Sending them to a
     # second LLM only added up to 450 ms and, on timeout, exposed the raw
     # English FAQ row that triggered this fix.
-    if match.intent in {"consultation_fee", "clinic_hours"}:
+    if match.intent in {"consultation_fee", "clinic_hours", "parking"}:
         return fallback
     try:
         return await asyncio.wait_for(
@@ -3822,6 +3882,18 @@ class VachanamAgent(Agent):
                 yield chunk
 
         safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
+        # A completed booking is a closed transaction. If the model drifts back
+        # to stale history, stop both the false "it failed" claim and a second
+        # confirmation question at the final patient-facing boundary. A real
+        # second/family booking is unaffected because its explicit caller turn
+        # sets caller_asked_to_book before TTS starts.
+        if (
+            self._state.token_confirmed
+            and not self._state.caller_asked_to_book
+        ):
+            safe_text = _guard_closed_booking_speech_stream(
+                safe_text, self._lang_code
+            )
         expressive_text = _filter_soniox_expression_stream(safe_text)
         # Native-script doctor names/roles (cached per clinic+language) so the
         # voice does not flip to an English accent mid-sentence.
@@ -3947,9 +4019,26 @@ class VachanamAgent(Agent):
         # unconstrained model turn and it can ask "shall I book?" again.
         if (
             self._state.pending_confirmation is None
+            and not self._state.token_confirmed
             and self._last_assistant_requested_booking_confirmation()
         ):
             self._state.pending_confirmation = 'book'
+
+        if (
+            self._state.token_confirmed
+            and not self._state.caller_asked_to_book
+            and not _caller_authorized_booking(utterance)
+        ):
+            turn_ctx.add_message(
+                role="system",
+                content=(
+                    "Authoritative transaction state: the most recent booking "
+                    "was committed successfully and is CLOSED. Do not ask to "
+                    "book it again, do not say it failed, and do not call any "
+                    "booking mutation unless this caller explicitly asks for "
+                    "a new appointment. Answer only their current question."
+                ),
+            )
 
         # Semantic normalization before generation: in ordinary clinic speech
         # bare "12" is noon.  Midnight is accepted only when the caller says it
@@ -5187,6 +5276,23 @@ class VachanamAgent(Agent):
         check_availability confirms capacity AND the patient agrees to the date.
         appointment_time (HH:MM) only for slot-type doctors."""
         _guard_human_booking(self._state)
+        if (
+            self._state.token_confirmed
+            and self._state.last_user_utterance is not None
+            and not self._state.caller_asked_to_book
+        ):
+            logger.warning(
+                "booking_hold_blocked_closed_transaction session=%s",
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            return {
+                "success": True,
+                "already_confirmed": True,
+                "instruction": (
+                    "The previous booking is already confirmed. Do not reserve "
+                    "or discuss it again; answer the caller's current question."
+                ),
+            }
         # assign_token is a Redis INCR — fast; a filler here is just noise (#429).
         resolved = await self._resolve_doctor_id(doctor_id)
         parsed_date = self._parse_date(booking_date)
@@ -5303,6 +5409,28 @@ class VachanamAgent(Agent):
         # yes is accepted only after an audible booking-confirmation question.
         self._state.quality_intent = 'booking'
         utterance = self._state.last_user_utterance
+        if (
+            self._state.token_confirmed
+            and utterance is not None
+            and not self._state.caller_asked_to_book
+        ):
+            logger.warning(
+                "booking_confirm_blocked_closed_transaction session=%s",
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            return {
+                "success": True,
+                "already_confirmed": True,
+                "token_id": (
+                    str(self._state.last_confirmed_token_id)
+                    if self._state.last_confirmed_token_id else None
+                ),
+                "instruction": (
+                    "The previous booking is already confirmed. Do not call a "
+                    "booking tool again and do not say it failed. Answer the "
+                    "caller's current question."
+                ),
+            }
         # Once we have DEMANDED the confirmation question (pending_confirmation
         # armed), the MODEL decides whether the caller agreed — it is the only
         # component here fluent in seven languages and both scripts. Matching

@@ -71,6 +71,41 @@ def test_bare_fee_value_gets_subject_and_currency_in_fallback():
     assert "1000 రూపాయలు" in speech
 
 
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        (
+            "I have a bike. At my previous clinic I had to park it outside; "
+            "will I have the same problem at your clinic?"
+        ),
+        "parking vundha?",
+        "నా బైక్ పెట్టుకోవడానికి అక్కడ ప్లేస్ ఉందా?",
+        "क्या मेरी बाइक के लिए जगह है?",
+    ],
+)
+def test_parking_faq_matches_direct_and_indirect_patient_wording(utterance):
+    faq = [{"q": "Is parking available?", "a": "yes"}]
+    assert find_faq_match(utterance, faq) == FaqMatch(
+        "Is parking available?", "yes", "parking"
+    )
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("te", "మా క్లినిక్‌లో పార్కింగ్ అందుబాటులో ఉంది"),
+        ("en", "parking is available at the clinic"),
+        ("hi", "क्लिनिक में पार्किंग उपलब्ध है"),
+    ],
+)
+def test_bare_parking_yes_becomes_a_natural_localized_answer(language, expected):
+    speech = natural_fallback(
+        FaqMatch("Is parking available?", "yes", "parking"), language
+    )
+    assert speech.casefold() != "yes"
+    assert expected.casefold() in speech.casefold()
+
+
 def test_english_clinic_hours_row_has_complete_natural_telugu_fallback():
     match = FaqMatch(
         "What are the clinic timings? Are you open on Sundays?",
@@ -93,6 +128,15 @@ async def test_common_faq_renderer_skips_second_llm_hop():
         speech = await _naturalize_faq_match(match, "te")
     localize.assert_not_awaited()
     assert "ఉదయం" in speech and "సాయంత్రం" in speech
+
+
+@pytest.mark.asyncio
+async def test_parking_renderer_is_deterministic_and_skips_llm():
+    match = FaqMatch("Is parking available?", "yes", "parking")
+    with patch("agent.livekit_minimal.agent._localize_message", new=AsyncMock()) as localize:
+        speech = await _naturalize_faq_match(match, "te")
+    localize.assert_not_awaited()
+    assert "పార్కింగ్ అందుబాటులో ఉంది" in speech
 
 
 @pytest.mark.asyncio

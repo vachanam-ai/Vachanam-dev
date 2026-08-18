@@ -39,7 +39,13 @@ _INTENT_TERMS = {
         "ఎక్కడ", "అడ్రస్", "లొకేషన్", "कहाँ", "पता", "எங்கே", "முகவரி",
         "ಎಲ್ಲಿ", "ವಿಳಾಸ", "कुठे", "ঠিকানা",
     ),
-    "parking": ("parking", "పార్కింగ్", "पार्किंग", "பார்க்கிங்", "ಪಾರ್ಕಿಂಗ್"),
+    "parking": (
+        "parking", "park", "bike", "motorbike", "scooter", "two wheeler",
+        "vehicle", "బైక్", "బండి", "వాహనం", "పార్కింగ్", "పార్క్",
+        "पार्किंग", "पार्क", "बाइक", "गाड़ी", "वाहन",
+        "பார்க்கிங்", "பைக்", "வண்டி", "பார்க்",
+        "ಪಾರ್ಕಿಂಗ್", "ಬೈಕ್", "ಗಾಡಿ", "ಪಾರ್ಕ್",
+    ),
     "payment": (
         "payment method", "cash", "upi", "card", "పేమెంట్", "నగదు", "కార్డ్",
         "भुगतान", "कैश", "பணம்", "கார்டு", "ಪಾವತಿ", "ನಗದು",
@@ -158,6 +164,20 @@ def natural_fallback(match: FaqMatch, lang_code: str) -> str:
         localized = _clinic_hours(answer, lang_code)
         if localized:
             return localized
+    if match.intent == "parking" and re.match(
+        r"^(?:yes|available|avunu|ఉంది|అవును|हाँ|हां|जी|ஆம்|ஆமாம்|ಹೌದು|हो)\b",
+        answer,
+        flags=re.I,
+    ):
+        direct = {
+            "te": "అవునండి, మా క్లినిక్‌లో పార్కింగ్ అందుబాటులో ఉంది.",
+            "hi": "जी हाँ, क्लिनिक में पार्किंग उपलब्ध है।",
+            "ta": "ஆமாங்க, கிளினிக்கில் பார்க்கிங் வசதி இருக்கு.",
+            "kn": "ಹೌದು, ಕ್ಲಿನಿಕ್‌ನಲ್ಲಿ ಪಾರ್ಕಿಂಗ್ ಸೌಲಭ್ಯ ಇದೆ.",
+            "mr": "हो, क्लिनिकमध्ये पार्किंग उपलब्ध आहे.",
+            "en": "Yes, parking is available at the clinic.",
+        }
+        return direct.get(lang_code, direct["en"])
     if lang_code == "te":
         subject = {
             "consultation_fee": "కన్సల్టేషన్ ఫీజు", "clinic_hours": "మా క్లినిక్ టైమింగ్స్",
