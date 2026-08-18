@@ -2843,6 +2843,7 @@ def _explicit_language_request(text: str) -> str | None:
 
     request_cues = (
         'can you', 'could you', 'would you', 'will you', 'do you speak',
+        'do you know',
         'please', 'pls', 'kindly', 'speak', 'talk in', 'switch',
         'change language', 'reply in', 'respond in', 'continue in',
         'use ', 'prefer ', 'matlad', 'maatlad', 'cheppandi', 'baat',
@@ -2856,6 +2857,22 @@ def _explicit_language_request(text: str) -> str | None:
         ' il', ' yil', ' madhe', ' madhye', ' te ', ' e ',
     )
     has_request_cue = any(cue in low for cue in request_cues)
+    # The common Hindi capability question is also a request to continue in
+    # Hindi: "aapko Hindi aata hai?" / "क्या आपको हिंदी आती है?". It has no
+    # "speak/switch" verb, so the generic cue list previously rejected it and
+    # left the unconstrained LLM to argue with the caller. Require both a
+    # second-person subject and an ability word so "my friend knows Hindi"
+    # remains a mere mention.
+    second_person = any(term in low for term in (
+        'aapko', 'aap ko', 'aap ', 'tumko', 'tumhe',
+        'आपको', 'आप ', 'तुमको', 'तुम्हें', 'మీకు',
+    ))
+    language_ability = any(term in low for term in (
+        'aata hai', 'aati hai', 'aate hain', 'bolna aata', 'samajh aata',
+        'आता है', 'आती है', 'आते हैं', 'बोलना आता', 'समझ आता',
+        'వచ్చా', 'వస్తుందా', 'తెలుసా',
+    ))
+    has_request_cue = has_request_cue or (second_person and language_ability)
     padded = f' {low} '
     has_short_locative = len(words) <= 5 and any(
         marker in padded for marker in locatives

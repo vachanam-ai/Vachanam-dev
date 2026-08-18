@@ -46,6 +46,11 @@ def test_switch_ack_exists_for_every_language():
         ("Malayalam il samsarikkamo", "ml"),
         ("Marathi madhe bola", "mr"),
         ("Bangla te kotha bolun", "bn"),
+        ("aapko Hindi aata hai?", "hi"),
+        ("Aapko Hindi aati hai kya?", "hi"),
+        ("क्या आपको हिंदी आती है?", "hi"),
+        ("మీకు హిందీ వచ్చా?", "hi"),
+        ("Do you know Hindi?", "hi"),
         ("മലയാളം", "ml"),
         ("বাংলা", "bn"),
     ],
@@ -63,6 +68,7 @@ def test_common_short_language_requests_switch_without_llm(utterance, expected):
         "Which languages do you support?",
         "My school language was Hindi but I need an appointment.",
         "Can you compare Telugu and English?",
+        "Mere friend ko Hindi aata hai, I need an appointment.",
     ],
 )
 def test_language_mentions_do_not_accidentally_switch(utterance):
