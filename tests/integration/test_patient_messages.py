@@ -55,7 +55,9 @@ async def test_messages_listed_pending_and_urgent_first(db):
     ])
     await db.commit()
 
-    app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id)
+    app.dependency_overrides[get_current_user] = lambda: _as_user(
+        br.id, org_id, role="receptionist"
+    )
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
             r = await ac.get(f"/branches/{br.id}/messages")

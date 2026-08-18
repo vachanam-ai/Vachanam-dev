@@ -36,7 +36,7 @@ export const sessionFromToken = (token) => {
 /** Role → landing route. Single source of truth for role-based homes. */
 export const roleHome = (role) =>
   ({
-    receptionist: "/queue",
+    receptionist: "/dashboard",
     org_admin: "/dashboard",
     doctor: "/my-schedule",
     super_admin: "/admin",

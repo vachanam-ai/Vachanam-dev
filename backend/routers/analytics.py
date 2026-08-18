@@ -176,11 +176,10 @@ async def analytics_call_quality(
         branch_uuid = _uuid.UUID(branch_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid branch_id format")
-    # Owner analytics: peer-doctor performance + billing consumption must not
-    # reach a receptionist or a single doctor (treatment/queue/patients already
-    # scope doctors to their own data; this route did not). org_admin only.
-    if user.role != "org_admin":
-        raise HTTPException(status_code=403, detail="Owner analytics — organization admin only")
+    # The receptionist runs this same operational dashboard. Doctors remain
+    # excluded because the response includes peer-doctor performance.
+    if user.role not in ("org_admin", "receptionist"):
+        raise HTTPException(status_code=403, detail="Clinic operations dashboard only")
     await assert_branch_access(user, branch_id, db)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
@@ -247,10 +246,10 @@ async def analytics_overview(
         branch_uuid = _uuid.UUID(branch_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid branch_id format")
-    # Owner analytics: peer-doctor performance + billing consumption must not
-    # reach a receptionist or a single doctor. org_admin only (see call-quality).
-    if user.role != "org_admin":
-        raise HTTPException(status_code=403, detail="Owner analytics — organization admin only")
+    # Full branch operations dashboard: owner + assigned receptionist. Doctors
+    # remain excluded because this includes peer-doctor performance.
+    if user.role not in ("org_admin", "receptionist"):
+        raise HTTPException(status_code=403, detail="Clinic operations dashboard only")
     await assert_branch_access(user, branch_id, db)
     from backend.routers.queue import _branch_today
 

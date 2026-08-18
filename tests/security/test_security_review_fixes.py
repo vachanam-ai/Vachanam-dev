@@ -248,7 +248,7 @@ def test_session_state_fails_closed_before_identity_check():
     assert SessionState().identity_verified is False
 
 
-# ── Fix #2: owner analytics denies non-org_admin (deny path is pure) ──────────
+# ── Fix #2: operations analytics still denies doctors ────────────────────────
 from backend.middleware.auth_middleware import CurrentUser
 from backend.routers.analytics import analytics_call_quality, analytics_overview
 
@@ -261,16 +261,16 @@ def _user(role: str) -> CurrentUser:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role", ["receptionist", "doctor"])
-async def test_analytics_overview_forbidden_for_non_owner(role):
+@pytest.mark.parametrize("role", ["doctor"])
+async def test_analytics_overview_forbidden_for_doctor(role):
     with pytest.raises(HTTPException) as e:
         await analytics_overview(branch_id=str(BRANCH), days=14, user=_user(role), db=None)
     assert e.value.status_code == 403
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role", ["receptionist", "doctor"])
-async def test_analytics_call_quality_forbidden_for_non_owner(role):
+@pytest.mark.parametrize("role", ["doctor"])
+async def test_analytics_call_quality_forbidden_for_doctor(role):
     with pytest.raises(HTTPException) as e:
         await analytics_call_quality(branch_id=str(BRANCH), days=14, user=_user(role), db=None)
     assert e.value.status_code == 403

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sessionFromToken } from "./useAuth.jsx";
+import { roleHome, sessionFromToken } from "./useAuth.jsx";
 
 const tokenFor = (claims) => {
   const payload = btoa(JSON.stringify(claims)).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
@@ -22,5 +22,11 @@ describe("sessionFromToken", () => {
   it("rejects expired or malformed sessions", () => {
     expect(sessionFromToken(tokenFor({ sub: "u", email: "e", role: "doctor", exp: 1 }))).toBeNull();
     expect(sessionFromToken("not-a-jwt")).toBeNull();
+  });
+});
+
+describe("roleHome", () => {
+  it("opens the complete clinic dashboard for receptionists", () => {
+    expect(roleHome("receptionist")).toBe("/dashboard");
   });
 });

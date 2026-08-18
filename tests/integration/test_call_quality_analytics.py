@@ -20,11 +20,11 @@ pytestmark = pytest.mark.asyncio
 _ALGO = "HS256"
 
 
-def _owner_jwt(org_id, branch_id):
+def _owner_jwt(org_id, branch_id, role="org_admin"):
     now = datetime.now(timezone.utc)
     return jwt.encode(
         {
-            "sub": str(uuid.uuid4()), "email": "owner@cq.test", "role": "org_admin",
+            "sub": str(uuid.uuid4()), "email": "owner@cq.test", "role": role,
             "org_id": org_id, "branch_ids": [branch_id], "is_admin": False,
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(hours=8)).timestamp()), "jti": str(uuid.uuid4()),
@@ -151,3 +151,22 @@ async def test_call_quality_requires_branch_access(branch, client):
         headers={"Authorization": f"Bearer {_owner_jwt(str(uuid.uuid4()), other)}"},
     )
     assert r.status_code in (401, 403), r.text
+
+
+async def test_receptionist_can_read_the_complete_branch_dashboard(branch, client):
+    token = _owner_jwt(branch["org_id"], branch["branch_id"], role="receptionist")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    overview = await client.get(
+        "/analytics/overview",
+        params={"branch_id": branch["branch_id"], "days": 14},
+        headers=headers,
+    )
+    quality = await client.get(
+        "/analytics/call-quality",
+        params={"branch_id": branch["branch_id"], "days": 14},
+        headers=headers,
+    )
+
+    assert overview.status_code == 200, overview.text
+    assert quality.status_code == 200, quality.text

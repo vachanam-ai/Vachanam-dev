@@ -14,7 +14,8 @@ import { WHATSAPP_SELF_SERVE_LIVE } from "../lib/plans.js";
 
 const NAV = {
   receptionist: [
-    ["/queue", "Live queue", ListBullets], ["/walk-in", "Add walk-in", UserPlus],
+    ["/dashboard", "Overview", SquaresFour], ["/queue", "Live queue", ListBullets],
+    ["/walk-in", "Add walk-in", UserPlus],
     ["/treatments", "Treatments", FirstAidKit], ["/patients", "Patients", UsersThree],
     ["/availability", "Doctor leave", CalendarX], ["/tickets", "Support", ChatCircleDots],
   ],

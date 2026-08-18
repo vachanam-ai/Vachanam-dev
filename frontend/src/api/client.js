@@ -99,7 +99,7 @@ export const createVoiceUsageOrder = (cycleId) =>
 export const saveGstin = (gstin) =>
   api.post("/api/billing/gstin", { gstin }).then((r) => r.data);
 
-// ── Analytics (owner) ──
+// ── Analytics (owner + receptionist dashboard) ──
 export const fetchAnalytics = (branchId, days = 14) =>
   api.get("/analytics/overview", { params: { branch_id: branchId, days } }).then((r) => r.data);
 
