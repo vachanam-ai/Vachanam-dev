@@ -164,7 +164,13 @@ from agent.tools.booking_tools import (  # noqa: E402
 )
 from backend.config import settings  # noqa: E402
 from backend.database import AsyncSessionLocal, get_loop_engine  # noqa: E402
-from backend.models.schema import Branch, Doctor, Token  # noqa: E402
+from backend.models.schema import (  # noqa: E402
+    Branch,
+    Doctor,
+    DoctorDateSchedule,
+    DoctorUnavailability,
+    Token,
+)
 from backend.models.schema import Patient as _PatientModel  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
@@ -4863,6 +4869,156 @@ class VachanamAgent(Agent):
         )
         return {"availability": availability}
 
+    async def _find_next_doctor_availability(
+        self,
+        doctor: Doctor,
+        search_from: date_cls,
+        *,
+        leave_anchor: date_cls | None = None,
+    ) -> dict | None:
+        """Return the first actually bookable day, using live DB capacity."""
+        from backend.services.doctor_schedule import effective_recurring_schedule
+
+        horizon = search_from + timedelta(days=60)
+        leave_dates = set((
+            await self._db.execute(
+                select(DoctorUnavailability.date).where(
+                    and_(
+                        DoctorUnavailability.branch_id == self._state.branch_id,
+                        DoctorUnavailability.doctor_id == doctor.id,
+                        DoctorUnavailability.date >= search_from,
+                        DoctorUnavailability.date <= horizon,
+                    )
+                )
+            )
+        ).scalars())
+        date_rows = list((
+            await self._db.execute(
+                select(DoctorDateSchedule).where(
+                    and_(
+                        DoctorDateSchedule.branch_id == self._state.branch_id,
+                        DoctorDateSchedule.doctor_id == doctor.id,
+                        DoctorDateSchedule.date >= search_from,
+                        DoctorDateSchedule.date <= horizon,
+                    )
+                )
+            )
+        ).scalars())
+        overrides = {row.date: row for row in date_rows}
+        recurring = effective_recurring_schedule(doctor)
+
+        leave_through = None
+        candidate = search_from
+        if leave_anchor is not None:
+            candidate = leave_anchor
+            while candidate in leave_dates:
+                leave_through = candidate
+                candidate += timedelta(days=1)
+
+        while candidate <= horizon:
+            if candidate in leave_dates:
+                candidate += timedelta(days=1)
+                continue
+
+            override = overrides.get(candidate)
+            if override is not None:
+                has_sitting = bool(override.sessions)
+            elif doctor.schedule_mode == "date_specific":
+                has_sitting = False
+            else:
+                has_sitting = bool(recurring.get(str(candidate.weekday()), []))
+
+            if has_sitting:
+                availability = await check_availability(
+                    doctor_id=doctor.id,
+                    branch_id=self._state.branch_id,
+                    booking_date=candidate,
+                    db=self._db,
+                    caller_phone=None,
+                )
+                normalized = availability.casefold()
+                if (
+                    "bookable appointment starts" in normalized
+                    or "you will be token number" in normalized
+                ):
+                    return {
+                        "date": str(candidate),
+                        "spoken_date": candidate.strftime("%d %B"),
+                        "availability": availability,
+                        "leave_through": (
+                            str(leave_through) if leave_through else None
+                        ),
+                    }
+            candidate += timedelta(days=1)
+        return None
+
+    @function_tool()
+    async def get_doctor_return_availability(
+        self,
+        context: RunContext,
+        doctor_id: str,
+    ) -> dict:
+        """When does this doctor return after recorded leave?
+
+        Use for "when will the doctor return after leave?", "what is their
+        next available day after leave?", or equivalent questions. Do not ask
+        the caller to provide a date. This checks the current or next recorded
+        leave range, published schedule, and real booking capacity, then
+        returns the first bookable date/time after that leave.
+        """
+        self._state.quality_intent = "availability"
+        _say_lookup_filler(context)
+        resolved = await self._resolve_doctor_id(doctor_id, keep_established=True)
+        doctor = await self._db.get(Doctor, resolved)
+        if doctor is None or doctor.branch_id != self._state.branch_id:
+            return {"error": "unknown_doctor"}
+
+        today = (await _branch_now(self._state.branch_id, self._db)).date()
+        leave_anchor = (
+            await self._db.execute(
+                select(DoctorUnavailability.date)
+                .where(
+                    and_(
+                        DoctorUnavailability.branch_id == self._state.branch_id,
+                        DoctorUnavailability.doctor_id == doctor.id,
+                        DoctorUnavailability.date >= today,
+                    )
+                )
+                .order_by(DoctorUnavailability.date)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        result = await self._find_next_doctor_availability(
+            doctor,
+            leave_anchor or today,
+            leave_anchor=leave_anchor,
+        )
+        if result is None:
+            return {
+                "doctor": doctor.name,
+                "available": False,
+                "instruction": (
+                    "No future bookable date is currently published in the "
+                    "next 60 days. Say exactly that. Never invent a return "
+                    "date and never say you are unaware of the leave record."
+                ),
+            }
+
+        leave_text = (
+            f"The recorded leave runs through {result['leave_through']}. "
+            if result["leave_through"] else ""
+        )
+        return {
+            "doctor": doctor.name,
+            "available": True,
+            **result,
+            "instruction": (
+                f"{leave_text}{doctor.name}'s first verified bookable "
+                f"availability is {result['spoken_date']}: "
+                f"{result['availability']} Answer directly, then offer to book it."
+            ),
+        }
+
     @function_tool()
     async def get_doctor_schedule(
         self,
@@ -4908,10 +5064,30 @@ class VachanamAgent(Agent):
         )
         spoken_date = when.strftime("%d %B")
         if schedule.status == "unavailable" and schedule.source == "leave":
+            next_available = await self._find_next_doctor_availability(
+                doctor, when, leave_anchor=when
+            )
+            if next_available is not None:
+                return {
+                    "doctor": doctor.name,
+                    "date": str(when),
+                    "available": False,
+                    "next_available": next_available,
+                    "instruction": (
+                        f"{doctor.name} is on leave through "
+                        f"{next_available['leave_through']} and is next "
+                        f"bookable on {next_available['spoken_date']}: "
+                        f"{next_available['availability']} Tell the caller this "
+                        "verified return date/time and offer to book it."
+                    ),
+                }
             return {
                 "doctor": doctor.name, "date": str(when), "available": False,
-                "instruction": f"{doctor.name} is not sitting on {spoken_date}. "
-                               "Offer another date.",
+                "instruction": (
+                    f"{doctor.name} is on leave on {spoken_date}, but no future "
+                    "bookable date is published in the next 60 days. Say that "
+                    "exactly; never say you are unaware and never guess."
+                ),
             }
         if schedule.status == "unpublished":
             return {
