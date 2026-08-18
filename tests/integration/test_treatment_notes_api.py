@@ -213,7 +213,7 @@ async def test_cross_branch_note_denied(db):
 
 
 @pytest.mark.asyncio
-async def test_attend_auto_creates_treatment_log(db):
+async def test_attend_auto_creates_treatment_log_and_queues_feedback(db, monkeypatch):
     """Marking a token attended opens a treatment log for that patient (Vinay
     2026-06-24: 'whoever attends should have a log created'). Idempotent per token."""
     org_id = uuid.uuid4()
@@ -227,6 +227,15 @@ async def test_attend_auto_creates_treatment_log(db):
     tok = Token(id=uuid.uuid4(), branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
                 date=date(2026, 6, 24), token_number=1, status="confirmed", source="walk_in")
     db.add(tok); await db.commit()
+
+    feedback = []
+
+    async def _capture_feedback(self, to, **kwargs):
+        feedback.append((to, kwargs))
+
+    from backend.services.meta_service import MetaService
+
+    monkeypatch.setattr(MetaService, "send_rating_request", _capture_feedback)
 
     app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, user_id=usr.id)
     try:
@@ -245,3 +254,14 @@ async def test_attend_auto_creates_treatment_log(db):
     assert notes[0].doctor_id == doc.id
     assert notes[0].visit_date == date(2026, 6, 24)
     assert notes[0].steps_performed is None  # blank log to be filled by the doctor
+    assert feedback == [
+        (
+            pat.phone,
+            {
+                "branch_id": br.id,
+                "token_id": str(tok.id),
+                "clinic_name": br.name,
+                "background_delivery": True,
+            },
+        )
+    ]

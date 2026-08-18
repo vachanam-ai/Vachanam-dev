@@ -234,7 +234,7 @@ class MetaService:
 
     async def send_rating_request(
         self, to: str, *, branch_id=None, token_id: str = "",
-        clinic_name: str = "",
+        clinic_name: str = "", background_delivery: bool = False,
     ) -> None:
         buttons = [
             {"id": f"rate:{token_id}:{score}", "title": f"{score} ⭐"}
@@ -245,6 +245,7 @@ class MetaService:
             _values("rating", clinic=clinic_name),
             event_key=(f"rating:{token_id}" if token_id else None),
             buttons=buttons,
+            background_delivery=background_delivery,
         )
 
     async def send_leave_rebook(
@@ -275,6 +276,7 @@ class MetaService:
         branch_id=None,
         token_id: str | None = None,
         patient_lang: str | None = None,
+        background_delivery: bool = False,
     ) -> None:
         """Send the booking-confirmation template with Reschedule/Cancel
         buttons. branch_id/token_id are optional for call-site compatibility —
@@ -323,6 +325,7 @@ class MetaService:
                 ),
                 event_key=(f"booking:{token_id}" if token_id else None),
                 buttons=buttons,
+                background_delivery=background_delivery,
             )
         except Exception as e:  # noqa: BLE001 — RULE 4: never surfaces to booking
             logger.warning("wa_confirmation_failed", error=str(e)[:200])

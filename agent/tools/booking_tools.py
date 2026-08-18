@@ -1599,6 +1599,7 @@ async def confirm_booking(
                 branch_id=branch_id,
                 token_id=str(token.id),
                 patient_lang=getattr(patient, "preferred_language", None),
+                background_delivery=True,
             )
         except Exception as e:
             logger.error("whatsapp_confirmation_failed", error=str(e), token_id=str(token.id))

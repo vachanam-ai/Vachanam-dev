@@ -19,6 +19,29 @@ BACKOFF_SECONDS = (5, 30, 300, 1800, 21600, 86400, 86400, 86400, 86400)
 MAX_ATTEMPTS = 10
 BATCH = 50
 
+# A late transactional message is worse than a missed one: it can tell a
+# patient that yesterday's booking/cancellation is the current state. The
+# authoritative booking remains in Postgres; only its stale notification is
+# retired. Scheduled reminders/follow-ups keep their own timing semantics.
+TRANSACTIONAL_MAX_AGE = timedelta(minutes=15)
+TRANSACTIONAL_PURPOSES = frozenset({"booking_confirm", "reschedule", "cancel"})
+
+
+def _transaction_expired(task: WhatsAppDelivery, now: datetime) -> bool:
+    if task.purpose not in TRANSACTIONAL_PURPOSES or task.created_at is None:
+        return False
+    created_at = task.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return now - created_at > TRANSACTIONAL_MAX_AGE
+
+
+async def _deliver_safely(task_id) -> None:
+    try:
+        await deliver(task_id)
+    except Exception as exc:  # noqa: BLE001 - scheduled worker will retry the row
+        logger.warning("wa_background_delivery_failed", error=str(exc)[:200])
+
 
 async def _connected(branch_id) -> bool:
     async with _db_module.AsyncSessionLocal() as db:
@@ -132,7 +155,7 @@ async def enqueue(
         # a live voice tool wait for Meta's network response. If this process
         # exits, the scheduled outbox worker recovers the pending/in-progress
         # row and retries it.
-        asyncio.create_task(deliver(task_id))
+        asyncio.create_task(_deliver_safely(task_id))
         return True
     if not send_now:
         return True
@@ -164,6 +187,19 @@ async def deliver(task_id) -> bool:
         if task.status == "sent":
             return True
         if task.status in {"in_progress", "failed_permanent", "cancelled"}:
+            return False
+        now = datetime.now(timezone.utc)
+        if _transaction_expired(task, now):
+            task.status = "cancelled"
+            task.next_attempt_at = now
+            task.last_error = "stale transactional notification expired"
+            await db.commit()
+            logger.warning(
+                "wa_delivery_expired",
+                branch_id=str(task.branch_id),
+                purpose=task.purpose,
+                event_key=task.event_key,
+            )
             return False
         task.status = "in_progress"
         await db.commit()

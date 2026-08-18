@@ -1,6 +1,7 @@
 """Proof that patient-event WhatsApp sends are durable and idempotent."""
 import asyncio
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
@@ -98,6 +99,39 @@ async def test_transient_failure_is_persisted_then_retried(db, monkeypatch):
     assert task.status == "sent"
     assert task.attempts == 1
     assert task.sent_at is not None
+
+
+async def test_stale_transactional_message_is_retired_not_sent(db, monkeypatch):
+    branch = await _branch(db)
+    sends = 0
+
+    monkeypatch.setattr(wa_service, "wa_enabled", lambda *a, **k: True)
+
+    async def sent(*args, **kwargs):
+        nonlocal sends
+        sends += 1
+        return True
+
+    monkeypatch.setattr(meta_service, "send_purpose", sent)
+    assert await wa_delivery.enqueue(
+        branch.id,
+        "+919876500022",
+        "booking_confirm",
+        ["Anjali", "Clinic", "Srinivas", "12 August", "10:30 AM"],
+        event_key="booking:stale-token",
+        send_now=False,
+    ) is True
+
+    task = (await db.execute(select(WhatsAppDelivery))).scalar_one()
+    task.created_at = datetime.now(timezone.utc) - timedelta(minutes=16)
+    await db.commit()
+
+    assert await wa_delivery.deliver(task.id) is False
+    db.expire_all()
+    task = (await db.execute(select(WhatsAppDelivery))).scalar_one()
+    assert sends == 0
+    assert task.status == "cancelled"
+    assert task.last_error == "stale transactional notification expired"
 
 
 async def test_provider_send_does_not_hold_an_outbox_db_connection(db, monkeypatch):
