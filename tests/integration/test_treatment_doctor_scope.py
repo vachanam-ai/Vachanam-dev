@@ -14,7 +14,7 @@ import pytest_asyncio
 
 from backend.config import settings
 from backend.models.schema import (
-    Branch, Doctor, Organization, Patient, TreatmentNote, User,
+    Branch, Doctor, Organization, Patient, PatientMessage, TreatmentNote, User,
 )
 
 _ALGO = "HS256"
@@ -94,12 +94,11 @@ async def test_doctor_list_is_forced_to_own_threads(client, db):
     assert [x["name"] for x in rows] == ["MinePatient"]
     assert all(x["doctor_id"] == str(d1.id) for x in rows)
 
-    # Other doctor's patient's notes: forced scope yields nothing.
+    # Other doctor's patient is not addressable from a doctor session.
     r = await client.get(f"/treatment/patients/{p2.id}/treatment-notes",
                          params={"branch_id": str(b.id), "doctor_id": str(d2.id)},
                          headers=_auth(tok))
-    assert r.status_code == 200
-    assert r.json()["notes"] == []
+    assert r.status_code == 403
 
     # Owner keeps the full view (unchanged for other roles).
     owner = _jwt("org_admin", str(org.id), str(b.id))
@@ -140,3 +139,33 @@ async def test_doctor_cannot_write_other_doctors_threads(client, db):
     left = (await db.execute(select(TreatmentNote.id).where(
         TreatmentNote.id == n2.id))).scalar_one_or_none()
     assert left is not None, "doctor login must not delete another doctor's thread"
+
+
+@pytest.mark.asyncio
+async def test_doctor_cannot_read_or_mark_messages_for_another_doctors_patient(client, db):
+    org, b, d1, d2, uid, p1, p2, n1, n2 = await _seed(db)
+    message = PatientMessage(
+        branch_id=b.id,
+        patient_id=p2.id,
+        caller_phone=p2.phone,
+        message="private message for the other treatment",
+    )
+    db.add(message)
+    await db.commit()
+    tok = _jwt("doctor", str(org.id), str(b.id), str(uid))
+
+    r = await client.get(
+        f"/treatment/patients/{p2.id}/followups",
+        params={"branch_id": str(b.id), "doctor_id": str(d2.id)},
+        headers=_auth(tok),
+    )
+    assert r.status_code == 403
+
+    r = await client.post(
+        f"/treatment/patients/{p2.id}/messages/mark-read",
+        json={"branch_id": str(b.id)},
+        headers=_auth(tok),
+    )
+    assert r.status_code == 403
+    await db.refresh(message)
+    assert message.read_at is None

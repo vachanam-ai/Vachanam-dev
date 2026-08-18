@@ -138,7 +138,8 @@ function ThreadRow({ item }) {
 }
 
 export default function Treatments() {
-  const { branchId } = useAuth();
+  const { branchId, role } = useAuth();
+  const isDoctor = role === "doctor";
   const qc = useQueryClient();
   const pageRef = useRef(null);
 
@@ -397,17 +398,19 @@ export default function Treatments() {
             onChange={(e) => setPatientSearch(e.target.value)}
             aria-label="Search patients"
           />
-          <select
-            className="field sm:w-56"
-            value={filterDoctorId}
-            onChange={(e) => setFilterDoctorId(e.target.value)}
-            aria-label="Filter by doctor"
-          >
-            <option value="">All doctors</option>
-            {doctorList.map((d) => (
-              <option key={d.id} value={d.id}>{d.name}</option>
-            ))}
-          </select>
+          {!isDoctor && (
+            <select
+              className="field sm:w-56"
+              value={filterDoctorId}
+              onChange={(e) => setFilterDoctorId(e.target.value)}
+              aria-label="Filter by doctor"
+            >
+              <option value="">All doctors</option>
+              {doctorList.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          )}
         </div>
         {patientsLoading ? (
           <p className="font-ui text-sm text-slate">Loading patients…</p>
@@ -689,22 +692,28 @@ export default function Treatments() {
                 />
               </div>
               <div>
-                <label className="label" htmlFor="doctor-select">Doctor</label>
-                <select
-                  id="doctor-select"
-                  className="field"
-                  value={doctorId}
-                  onChange={(e) => setDoctorId(e.target.value)}
-                  required
-                >
-                  <option value="">Select…</option>
-                  {doctorList.map((d) => {
-                    const id = d.id ?? d.doctor_id;
-                    return (
-                      <option key={id} value={id}>{d.name}</option>
-                    );
-                  })}
-                </select>
+                <label className="label" htmlFor={isDoctor ? "assigned-doctor" : "doctor-select"}>Doctor</label>
+                {isDoctor ? (
+                  <div id="assigned-doctor" className="field bg-pill" aria-label="Assigned doctor">
+                    {selectedPatient?.doctor_name || "Your doctor profile"}
+                  </div>
+                ) : (
+                  <select
+                    id="doctor-select"
+                    className="field"
+                    value={doctorId}
+                    onChange={(e) => setDoctorId(e.target.value)}
+                    required
+                  >
+                    <option value="">Select…</option>
+                    {doctorList.map((d) => {
+                      const id = d.id ?? d.doctor_id;
+                      return (
+                        <option key={id} value={id}>{d.name}</option>
+                      );
+                    })}
+                  </select>
+                )}
               </div>
             </div>
 

@@ -125,6 +125,28 @@ async def _forced_doctor_id(
     return own
 
 
+async def _assert_doctor_treats_patient(
+    doctor_id: uuid.UUID | None,
+    patient_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    db: AsyncSession,
+) -> None:
+    """Doctor accounts may address only patients in their own treatment list."""
+    if doctor_id is None:
+        return
+    treatment_id = (
+        await db.execute(
+            select(TreatmentNote.id).where(
+                TreatmentNote.branch_id == branch_id,
+                TreatmentNote.patient_id == patient_id,
+                TreatmentNote.doctor_id == doctor_id,
+            ).limit(1)
+        )
+    ).scalar_one_or_none()
+    if treatment_id is None:
+        raise HTTPException(status_code=403, detail="Patient is not assigned to this doctor")
+
+
 @router.post("/patients/{patient_id}/treatment-notes", status_code=201, response_model=NoteOut)
 async def create_note(
     patient_id: uuid.UUID,
@@ -230,6 +252,7 @@ async def list_notes(
     own = await _forced_doctor_id(user, branch_id, db)
     if own is not None:
         doctor_id = own
+    await _assert_doctor_treats_patient(own, patient_id, branch_id, db)
     q = select(TreatmentNote).where(
         TreatmentNote.patient_id == patient_id,
         TreatmentNote.branch_id == branch_id,
@@ -440,6 +463,7 @@ async def list_followups(
     own = await _forced_doctor_id(user, branch_id, db)
     if own is not None:
         doctor_id = own
+    await _assert_doctor_treats_patient(own, patient_id, branch_id, db)
     q = select(FollowupTask).where(
         FollowupTask.patient_id == patient_id,
         FollowupTask.branch_id == branch_id,
@@ -511,6 +535,8 @@ async def mark_messages_read(
     Idempotent (already-read rows never match)."""
     await assert_branch_access(user, str(body.branch_id), db)
     await _load_patient(patient_id, body.branch_id, db)
+    own = await _forced_doctor_id(user, body.branch_id, db)
+    await _assert_doctor_treats_patient(own, patient_id, body.branch_id, db)
     res = await db.execute(
         update(PatientMessage)
         .where(
@@ -535,6 +561,7 @@ async def doctor_reply(
     own = await _forced_doctor_id(user, body.branch_id, db)
     if own is not None and body.doctor_id != own:
         raise HTTPException(status_code=403, detail="Doctors can only reply on their own treatment threads")
+    await _assert_doctor_treats_patient(own, patient_id, body.branch_id, db)
     await _load_patient(patient_id, body.branch_id, db)
     await _load_doctor(body.doctor_id, body.branch_id, db)
     branch_timezone = (
