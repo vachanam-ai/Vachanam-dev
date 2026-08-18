@@ -140,12 +140,25 @@ def natural_fallback(match: FaqMatch, lang_code: str) -> str:
     """Self-contained fallback when the small natural-language pass times out."""
     answer = match.answer.strip().rstrip(".")
     if match.intent == "consultation_fee" and re.fullmatch(r"[\d,]+(?:\.\d+)?", answer):
-        answer = f"{answer} rupees" if lang_code == "en" else f"{answer} రూపాయలు"
+        currency = {
+            "te": "రూపాయలు", "hi": "रुपये", "ta": "ரூபாய்",
+            "kn": "ರೂಪಾಯಿ", "mr": "रुपये", "en": "rupees",
+        }.get(lang_code, "rupees")
+        answer = f"{answer} {currency}"
+        direct = {
+            "te": f"కన్సల్టేషన్ ఫీజు {answer} అండి.",
+            "hi": f"कंसल्टेशन फीस {answer} है जी।",
+            "ta": f"கன்சல்டேஷன் பீஸ் {answer}ங்க.",
+            "kn": f"ಕನ್ಸಲ್ಟೇಶನ್ ಫೀಸ್ {answer} ರೀ.",
+            "mr": f"कन्सल्टेशन फी {answer} आहे.",
+            "en": f"The consultation fee is {answer}.",
+        }
+        return direct.get(lang_code, direct["en"])
+    if match.intent == "clinic_hours":
+        localized = _clinic_hours(answer, lang_code)
+        if localized:
+            return localized
     if lang_code == "te":
-        if match.intent == "clinic_hours":
-            localized = _telugu_clinic_hours(answer)
-            if localized:
-                return localized
         subject = {
             "consultation_fee": "కన్సల్టేషన్ ఫీజు", "clinic_hours": "మా క్లినిక్ టైమింగ్స్",
             "location": "మా క్లినిక్ లొకేషన్", "parking": "పార్కింగ్ గురించి",
@@ -196,7 +209,46 @@ def _clock_value(hour_raw: str, minute_raw: str | None, meridiem: str | None) ->
     return time(hour, minute)
 
 
-def _telugu_clinic_hours(answer: str) -> str | None:
+_CLOCK_NUMBERS = {
+    "hi": {
+        1: "एक", 2: "दो", 3: "तीन", 4: "चार", 5: "पाँच", 6: "छह", 7: "सात",
+        8: "आठ", 9: "नौ", 10: "दस", 11: "ग्यारह", 12: "बारह", 15: "पंद्रह", 30: "तीस", 45: "पैंतालीस",
+    },
+    "ta": {
+        1: "ஒன்று", 2: "இரண்டு", 3: "மூன்று", 4: "நான்கு", 5: "ஐந்து", 6: "ஆறு", 7: "ஏழு",
+        8: "எட்டு", 9: "ஒன்பது", 10: "பத்து", 11: "பதினொன்று", 12: "பன்னிரண்டு", 15: "பதினைந்து", 30: "முப்பது", 45: "நாற்பத்தைந்து",
+    },
+    "kn": {
+        1: "ಒಂದು", 2: "ಎರಡು", 3: "ಮೂರು", 4: "ನಾಲ್ಕು", 5: "ಐದು", 6: "ಆರು", 7: "ಏಳು",
+        8: "ಎಂಟು", 9: "ಒಂಬತ್ತು", 10: "ಹತ್ತು", 11: "ಹನ್ನೊಂದು", 12: "ಹನ್ನೆರಡು", 15: "ಹದಿನೈದು", 30: "ಮೂವತ್ತು", 45: "ನಲವತ್ತೈದು",
+    },
+    "mr": {
+        1: "एक", 2: "दोन", 3: "तीन", 4: "चार", 5: "पाच", 6: "सहा", 7: "सात",
+        8: "आठ", 9: "नऊ", 10: "दहा", 11: "अकरा", 12: "बारा", 15: "पंधरा", 30: "तीस", 45: "पंचेचाळीस",
+    },
+}
+
+
+def _clock_phrase(value: time, lang_code: str) -> str:
+    """Natural clock speech for the four non-Telugu production languages."""
+    hour = value.hour % 12 or 12
+    numbers = _CLOCK_NUMBERS[lang_code]
+    hour_word = numbers[hour]
+    minute = "" if value.minute == 0 else f" {numbers.get(value.minute, value.minute)}"
+    if lang_code == "hi":
+        daypart = "सुबह" if value.hour < 12 else ("दोपहर" if value.hour < 16 else "शाम")
+        return f"{daypart} {hour_word} बजे" if not minute else f"{daypart} {hour_word} बजकर{minute} मिनट"
+    if lang_code == "ta":
+        daypart = "காலை" if value.hour < 12 else ("மதியம்" if value.hour < 16 else "மாலை")
+        return f"{daypart} {hour_word} மணி" + (f"{minute} நிமிடம்" if minute else "")
+    if lang_code == "kn":
+        daypart = "ಬೆಳಗ್ಗೆ" if value.hour < 12 else ("ಮಧ್ಯಾಹ್ನ" if value.hour < 16 else "ಸಂಜೆ")
+        return f"{daypart} {hour_word} ಗಂಟೆ" + (f"{minute} ನಿಮಿಷ" if minute else "")
+    daypart = "सकाळी" if value.hour < 12 else ("दुपारी" if value.hour < 16 else "संध्याकाळी")
+    return f"{daypart} {hour_word} वाजता" if not minute else f"{daypart} {hour_word} वाजून{minute} मिनिटांनी"
+
+
+def _clinic_hours(answer: str, lang_code: str) -> str | None:
     """Localize the common English DB-hours shape without an LLM round trip."""
     found = _HOURS_RANGE.search(answer or "")
     if found is None:
@@ -215,7 +267,43 @@ def _telugu_clinic_hours(answer: str) -> str | None:
     end = _clock_value(
         found.group("end"), found.group("end_min"), inferred_end_mer
     )
-    speech = f"మా క్లినిక్ {telugu_time_range(start, end)} తెరిచి ఉంటుందండి."
-    if re.search(r"sundays?\s+(?:is\s+)?(?:closed?|close)|closed?\s+on\s+sundays?", answer, re.I):
-        speech += " Sunday రోజు సెలవు అండి."
+    closed_sunday = bool(re.search(
+        r"sundays?\s+(?:is\s+)?(?:closed?|close)|closed?\s+on\s+sundays?",
+        answer, re.I,
+    ))
+    if lang_code == "te":
+        speech = f"మా క్లినిక్ {telugu_time_range(start, end)} తెరిచి ఉంటుందండి."
+        return speech + (" Sunday రోజు సెలవు అండి." if closed_sunday else "")
+    if lang_code == "en":
+        def _en_clock(value: time) -> str:
+            hour = value.hour % 12 or 12
+            minute = f":{value.minute:02d}" if value.minute else ""
+            return f"{hour}{minute} {'AM' if value.hour < 12 else 'PM'}"
+        speech = f"Our clinic is open from {_en_clock(start)} to {_en_clock(end)}."
+        return speech + (" It is closed on Sundays." if closed_sunday else "")
+    if lang_code not in _CLOCK_NUMBERS:
+        return None
+    start_speech, end_speech = _clock_phrase(start, lang_code), _clock_phrase(end, lang_code)
+    templates = {
+        "hi": f"हमारा क्लिनिक {start_speech} से {end_speech} तक खुला रहता है जी।",
+        "ta": f"எங்கள் கிளினிக் {start_speech} முதல் {end_speech} வரை திறந்திருக்கும்ங்க.",
+        "kn": f"ನಮ್ಮ ಕ್ಲಿನಿಕ್ {start_speech}ಯಿಂದ {end_speech}ಯವರೆಗೆ ತೆರೆದಿರುತ್ತದೆ ರೀ.",
+        "mr": "",
+    }
+    if lang_code == "mr":
+        start_boundary = start_speech.replace("वाजता", "वाजल्यापासून").replace("मिनिटांनी", "मिनिटांपासून")
+        end_boundary = end_speech.replace("वाजता", "वाजेपर्यंत").replace("मिनिटांनी", "मिनिटांपर्यंत")
+        templates["mr"] = f"आमचं क्लिनिक {start_boundary} {end_boundary} उघडं असतं."
+    sunday = {
+        "hi": " Sunday को बंद रहता है।", "ta": " Sunday விடுமுறைங்க.",
+        "kn": " Sunday ರಜೆ.", "mr": " Sunday सुट्टी असते.",
+    }
+    speech = templates[lang_code]
+    if closed_sunday:
+        speech += sunday[lang_code]
     return speech
+
+
+def _telugu_clinic_hours(answer: str) -> str | None:
+    """Backward-compatible name used by older tests/callers."""
+    return _clinic_hours(answer, "te")

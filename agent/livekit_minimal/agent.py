@@ -2970,6 +2970,41 @@ _DOCTOR_SCOPE_TE = {
     "plastic surgery": "ప్లాస్టిక్ సర్జరీకి సంబంధించిన సమస్యలు",
 }
 
+_DOCTOR_SCOPE_LOCAL = {
+    "hi": {
+        "dermatology": "त्वचा, बाल और नाखूनों से जुड़ी समस्याएँ",
+        "orthopedics": "हड्डियों, जोड़ों और मांसपेशियों से जुड़ी समस्याएँ",
+        "pediatrics": "बच्चों की सेहत से जुड़ी समस्याएँ",
+        "gynecology": "महिलाओं की सेहत से जुड़ी समस्याएँ",
+        "ent": "कान, नाक और गले की समस्याएँ",
+        "dentistry": "दाँत, मसूड़े और मुँह की समस्याएँ",
+        "ophthalmology": "आँखों की समस्याएँ", "cardiology": "दिल से जुड़ी समस्याएँ",
+        "general medicine": "सामान्य सेहत की समस्याएँ", "plastic surgery": "प्लास्टिक सर्जरी से जुड़ी समस्याएँ",
+    },
+    "ta": {
+        "dermatology": "தோல், முடி, நகம் சம்பந்தப்பட்ட பிரச்சனைகள்",
+        "orthopedics": "எலும்பு, மூட்டு, தசை சம்பந்தப்பட்ட பிரச்சனைகள்",
+        "pediatrics": "குழந்தைகளின் உடல்நலப் பிரச்சனைகள்", "gynecology": "பெண்களின் உடல்நலப் பிரச்சனைகள்",
+        "ent": "காது, மூக்கு, தொண்டை பிரச்சனைகள்", "dentistry": "பல், ஈறு, வாய் பிரச்சனைகள்",
+        "ophthalmology": "கண் பிரச்சனைகள்", "cardiology": "இதயம் சம்பந்தப்பட்ட பிரச்சனைகள்",
+        "general medicine": "பொதுவான உடல்நலப் பிரச்சனைகள்", "plastic surgery": "பிளாஸ்டிக் சர்ஜரி சம்பந்தப்பட்ட பிரச்சனைகள்",
+    },
+    "kn": {
+        "dermatology": "ಚರ್ಮ, ಕೂದಲು, ಉಗುರುಗಳಿಗೆ ಸಂಬಂಧಿಸಿದ ಸಮಸ್ಯೆಗಳು", "orthopedics": "ಮೂಳೆ, ಕೀಲು, ಸ್ನಾಯುಗಳಿಗೆ ಸಂಬಂಧಿಸಿದ ಸಮಸ್ಯೆಗಳು",
+        "pediatrics": "ಮಕ್ಕಳ ಆರೋಗ್ಯ ಸಮಸ್ಯೆಗಳು", "gynecology": "ಮಹಿಳೆಯರ ಆರೋಗ್ಯ ಸಮಸ್ಯೆಗಳು",
+        "ent": "ಕಿವಿ, ಮೂಗು, ಗಂಟಲಿನ ಸಮಸ್ಯೆಗಳು", "dentistry": "ಹಲ್ಲು, ವಸಡು, ಬಾಯಿಯ ಸಮಸ್ಯೆಗಳು",
+        "ophthalmology": "ಕಣ್ಣಿನ ಸಮಸ್ಯೆಗಳು", "cardiology": "ಹೃದಯಕ್ಕೆ ಸಂಬಂಧಿಸಿದ ಸಮಸ್ಯೆಗಳು",
+        "general medicine": "ಸಾಮಾನ್ಯ ಆರೋಗ್ಯ ಸಮಸ್ಯೆಗಳು", "plastic surgery": "ಪ್ಲಾಸ್ಟಿಕ್ ಸರ್ಜರಿಗೆ ಸಂಬಂಧಿಸಿದ ಸಮಸ್ಯೆಗಳು",
+    },
+    "mr": {
+        "dermatology": "त्वचा, केस आणि नखांच्या समस्या", "orthopedics": "हाडे, सांधे आणि स्नायूंच्या समस्या",
+        "pediatrics": "मुलांच्या आरोग्याच्या समस्या", "gynecology": "स्त्रियांच्या आरोग्याच्या समस्या",
+        "ent": "कान, नाक आणि घशाच्या समस्या", "dentistry": "दात, हिरड्या आणि तोंडाच्या समस्या",
+        "ophthalmology": "डोळ्यांच्या समस्या", "cardiology": "हृदयाशी संबंधित समस्या",
+        "general medicine": "सामान्य आरोग्याच्या समस्या", "plastic surgery": "प्लास्टिक सर्जरीशी संबंधित समस्या",
+    },
+}
+
 
 def _doctor_scope_text(doctor, language: str) -> str:
     """Explain one DB-selected doctor's scope; never diagnose or invent a service."""
@@ -2985,8 +3020,15 @@ def _doctor_scope_text(doctor, language: str) -> str:
         return f"Dr. {name} treats problems related to {specialty}." if specialty else (
             f"The clinic has not published Dr. {name}'s specialty yet."
         )
-    # For languages without a verified specialty phrase, repeat only the DB
-    # value; the full LLM remains out of the factual decision.
+    scope = _DOCTOR_SCOPE_LOCAL.get(language, {}).get(canonical or "")
+    if scope:
+        return {
+            "hi": f"डॉक्टर {name} {scope} देखते हैं जी।",
+            "ta": f"டாக்டர் {name} {scope} பார்ப்பாங்க.",
+            "kn": f"ಡಾಕ್ಟರ್ {name} {scope} ನೋಡುತ್ತಾರೆ ರೀ.",
+            "mr": f"डॉक्टर {name} {scope} पाहतात.",
+        }[language]
+    # Unknown specialties stay tied to the literal DB value.
     return _doctor_roster_text((doctor,), language)
 
 
