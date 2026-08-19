@@ -197,7 +197,6 @@ VAD_TURN_DETECTION_S = 0.06
 # This applies ONLY to deterministic incomplete-fragment clarifications; normal
 # complete turns retain the 60ms VAD path and pay no extra latency.
 INCOMPLETE_CLARIFICATION_GRACE_S = 0.35
-AMBIGUOUS_TIME_GRACE_S = 1.1
 
 
 def _decode_jsonb(value, fallback):
@@ -3299,30 +3298,10 @@ _INCOMPLETE_EXACT = frozenset({
 })
 
 
-def _bare_ambiguous_clock_time(text: str) -> str | None:
-    """Return a standalone 1-11 clock value that still needs AM/PM.
-
-    Only a bare numeric clock is accepted. Longer utterances and plain
-    integers keep their existing intent handling, so ages, tokens and phone
-    digits are untouched. Twelve is excluded because clinic-time speech
-    deterministically means noon.
-    """
-    clean = (text or "").strip().rstrip(".!?…").strip()
-    match = re.fullmatch(r"(\d{1,2})\s*:\s*([0-5]\d)", clean)
-    if match is None:
-        return None
-    hour = int(match.group(1))
-    if not 1 <= hour <= 11:
-        return None
-    return f"{hour}:{match.group(2)}"
-
-
 def _is_incomplete_fragment(text: str) -> bool:
     '''Recognize only high-confidence unfinished caller turns.'''
     clean = ' '.join((text or '').strip().split())
     if not clean:
-        return True
-    if _bare_ambiguous_clock_time(clean) is not None:
         return True
     normalized = clean.rstrip('.…').strip().casefold()
     if normalized in _INCOMPLETE_EXACT:
@@ -3497,20 +3476,6 @@ def _incomplete_clarification(language: str, attempt: int = 0) -> str:
     }
     table = first if attempt <= 0 else guided if attempt == 1 else support
     return table.get(language, table['en'])
-
-
-def _ambiguous_time_clarification(language: str, clock: str) -> str:
-    """Ask only for the missing daypart; never invent AM or PM."""
-    return {
-        'te': f'{clock} ఉదయమా, సాయంత్రమా అండి?',
-        'hi': f'{clock} सुबह या शाम जी?',
-        'ta': f'{clock} காலையா, மாலையா?',
-        'kn': f'{clock} ಬೆಳಿಗ್ಗೆಯಾ, ಸಂಜೆಯಾ?',
-        'mr': f'{clock} सकाळी की संध्याकाळी?',
-        'ml': f'{clock} രാവിലെയോ വൈകുന്നേരമോ?',
-        'bn': f'{clock} সকাল না সন্ধ্যা?',
-        'en': f'Did you mean {clock} AM or PM?',
-    }.get(language, f'Did you mean {clock} AM or PM?')
 
 
 _HOSTILE_WORDS = (
@@ -3785,20 +3750,14 @@ class VachanamAgent(Agent):
         # word of the call.
         self.set_pronunciations({})
 
-    def _defer_incomplete_clarification(
-        self, speech: str, *, grace_s: float | None = None
-    ) -> None:
-        """Give a caller time to finish a fragment, without slowing real turns."""
+    def _defer_incomplete_clarification(self, speech: str) -> None:
+        """Give a caller 350ms to finish a fragment, without slowing real turns."""
         _cancel_deferred_clarification(self._state, "replacement")
 
         async def _say_after_grace() -> None:
             this_task = asyncio.current_task()
             try:
-                await asyncio.sleep(
-                    INCOMPLETE_CLARIFICATION_GRACE_S
-                    if grace_s is None
-                    else grace_s
-                )
+                await asyncio.sleep(INCOMPLETE_CLARIFICATION_GRACE_S)
                 if self._state.deferred_clarification_task is not this_task:
                     return
                 self._state.deferred_clarification_task = None
@@ -4260,7 +4219,6 @@ class VachanamAgent(Agent):
                 str(explicit_doctor_id)[-8:],
                 _privacy_safe_session_id(self._state.session_id),
             )
-        ambiguous_clock = _bare_ambiguous_clock_time(utterance)
         incomplete_fragment = _is_incomplete_fragment(utterance)
         control_token_request = _is_control_token_request(utterance)
         reminder_policy_question = _is_reminder_policy_question(utterance)
@@ -4340,14 +4298,8 @@ class VachanamAgent(Agent):
             elif reminder_policy_question:
                 deterministic_speech = reminder_policy_speech
             elif incomplete_fragment:
-                deterministic_speech = (
-                    _ambiguous_time_clarification(
-                        detected_language, ambiguous_clock
-                    )
-                    if ambiguous_clock is not None
-                    else _incomplete_clarification(
-                        detected_language, clarification_attempt
-                    )
+                deterministic_speech = _incomplete_clarification(
+                    detected_language, clarification_attempt
                 )
             elif faq_match is not None:
                 deterministic_speech = faq_speech
@@ -4412,16 +4364,7 @@ class VachanamAgent(Agent):
         if incomplete_fragment:
             self._state.clarification_attempts = clarification_attempt + 1
             self._defer_incomplete_clarification(
-                _ambiguous_time_clarification(self._lang_code, ambiguous_clock)
-                if ambiguous_clock is not None
-                else _incomplete_clarification(
-                    self._lang_code, clarification_attempt
-                ),
-                grace_s=(
-                    AMBIGUOUS_TIME_GRACE_S
-                    if ambiguous_clock is not None
-                    else INCOMPLETE_CLARIFICATION_GRACE_S
-                ),
+                _incomplete_clarification(self._lang_code, clarification_attempt)
             )
             raise StopResponse()
 
@@ -4999,15 +4942,27 @@ class VachanamAgent(Agent):
             return None
         raw = value.strip().upper().replace('.', '')
         raw = re.sub(r'\s+', ' ', raw)
-        for fmt in ('%I:%M %p', '%I:%M%p', '%I %p', '%I%p', '%H'):
+        for fmt in ('%I:%M %p', '%I:%M%p', '%I %p', '%I%p'):
             try:
                 return datetime_cls.strptime(raw, fmt).time()
             except ValueError:
                 continue
         try:
-            return time_cls.fromisoformat(value)
+            parsed = time_cls.fromisoformat(raw)
         except ValueError:
-            raise ToolError(f"Invalid time '{value}'. Use HH:MM (24h).") from None
+            for fmt in ('%H:%M', '%H'):
+                try:
+                    parsed = datetime_cls.strptime(raw, fmt).time()
+                    break
+                except ValueError:
+                    continue
+            else:
+                raise ToolError(f"Invalid time '{value}'. Use HH:MM (24h).") from None
+        # Unmarked clinic times always mean the one natural occurrence inside
+        # the 09:00-21:00 service day: 9-11 morning, 12 noon, 1-8 evening.
+        if 1 <= parsed.hour <= 8:
+            return parsed.replace(hour=parsed.hour + 12)
+        return parsed
 
     @function_tool()
     async def route_to_doctor(self, context: RunContext, complaint: str) -> dict:

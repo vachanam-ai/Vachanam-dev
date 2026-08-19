@@ -12,8 +12,6 @@ from agent.livekit_minimal.agent import (
     _doctor_scope_text,
     _current_doctors_text,
     _control_token_refusal,
-    _bare_ambiguous_clock_time,
-    _ambiguous_time_clarification,
     _dominant_native_language,
     _inferred_call_failure,
     _incomplete_clarification,
@@ -146,26 +144,6 @@ def test_devanagari_language_is_inferred_only_with_language_specific_evidence():
 )
 def test_incomplete_fragments_are_deterministic(text):
     assert _is_incomplete_fragment(text)
-
-
-@pytest.mark.parametrize('text', ['7:45', '7:45.', '1:05', '11:59'])
-def test_bare_clock_waits_for_am_or_pm(text):
-    assert _bare_ambiguous_clock_time(text)
-    assert _is_incomplete_fragment(text)
-
-
-@pytest.mark.parametrize(
-    'text', ['7:45 AM', '7:45 pm', '12:00', '00:30', '23:45', 'age 7:45']
-)
-def test_complete_or_non_clock_values_do_not_enter_time_clarification(text):
-    assert _bare_ambiguous_clock_time(text) is None
-
-
-def test_bare_clock_clarification_never_invents_a_daypart():
-    assert _ambiguous_time_clarification('en', '7:45') == (
-        'Did you mean 7:45 AM or PM?'
-    )
-    assert '7:45' in _ambiguous_time_clarification('te', '7:45')
 
 
 @pytest.mark.asyncio

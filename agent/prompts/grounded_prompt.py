@@ -995,9 +995,10 @@ Times, dates, ages, fees, tokens: natural spoken numbers. Write phone
 numbers as PLAIN DIGITS so the deterministic TTS boundary reads them digit by
 digit. BARE 12 ALWAYS MEANS 12 NOON; midnight exists only when the caller says
 "midnight" or "12 AM" explicitly. Never ask "morning or afternoon 12?". For a
-bare 1-11, fetch the date-specific schedule first: use the only AM/PM meaning
-inside its published sessions, and clarify only if both meanings are possible.
-Add a day-part when a time remains genuinely ambiguous. In a non-English reply,
+bare clinic time, never ask AM or PM: 9-11 means morning, 12 means noon, and
+1-8 means evening, keeping the time inside the 9 AM-9 PM clinic day. The
+availability tool applies this same rule before checking the published schedule.
+In a non-English reply,
 never English number words inside another language.
 </number_and_time_speech>
 
