@@ -3324,6 +3324,8 @@ def _explicit_roster_doctor_id(
     spoken = consonant_skeleton(text)
     if not spoken:
         return None
+    latin_words = set(re.findall(r"[a-z]+", text.casefold()))
+    indic_spoken = consonant_skeleton(re.sub(r"[A-Za-z]+", " ", text))
     full_matches: list[tuple[int, UUID]] = []
     token_matches: list[UUID] = []
     for doctor in doctors or []:
@@ -3337,7 +3339,13 @@ def _explicit_roster_doctor_id(
         except (TypeError, ValueError):
             continue
         fingerprint = consonant_skeleton(name)
-        if len(fingerprint) >= 3 and fingerprint in spoken:
+        latin_name = re.findall(r"[a-z]+", name.casefold())
+        exact_latin_name = bool(latin_name) and all(
+            token in latin_words for token in latin_name
+        )
+        if len(fingerprint) >= 3 and (
+            exact_latin_name or (indic_spoken and fingerprint in indic_spoken)
+        ):
             full_matches.append((len(fingerprint), doctor_uuid))
             continue
         # Callers shorten names, and Telugu honorifics fuse onto the last word.
@@ -3350,7 +3358,10 @@ def _explicit_roster_doctor_id(
         # roster so an ambiguous surname leaves state untouched.
         for token in name.split():
             token_print = consonant_skeleton(token)
-            if len(token_print) >= 3 and token_print in spoken:
+            exact_latin_token = token.casefold() in latin_words
+            if len(token_print) >= 3 and (
+                exact_latin_token or (indic_spoken and token_print in indic_spoken)
+            ):
                 token_matches.append(doctor_uuid)
                 break
     if full_matches:
@@ -4773,17 +4784,33 @@ class VachanamAgent(Agent):
         lookup ran on a doctor the caller had never mentioned.
 
         The escapes are deterministic, so a caller who really does change
-        doctor is never trapped: naming one, or asking by specialty, both let
-        the model's own choice through.
+        doctor is never trapped: an explicit name resolves to that exact roster
+        doctor; a unique specialty resolves to its exact roster doctor.
         """
         established = self._state.doctor_id
-        if established is None or established == passed:
-            return passed
         utterance = self._state.last_user_utterance or ""
-        if _explicit_roster_doctor_id(utterance, self._doctor_contexts) is not None:
-            return passed  # caller named a doctor this turn
-        if _specialty_roster_query(utterance, self._doctor_contexts) is not None:
-            return passed  # caller asked by specialty ("the skin doctor")
+        explicit = _explicit_roster_doctor_id(utterance, self._doctor_contexts)
+        if explicit is not None:
+            self._state.doctor_id = explicit
+            return explicit  # the caller's name, never the model's UUID, wins
+        if established == passed:
+            return passed
+        specialty = _specialty_roster_query(utterance, self._doctor_contexts)
+        if specialty is not None:
+            matched_ids = {
+                UUID(str(doctor.id))
+                for doctor in specialty[1]
+                if getattr(doctor, "id", None) is not None
+            }
+            if len(matched_ids) == 1:
+                selected = matched_ids.pop()
+                self._state.doctor_id = selected
+                return selected
+            if passed in matched_ids:
+                self._state.doctor_id = passed
+                return passed
+        if established is None:
+            return passed
         logger.warning(
             "doctor_drift_blocked passed=%s kept=%s session=%s",
             str(passed)[-8:],

@@ -65,8 +65,16 @@ def test_caller_naming_another_doctor_wins():
     assert _resolve(SRINIVAS, "డాక్టర్ లక్ష్మి గారి టైమింగ్స్ చెప్పండి", LAKSHMI) == LAKSHMI
 
 
+def test_caller_name_beats_a_different_model_uuid():
+    assert _resolve(SRINIVAS, "డాక్టర్ లక్ష్మి గారి టైమింగ్స్ చెప్పండి", VISHNU) == LAKSHMI
+
+
 def test_caller_asking_by_specialty_wins():
     assert _resolve(SRINIVAS, "what are the skin doctor's timings?", LAKSHMI) == LAKSHMI
+
+
+def test_unique_specialty_beats_a_different_model_uuid():
+    assert _resolve(SRINIVAS, "what are the skin doctor's timings?", VISHNU) == LAKSHMI
 
 
 def test_nothing_established_yet_passes_through():
@@ -75,6 +83,10 @@ def test_nothing_established_yet_passes_through():
 
 def test_agreeing_argument_is_untouched():
     assert _resolve(SRINIVAS, "is he there on Saturday?", SRINIVAS) == SRINIVAS
+
+
+def test_saturday_is_not_mistaken_for_doctor_reddy():
+    assert ag._explicit_roster_doctor_id("is he there on Saturday?", ROSTER) is None
 
 
 @pytest.mark.asyncio
