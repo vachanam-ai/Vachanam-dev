@@ -40,6 +40,7 @@ def _agent(language='te', *, chat_ctx=None, factory=None):
 def test_english_detection_requires_a_real_sentence_not_latin_script():
     assert _clearly_english_utterance('Can I book an appointment tomorrow?')
     assert _clearly_english_utterance('What time is the doctor available today?')
+    assert _clearly_english_utterance("I'll let you know")
     assert _clearly_english_utterance('కెన్ యు రిపీట్ దట్ ఇన్ ఇంగ్లీష్, ప్లీజ్?')
     assert _clearly_english_utterance('ఓకే థాంక్యూ సో మచ్')
     assert not _clearly_english_utterance('repu doctor garu untara')
@@ -107,7 +108,7 @@ async def test_two_clear_english_turns_switch_the_whole_pipeline_to_english():
 
     await agent.on_user_turn_completed(
         ChatContext.empty(),
-        SimpleNamespace(content=['Can I book an appointment tomorrow?']),
+        SimpleNamespace(content=["I'll let you know"]),
     )
     assert state.language == 'te'
     assert state.language_candidate_turns == 1

@@ -3,8 +3,8 @@
 Vinay 2026-07-10: Soniox is better + cheaper (~$0.12/hr real-time Telugu).
 The contract that matters: the factory NEVER hard-requires the Soniox key —
 an empty key falls back to Sarvam so the clinic can't go offline over a
-missing/revoked secret (RULE 8), and the strict one-language-per-call rule
-(Vinay 2026-06-17) survives the provider change.
+missing/revoked secret (RULE 8). Soniox transcription supports code-switching;
+the runtime, not STT, owns the agent's response language.
 """
 from unittest.mock import patch
 
@@ -20,9 +20,9 @@ def test_soniox_when_key_set():
     assert isinstance(stt, soniox.STT)
     opts = stt._params
     assert opts.model == "stt-rt-v5"
-    # strict ONE language per call — hints pinned to the branch language
-    assert opts.language_hints == ["te"]
-    assert opts.language_hints_strict is True
+    # Preserve English code-switches without changing the agent reply language.
+    assert opts.language_hints == ["te", "en"]
+    assert opts.language_hints_strict is False
     assert stt._base_url == "wss://stt-rt.jp.soniox.com/transcribe-websocket"
     assert not hasattr(ag.settings, "soniox_api_key")
 
@@ -44,7 +44,14 @@ def test_language_switch_handoff_gets_new_language_hint():
     language must ride in the hints, not the old one."""
     with patch.object(ag.settings, "soniox_jp_api_key", "sk-test"):
         stt = ag._build_stt(get_lang("hi"))
-    assert stt._params.language_hints == ["hi"]
+    assert stt._params.language_hints == ["hi", "en"]
+
+
+def test_english_agent_does_not_duplicate_english_hint():
+    with patch.object(ag.settings, "soniox_jp_api_key", "sk-test"):
+        stt = ag._build_stt(get_lang("en"))
+    assert stt._params.language_hints == ["en"]
+    assert stt._params.language_hints_strict is False
 
 
 def test_soniox_conservative_latency_profile_is_effective():

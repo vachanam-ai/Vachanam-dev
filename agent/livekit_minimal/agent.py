@@ -1812,11 +1812,10 @@ def _build_stt(
     Sarvam), Sarvam Saaras v3 fallback otherwise so a missing/revoked Soniox
     key can never take the clinic offline (RULE 8).
 
-    language_hints_strict pins recognition to ONE language per call — same
-    strict-language rule as Sarvam's fixed `language=` (Vinay 2026-06-17:
-    auto-detect degrades on shared Indian-language words). Language change
-    happens ONLY via the switch_language agent handoff, which builds a new
-    STT through this same factory. #442 changes one control at a time:
+    Soniox receives the active language plus English as non-strict hints. This
+    preserves code-switched words and sentences without letting STT choose the
+    agent's reply language; the runtime language policy owns that decision.
+    #442 changes one control at a time:
     semantic latency level 1 is the production canary; sensitivity is unset,
     the hard cap remains 2000ms, and delayed manual finalize is opt-in.
 
@@ -1897,6 +1896,10 @@ def _build_stt(
             settings.soniox_endpoint_sensitivity,
             finalize_controller.delay_ms if finalize_controller is not None else 0,
         )
+        language_hints = [lang_cfg.code]
+        if lang_cfg.code != "en":
+            language_hints.append("en")
+
         return stt_type(
             **stt_kwargs,
             api_key=settings.soniox_jp_api_key,
@@ -1909,8 +1912,8 @@ def _build_stt(
             base_url=settings.soniox_jp_stt_ws_url,
             params=soniox.STTOptions(
                 model="stt-rt-v5",
-                language_hints=[lang_cfg.code],
-                language_hints_strict=True,
+                language_hints=language_hints,
+                language_hints_strict=False,
                 context=ctx,
                 max_endpoint_delay_ms=settings.soniox_max_endpoint_delay_ms,
                 endpoint_sensitivity=settings.soniox_endpoint_sensitivity,
@@ -2937,7 +2940,8 @@ def _dominant_native_language(text: str) -> str | None:
 _CLEAR_ENGLISH_WORDS = frozenset({
     'a', 'about', 'am', 'an', 'and', 'are', 'at', 'available', 'book',
     'can', 'cancel', 'come', 'could', 'day', 'do', 'doctor', 'for',
-    'have', 'help', 'i', 'is', 'it', 'me', 'my', 'need', 'on',
+    'have', 'help', 'i', "i'll", 'is', 'it', 'know', 'let', 'me', 'my',
+    'need', 'on',
     'please', 'repeat', 'reschedule', 'sure', 'thankyou', 'thanks', 'thats',
     'the', 'this', 'time', 'today', 'tomorrow', 'welcome', 'want', 'what',
     'when', 'where', 'which', 'with', 'would', 'you', 'english', 'much',
@@ -9455,13 +9459,10 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                       "filler_clips": [],
                       "wait_fillers": get_wait_fillers(lang_code),
                       "wait_clips": []},
-            # ONE language at a time (Vinay 2026-06-17): auto-detect was tried
-            # and rejected — shared words across Indian languages ("amma",
-            # numbers) mis-infer the language and degrade transcription. The
-            # ONLY way the call changes language is the switch_language tool
-            # (explicit caller ask, 2026-07-03): an AGENT HANDOFF carrying its
-            # own STT/TTS built through the same _build_stt factory — never a
-            # hot-swap of this session pipeline, never speech auto-detection.
+            # STT can transcribe code-switched speech, but transcription never
+            # selects the reply language. Explicit intent or the runtime's
+            # consecutive-turn policy triggers a language handoff carrying its
+            # own STT/TTS through the same _build_stt factory.
             stt=_build_stt(
                 lang_cfg,
                 _stt_terms,
