@@ -13,6 +13,7 @@ prompt hands the model every doctor's UUID, so it can emit any of them.
 """
 from __future__ import annotations
 
+import inspect
 import uuid
 
 import pytest
@@ -77,29 +78,46 @@ def test_agreeing_argument_is_untouched():
 
 
 @pytest.mark.asyncio
-async def test_only_the_read_only_tool_pins_the_doctor():
-    """A booking/reschedule legitimately carries an id from find_my_bookings,
-    so the pin must be opt-in — never the default."""
+async def test_doctor_pinning_is_the_safe_default():
+    """Every LLM-authored tool argument is untrusted and pinned by default."""
     inst = object.__new__(ag.VachanamAgent)
     inst._state = _State(SRINIVAS, "శనివారం బుక్ చేస్తారా?")
     inst._state.caller_named_doctor_id = None
     inst._doctor_contexts = ROSTER
 
-    assert await ag.VachanamAgent._resolve_doctor_id(inst, str(VISHNU)) == VISHNU
+    assert await ag.VachanamAgent._resolve_doctor_id(inst, str(VISHNU)) == SRINIVAS
     assert (
         await ag.VachanamAgent._resolve_doctor_id(
-            inst, str(VISHNU), keep_established=True
+            inst, str(VISHNU), keep_established=False
         )
-        == SRINIVAS
+        == VISHNU
     )
 
 
-def test_get_doctor_schedule_opts_in():
+def test_every_doctor_tool_inherits_the_safe_default():
+    from pathlib import Path
+
+    signature = inspect.signature(ag.VachanamAgent._resolve_doctor_id)
+    assert signature.parameters["keep_established"].default is True
+
+    src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
+    for tool_name in (
+        "check_availability",
+        "get_doctor_return_availability",
+        "get_doctor_schedule",
+        "assign_token",
+        "confirm_booking",
+    ):
+        body = src.split(f"async def {tool_name}", 1)[1].split("@function_tool", 1)[0]
+        assert "_resolve_doctor_id(" in body, tool_name
+        assert "keep_established=False" not in body, tool_name
+
+
+def test_schedule_resolution_remains_provable_in_logs():
     from pathlib import Path
 
     src = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
     body = src.split("async def get_doctor_schedule", 1)[1].split("@function_tool", 1)[0]
-    assert "_resolve_doctor_id(doctor_id, keep_established=True)" in body
     assert "doctor_schedule_resolved" in body, "resolved doctor is not logged"
 
 

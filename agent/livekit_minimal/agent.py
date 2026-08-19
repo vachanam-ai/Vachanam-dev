@@ -4793,16 +4793,21 @@ class VachanamAgent(Agent):
         return established
 
     async def _resolve_doctor_id(
-        self, doctor_id: str | None, *, keep_established: bool = False
+        self, doctor_id: str | None, *, keep_established: bool = True
     ) -> UUID:
         """Never trust the LLM to echo a UUID. Accept a real UUID, else match a
         doctor name within this branch, else fall back to the doctor selected by
         route_to_doctor. Raises ToolError (LLM-visible) instead of crashing.
 
-        keep_established pins the answer to the conversation's current doctor
-        when the caller's own words point at no other one — see
-        :meth:`_established_doctor_or`. Read-only tools only: a booking or
-        reschedule legitimately carries a doctor_id from find_my_bookings."""
+        By default, keep_established pins every model-authored UUID or name to
+        the conversation's current doctor when the caller's own words point at
+        no other one — see :meth:`_established_doctor_or`. Only a caller's
+        explicit doctor/specialty change may move that state. A caller already
+        routed to Dr Lakshmi therefore cannot reach another doctor's schedule
+        or booking path because the model emitted the wrong roster UUID.
+
+        Pass keep_established=False only for a trusted identifier read directly
+        from a database record, never for an LLM tool argument."""
         # A doctor the caller named explicitly outranks every LLM-authored UUID
         # or name. This prevents a stale Srinivas tool argument from overriding
         # the caller's later "Doctor Lakshmi".
@@ -4842,7 +4847,12 @@ class VachanamAgent(Agent):
                 doctors = list(result.scalars())
                 matches = [doc for doc in doctors if needle in doc.name.lower()]
                 if len(matches) == 1:
-                    return matches[0].id
+                    matched = matches[0].id
+                    return (
+                        self._established_doctor_or(matched)
+                        if keep_established
+                        else matched
+                    )
                 if len(matches) > 1:
                     # "kumar" matches both "Test Kumar" and "Ravi Kumar" — never
                     # guess; a silent first-match books the WRONG doctor.
