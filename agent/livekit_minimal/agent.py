@@ -87,7 +87,11 @@ from agent.i18n.lines import (  # noqa: E402
     get_transfer_notice,
     get_wait_fillers,
 )
-from agent.i18n.backchannels import is_lone_hello, suppress_backchannel  # noqa: E402
+from agent.i18n.backchannels import (  # noqa: E402
+    is_backchannel,
+    is_lone_hello,
+    suppress_backchannel,
+)
 from backend.services.clinic_cache import (  # noqa: E402
     get_doctors,
     load_doctors,
@@ -193,6 +197,7 @@ VAD_TURN_DETECTION_S = 0.06
 # This applies ONLY to deterministic incomplete-fragment clarifications; normal
 # complete turns retain the 60ms VAD path and pay no extra latency.
 INCOMPLETE_CLARIFICATION_GRACE_S = 0.35
+AMBIGUOUS_TIME_GRACE_S = 1.1
 
 
 def _decode_jsonb(value, fallback):
@@ -1497,19 +1502,14 @@ def _soniox_prewarm_matches(warm, voice_id: str, tts_lang: str) -> bool:
 
 
 def _preemptive_tts_enabled() -> bool:
-    """Keep speculative synthesis away from Cartesia's pooled socket.
+    """Never let uncommitted model text reach a caller.
 
-    A tool call cancels the speculative speech stream.  The Cartesia plugin
-    treats that cancellation as a broken connection and removes the WebSocket
-    from its pool; the next real response then pays a new TLS/WS handshake.
-    Measured with the deployed model/voice: stable reuse versus 161-258 ms
-    reacquisition and 300-390 ms first audio after each cancellation.
-
-    Gemini remains preemptive for every provider.  Soniox keeps the previously
-    validated LLM+TTS overlap; only the Cartesia sandbox opts out of speculative
-    TTS so its one warm WebSocket survives tool turns.
+    The LLM still runs preemptively, preserving its latency overlap.  Starting
+    TTS speculatively proved unsafe on real calls: a deterministic handler can
+    supersede the model after Soniox has already emitted a short partial line,
+    so callers hear both the discarded draft and the grounded answer.
     """
-    return (settings.tts_provider or "soniox").lower() != "cartesia"
+    return False
 
 
 def _build_cartesia_tts(tts_lang: str):
@@ -3299,10 +3299,30 @@ _INCOMPLETE_EXACT = frozenset({
 })
 
 
+def _bare_ambiguous_clock_time(text: str) -> str | None:
+    """Return a standalone 1-11 clock value that still needs AM/PM.
+
+    Only a bare numeric clock is accepted. Longer utterances and plain
+    integers keep their existing intent handling, so ages, tokens and phone
+    digits are untouched. Twelve is excluded because clinic-time speech
+    deterministically means noon.
+    """
+    clean = (text or "").strip().rstrip(".!?…").strip()
+    match = re.fullmatch(r"(\d{1,2})\s*:\s*([0-5]\d)", clean)
+    if match is None:
+        return None
+    hour = int(match.group(1))
+    if not 1 <= hour <= 11:
+        return None
+    return f"{hour}:{match.group(2)}"
+
+
 def _is_incomplete_fragment(text: str) -> bool:
     '''Recognize only high-confidence unfinished caller turns.'''
     clean = ' '.join((text or '').strip().split())
     if not clean:
+        return True
+    if _bare_ambiguous_clock_time(clean) is not None:
         return True
     normalized = clean.rstrip('.…').strip().casefold()
     if normalized in _INCOMPLETE_EXACT:
@@ -3477,6 +3497,20 @@ def _incomplete_clarification(language: str, attempt: int = 0) -> str:
     }
     table = first if attempt <= 0 else guided if attempt == 1 else support
     return table.get(language, table['en'])
+
+
+def _ambiguous_time_clarification(language: str, clock: str) -> str:
+    """Ask only for the missing daypart; never invent AM or PM."""
+    return {
+        'te': f'{clock} ఉదయమా, సాయంత్రమా అండి?',
+        'hi': f'{clock} सुबह या शाम जी?',
+        'ta': f'{clock} காலையா, மாலையா?',
+        'kn': f'{clock} ಬೆಳಿಗ್ಗೆಯಾ, ಸಂಜೆಯಾ?',
+        'mr': f'{clock} सकाळी की संध्याकाळी?',
+        'ml': f'{clock} രാവിലെയോ വൈകുന്നേരമോ?',
+        'bn': f'{clock} সকাল না সন্ধ্যা?',
+        'en': f'Did you mean {clock} AM or PM?',
+    }.get(language, f'Did you mean {clock} AM or PM?')
 
 
 _HOSTILE_WORDS = (
@@ -3751,14 +3785,20 @@ class VachanamAgent(Agent):
         # word of the call.
         self.set_pronunciations({})
 
-    def _defer_incomplete_clarification(self, speech: str) -> None:
-        """Give a caller 350ms to finish a fragment, without slowing real turns."""
+    def _defer_incomplete_clarification(
+        self, speech: str, *, grace_s: float | None = None
+    ) -> None:
+        """Give a caller time to finish a fragment, without slowing real turns."""
         _cancel_deferred_clarification(self._state, "replacement")
 
         async def _say_after_grace() -> None:
             this_task = asyncio.current_task()
             try:
-                await asyncio.sleep(INCOMPLETE_CLARIFICATION_GRACE_S)
+                await asyncio.sleep(
+                    INCOMPLETE_CLARIFICATION_GRACE_S
+                    if grace_s is None
+                    else grace_s
+                )
                 if self._state.deferred_clarification_task is not this_task:
                     return
                 self._state.deferred_clarification_task = None
@@ -4046,6 +4086,17 @@ class VachanamAgent(Agent):
         self._state.last_user_utterance = utterance
         _cancel_deferred_clarification(self._state, "next_turn_committed")
 
+        # A newly committed caller turn supersedes any response still being
+        # generated or played for the preceding turn. Do this before reading
+        # or mutating conversational state so two replies can never queue.
+        try:
+            sess = self.session
+            if getattr(sess, "agent_state", None) in ("thinking", "speaking"):
+                sess.interrupt()
+                logger.info("superseded_pending_reply state=%s", sess.agent_state)
+        except Exception as e:  # noqa: BLE001 — never drop a real caller turn
+            logger.warning("supersede_pending_reply_failed: %s", e)
+
         # The model may ask the required confirmation itself, before a tool
         # guard has had a chance to arm `pending_confirmation`. Record that
         # audible question now. Otherwise a plain "yes" goes back through an
@@ -4056,6 +4107,23 @@ class VachanamAgent(Agent):
             and self._last_assistant_requested_booking_confirmation()
         ):
             self._state.pending_confirmation = 'book'
+
+        # A standalone listening acknowledgement after a completed statement
+        # is not a new question. Letting it reach the model made it restate the
+        # previous roster/answer (latest production example: roster -> "Okay"
+        # -> roster again). Preserve the same words whenever the assistant
+        # actually asked a question, because then "okay" may be consent.
+        if (
+            is_backchannel(utterance)
+            and self._state.pending_confirmation is None
+            and not self._last_assistant_asked_question()
+        ):
+            try:
+                self.session.interrupt()
+            except Exception:
+                pass
+            logger.info("standalone_acknowledgement_consumed")
+            raise StopResponse()
 
         if (
             self._state.token_confirmed
@@ -4089,28 +4157,6 @@ class VachanamAgent(Agent):
                     "the nearest bookable slot returned by the tool."
                 ),
             )
-
-        # ONE ANSWER PER QUESTION. Vinay 2026-08-09: "when i repeat question,
-        # before it replied. it is repeating answer 2 times."
-        #
-        # A committed turn arriving while the PREVIOUS reply is still being
-        # generated used to leave both replies queued: LiveKit's interruption
-        # machinery guards the agent while it is SPEAKING, and the backchannel
-        # filter in stt_node only suppresses while agent_state == "speaking" —
-        # so a repeat during "thinking" is neither interrupted nor filtered,
-        # and the caller hears the same answer twice.
-        #
-        # Reaching here means the turn already survived the backchannel filter
-        # and was committed, so it is real speech and it supersedes whatever is
-        # in flight. Cancelling now (not force) lets the in-flight generation
-        # unwind and keeps the chat context consistent.
-        try:
-            sess = self.session
-            if getattr(sess, "agent_state", None) in ("thinking", "speaking"):
-                sess.interrupt()
-                logger.info("superseded_pending_reply state=%s", sess.agent_state)
-        except Exception as e:  # noqa: BLE001 — RULE 8: never drop a real turn
-            logger.warning("supersede_pending_reply_failed: %s", e)
 
         # Remember consent instead of re-deriving it every turn. "book me an
         # appointment tomorrow at 10" is authorization for the booking that
@@ -4214,6 +4260,7 @@ class VachanamAgent(Agent):
                 str(explicit_doctor_id)[-8:],
                 _privacy_safe_session_id(self._state.session_id),
             )
+        ambiguous_clock = _bare_ambiguous_clock_time(utterance)
         incomplete_fragment = _is_incomplete_fragment(utterance)
         control_token_request = _is_control_token_request(utterance)
         reminder_policy_question = _is_reminder_policy_question(utterance)
@@ -4293,8 +4340,14 @@ class VachanamAgent(Agent):
             elif reminder_policy_question:
                 deterministic_speech = reminder_policy_speech
             elif incomplete_fragment:
-                deterministic_speech = _incomplete_clarification(
-                    detected_language, clarification_attempt
+                deterministic_speech = (
+                    _ambiguous_time_clarification(
+                        detected_language, ambiguous_clock
+                    )
+                    if ambiguous_clock is not None
+                    else _incomplete_clarification(
+                        detected_language, clarification_attempt
+                    )
                 )
             elif faq_match is not None:
                 deterministic_speech = faq_speech
@@ -4359,7 +4412,16 @@ class VachanamAgent(Agent):
         if incomplete_fragment:
             self._state.clarification_attempts = clarification_attempt + 1
             self._defer_incomplete_clarification(
-                _incomplete_clarification(self._lang_code, clarification_attempt)
+                _ambiguous_time_clarification(self._lang_code, ambiguous_clock)
+                if ambiguous_clock is not None
+                else _incomplete_clarification(
+                    self._lang_code, clarification_attempt
+                ),
+                grace_s=(
+                    AMBIGUOUS_TIME_GRACE_S
+                    if ambiguous_clock is not None
+                    else INCOMPLETE_CLARIFICATION_GRACE_S
+                ),
             )
             raise StopResponse()
 
@@ -4629,6 +4691,20 @@ class VachanamAgent(Agent):
         except Exception:
             return False
         return False
+
+    def _last_assistant_asked_question(self) -> bool:
+        """Whether the latest audible assistant turn expects an answer."""
+        try:
+            for item in reversed(list(getattr(self.chat_ctx, 'items', None) or [])):
+                if getattr(item, 'role', None) != 'assistant':
+                    continue
+                text = sanitize_for_tts(self._message_text(item)).strip()
+                if not text or text == '<context_ack/>':
+                    continue
+                return '?' in text or '？' in text
+        except Exception:
+            return True
+        return True
 
     def _last_assistant_requested_cancellation(self) -> bool:
         if self._awaiting_confirmation('cancel'):

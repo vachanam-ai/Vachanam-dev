@@ -78,15 +78,14 @@ def test_cartesia_is_prewarmed_off_the_first_reply_path():
     assert "primary.prewarm()" in cartesia_branch
 
 
-def test_cartesia_keeps_its_warm_socket_by_skipping_speculative_tts(monkeypatch):
-    """Tool calls cancel speculative speech; the plugin then discards its
-    pooled WebSocket and the real answer pays a fresh connection handshake."""
+def test_no_provider_speaks_uncommitted_speculative_text(monkeypatch):
+    """A cancelled model draft must never become caller-facing audio."""
     import agent.livekit_minimal.agent as a
 
     monkeypatch.setattr(a.settings, "tts_provider", "cartesia")
     assert a._preemptive_tts_enabled() is False
     monkeypatch.setattr(a.settings, "tts_provider", "soniox")
-    assert a._preemptive_tts_enabled() is True
+    assert a._preemptive_tts_enabled() is False
 
 
 def test_cartesia_connection_reuse_is_visible_in_runtime_metrics():

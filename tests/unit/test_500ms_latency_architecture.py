@@ -18,11 +18,11 @@ def test_local_vad_boundary_is_at_most_60ms_with_quality_guard_retained():
     assert "llm=%s stt=%s tts=%s" in SRC
 
 
-def test_llm_and_tts_run_preemptively_together():
+def test_llm_stays_preemptive_but_uncommitted_tts_never_reaches_caller():
     assert '"preemptive_generation": {' in SRC
     assert '"enabled": True' in SRC
     assert '"preemptive_tts": _preemptive_tts_enabled()' in SRC
-    assert ag._preemptive_tts_enabled() is True
+    assert ag._preemptive_tts_enabled() is False
     assert '"max_retries": 2' in SRC
 
 

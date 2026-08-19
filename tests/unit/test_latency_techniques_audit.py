@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent.livekit_minimal import agent as ag
+
 
 SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
 
@@ -21,10 +23,10 @@ def test_t1_streaming_stt_preemptive_generation_done():
     """#1: the LLM fires on the STT partial (preemptive), not after commit."""
     assert '"preemptive_generation": {' in SRC
     assert '"enabled": True' in SRC
-    # Runtime policy disables speculative TTS only for Cartesia, whose plugin
-    # cannot safely accept the preemptive stream. Soniox production remains on.
+    # The LLM remains preemptive, but uncommitted TTS is never caller-facing.
+    # Real calls proved a cancelled draft could otherwise leak partial audio.
     assert '"preemptive_tts": _preemptive_tts_enabled()' in SRC
-    assert '!= "cartesia"' in SRC
+    assert ag._preemptive_tts_enabled() is False
 
 
 def test_t2_partial_llm_tokens_stream_to_tts_done():
