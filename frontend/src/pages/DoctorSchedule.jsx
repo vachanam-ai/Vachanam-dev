@@ -18,6 +18,18 @@ import { revealStagger } from "../lib/motion.js";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]; // ISO 0-6
 
+export const formatTimeLabel = (value) => {
+  const [hour, minute] = value.split(":").map(Number);
+  const period = hour >= 12 ? "PM" : "AM";
+  return `${hour % 12 || 12}:${String(minute).padStart(2, "0")} ${period}`;
+};
+
+const TIME_OPTIONS = Array.from({ length: 96 }, (_, index) => {
+  const minutes = index * 15;
+  const value = `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  return { value, label: formatTimeLabel(value) };
+});
+
 const EMPTY_DOCTOR = {
   name: "",
   specialization: "",
@@ -52,20 +64,35 @@ const scheduleForForm = (doctor) => {
   return Object.fromEntries(days.map((day) => [String(day), [{ start, end }]]));
 };
 
+function TimeSelect({ value, onChange, label }) {
+  const options = TIME_OPTIONS.some((option) => option.value === value)
+    ? TIME_OPTIONS
+    : [...TIME_OPTIONS, { value, label: formatTimeLabel(value) }]
+        .sort((a, b) => a.value.localeCompare(b.value));
+
+  return (
+    <select className="field numeral cursor-pointer" value={value} onChange={onChange} aria-label={label}>
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>{option.label}</option>
+      ))}
+    </select>
+  );
+}
+
 function SessionsEditor({ sessions, onChange }) {
   const update = (index, key, value) =>
     onChange(sessions.map((session, i) => i === index ? { ...session, [key]: value } : session));
   return (
     <div className="space-y-2">
       {sessions.map((session, index) => (
-        <div key={index} className="flex items-center gap-2">
-          <input className="field" type="time" value={session.start}
+        <div key={index} className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]">
+          <TimeSelect value={session.start} label={`Session ${index + 1} start time`}
             onChange={(e) => update(index, "start", e.target.value)} />
-          <span className="text-slate">to</span>
-          <input className="field" type="time" value={session.end}
+          <span className="font-ui text-xs font-medium text-slate">to</span>
+          <TimeSelect value={session.end} label={`Session ${index + 1} end time`}
             onChange={(e) => update(index, "end", e.target.value)} />
           {sessions.length > 1 && (
-            <button type="button" className="btn-ghost px-3" onClick={() => onChange(sessions.filter((_, i) => i !== index))}>
+            <button type="button" className="btn-ghost col-span-3 px-3 sm:col-span-1" onClick={() => onChange(sessions.filter((_, i) => i !== index))}>
               Remove
             </button>
           )}
