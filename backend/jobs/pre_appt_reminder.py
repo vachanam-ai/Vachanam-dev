@@ -19,6 +19,7 @@ from sqlalchemy import and_, func, select, update
 
 import backend.database as _db_module
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
+from backend.services import wa_templates
 from backend.services.billing_math import PLANS
 from backend.services.outbound_guard import lock_key
 from backend.services.telephony import branch_outbound_trunk_id
@@ -382,6 +383,7 @@ async def _send_wa_reminder(
         doctor_name=doctor.name,
         on_date=token.date.strftime("%d %B"),
         at_time=when,
+        maps=wa_templates.maps_link(branch.address),
     )
 
 

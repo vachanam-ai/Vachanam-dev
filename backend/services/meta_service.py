@@ -40,12 +40,12 @@ logger = structlog.get_logger()
 # looking message, which is why the runbook documents the order rather than
 # leaving it to chance.
 _ORDER: dict[str, tuple[str, ...]] = {
-    "booking_confirm": ("patient", "clinic", "doctor", "on_date", "at_time"),
+    "booking_confirm": ("patient", "clinic", "doctor", "on_date", "at_time", "maps"),
     "reschedule": ("patient", "doctor", "on_date", "at_time"),
     "cancel": ("patient", "doctor", "on_date", "at_time"),
     "feedback": ("review_link",),
     "location": ("clinic", "address", "maps"),
-    "reminder": ("patient", "doctor", "on_date", "at_time"),
+    "reminder": ("patient", "doctor", "on_date", "at_time", "maps"),
     "followup": ("patient", "doctor", "message"),
     "rating": ("clinic",),
     "leave_rebook": ("doctor", "on_date"),
@@ -186,18 +186,21 @@ class MetaService:
         self, to: str, *, branch_id=None, clinic_name: str = "",
         doctor_name: str = "", token_id: str = "", review_link: str = "",
         patient_name: str = "",
+        background_delivery: bool = False,
     ) -> None:
         await _queue_or_send(
             branch_id, to, "feedback",
             _values("feedback", patient=patient_name, clinic=clinic_name,
                     doctor=doctor_name, review_link=review_link),
             event_key=(f"feedback:{token_id}" if token_id else None),
+            background_delivery=background_delivery,
         )
 
     async def send_appointment_reminder(
         self, to: str, *, branch_id=None, token_id: str = "",
         reminder_kind: str = "30m", patient_name: str = "",
         doctor_name: str = "", on_date: str = "", at_time: str = "",
+        maps: str = "",
     ) -> bool:
         buttons = [
             {"id": f"rs:{token_id}", "title": "Reschedule"},
@@ -207,7 +210,7 @@ class MetaService:
             branch_id, to, "reminder",
             _values(
                 "reminder", patient=patient_name, doctor=doctor_name,
-                on_date=on_date, at_time=at_time,
+                on_date=on_date, at_time=at_time, maps=maps,
             ),
             event_key=(
                 f"reminder:{reminder_kind}:{token_id}" if token_id else None
@@ -322,6 +325,7 @@ class MetaService:
                         appointment_time.strftime("%I:%M %p").lstrip("0")
                         if appointment_time else f"token {token_number}"
                     ),
+                    maps=wa_templates.maps_link(branch.address),
                 ),
                 event_key=(f"booking:{token_id}" if token_id else None),
                 buttons=buttons,

@@ -1,12 +1,11 @@
-"""Evening WhatsApp rating batch (spec 2026-07-13, WA T8).
+"""Evening recovery for post-visit Google feedback messages.
 
-Daily ~19:00 IST tick: every token marked ATTENDED today at a linked, gated
-branch whose patient hasn't been asked and hasn't rated → one rating_ask
-template (1-5 star quick replies; replies land in wa_actions.handle_rating).
+Daily ~19:00 IST tick: every attended token from the last two days at a linked,
+gated branch with a configured Google review link gets one feedback template.
 
-Ask-once is the durable WhatsApp outbox's unique rating:{token_id} event key.
+Ask-once is the durable WhatsApp outbox's unique feedback:{token_id} event key.
 A provider outage is retried, while repeated job runs cannot nag the patient.
-RULE 1: per-branch scoped query. RULE 9: template carries the clinic name only.
+RULE 1: per-branch scoped query. RULE 9: template carries only the review URL.
 """
 from __future__ import annotations
 
@@ -14,7 +13,7 @@ import structlog
 from sqlalchemy import and_, select
 
 import backend.database as _db_module
-from backend.models.schema import Branch, Organization, Patient, Rating, Token
+from backend.models.schema import Branch, Organization, Patient, Token
 from backend.services import wa_service
 
 logger = structlog.get_logger()
@@ -25,7 +24,10 @@ async def run_wa_rating_ask() -> None:
             await db.execute(
                 select(Branch, Organization.plan)
                 .join(Organization, Organization.id == Branch.org_id)
-                .where(Branch.wa_phone_number_id.is_not(None))
+                .where(
+                    Branch.wa_phone_number_id.is_not(None),
+                    Branch.google_review_url.is_not(None),
+                )
             )
         ).all()
         for branch, plan in branches:
@@ -39,14 +41,12 @@ async def run_wa_rating_ask() -> None:
                 await db.execute(
                     select(Token, Patient)
                     .join(Patient, Patient.id == Token.patient_id)
-                    .outerjoin(Rating, Rating.token_id == Token.id)
                     .where(
                         and_(
                             Token.branch_id == branch.id,  # RULE 1
                             Token.date >= window_start,
                             Token.date <= today,
                             Token.status == "attended",
-                            Rating.id.is_(None),
                         )
                     )
                 )
@@ -56,11 +56,12 @@ async def run_wa_rating_ask() -> None:
                     continue
                 from backend.services.meta_service import MetaService
 
-                await MetaService().send_rating_request(
+                await MetaService().send_feedback_request(
                     patient.phone,
                     branch_id=branch.id,
                     token_id=str(token.id),
                     clinic_name=branch.name,
+                    review_link=branch.google_review_url,
                 )
 
 

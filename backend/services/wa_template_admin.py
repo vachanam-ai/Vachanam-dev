@@ -35,9 +35,9 @@ SYSTEM_TEMPLATE_DEFINITIONS = (
     {
         "name": "vachanam_booking_confirm", "body": (
             "Hello {{1}}, your appointment at {{2}} with Dr {{3}} is confirmed "
-            "for {{4}} at {{5}}. Please come on time."
+            "for {{4}} at {{5}}. Please come on time. Location: {{6}} See you soon."
         ),
-        "examples": ["Anjali", "Venkateshwara Clinic", "Srinivas", "12 August", "10:30 AM"],
+        "examples": ["Anjali", "Venkateshwara Clinic", "Srinivas", "12 August", "10:30 AM", "https://maps.google.com/"],
         "buttons": ["Reschedule", "Cancel"],
     },
     {
@@ -59,27 +59,28 @@ SYSTEM_TEMPLATE_DEFINITIONS = (
     {
         "name": "vachanam_appt_reminder", "body": (
             "Reminder for {{1}}: your appointment with Dr {{2}} is on {{3}} "
-            "at {{4}}. Please come on time."
+            "at {{4}}. Please come on time. Location: {{5}} See you soon."
         ),
-        "examples": ["Anjali", "Srinivas", "12 August", "10:30 AM"],
+        "examples": ["Anjali", "Srinivas", "12 August", "10:30 AM", "https://maps.google.com/"],
         "buttons": ["Reschedule", "Cancel"],
     },
     {
         "name": "vachanam_followup", "body": (
-            "Hello {{1}}, Dr {{2}} has a follow-up message for you: {{3}}"
+            "Hello {{1}}, Dr {{2}} has a follow-up message for you: {{3}} "
+            "Please reply if you need help."
         ),
         "examples": ["Anjali", "Srinivas", "Please schedule your next visit"],
         "buttons": [],
     },
     {
         "name": "vachanam_clinic_location",
-        "body": "{{1}} is at {{2}}. Directions: {{3}}",
+        "body": "Clinic {{1}} is at {{2}}. Directions: {{3}} Open it to navigate.",
         "examples": ["Venkateshwara Clinic", "Hyderabad", "https://maps.google.com/"],
         "buttons": [],
     },
     {
         "name": "vachanam_feedback",
-        "body": "Thank you for visiting us. Share your feedback here: {{1}}",
+        "body": "Thank you for visiting us. Share your feedback here: {{1}} Thank you.",
         "examples": ["https://example.com/review"],
         "buttons": [],
     },
@@ -158,6 +159,11 @@ def validate_body(body: str, examples: list[str] | None) -> list[int]:
     no example value is too. Returns the sorted, deduplicated placeholder
     numbers so the caller can build the `example.body_text` payload."""
     numbers = placeholder_numbers(body)
+    stripped = (body or "").strip()
+    if stripped.startswith("{{") or stripped.endswith("}}"):
+        raise TemplateAdminError(
+            422, "A placeholder cannot be the first or last content in a template."
+        )
     if numbers and numbers != list(range(1, len(numbers) + 1)):
         raise TemplateAdminError(
             422,
@@ -204,8 +210,14 @@ def _meta_error_message(r: httpx.Response) -> str:
         body = r.json()
     except Exception:  # noqa: BLE001 — non-JSON error body
         return "WhatsApp rejected this template."
-    msg = (body.get("error") or {}).get("message")
-    return (msg or "WhatsApp rejected this template.")[:300]
+    error = body.get("error") or {}
+    msg = error.get("message")
+    details = (error.get("error_data") or {}).get("details")
+    user_msg = error.get("error_user_msg")
+    text = details or user_msg or msg or "WhatsApp rejected this template."
+    return (
+        f"{text} (code {error.get('code')}, subcode {error.get('error_subcode')})"
+    )[:300]
 
 
 async def list_templates(branch) -> list[dict]:

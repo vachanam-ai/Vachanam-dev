@@ -38,7 +38,9 @@ export const PLAN_CATALOG = {
 export const VOICE_PLAN_KEYS = ["solo"];
 // Fail closed until Meta approves Vachanam for public clinic onboarding.
 // The private Venkateshwara bridge is backend-only and does not need this UI.
-export const WHATSAPP_SELF_SERVE_LIVE = false;
+// One deployment flag controls every public WhatsApp entry point. Keep this
+// fail-closed when the value is absent or misspelled.
+export const WHATSAPP_SELF_SERVE_LIVE = import.meta.env.VITE_WHATSAPP_LIVE === "true";
 export const PUBLIC_PLAN_KEYS = WHATSAPP_SELF_SERVE_LIVE
   ? [...VOICE_PLAN_KEYS, "wa"]
   : VOICE_PLAN_KEYS;

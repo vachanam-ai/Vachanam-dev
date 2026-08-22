@@ -97,6 +97,8 @@ services:
         sync: false
       - key: META_GRAPH_VERSION
         value: v25.0
+      - key: WHATSAPP_SELF_SERVE_LIVE
+        value: "true"
       - key: GOOGLE_OAUTH_CLIENT_ID
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_SECRET

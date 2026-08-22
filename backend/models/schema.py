@@ -105,6 +105,7 @@ class Branch(Base):
     welcome_short_audio: Mapped[bytes | None] = mapped_column(LargeBinary)
     address: Mapped[str | None] = mapped_column(Text)
     city: Mapped[str | None] = mapped_column(String(100))
+    google_review_url: Mapped[str | None] = mapped_column(Text)
     # whatsapp_number: human-readable phone (+91XXXXXXXXXX) used in messages
     whatsapp_number: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
     # meta_phone_number_id: Meta's internal numeric ID — used to identify receiving branch in webhook

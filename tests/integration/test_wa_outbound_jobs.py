@@ -6,9 +6,7 @@ from datetime import date, time
 import pytest
 
 from backend.config import settings
-from backend.models.schema import (
-    Branch, Doctor, Organization, Patient, Rating, Token,
-)
+from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 from backend.services import wa_service, wa_template_registry
 
 
@@ -28,7 +26,7 @@ def wa_capture(monkeypatch):
         names = {
             "booking_confirm": "booking_confirm",
             "reminder": "appt_reminder",
-            "feedback": "rating_ask",
+            "feedback": "feedback",
             "rating": "rating_ask",
             "leave_rebook": "leave_rebook",
         }
@@ -57,6 +55,7 @@ async def _clinic(db, plan="clinic", linked=True):
         wa_phone_number_id=str(uuid.uuid4().int)[:12] if linked else None,
         wa_status="connected" if linked else "disconnected",
         whatsapp_addon=plan in ("clinic", "multi"),
+        google_review_url="https://g.page/r/example/review",
     )
     db.add(b)
     await db.flush()
@@ -106,24 +105,24 @@ async def test_wa_reminder_skips_solo_and_unlinked(db, wa_capture):
     assert wa_capture == []
 
 
-# ── rating batch ─────────────────────────────────────────────────────────────
+# ── post-visit feedback recovery ────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_rating_batch_asks_once_and_skips_rated(db, wa_capture):
+async def test_feedback_batch_asks_once_and_skips_missing_review_link(db, wa_capture):
     import backend.jobs.wa_rating_ask as job
 
     b, doc, pat, tok = await _clinic(db)
-    b2, _, _, tok2 = await _clinic(db)
-    # tok2 already rated → must be skipped
-    db.add(Rating(branch_id=b2.id, token_id=tok2.id, patient_id=tok2.patient_id, score=5))
+    b2, _, _, _ = await _clinic(db)
+    b2.google_review_url = None
     await db.commit()
 
     await job.run_wa_rating_ask()
-    first = [s for s in wa_capture if s["template"] == "rating_ask"]
-    assert len(first) == 1  # only the unrated attended token
+    first = [s for s in wa_capture if s["template"] == "feedback"]
+    assert len(first) == 1
+    assert first[0]["params"] == [b.google_review_url]
 
     await job.run_wa_rating_ask()  # second run: durable event key holds
-    second = [s for s in wa_capture if s["template"] == "rating_ask"]
+    second = [s for s in wa_capture if s["template"] == "feedback"]
     assert len(second) == 1
 
 

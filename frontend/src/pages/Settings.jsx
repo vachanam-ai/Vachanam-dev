@@ -178,6 +178,7 @@ export default function Settings() {
         name: data.name ?? "",
         address: data.address ?? "",
         city: data.city ?? "",
+        google_review_url: data.google_review_url ?? "",
         clinic_phone: data.clinic_phone ?? "",
         emergency_contact: data.emergency_contact ?? "",
         google_calendar_id: data.google_calendar_id ?? "",
@@ -405,6 +406,15 @@ export default function Settings() {
             <input className="field" value={form.address} onChange={set("address")}
               placeholder="Shop 4, Ayyappa Society, Madhapur" />
           </div>
+          <div className="sm:col-span-2">
+            <label className="label">Google review link</label>
+            <input className="field" value={form.google_review_url}
+              onChange={set("google_review_url")}
+              placeholder="https://g.page/r/.../review" inputMode="url" />
+            <p className="mt-1 font-ui text-xs text-slate">
+              Sent once after the receptionist marks a visit attended.
+            </p>
+          </div>
           <div>
             <label className="label">Clinic's existing phone</label>
             <input className="field" value={form.clinic_phone} onChange={set("clinic_phone")}
@@ -426,6 +436,7 @@ export default function Settings() {
           onClick={() =>
             save.mutate({
               name: form.name, address: form.address, city: form.city,
+              google_review_url: form.google_review_url,
               clinic_phone: form.clinic_phone, emergency_contact: form.emergency_contact
             })}>
           Save details

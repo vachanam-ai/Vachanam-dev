@@ -183,6 +183,16 @@ def test_branch_settings_match_database_lengths():
         BranchDetailsUpdate(name="x" * 300, google_calendar_id="c" * 300)
 
 
+def test_google_review_link_must_stay_on_google():
+    from backend.routers.branches import BranchDetailsUpdate
+
+    assert BranchDetailsUpdate(
+        google_review_url="https://g.page/r/example/review"
+    ).google_review_url
+    with pytest.raises(ValidationError):
+        BranchDetailsUpdate(google_review_url="https://phishing.example/review")
+
+
 @known("AUDIT-016", "branch settings accept garbage phone values")
 def test_branch_settings_reject_invalid_phones():
     from backend.routers.branches import BranchDetailsUpdate
@@ -347,6 +357,9 @@ def test_zap_scans_master_pull_requests():
 @known("AUDIT-036", "WhatsApp UI is hidden by a hard-coded source boolean")
 def test_whatsapp_ui_uses_runtime_feature_config():
     assert "const WHATSAPP_LIVE = false" not in source("frontend/src/pages/Settings.jsx")
+    plans = source("frontend/src/lib/plans.js")
+    assert "VITE_WHATSAPP_LIVE" in plans
+    assert "WHATSAPP_SELF_SERVE_LIVE = false" not in plans
 
 
 @known("AUDIT-037", "multi-branch users are silently pinned to branch_ids[0]")

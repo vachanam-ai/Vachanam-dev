@@ -219,7 +219,11 @@ async def test_attend_auto_creates_treatment_log_and_queues_feedback(db, monkeyp
     org_id = uuid.uuid4()
     db.add(_org(org_id)); await db.flush()
     usr = _user(org_id)
-    br = Branch(id=uuid.uuid4(), org_id=org_id, name="C", whatsapp_number="+910000000011")
+    br = Branch(
+        id=uuid.uuid4(), org_id=org_id, name="C",
+        whatsapp_number="+910000000011",
+        google_review_url="https://g.page/r/example/review",
+    )
     db.add_all([usr, br]); await db.flush()
     doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token")
     pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000011")
@@ -235,7 +239,7 @@ async def test_attend_auto_creates_treatment_log_and_queues_feedback(db, monkeyp
 
     from backend.services.meta_service import MetaService
 
-    monkeypatch.setattr(MetaService, "send_rating_request", _capture_feedback)
+    monkeypatch.setattr(MetaService, "send_feedback_request", _capture_feedback)
 
     app.dependency_overrides[get_current_user] = lambda: _as_user(br.id, org_id, user_id=usr.id)
     try:
@@ -261,6 +265,7 @@ async def test_attend_auto_creates_treatment_log_and_queues_feedback(db, monkeyp
                 "branch_id": br.id,
                 "token_id": str(tok.id),
                 "clinic_name": br.name,
+                "review_link": br.google_review_url,
                 "background_delivery": True,
             },
         )

@@ -20,10 +20,10 @@ def test_required_templates_cover_every_patient_event():
         "booking_confirm", "reschedule", "cancel",
         "location", "feedback", "followup", "reminder", "rating", "leave_rebook",
     }
-    assert mapping["booking_confirm"]["params"] == 5
+    assert mapping["booking_confirm"]["params"] == 6
     assert mapping["reschedule"]["params"] == 4
     assert mapping["cancel"]["params"] == 4
-    assert mapping["reminder"]["params"] == 4
+    assert mapping["reminder"]["params"] == 5
 
 
 def test_time_sensitive_templates_tell_patient_to_arrive_on_time():

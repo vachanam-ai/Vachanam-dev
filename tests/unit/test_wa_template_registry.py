@@ -198,3 +198,16 @@ def test_vinays_five_templates_all_resolve():
         _t("appointment_feedback"),
     ])
     assert sorted(m) == ["booking_confirm", "cancel", "feedback", "location", "reschedule"]
+
+
+def test_exact_confirm_beats_longer_confirmation_without_map_button():
+    m = reg.build_map([_t("appointment_confirmation"), _t("confirm")])
+    assert m["booking_confirm"]["name"] == "confirm"
+
+
+def test_venkateshwara_remainder_typo_is_still_a_reminder():
+    m = reg.build_map([
+        _t("remainder", body="Hi {{1}} {{2}} {{3}} {{4}} {{5}}")
+    ])
+    assert m["reminder"]["name"] == "remainder"
+    assert m["reminder"]["params"] == 5

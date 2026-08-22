@@ -38,8 +38,13 @@ In Meta for Developers:
 2. Add **Facebook Login for Business** and the **WhatsApp** product.
 3. Create a new Facebook Login for Business configuration.
 4. Choose the **WhatsApp Embedded Signup** variation and **Cloud API** product.
-5. Use the v4 template with a 60-day business integration token expiry where
-   Meta offers it.
+5. Access token type must be **System-user access token** with
+   `response_type=code` exchanged server-side. Either expiry Meta offers is
+   fine: a 60-day business integration token, or never-expire (verified
+   2026-08-22). `wa_connect` stores `token_expires_at: null` when Meta
+   returns no `expires_in`, and both `wa_service.token_for` and
+   `WaConnectCard` skip the expiry gate on a null - a never-expiring token
+   never trips reauthorization.
 6. Request only the two permissions listed above.
 7. Save the configuration ID as `META_CONFIG_ID`.
 
@@ -61,13 +66,14 @@ backend immediately. Meta's authorization code expires in about 30 seconds.
 
 ## 3. Configure the webhook
 
-Use the currently deployed backend URL:
+Use the API custom domain (verified live 2026-08-21 — `/health` 200, the
+webhook route answers a bad `hub.verify_token` with 403):
 
-`https://vachanam-backend.onrender.com/webhooks/whatsapp`
+`https://api.vachanam.in/webhooks/whatsapp`
 
-`https://vachanam.in` is the clinic-facing product origin. The webhook is a
-backend route, so its Render hostname is intentional until a verified API
-custom domain points to the same service. Do not use
+`https://vachanam-backend.onrender.com/webhooks/whatsapp` is the same service
+and remains a valid fallback. `https://vachanam.in` is the clinic-facing
+product origin, not the webhook. Do not use
 `vachanam.vinayrongala.workers.dev`.
 
 Set the callback verify token to the same random secret stored as
@@ -93,12 +99,17 @@ META_APP_ID=<Meta app ID>
 META_APP_SECRET=<Meta app secret>
 META_CONFIG_ID=<Embedded Signup v4 configuration ID>
 META_GRAPH_VERSION=v25.0
+WHATSAPP_SELF_SERVE_LIVE=true
 META_WEBHOOK_VERIFY_TOKEN=<random webhook verification secret>
 ```
 
 `META_APP_ID`, `META_CONFIG_ID`, and the graph version are public configuration
 and may be returned to the browser. `META_APP_SECRET`, clinic tokens,
 registration PINs, and the webhook verify token must never leave the backend.
+
+Build the frontend with `VITE_WHATSAPP_LIVE=true` at the same release. The
+frontend and backend gates must be enabled together; the backend remains the
+authoritative check.
 
 The old platform `META_ACCESS_TOKEN`, `META_WABA_ID`, and
 `META_PHONE_NUMBER_ID` may remain only for an explicitly controlled test

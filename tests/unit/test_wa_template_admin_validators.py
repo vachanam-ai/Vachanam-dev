@@ -44,8 +44,14 @@ def test_validate_body_rejects_blank_example():
 
 def test_validate_body_accepts_sequential_with_examples():
     assert wa_template_admin.validate_body(
-        "Hi {{1}} on {{2}}", ["Ravi", "Monday"]
+        "Hi {{1}} on {{2}}. See you soon.", ["Ravi", "Monday"]
     ) == [1, 2]
+
+
+@pytest.mark.parametrize("body", ["{{1}} is booked.", "Booked for {{1}}"])
+def test_validate_body_rejects_placeholder_at_boundary(body):
+    with pytest.raises(wa_template_admin.TemplateAdminError):
+        wa_template_admin.validate_body(body, ["Monday"])
 
 
 def test_all_required_and_legacy_system_templates_are_frozen():

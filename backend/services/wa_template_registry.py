@@ -67,7 +67,10 @@ PURPOSES: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     "feedback": (
         "vachanam_feedback", ("feedback", "review", "experience"), ("cancel", "rating"),
     ),
-    "reminder": ("vachanam_appt_reminder", ("remind",), ("cancel", "reschedul")),
+    "reminder": (
+        "vachanam_appt_reminder", ("remind", "remainder"),
+        ("cancel", "reschedul"),
+    ),
     "followup": (
         "vachanam_followup", ("followup", "follow_up", "doctor_message"),
         ("cancel", "reschedul", "remind"),
@@ -131,6 +134,12 @@ def _pick(
         t for t in approved
         if not any(bad in (t.get("name") or "").lower() for bad in excludes)
     ]
+    # A clinic that named its template exactly "confirm" or "feedback" made
+    # a clearer choice than a sibling named "appointment_confirmation".
+    for keyword in keywords:
+        for t in eligible:
+            if keyword == (t.get("name") or "").lower():
+                return t
     for keyword in keywords:
         for t in eligible:
             if keyword in (t.get("name") or "").lower():

@@ -1,69 +1,35 @@
-# WhatsApp template pack — paste into Meta Business Manager
+# WhatsApp lifecycle templates
 
-WABA → Message templates → Create template. Category **UTILITY** for all
-four. Create each template TWICE: language **Telugu (te)** and **English
-(en)** — the code sends whichever matches the patient (default en).
-Buttons are **Quick reply** type; add them in the exact order shown (the
-code addresses them by index). Body {{n}} placeholders must stay in order.
+Vachanam discovers approved templates per clinic WABA. The owner dashboard can
+submit the canonical English templates below with **Install required
+templates**. Template variables are positional, so their order is a runtime
+contract.
 
-Telugu copy below is first-pass (written register) — review before
-submitting; Meta review itself typically takes minutes to 2 days.
+Do not create translated copies. Lifecycle templates are deliberately English
+only; free-form WhatsApp chat may still follow the patient's language.
 
----
+| Purpose | Canonical name | Variables, in order | Quick replies |
+| --- | --- | --- | --- |
+| Confirmation | `vachanam_booking_confirm` | patient, clinic, doctor, date, time, Google Maps link | Reschedule, Cancel |
+| Reschedule | `vachanam_booking_reschedule` | patient, doctor, date, time | Reschedule, Cancel |
+| Cancellation | `vachanam_booking_cancel` | patient, doctor, date, time | none |
+| Reminder | `vachanam_appt_reminder` | patient, doctor, date, time, Google Maps link | Reschedule, Cancel |
+| Follow-up | `vachanam_followup` | patient, doctor, clinic-approved message | none |
+| Clinic location | `vachanam_clinic_location` | clinic, address, Google Maps link | none |
+| Post-visit review | `vachanam_feedback` | Google review link | none |
+| In-chat rating | `vachanam_rating_ask` | clinic | 1, 2, 3, 4, 5 |
+| Doctor leave | `vachanam_leave_rebook` | doctor, date | Reschedule |
 
-## 1. booking_confirm
+Meta rejects a template whose first or last content is a variable. Keep text
+after the final `{{n}}`. The source of truth for exact submitted copy is
+`backend/services/wa_template_admin.py::SYSTEM_TEMPLATE_DEFINITIONS`.
 
-Body (en):
-```
-Your appointment is confirmed at {{1}} with {{2}} on {{3}}.
-Location: {{4}}
-```
-Body (te):
-```
-{{1}} లో {{2}} గారితో మీ అపాయింట్‌మెంట్ కన్ఫర్మ్ అయింది — {{3}}.
-లొకేషన్: {{4}}
-```
-Quick replies (order): `Reschedule` · `Cancel`
+Existing clinic templates may use different names. The registry discovers
+those by purpose and fits the values to the approved body parameter count. In
+particular, Venkateshwara's existing `confirm` and `remainder` templates are
+supported; the spelling `remainder` is treated as a reminder.
 
-## 2. appt_reminder
-
-Body (en):
-```
-Reminder: your appointment with {{1}} is today at {{2}}. See you soon!
-```
-Body (te):
-```
-గుర్తు చేస్తున్నాం: ఈరోజు {{2}} కి {{1}} గారితో మీ అపాయింట్‌మెంట్ ఉంది. వస్తారు కదా!
-```
-Quick replies (order): `Reschedule` · `Cancel`
-
-## 3. rating_ask
-
-Body (en):
-```
-Thank you for visiting {{1}} today. How was your visit?
-```
-Body (te):
-```
-ఈరోజు {{1}} కి వచ్చినందుకు ధన్యవాదాలు. మీ విజిట్ ఎలా అనిపించింది?
-```
-Quick replies (order): `1 ⭐` · `2 ⭐` · `3 ⭐` · `4 ⭐` · `5 ⭐`
-
-## 4. leave_rebook
-
-Body (en):
-```
-{{1}} is unavailable on {{2}}, so your appointment was cancelled — sorry.
-We tried calling you. Tap below and we'll help you rebook.
-```
-Body (te):
-```
-{{2}} న {{1}} గారు అందుబాటులో లేరు, అందుకే మీ అపాయింట్‌మెంట్ క్యాన్సల్ అయింది — సారీ.
-మీకు కాల్ కూడా చేశాం. కింద నొక్కండి, మళ్ళీ బుక్ చేసుకుందాం.
-```
-Quick replies (order): `Reschedule`
-
----
-
-After approval nothing else is needed — the backend already sends by these
-names. A REJECTED template silently disables only that flow (RULE 8).
+After Meta approves or rejects a submitted template, the
+`message_template_status_update` webhook invalidates that clinic's template
+cache. An unapproved or missing template disables only that notification; it
+never causes a fake booking or changes appointment state.

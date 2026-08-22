@@ -338,12 +338,12 @@ async def _update_status(
             logger.warning("attend_treatment_note_failed", token_id=token_id, error=str(exc))
 
         # Queue feedback when the visit actually happens, not at a fixed 7 PM
-        # batch. The existing rating:{token_id} outbox key makes this and the
+        # batch. The feedback:{token_id} outbox key makes this and the
         # nightly recovery job exactly-once. Meta delivery cannot undo attendance.
         try:
-            patient_phone, clinic_name = (
+            patient_phone, clinic_name, review_url = (
                 await db.execute(
-                    select(Patient.phone, Branch.name)
+                    select(Patient.phone, Branch.name, Branch.google_review_url)
                     .join(Token, Token.patient_id == Patient.id)
                     .join(Branch, Branch.id == Token.branch_id)
                     .where(
@@ -354,14 +354,15 @@ async def _update_status(
                     )
                 )
             ).one()
-            if patient_phone:
+            if patient_phone and review_url:
                 from backend.services.meta_service import MetaService
 
-                await MetaService().send_rating_request(
+                await MetaService().send_feedback_request(
                     patient_phone,
                     branch_id=branch_uuid,
                     token_id=str(token_uuid),
                     clinic_name=clinic_name,
+                    review_link=review_url,
                     background_delivery=True,
                 )
         except Exception as exc:  # noqa: BLE001 - feedback never undoes attendance

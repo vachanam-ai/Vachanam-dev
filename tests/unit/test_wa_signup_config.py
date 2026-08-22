@@ -158,3 +158,24 @@ async def test_anonymous_is_rejected(client, db):
     _org, branch = await _clinic(db)
     r = await client.get(_url(branch))
     assert r.status_code in (401, 403)
+
+
+def test_preflight_required_fields_match_the_runbook():
+    """scripts/wa_preflight.py hardcodes the six webhook fields it demands.
+
+    That list also lives in the onboarding runbook, and the two drifting apart
+    is the exact failure the script exists to prevent: a field nobody
+    subscribed silently drops a whole class of event (no `messages` = no
+    patient reaches the bot). Pin them to each other.
+    """
+    import re
+    from pathlib import Path
+
+    from scripts.wa_preflight import REQUIRED_FIELDS
+
+    runbook = Path("docs/runbooks/META_WHATSAPP_SETUP.md").read_text(encoding="utf-8")
+    section = runbook.split("## 3. Configure the webhook", 1)[1].split("##", 1)[0]
+    documented = set(re.findall(r"^- `([a-z_]+)`$", section, re.MULTILINE))
+
+    assert documented, "runbook section 3 no longer lists the subscribed fields"
+    assert REQUIRED_FIELDS == documented

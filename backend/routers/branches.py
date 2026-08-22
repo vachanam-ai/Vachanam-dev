@@ -7,6 +7,7 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Literal
+from urllib.parse import urlparse
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -122,6 +123,7 @@ class BranchSettings(BaseModel):
     name: str
     address: str | None = None
     city: str | None = None
+    google_review_url: str | None = None
     clinic_phone: str | None = None
     tts_voice: str | None = None   # Soniox catalog voice; NULL/legacy → default
     language: str = "te"
@@ -191,6 +193,7 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         name=branch.name,
         address=branch.address,
         city=branch.city,
+        google_review_url=getattr(branch, "google_review_url", None),
         clinic_phone=getattr(branch, "clinic_phone", None),
         tts_voice=getattr(branch, "tts_voice", None),
         language=(
@@ -978,6 +981,7 @@ class BranchDetailsUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     address: str | None = Field(default=None, max_length=2000)
     city: str | None = Field(default=None, max_length=100)
+    google_review_url: str | None = Field(default=None, max_length=2000)
     clinic_phone: str | None = Field(default=None, max_length=20)
     emergency_contact: str | None = Field(default=None, max_length=20)
     google_calendar_id: str | None = Field(default=None, max_length=255)
@@ -992,6 +996,24 @@ class BranchDetailsUpdate(BaseModel):
             return value
         from backend.services.validators import normalize_indian_phone
         return normalize_indian_phone(value)
+
+    @field_validator("google_review_url")
+    @classmethod
+    def _validate_google_review_url(cls, value):
+        if value is None or not value.strip():
+            return value
+        parsed = urlparse(value.strip())
+        host = (parsed.hostname or "").lower()
+        allowed = (
+            host == "g.page"
+            or host == "maps.app.goo.gl"
+            or host == "search.google.com"
+            or host == "google.com"
+            or host.endswith(".google.com")
+        )
+        if parsed.scheme != "https" or not allowed:
+            raise ValueError("Use an HTTPS Google Maps or Google review link")
+        return value.strip()
 
 
 class StaffMember(BaseModel):
@@ -1135,7 +1157,7 @@ async def update_branch_settings(
 
     old_did = branch.did_number  # capture before mutate (G9 trunk cleanup)
     for field in (
-        "name", "address", "city", "clinic_phone",
+        "name", "address", "city", "google_review_url", "clinic_phone",
         "emergency_contact", "google_calendar_id", "did_number",
     ):
         value = getattr(body, field)
