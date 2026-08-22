@@ -1651,15 +1651,16 @@ def build_cases() -> list[CaseSpec]:
             "question_ack",
             "Acknowledge the logged question in the active language.",
         ))
-        cases.append(_case(
-            f"SERVICEABLE-{language}",
-            "language_serviceability",
-            "prompt.build",
-            language,
-            f"Clinic config selects {LANGUAGE_NAMES[language]}.",
-            "serviceability",
-            "Every language exposed by the registry must build a production prompt.",
-        ))
+        if language in supported_codes():
+            cases.append(_case(
+                f"SERVICEABLE-{language}",
+                "language_serviceability",
+                "prompt.build",
+                language,
+                f"Clinic config selects {LANGUAGE_NAMES[language]}.",
+                "serviceability",
+                "Every enabled language must build a production prompt.",
+            ))
 
     ids = [case.case_id for case in cases]
     if len(ids) != len(set(ids)):

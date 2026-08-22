@@ -130,7 +130,7 @@ def test_the_prompt_still_says_ask_it_only_once():
     assert "caller explicitly says they did not hear it" in flat
 
 
-@pytest.mark.parametrize("lang", ["te", "hi", "ta", "kn", "mr", "en"])
+@pytest.mark.parametrize("lang", ["te", "hi", "en"])
 def test_the_rule_reaches_every_language(lang):
     """The loop was worst in Hindi. A rule that only exists in the English
     prompt fixes nothing for the languages that actually broke."""

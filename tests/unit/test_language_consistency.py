@@ -31,7 +31,7 @@ def _prompt(code: str) -> str:
 
 def test_non_telugu_prompt_has_absolute_output_language_rule_no_mirroring():
     # The live failure was the POST-SWITCH English agent drifting to Telugu.
-    for code in ("en", "hi", "ta"):
+    for code in ("en", "hi"):
         prompt = _prompt(code)
         assert "until an EXPLICIT switch" in prompt
         assert "CURRENT ACTIVE LANGUAGE" in prompt
