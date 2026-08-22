@@ -10,6 +10,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import httpx
 from sqlalchemy import func, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -23,6 +24,7 @@ from backend.models.schema import (
     WhatsAppDelivery,
 )
 from backend.services import wa_service, wa_template_admin, wa_template_registry
+from backend.services.meta_graph import url as graph_url
 
 # Meta template copy can contain emoji that the Windows console code page
 # cannot encode. Keep the audit running and escape only unsupported glyphs.
@@ -97,6 +99,23 @@ async def audit(name: str) -> int:
     )
     print(f"  token_statuses={dict(token_counts)}")
     print(f"  followup_statuses={dict(followups)}")
+
+    token = wa_service.token_for(branch)
+    if token and branch.wa_waba_id:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.get(
+                graph_url(f"{branch.wa_waba_id}/subscribed_apps"),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        apps = response.json().get("data", []) if response.is_success else []
+        app_ids = [
+            app.get("id") or (app.get("whatsapp_business_api_data") or {}).get("id")
+            for app in apps
+        ]
+        print(
+            "  subscribed_apps="
+            + (", ".join(str(app_id) for app_id in app_ids if app_id) or "NONE")
+        )
 
     print("\nApproved Meta templates")
     try:
