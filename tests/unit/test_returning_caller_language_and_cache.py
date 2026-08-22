@@ -15,6 +15,11 @@ def test_intro_uses_branch_and_phone_language_before_playback():
     assert 'f"{cached_route[\'id\']}:{_caller_digits[-10:]}"' in AGENT
 
 
+def test_legacy_disabled_branch_language_is_blocked_before_early_audio():
+    assert "if _warm_default_lang not in supported_codes():" in AGENT
+    assert "if default_lang not in supported_codes():" in AGENT
+
+
 def test_prompt_cache_read_overlaps_remaining_call_setup():
     start = AGENT.index("_main_cache_task = asyncio.create_task(")
     finish = AGENT.index("_cached_llm = await _main_cache_task")

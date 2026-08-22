@@ -7817,7 +7817,7 @@ def _doctor_roster_text(doctors, language: str) -> str:
         specialization = str(getattr(doctor, 'specialization', '') or '').strip()
         if name:
             rows.append((name, specialization))
-    code = language if language in LANGUAGES else DEFAULT_LANG
+    code = language if language in supported_codes() else DEFAULT_LANG
     if not rows:
         return {
             'te': 'డాక్టర్ల వివరాలు ఇప్పుడే కనిపించడం లేదండి. ఒక్క నిమిషం తర్వాత మళ్ళీ అడగండి.',
@@ -13992,6 +13992,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         )
     if _warm_route is not None:
         _warm_default_lang = (_warm_route.get("language") or DEFAULT_LANG).strip()
+        if _warm_default_lang not in supported_codes():
+            _warm_default_lang = DEFAULT_LANG
         _warm_phone = outbound_number or caller or ""
         _warm_digits = re.sub(r"\D", "", _warm_phone)
         _warm_preference_key = (
@@ -14043,7 +14045,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         nonlocal _early_greeting_task, _early_greeting_texts
         nonlocal _early_intro_texts, _early_intro_cache_key
         nonlocal _early_route_id, _early_voice, _early_language
-        default_lang = (route.get("language") or "te").strip()
+        default_lang = (route.get("language") or DEFAULT_LANG).strip()
+        if default_lang not in supported_codes():
+            default_lang = DEFAULT_LANG
         route_lang = (preferred_language or default_lang).strip()
         if route_lang not in supported_codes():
             route_lang = default_lang

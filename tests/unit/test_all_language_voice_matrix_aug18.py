@@ -22,6 +22,11 @@ def test_prompt_covers_every_serviceable_production_language():
     assert supported_codes() == SERVICEABLE_LANGUAGES
 
 
+def test_disabled_legacy_language_cannot_reach_deterministic_voice_output():
+    doctor = SimpleNamespace(name="Dr. Satya", specialization="Dermatology")
+    assert _doctor_roster_text((doctor,), "ta") == _doctor_roster_text((doctor,), "te")
+
+
 @pytest.mark.parametrize("language", VOICE_LANGUAGES)
 @pytest.mark.parametrize(
     "answer",
