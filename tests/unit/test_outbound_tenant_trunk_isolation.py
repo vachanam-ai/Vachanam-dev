@@ -33,7 +33,9 @@ async def test_followup_without_branch_trunk_never_dispatches():
     result = await next_visit_followup_caller._dispatch(
         NS(id="task"), _branch(), NS(id="doctor"), NS(phone="+910000000000"), None
     )
-    assert result is False
+    # No provider handoff was attempted, so the scheduler must defer without
+    # consuming the patient's retry budget.
+    assert result is None
 
 
 @pytest.mark.asyncio
