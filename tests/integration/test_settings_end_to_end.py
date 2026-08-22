@@ -181,21 +181,21 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     assert g.json()["did_number"] == normalize_did(DID)
     # Language defaults to Telugu and the dropdown options are surfaced.
     assert g.json()["language"] == "te"
-    assert any(o["code"] == "ta" for o in g.json()["allowed_languages"])
+    assert {o["code"] for o in g.json()["allowed_languages"]} == {"te", "hi", "en"}
 
-    # Owner switches the clinic to Tamil via the voice PATCH (carries tts_voice).
+    # Owner switches the clinic to Hindi via the voice PATCH (carries tts_voice).
     lp = await client.patch(
         f"/branches/{bid}/voice",
         headers=_auth(owner),
-        json={"tts_voice": "Meera", "language": "ta"},
+        json={"tts_voice": "Meera", "language": "hi"},
     )
     assert lp.status_code == 200, lp.text
-    assert lp.json()["language"] == "ta"
-    # An unknown language code is rejected, not silently stored.
+    assert lp.json()["language"] == "hi"
+    # A currently disabled language is rejected, not silently stored.
     bad = await client.patch(
         f"/branches/{bid}/voice",
         headers=_auth(owner),
-        json={"tts_voice": "Meera", "language": "zz"},
+        json={"tts_voice": "Meera", "language": "ta"},
     )
     assert bad.status_code == 422
 
@@ -295,10 +295,10 @@ async def test_full_settings_onboarding_makes_everything_work(clinic, client, db
     assert "Walkin Wanda" in q.text  # the booking is visible to reception
 
 
-async def test_legacy_clone_routes_stay_gone_and_all_languages_remain(client, db):
+async def test_legacy_clone_routes_stay_gone_and_enabled_languages_remain(client, db):
     """Voice cloning REMOVED entirely 2026-07-24 (Vinay): the settings payload no
     longer carries voice_cloning_allowed, the clone endpoints are GONE (404), and
-    every plan still sees all languages (2026-07-12; Odia removed 2026-07-24)."""
+    every plan sees the currently enabled production languages."""
     org = Organization(
         name="Solo Org", owner_phone="+919000777002",
         owner_email=f"solo-{uuid.uuid4().hex[:6]}@test.com", plan="solo", status="active",
@@ -319,7 +319,7 @@ async def test_legacy_clone_routes_stay_gone_and_all_languages_remain(client, db
     assert g.status_code == 200
     assert "voice_cloning_allowed" not in g.json()
     codes = [o["code"] for o in g.json()["allowed_languages"]]
-    assert {"te", "hi", "en"} <= set(codes) and len(codes) == 8  # 7 Indian + en
+    assert set(codes) == {"te", "hi", "en"}
 
     # The clone endpoints are gone — routes removed, not just gated.
     r = await client.post(

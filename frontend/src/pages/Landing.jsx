@@ -313,7 +313,7 @@ export default function Landing() {
 
         <section className="marketing-fact-band" aria-label="Product guarantees">
           <div><Headset size={24} weight="duotone" /><span><strong>Always available</strong><small>When your desk is busy</small></span></div>
-          <div><GlobeHemisphereEast size={24} weight="duotone" /><span><strong>7 Indian languages</strong><small>One consistent workflow</small></span></div>
+          <div><GlobeHemisphereEast size={24} weight="duotone" /><span><strong>Telugu, Hindi & English</strong><small>One consistent workflow</small></span></div>
           <div><Database size={24} weight="duotone" /><span><strong>Database grounded</strong><small>No invented availability</small></span></div>
           <div><FirstAidKit size={24} weight="duotone" /><span><strong>Reception only</strong><small>Medical decisions stay human</small></span></div>
         </section>

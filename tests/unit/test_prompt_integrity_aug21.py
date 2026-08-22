@@ -34,7 +34,7 @@ from agent.session_state import SessionState
 
 
 TODAY = date(2026, 8, 21)
-EXPECTED_LANGUAGES = frozenset({"te", "en", "hi", "ta", "kn", "ml", "mr", "bn"})
+EXPECTED_LANGUAGES = frozenset({"te", "en", "hi"})
 
 BASE = {
     "clinic_name": "Prompt Integrity Clinic",
@@ -168,7 +168,7 @@ def test_recording_flag_is_represented_truthfully_in_prompt():
     assert "delivered the recording notice" in active.casefold()
 
 
-def test_full_register_body_is_present_for_all_eight_languages():
+def test_full_register_body_is_present_for_every_enabled_language():
     assert set(supported_codes()) == EXPECTED_LANGUAGES
     missing = [
         language

@@ -38,6 +38,11 @@ LANGUAGES: dict[str, LangConfig] = {
     "bn": LangConfig("bn", "Bengali", "বাংলা", "Bengali", "bn-IN", "bn", "Priya"),
 }
 
+# Production language switch. Keep the dormant configs above so re-enabling a
+# reviewed language is a one-line change; only these codes are offered, saved,
+# prompted, or warmed today.
+ENABLED_LANGUAGE_CODES: tuple[str, ...] = ("te", "hi", "en")
+
 DEFAULT_LANG = "te"
 
 

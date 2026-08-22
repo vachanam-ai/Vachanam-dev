@@ -2003,9 +2003,9 @@ async def set_preferred_language(
     The dedicated mapping is authoritative.  Existing family patient rows are
     updated too for backwards compatibility.  Returns patient rows updated.
     """
-    from agent.i18n import LANGUAGES
+    from agent.i18n import ENABLED_LANGUAGE_CODES
 
-    if language not in LANGUAGES:
+    if language not in ENABLED_LANGUAGE_CODES:
         raise ValueError(f"unsupported language: {language}")
     digits = _phone_digits(phone)
     if len(digits) < 10:

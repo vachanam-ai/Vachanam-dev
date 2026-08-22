@@ -92,10 +92,11 @@ async def test_set_updates_all_rows_branch_scoped(db):
     assert other.preferred_language is None
 
 
-async def test_set_rejects_unknown_code(db):
+@pytest.mark.parametrize("language", ("fr", "ta"))
+async def test_set_rejects_unknown_or_disabled_code(db, language):
     br = await _setup(db)
     with pytest.raises(ValueError):
-        await set_preferred_language(br.id, PHONE, "fr", db)
+        await set_preferred_language(br.id, PHONE, language, db)
 
 
 async def test_set_returns_zero_without_patient_row(db):

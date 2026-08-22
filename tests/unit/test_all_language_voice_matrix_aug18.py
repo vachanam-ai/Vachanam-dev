@@ -14,8 +14,8 @@ from agent.livekit_minimal.faq_grounding import FaqMatch, natural_fallback
 from agent.prompts.grounded_prompt import supported_codes
 
 
-SERVICEABLE_LANGUAGES = ("te", "hi", "ta", "kn", "ml", "bn", "mr", "en")
-VOICE_LANGUAGES = ("te", "hi", "ta", "kn", "mr", "en")
+SERVICEABLE_LANGUAGES = ("te", "hi", "en")
+VOICE_LANGUAGES = SERVICEABLE_LANGUAGES
 
 
 def test_prompt_covers_every_serviceable_production_language():

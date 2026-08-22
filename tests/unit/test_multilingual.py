@@ -19,7 +19,8 @@ from agent.i18n.lines import Lines
 from agent.prompts.grounded_prompt import PACKS, supported_codes
 from agent.prompts.system_prompt import DoctorContext, build_system_prompt
 
-EXPECTED = {"te", "en", "hi", "ta", "kn", "ml", "mr", "bn"}  # Odia removed 2026-07-24
+AVAILABLE = {"te", "en", "hi", "ta", "kn", "ml", "mr", "bn"}
+ENABLED = {"te", "en", "hi"}
 
 # Each internal code -> the Unicode script its letters must belong to.
 SCRIPT_OF = {
@@ -31,9 +32,9 @@ _SHARED = {0x0964, 0x0965, 0x200C, 0x200D}
 
 
 def test_registry_covers_mvp_languages():
-    assert EXPECTED <= set(LANGUAGES)
-    assert set(PACKS) == EXPECTED
-    assert set(supported_codes()) == EXPECTED
+    assert set(LANGUAGES) == AVAILABLE
+    assert set(PACKS) == AVAILABLE
+    assert set(supported_codes()) == ENABLED
 
 
 @pytest.mark.parametrize("code", ["ml", "bn"])
@@ -67,7 +68,7 @@ def test_language_code_is_case_insensitive():
     assert get_lang("Hi").code == "hi"
 
 
-@pytest.mark.parametrize("code", sorted(EXPECTED))
+@pytest.mark.parametrize("code", sorted(AVAILABLE))
 def test_lines_complete(code):
     lines = get_lines(code)
     assert isinstance(lines, Lines)
@@ -91,7 +92,7 @@ def test_lines_complete(code):
         assert getattr(lines, field).strip(), f"{code}.{field} is empty"
 
 
-@pytest.mark.parametrize("code", sorted(EXPECTED))
+@pytest.mark.parametrize("code", sorted(AVAILABLE))
 def test_spoken_lines_are_in_their_own_script(code):
     """No paste corruption: every non-ASCII letter must be in the clinic's own
     script (allowing shared danda/joiners and the {placeholders})."""
@@ -135,11 +136,6 @@ def test_telugu_prompt_has_no_directive():
     [
         ("en", "English"),
         ("hi", "Hindi"),
-        ("ta", "Tamil"),
-        ("kn", "Kannada"),
-        ("ml", "Malayalam"),
-        ("mr", "Marathi"),
-        ("bn", "Bengali"),
     ],
 )
 def test_non_telugu_prompt_has_primary_language_directive(code, name):
@@ -147,6 +143,7 @@ def test_non_telugu_prompt_has_primary_language_directive(code, name):
     assert f"ACTIVE: {name}" in p
 
 
-def test_unknown_language_without_grounded_prompt_pack_is_rejected():
+@pytest.mark.parametrize("code", ("zz", "ta", "kn", "ml", "mr", "bn"))
+def test_unknown_or_disabled_language_is_rejected(code):
     with pytest.raises(ValueError, match="not serviceable"):
-        build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language="zz")
+        build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language=code)

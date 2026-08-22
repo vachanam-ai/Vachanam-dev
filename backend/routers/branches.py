@@ -64,13 +64,20 @@ SONIOX_VOICES = tuple(
 SONIOX_VOICE_IDS = {voice["voice_id"] for voice in SONIOX_VOICES}
 
 # Voice-agent languages a clinic can pick (single source of truth: agent.i18n).
-from agent.i18n import LANGUAGES as _LANGUAGES  # noqa: E402
+from agent.i18n import (  # noqa: E402
+    ENABLED_LANGUAGE_CODES,
+    LANGUAGES as _LANGUAGES,
+)
 
-ALLOWED_LANGUAGES = list(_LANGUAGES.keys())
+ALLOWED_LANGUAGES = list(ENABLED_LANGUAGE_CODES)
 # For the Settings dropdown: code + English name + endonym.
 LANGUAGE_OPTIONS = [
-    {"code": c, "name": cfg.name, "native_name": cfg.native_name}
-    for c, cfg in _LANGUAGES.items()
+    {
+        "code": c,
+        "name": _LANGUAGES[c].name,
+        "native_name": _LANGUAGES[c].native_name,
+    }
+    for c in ENABLED_LANGUAGE_CODES
 ]
 
 
@@ -186,7 +193,11 @@ async def _settings_payload(db: AsyncSession, branch: Branch, branch_id: str, di
         city=branch.city,
         clinic_phone=getattr(branch, "clinic_phone", None),
         tts_voice=getattr(branch, "tts_voice", None),
-        language=getattr(branch, "language", "te") or "te",
+        language=(
+            getattr(branch, "language", "te")
+            if getattr(branch, "language", "te") in ALLOWED_LANGUAGES
+            else "te"
+        ),
         did_number=branch.did_number,
         emergency_contact=branch.emergency_contact,
         google_calendar_id=branch.google_calendar_id,
@@ -341,6 +352,13 @@ async def list_branch_voices(
     if branch is None:
         raise HTTPException(status_code=404, detail="Branch not found")
     lang = (language or getattr(branch, "language", None) or "te").lower()
+    if language is not None and lang not in ALLOWED_LANGUAGES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Language must be one of {ALLOWED_LANGUAGES}",
+        )
+    if lang not in ALLOWED_LANGUAGES:
+        lang = "te"
 
     clones = (
         await db.execute(

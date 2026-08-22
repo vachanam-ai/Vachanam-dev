@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from html import escape
 from typing import TYPE_CHECKING
 
-from agent.i18n import get_lang
+from agent.i18n import ENABLED_LANGUAGE_CODES, LANGUAGES
 from agent.i18n.lines import get_lines
 
 if TYPE_CHECKING:
@@ -615,14 +615,11 @@ def _pack(code: str) -> LangPack:
 
 
 def _configured_codes() -> tuple[str, ...]:
-    out: list[str] = []
-    for code in PACKS:
-        try:
-            get_lang(code)
-        except Exception:  # noqa: BLE001
-            continue
-        out.append(code)
-    return tuple(out)
+    return tuple(
+        code
+        for code in ENABLED_LANGUAGE_CODES
+        if code in PACKS and code in LANGUAGES
+    )
 
 
 def _codes_for(current: str) -> list[str]:

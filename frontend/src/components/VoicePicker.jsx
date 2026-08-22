@@ -4,11 +4,6 @@ import { Pause, Play } from "@phosphor-icons/react";
 export const LANGUAGES = [
   { code: "te", native: "తెలుగు", english: "Telugu" },
   { code: "hi", native: "हिन्दी", english: "Hindi" },
-  { code: "ta", native: "தமிழ்", english: "Tamil" },
-  { code: "kn", native: "ಕನ್ನಡ", english: "Kannada" },
-  { code: "ml", native: "മലയാളം", english: "Malayalam" },
-  { code: "mr", native: "मराठी", english: "Marathi" },
-  { code: "bn", native: "বাংলা", english: "Bengali" },
 ];
 
 export default function VoicePicker() {
@@ -40,7 +35,7 @@ export default function VoicePicker() {
           );
         })}
       </div>
-      <p>One reception workflow, spoken in the language your patient chooses.</p>
+      <p>Telugu and Hindi voice samples. English is also supported.</p>
     </div>
   );
 }

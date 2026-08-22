@@ -20,11 +20,6 @@ const LANGUAGES = [
   { code: "te", label: "Telugu" },
   { code: "en", label: "English" },
   { code: "hi", label: "Hindi" },
-  { code: "ta", label: "Tamil" },
-  { code: "kn", label: "Kannada" },
-  { code: "ml", label: "Malayalam" },
-  { code: "mr", label: "Marathi" },
-  { code: "bn", label: "Bengali" },
 ];
 
 function errorMessage(error, fallback) {

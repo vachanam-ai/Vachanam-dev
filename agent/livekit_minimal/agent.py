@@ -6190,7 +6190,7 @@ def _caller_refused_outright(text: str) -> bool:
 
     He is right, and this function is what is left after taking him seriously.
     Deciding whether a reply MEANS yes is the model's job — it is the only
-    part of this system that is fluent in seven languages and both scripts,
+    part of this system that understands natural caller intent across languages,
     and every attempt to encode that judgement as a phrase list has produced a
     loop instead (2026-08-03 Telugu, 2026-08-07 Hindi). So the guard no longer
     tries. It asks one question the model cannot be trusted with, because a
@@ -6834,7 +6834,8 @@ def _explicit_language_request(text: str) -> str | None:
     '''Resolve a clear caller instruction to switch the whole voice pipeline.
 
     This is deterministic and runs before the LLM. It accepts the short phrases
-    people actually use on calls, including all eight supported languages.
+    people actually use on calls. Disabled-language requests are still
+    recognized so the agent can decline them without changing the call.
     Merely mentioning a language in a longer clinic question does not switch it.
     '''
     low = ' '.join((text or '').casefold().strip().split())
@@ -11751,7 +11752,7 @@ class VachanamAgent(Agent):
         words from another language.
 
         Args:
-            language: te | en | hi | ta | kn | ml | mr | bn
+            language: te | hi | en
         """
         code = (language or "").strip().lower()
         # The LLM sometimes passes the language NAME instead of the code.
