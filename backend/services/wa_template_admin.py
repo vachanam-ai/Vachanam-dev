@@ -159,16 +159,16 @@ def validate_body(body: str, examples: list[str] | None) -> list[int]:
     no example value is too. Returns the sorted, deduplicated placeholder
     numbers so the caller can build the `example.body_text` payload."""
     numbers = placeholder_numbers(body)
-    stripped = (body or "").strip()
-    if stripped.startswith("{{") or stripped.endswith("}}"):
-        raise TemplateAdminError(
-            422, "A placeholder cannot be the first or last content in a template."
-        )
     if numbers and numbers != list(range(1, len(numbers) + 1)):
         raise TemplateAdminError(
             422,
             "Placeholders must be sequential starting from {{1}} — e.g. "
             "{{1}}, {{2}}, not {{1}}, {{3}}.",
+        )
+    stripped = (body or "").strip()
+    if stripped.startswith("{{") or stripped.endswith("}}"):
+        raise TemplateAdminError(
+            422, "A placeholder cannot be the first or last content in a template."
         )
     examples = examples or []
     if numbers and len(examples) < len(numbers):

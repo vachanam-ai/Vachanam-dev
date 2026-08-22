@@ -54,6 +54,11 @@ def test_validate_body_rejects_placeholder_at_boundary(body):
         wa_template_admin.validate_body(body, ["Monday"])
 
 
+def test_validate_body_reports_sequence_before_boundary():
+    with pytest.raises(wa_template_admin.TemplateAdminError, match="sequential"):
+        wa_template_admin.validate_body("{{2}} only", ["Monday"])
+
+
 def test_all_required_and_legacy_system_templates_are_frozen():
     required = {
         item["name"]
