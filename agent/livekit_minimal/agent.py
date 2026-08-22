@@ -9538,11 +9538,18 @@ class VachanamAgent(Agent):
         '''Switch the active pipeline without waiting for the LLM to call a tool.'''
         self._state.explicit_language_lock = code
         self._sync_runtime_language(code)
-        persist_task = asyncio.create_task(
-            _persist_call_language(self._state, code)
-        )
-        self._background_tasks.add(persist_task)
-        persist_task.add_done_callback(self._background_tasks.discard)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Pure synchronous contract checks have no loop. Live calls always
+            # do, and shutdown independently repairs the final preference.
+            pass
+        else:
+            persist_task = loop.create_task(
+                _persist_call_language(self._state, code)
+            )
+            self._background_tasks.add(persist_task)
+            persist_task.add_done_callback(self._background_tasks.discard)
         if code == self._lang_code or self._agent_factory is None:
             return False
         try:
