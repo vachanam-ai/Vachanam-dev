@@ -239,7 +239,10 @@ async def test_fast_dial_failure_cannot_be_overwritten_as_sent(db, redis):
     token.reminder_sent = False
     await db.commit()
 
-    marked = await job._mark_dispatched_if_no_dial_failure(db, token.id, expected_dial_attempts=0)
+    appointment_id = token.id
+    marked = await job._mark_dispatched_if_no_dial_failure(
+        db, appointment_id, expected_dial_attempts=0
+    )
 
     await db.refresh(token)
     assert marked is False
@@ -256,8 +259,9 @@ async def test_retry_preserves_the_first_dispatch_timestamp(db, redis):
     token.reminder_sent = False
     await db.commit()
 
+    appointment_id = token.id
     marked = await job._mark_dispatched_if_no_dial_failure(
-        db, token.id, expected_dial_attempts=2
+        db, appointment_id, expected_dial_attempts=2
     )
 
     await db.refresh(token)
