@@ -18,7 +18,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytest
 
-from agent.tools.booking_tools import _merge_to_ranges, check_availability
+from agent.tools.booking_tools import _generate_slots, _merge_to_ranges, check_availability
 from backend.services.doctor_schedule import bookable_starts_as_text
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 
@@ -93,6 +93,16 @@ async def test_a_booked_slot_is_removed_from_the_spoken_availability(db, redis):
 def test_sitting_end_is_never_advertised_as_a_bookable_start():
     starts = [time(9), time(9, 30), time(10), time(10, 30), time(11), time(11, 30)]
     assert bookable_starts_as_text(starts, 30) == "9:00 AM to 11:30 AM"
+
+
+def test_five_and_six_pm_bookings_explain_both_aroha_gaps():
+    starts = _generate_slots(time(15), time(20), 15)
+    free = [slot for slot in starts if slot not in {time(17), time(18)}]
+
+    assert bookable_starts_as_text(free, 15) == (
+        "3:00 PM to 4:45 PM and 5:15 PM to 5:45 PM and "
+        "6:15 PM to 7:45 PM"
+    )
 
 
 @pytest.mark.asyncio
@@ -173,6 +183,7 @@ async def test_the_schedule_tool_hands_the_model_free_time_not_just_sittings(db)
         clinic_name="C", doctors=[], emergency_contact="+919000000000",
         plan="clinic", language="en",
     )
-    assert "free_now, NOT sitting_hours" in prompt
+    assert "free_now" in prompt
+    assert "NOT sitting_hours" in prompt
     assert "ALL\nthe free ranges in ONE answer" in prompt or \
            "ALL the free ranges in ONE answer" in prompt

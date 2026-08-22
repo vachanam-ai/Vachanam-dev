@@ -9,12 +9,14 @@ Proves the language seam is correct and SAFE:
   - build_system_prompt leaves Telugu byte-identical (no regression for the live
     clinic) and gives every other language a hard PRIMARY-LANGUAGE directive
 """
+from dataclasses import fields
 import unicodedata as U
 
 import pytest
 
 from agent.i18n import LANGUAGES, get_lang, get_lines
 from agent.i18n.lines import Lines
+from agent.prompts.grounded_prompt import PACKS, supported_codes
 from agent.prompts.system_prompt import DoctorContext, build_system_prompt
 
 EXPECTED = {"te", "en", "hi", "ta", "kn", "ml", "mr", "bn"}  # Odia removed 2026-07-24
@@ -30,6 +32,17 @@ _SHARED = {0x0964, 0x0965, 0x200C, 0x200D}
 
 def test_registry_covers_mvp_languages():
     assert EXPECTED <= set(LANGUAGES)
+    assert set(PACKS) == EXPECTED
+    assert set(supported_codes()) == EXPECTED
+
+
+@pytest.mark.parametrize("code", ["ml", "bn"])
+def test_new_grounded_prompt_packs_are_complete(code):
+    pack = PACKS[code]
+    for field in fields(type(pack)):
+        value = getattr(pack, field.name)
+        if isinstance(value, str):
+            assert value.strip(), f"{code}.{field.name} is empty"
 
 
 def test_stt_tts_codes_correct():
@@ -68,6 +81,14 @@ def test_lines_complete(code):
         assert ph in lines.rebook_greeting
     assert lines.service_blocked.strip()
     assert lines.cap_warning.strip() and lines.cap_goodbye.strip()
+    for field in (
+        "confirm_booked_token",
+        "confirm_booked_slot",
+        "confirm_resched_slot",
+        "confirm_resched_token",
+        "confirm_cancelled",
+    ):
+        assert getattr(lines, field).strip(), f"{code}.{field} is empty"
 
 
 @pytest.mark.parametrize("code", sorted(EXPECTED))
@@ -79,6 +100,9 @@ def test_spoken_lines_are_in_their_own_script(code):
         lines.disclosure_greeting + lines.known_caller_greeting
         + lines.reminder_greeting + lines.rebook_greeting
         + lines.service_blocked + lines.cap_warning + lines.cap_goodbye
+        + lines.confirm_booked_token + lines.confirm_booked_slot
+        + lines.confirm_resched_slot + lines.confirm_resched_token
+        + lines.confirm_cancelled
         + "".join(lines.fillers)
     )
     want = SCRIPT_OF[code]
@@ -106,13 +130,23 @@ def test_telugu_prompt_has_no_directive():
     assert "ACTIVE: Telugu" in p
 
 
-@pytest.mark.parametrize("code,name", [("hi", "Hindi"), ("ta", "Tamil"), ("mr", "Marathi")])
+@pytest.mark.parametrize(
+    ("code", "name"),
+    [
+        ("en", "English"),
+        ("hi", "Hindi"),
+        ("ta", "Tamil"),
+        ("kn", "Kannada"),
+        ("ml", "Malayalam"),
+        ("mr", "Marathi"),
+        ("bn", "Bengali"),
+    ],
+)
 def test_non_telugu_prompt_has_primary_language_directive(code, name):
     p = build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language=code)
     assert f"ACTIVE: {name}" in p
 
 
-@pytest.mark.parametrize("code", ["bn", "ml", "zz"])
-def test_language_without_grounded_prompt_pack_is_rejected(code):
+def test_unknown_language_without_grounded_prompt_pack_is_rejected():
     with pytest.raises(ValueError, match="not serviceable"):
-        build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language=code)
+        build_system_prompt("Clinic", _docs(), "+919999999999", "clinic", language="zz")

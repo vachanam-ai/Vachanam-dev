@@ -13,6 +13,66 @@ Format per session:
 
 ---
 
+## 2026-08-22 - Voice truth, language lock, read liveness, and date-range schedules
+
+Hardened the local production voice candidate around the failures reported in
+the first clinic call. Appointment, reschedule, cancellation, clinic-message,
+and clinic-question success speech is now tied to the matching successful
+server result and a one-use deterministic receipt. Failed or disconnected
+time-slot calendars cannot produce a booking claim: the agent says booking is
+temporarily unavailable, states that no appointment was created, and offers to
+record the caller's exact request. Token-queue booking remains independent of
+Google Calendar and announces only a token returned by a successful write.
+
+Replaced accumulated prompt patches with one ordered conversation contract.
+Explicit language changes now create a durable runtime lock for all eight
+supported languages; mixed-language words and wrong-language model output do
+not silently move the call to another language. Caller name, doctor, date,
+time, message text, consent, and completed-action state are bound outside the
+model so a stale turn cannot rewrite them. Read tools now have tracked
+in-flight/answer-owed state, timeouts, evidence-based settlement, and a direct
+failure path, preventing a wait filler from degrading into silence, a new
+"hello", or an unsupported answer.
+
+Added an offline adversarial corpus that exercises the production speech
+boundaries, mutation receipts, language locks, caller date/time parsing,
+calendar-disconnect recovery, privacy, and read-liveness paths under several
+stream chunkings. Added focused regressions for prompt composition, patient
+identity, message privacy, mutation outcomes, and the "let me check" failure
+mode. These are deterministic local tests and do not consume telephony minutes;
+they are not evidence of a live clinic call.
+
+The final gate also found and removed two additional runtime defects. A
+successful slot booking could retain its in-flight Redis hold handle until call
+shutdown, where cleanup could decrement the already-consumed slot; success now
+clears that handle before deterministic speech can terminate the tool turn.
+Multi-sentence private reasoning could resume with "I should list..." after an
+earlier private sentence was suppressed; the streaming firewall now suppresses
+those continuation forms too. First-time WhatsApp booking no longer creates an
+anonymous "WhatsApp Patient" record: a real name is required before any hold,
+while age remains optional.
+
+The exact-date doctor schedule publisher now accepts an inclusive From/To
+range and applies the same sessions to up to 31 dates in one database
+transaction. Every date is locked and validated before any schedule changes;
+conflicts return their exact dates and leave the entire range unchanged. There
+is no database migration in this change.
+
+Primary files: `agent/livekit_minimal/agent.py`,
+`agent/prompts/ordered_contract.py`, `agent/prompts/grounded_prompt.py`,
+`agent/services/caller_datetime.py`, `agent/session_state.py`,
+`agent/livekit_minimal/confirm_speech.py`,
+`agent/eval/offline_call_red_team.py`,
+`frontend/src/pages/DoctorSchedule.jsx`, and the corresponding voice and
+frontend regression tests.
+
+Verification: 3,241 unit tests passed; 209 security tests passed with one skip;
+97 frontend tests passed; the production frontend build transformed 4,731
+modules; the canonical offline campaign passed 2,930/2,930 executions from
+1,436 semantic scenarios; Ruff and diff checks are clean. No billable call was
+made. Follow-up: review the exact staged diff, deploy, and perform read-only
+post-deploy health checks. No deployment result is claimed by this entry yet.
+
 ## 2026-08-17 - Single 30-minute appointment reminder
 
 Removed the day-before voice and WhatsApp reminder. Appointment reminders now

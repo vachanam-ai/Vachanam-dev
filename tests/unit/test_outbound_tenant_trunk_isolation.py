@@ -47,7 +47,7 @@ async def test_question_callback_without_shared_trunk_never_dispatches(monkeypat
     result = await question_callback_caller._dispatch(
         NS(id="question", caller_phone="+910000000000"), _branch(), ""
     )
-    assert result is False
+    assert result is None
 
 
 @pytest.mark.asyncio

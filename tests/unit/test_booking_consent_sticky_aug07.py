@@ -73,9 +73,13 @@ def test_consent_is_spent_on_success_not_on_authorization():
     """Cleared at authorization instead, a retry after a transient failure
     would have to ask the caller all over again."""
     src = _src("confirm_booking")
-    auth_block = src.split("any_booking_confirmed = True")[0]
-    # the disarm that happens at authorization time is pending_confirmation,
-    # and it must NOT take the sticky consent with it
+    auth_block = src.split(
+        "snapshot = self._state.booking_confirmation_snapshot", 1
+    )[1].split(
+        "_protect_mutation(context)", 1
+    )[0]
+    # Consuming a verified snapshot disarms only pending_confirmation. The
+    # request itself is spent only after the durable booking succeeds.
     assert "caller_asked_to_book = False" not in auth_block
 
 
@@ -116,14 +120,14 @@ def test_a_declined_age_is_accepted_not_chased():
 
 def test_the_confirmation_question_uses_the_patients_name():
     flat = " ".join(_prompt().split())
-    assert "Okay <name> — shall I confirm your appointment" in flat
-    assert "<time> on <date> with <doctor>" in flat
+    assert "exactly one natural yes-question in the ACTIVE LANGUAGE" in flat
+    assert "time-slot doctor it contains patient, doctor, date, hour, and minute" in flat
 
 
 def test_the_prompt_still_says_ask_it_only_once():
     flat = " ".join(_prompt().split())
-    assert "Ask that question ONCE" in flat
-    assert "Never re-ask it" in flat
+    assert "Ask it ONCE" in flat
+    assert "caller explicitly says they did not hear it" in flat
 
 
 @pytest.mark.parametrize("lang", ["te", "hi", "ta", "kn", "mr", "en"])
@@ -132,4 +136,4 @@ def test_the_rule_reaches_every_language(lang):
     prompt fixes nothing for the languages that actually broke."""
     flat = " ".join(_prompt(lang).split())
     assert "Ask name and age in ONE question" in flat
-    assert "Ask that question ONCE" in flat
+    assert "Ask it ONCE" in flat

@@ -96,7 +96,9 @@ def test_a_refusal_on_a_seeded_call_still_withdraws_consent():
     from agent.livekit_minimal.agent import VachanamAgent
 
     src = inspect.getsource(VachanamAgent.on_user_turn_completed)
-    block = src.split("_caller_refused_outright(utterance)")[1].split("else:")[0]
+    block = src.split(
+        "declined_turn = _caller_refused_outright(utterance)", 1
+    )[1].split("else:", 1)[0]
     assert "caller_asked_to_book = False" in block
     assert "caller_asked_to_reschedule = False" in block
 

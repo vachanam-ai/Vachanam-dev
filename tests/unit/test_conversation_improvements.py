@@ -55,5 +55,6 @@ def test_receptionist_playbook_block_present():
     assert "SILENT → one check" in p
     assert "NOISE or several voices" in p
     assert "WRONG NUMBER" in p
-    assert "MESSAGE: confirm once, take_message" in p
+    assert "MESSAGE: if the caller gives clear relay content" in p
+    assert "take_message in the SAME turn" in p
     assert "log_clinic_question" in p

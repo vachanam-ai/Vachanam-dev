@@ -21,11 +21,11 @@ class _Agent(VachanamAgent):
         return self._test_session
 
 
-def _agent(language='te', *, chat_ctx=None, factory=None):
+def _agent(language='te', *, chat_ctx=None, factory=None, calendar_service=None):
     state = SessionState(language=language, preferred_language=language)
     agent = _Agent(
         instructions='test', state=state, db=None, room=None,
-        calendar_service=None, meta_service=MetaService(), transfer_to='',
+        calendar_service=calendar_service, meta_service=MetaService(), transfer_to='',
         lang_code=language, chat_ctx=chat_ctx, agent_factory=factory,
     )
     session = SimpleNamespace(
@@ -49,7 +49,7 @@ def test_english_detection_requires_a_real_sentence_not_latin_script():
 
 
 @pytest.mark.asyncio
-async def test_yes_after_audible_booking_question_is_forced_to_confirm_not_reask():
+async def test_model_authored_booking_question_does_not_arm_confirmation():
     history = ChatContext.empty()
     history.add_message(
         role='assistant',
@@ -62,15 +62,11 @@ async def test_yes_after_audible_booking_question_is_forced_to_confirm_not_reask
         turn, SimpleNamespace(content=['Yes, please.'])
     )
 
-    assert state.pending_confirmation == 'book'
-    assert state.caller_asked_to_book is True
-    system_text = ' '.join(
-        agent._message_text(item)
-        for item in turn.items
-        if getattr(item, 'role', None) == 'system'
-    )
-    assert 'then call confirm_booking immediately' in system_text
-    assert 'Do not ask any confirmation question again' in system_text
+    # Only the server-built question, verified through full playout, may arm a
+    # mutation snapshot. A model-authored transcript line is not a receipt.
+    assert state.pending_confirmation is None
+    assert state.booking_confirmation_snapshot == {}
+    assert state.booking_confirmation_granted is False
 
 
 @pytest.mark.asyncio
@@ -121,6 +117,7 @@ async def test_two_clear_english_turns_switch_the_whole_pipeline_to_english():
 
     assert state.language == 'en'
     assert state.preferred_language == 'en'
+    assert state.explicit_language_lock == 'en'
     assert session.updated_agent is replacement
 
 
@@ -186,7 +183,7 @@ async def test_closed_booking_tools_cannot_allocate_or_confirm_again():
 
 @pytest.mark.asyncio
 async def test_explicit_second_family_booking_opens_a_fresh_transaction():
-    agent, state, _ = _agent('en')
+    agent, state, _ = _agent('en', calendar_service=object())
     doctor_id = UUID('00000000-0000-0000-0000-000000000001')
     state.branch_id = UUID('00000000-0000-0000-0000-000000000002')
     state.token_confirmed = True

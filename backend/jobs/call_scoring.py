@@ -27,6 +27,7 @@ from sqlalchemy import select
 import backend.database as _db_module
 from backend.config import settings
 from backend.models.schema import CallQuality
+from backend.services.call_quality_rules import has_unresolved_check
 
 logger = structlog.get_logger()
 
@@ -62,6 +63,23 @@ _RUBRIC = (
 # B21: retire a transcript after this many failed judge attempts so it stops
 # starving newer calls and re-burning LLM calls every run.
 MAX_JUDGE_ATTEMPTS = 3
+
+
+def _apply_deterministic_quality_rules(transcript: str, verdict: dict) -> dict:
+    """Clamp failures that are visible from turn order, regardless of the LLM."""
+    if not has_unresolved_check(transcript):
+        return verdict
+
+    existing_tags = [tag for tag in verdict["tags"] if tag != "good"]
+    tags = ["slow_or_repetitive", *existing_tags]
+    return {
+        "score": min(verdict["score"], 2),
+        "tags": list(dict.fromkeys(tags))[:3],
+        "summary": (
+            "Agent promised a lookup, then used a line-presence prompt or "
+            "repeated the promise before delivering the result."
+        ),
+    }
 
 
 async def _judge_transcript(transcript: str, language: str | None) -> dict | None:
@@ -136,6 +154,7 @@ async def run_call_scoring(batch: int = 50) -> None:
                     row.judged_at = datetime.now(timezone.utc)
                     retired += 1
                 continue
+            verdict = _apply_deterministic_quality_rules(row.transcript, verdict)
             row.judge_score = verdict["score"]
             row.judge_tags = verdict["tags"]
             row.judge_summary = verdict["summary"]

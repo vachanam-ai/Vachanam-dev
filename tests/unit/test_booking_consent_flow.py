@@ -3,10 +3,9 @@
 Real call 2026-08-03, 7:44pm (Vinay): the agent said "you haven't explicitly told
 to book appointment, without that i can't book". Two faults in one sentence.
 
-  1. It refused instead of asking. A caller who names a doctor, a day or a time
-     IS asking to book. The agent should check the slot and put ONE confirmation
-     question — "he is available then, shall I book?" — and on a yes, book
-     immediately, with no repetition.
+  1. It refused instead of continuing a booking the caller had actually
+     requested. The agent should check the slot and put ONE native-language
+     confirmation question; a mere availability question stays read-only.
   2. It read an internal rule out loud. <private_channel> already forbids
      narrating tool mechanics; a permission rule is the same class of thing. No
      receptionist tells a patient "you did not phrase that as an instruction".
@@ -45,22 +44,21 @@ def _raw(language: str = "en") -> str:
     )
 
 
-def test_naming_a_time_is_treated_as_a_booking_request():
+def test_naming_a_time_alone_is_not_treated_as_a_booking_request():
     text = _prompt()
-    assert "IS asking to book" in text
-    assert "Do not wait to be asked in exact words" in text
+    assert "Merely naming a doctor/date/time" in text
+    assert "does NOT authorize or begin a booking" in text
+    assert "stated desire for an appointment begins booking" in text
+    assert "After an authorized booking request, flow" in text
+    assert "Flow: need or doctor" not in text
 
 
 def test_exactly_one_confirmation_question_then_book():
     text = _prompt()
-    # Vinay 2026-08-07 gave the exact shape he wants, and it names the patient:
-    # "okay vinay, shall i confirm your appointment at 9am with dr.srinivas?"
-    # Same single question as the 08-03 rule this test was written for — the
-    # name and the date were added, the "ask it once" contract is unchanged.
-    assert "shall I confirm your appointment" in text
-    assert "Okay <name>" in text
+    assert "exactly one natural yes-question in the ACTIVE LANGUAGE" in text
+    assert "time-slot doctor it contains patient, doctor, date, hour, and minute" in text
     assert "confirm_booking IMMEDIATELY" in text
-    assert "Ask that question ONCE" in text
+    assert "Ask it ONCE" in text
     assert "never re-confirm a booking already made" in text
 
 
@@ -89,7 +87,7 @@ def test_when_is_he_free_reads_free_time_not_the_sitting_block():
     """8pm, 8:15 taken: the answer is "8 to 8:15 and 8:30 to 9", not the sitting
     block — booked slots and passed time are not availability."""
     text = _prompt()
-    assert "free_now, NOT sitting_hours" in text
+    assert "free_now RESULT FIELD, NOT sitting_hours" in text
     assert "Read ALL the free ranges in ONE answer" in text
 
 
@@ -98,5 +96,5 @@ def test_the_rule_survives_every_language_render(language):
     """The prompt is rebuilt per active language; a rule that only exists in the
     English render protects nobody — this clinic runs in Telugu."""
     text = _prompt(language)
-    assert "shall I confirm your appointment" in text
+    assert "exactly one natural yes-question in the ACTIVE LANGUAGE" in text
     assert "NEVER tell a caller you lack permission" in text

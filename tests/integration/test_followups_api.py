@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from backend.main import app
 from backend.models.schema import (
-    Branch, Doctor, Patient, Organization, User, FollowupTask,
+    Branch, Doctor, Patient, Organization, User, FollowupTask, TreatmentNote,
 )
 from backend.middleware.auth_middleware import get_current_user, CurrentUser
 
@@ -45,6 +45,18 @@ def _user(org_id):
                 role="doctor")
 
 
+def _assignment(branch, doctor, patient, user):
+    return TreatmentNote(
+        branch_id=branch.id,
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        visit_date=date.today(),
+        steps_performed="consultation",
+        is_final=False,
+        created_by_user_id=user.id,
+    )
+
+
 @pytest.mark.asyncio
 async def test_doctor_reply_creates_advice_task(db):
     o = uuid.uuid4()
@@ -57,7 +69,8 @@ async def test_doctor_reply_creates_advice_task(db):
     doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token",
                  user_id=usr.id)
     pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000040")
-    db.add_all([doc, pat]); await db.commit()
+    db.add_all([doc, pat]); await db.flush()
+    db.add(_assignment(br, doc, pat, usr)); await db.commit()
     app.dependency_overrides[get_current_user] = lambda: _u(br.id, o, user_id=usr.id)
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as ac:
@@ -95,7 +108,8 @@ async def test_a_doctor_can_ask_for_a_different_day_on_the_reply(db):
     doc = Doctor(id=uuid.uuid4(), branch_id=br.id, name="Dr A", booking_type="token",
                  user_id=usr.id)
     pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000045")
-    db.add_all([doc, pat]); await db.commit()
+    db.add_all([doc, pat]); await db.flush()
+    db.add(_assignment(br, doc, pat, usr)); await db.commit()
     tomorrow = date.today() + timedelta(days=1)
     app.dependency_overrides[get_current_user] = lambda: _u(br.id, o, user_id=usr.id)
     try:
@@ -134,6 +148,7 @@ async def test_list_followups_thread_ordered(db):
                  user_id=usr.id)  # linked: doctor login reads its own thread
     pat = Patient(id=uuid.uuid4(), branch_id=br.id, name="P", phone="+919000000041")
     db.add_all([doc, pat]); await db.flush()
+    db.add(_assignment(br, doc, pat, usr)); await db.flush()
     # In-thread: next_visit_book + doctor_advice; out-of-thread: post_appt_check (hidden).
     t_book = FollowupTask(branch_id=br.id, doctor_id=doc.id, patient_id=pat.id,
                           task_type="next_visit_book", channel="voice",

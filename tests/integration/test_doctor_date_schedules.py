@@ -1,11 +1,14 @@
+import asyncio
 import uuid
 from datetime import date, datetime, time, timedelta
 
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import BackgroundTasks, HTTPException, Request
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.tools.booking_tools import check_availability
+import backend.database as _db_module
 from backend.models.schema import (
     Branch,
     Doctor,
@@ -17,7 +20,13 @@ from backend.models.schema import (
     User,
 )
 from backend.middleware.auth_middleware import CurrentUser
-from backend.routers.availability import DateScheduleIn, publish_date_schedule
+from backend.routers.availability import (
+    DateScheduleIn,
+    DateScheduleRangeIn,
+    delete_date_schedule,
+    publish_date_schedule,
+    publish_date_schedule_range,
+)
 from backend.routers.doctors import _reject_if_schedule_edit_breaks_bookings
 from backend.services.doctor_schedule import doctors_on_shift_at, resolve_doctor_schedule
 
@@ -192,6 +201,325 @@ async def test_schedule_edit_cannot_orphan_confirmed_appointment(db, redis):
         )
     assert exc.value.status_code == 409
     assert "1 confirmed appointment" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_schedule_range_publishes_every_date_in_one_commit(db, redis):
+    branch, doctor = await _clinic(db)
+    start = date.today() + timedelta(days=2)
+    end = start + timedelta(days=30)
+    background_tasks = BackgroundTasks()
+
+    result = await publish_date_schedule_range.__wrapped__(
+        branch_id=str(branch.id),
+        doctor_id=str(doctor.id),
+        body=DateScheduleRangeIn(
+            date_from=start,
+            date_to=end,
+            sessions=[
+                {"start": "09:00", "end": "12:00"},
+                {"start": "17:00", "end": "21:00"},
+            ],
+            notes="Doctor confirmed the range",
+        ),
+        request=_request(),
+        background_tasks=background_tasks,
+        current_user=_user(branch.id, org_id=branch.org_id),
+        db=db,
+    )
+
+    expected_dates = [start + timedelta(days=offset) for offset in range(31)]
+    assert [item.date for item in result.schedules] == [day.isoformat() for day in expected_dates]
+    assert len(background_tasks.tasks) == 1
+    rows = (
+        await db.execute(
+            select(DoctorDateSchedule)
+            .where(DoctorDateSchedule.doctor_id == doctor.id)
+            .order_by(DoctorDateSchedule.date)
+        )
+    ).scalars().all()
+    assert [row.date for row in rows] == expected_dates
+    assert all(row.sessions == result.schedules[0].sessions for row in rows)
+    assert all(row.notes == "Doctor confirmed the range" for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_schedule_range_conflict_names_date_and_writes_nothing(db, redis):
+    branch, doctor = await _clinic(db)
+    doctor_id = doctor.id
+    start = date.today() + timedelta(days=2)
+    conflict_date = start + timedelta(days=1)
+    end = start + timedelta(days=2)
+    original_sessions = [{"start": "08:00", "end": "10:00"}]
+    patient = Patient(
+        branch_id=branch.id,
+        name="Range Protected Patient",
+        phone="+919888777664",
+        age=32,
+        is_primary=True,
+    )
+    db.add(patient)
+    await db.flush()
+    db.add_all([
+        DoctorDateSchedule(
+            branch_id=branch.id,
+            doctor_id=doctor.id,
+            date=start,
+            sessions=original_sessions,
+            notes="Keep this",
+        ),
+        Token(
+            branch_id=branch.id,
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            date=conflict_date,
+            appointment_time=time(9, 30),
+            token_number=1,
+            source="voice",
+            status="confirmed",
+        ),
+    ])
+    await db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        await publish_date_schedule_range.__wrapped__(
+            branch_id=str(branch.id),
+            doctor_id=str(doctor.id),
+            body=DateScheduleRangeIn(
+                date_from=start,
+                date_to=end,
+                sessions=[{"start": "17:00", "end": "21:00"}],
+            ),
+            request=_request(),
+            background_tasks=BackgroundTasks(),
+            current_user=_user(branch.id, org_id=branch.org_id),
+            db=db,
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == {
+        "message": "Schedule range has conflicts. No dates were changed.",
+        "conflicts": [{
+            "date": conflict_date.isoformat(),
+            "reasons": ["Schedule would invalidate 1 confirmed appointment(s)."],
+        }],
+    }
+    rows = (
+        await db.execute(
+                select(DoctorDateSchedule)
+                .where(DoctorDateSchedule.doctor_id == doctor_id)
+            .order_by(DoctorDateSchedule.date)
+        )
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].date == start
+    assert rows[0].sessions == original_sessions
+    assert rows[0].notes == "Keep this"
+
+
+@pytest.mark.asyncio
+async def test_schedule_range_rejects_32_dates_before_locking_or_writing(db, redis):
+    branch, doctor = await _clinic(db)
+    start = date.today() + timedelta(days=2)
+
+    with pytest.raises(HTTPException) as exc:
+        await publish_date_schedule_range.__wrapped__(
+            branch_id=str(branch.id),
+            doctor_id=str(doctor.id),
+            body=DateScheduleRangeIn(
+                date_from=start,
+                date_to=start + timedelta(days=31),
+                sessions=[{"start": "09:00", "end": "12:00"}],
+            ),
+            request=_request(),
+            background_tasks=BackgroundTasks(),
+            current_user=_user(branch.id, org_id=branch.org_id),
+            db=db,
+        )
+
+    assert exc.value.status_code == 422
+    assert "1 to 31 dates" in exc.value.detail
+    assert (
+        await db.execute(
+            select(DoctorDateSchedule).where(DoctorDateSchedule.doctor_id == doctor.id)
+        )
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_range_waits_for_doctor_config_and_validates_fresh_shape(
+    db, redis
+):
+    branch, doctor = await _clinic(db)
+    target = date.today() + timedelta(days=2)
+    patient = Patient(
+        branch_id=branch.id,
+        name="Config Race Patient",
+        phone="+919888777663",
+        age=33,
+        is_primary=True,
+    )
+    db.add(patient)
+    await db.flush()
+    db.add(Token(
+        branch_id=branch.id,
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        date=target,
+        appointment_time=time(9, 30),
+        token_number=1,
+        source="voice",
+        status="confirmed",
+    ))
+    await db.commit()
+
+    async with _db_module.AsyncSessionLocal() as writer, _db_module.AsyncSessionLocal() as publisher:
+        await writer.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"schedule-config:{branch.id}:{doctor.id}"},
+        )
+        await writer.execute(
+            update(Doctor)
+            .where(Doctor.id == doctor.id)
+            .values(slot_duration_minutes=60)
+        )
+        publish = asyncio.create_task(
+            publish_date_schedule_range.__wrapped__(
+                branch_id=str(branch.id),
+                doctor_id=str(doctor.id),
+                body=DateScheduleRangeIn(
+                    date_from=target,
+                    date_to=target,
+                    sessions=[{"start": "09:00", "end": "10:00"}],
+                ),
+                request=_request(),
+                background_tasks=BackgroundTasks(),
+                current_user=_user(branch.id, org_id=branch.org_id),
+                db=publisher,
+            )
+        )
+        try:
+            await asyncio.sleep(0.1)
+            assert not publish.done(), "range publish read stale doctor config"
+        finally:
+            await writer.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            await asyncio.wait_for(publish, timeout=2)
+        assert exc.value.status_code == 409
+        assert "1 confirmed appointment" in str(exc.value.detail)
+
+    rows = (
+        await db.execute(
+            select(DoctorDateSchedule).where(DoctorDateSchedule.doctor_id == doctor.id)
+        )
+    ).scalars().all()
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_unavailable_and_unpublished_dates_project_an_empty_calendar_set(
+    db, redis, monkeypatch
+):
+    from backend.services.doctor_calendar import sync_date_schedule_events
+
+    branch, doctor = await _clinic(db)
+    branch.google_calendar_id = "clinic-calendar"
+    target = date.today() + timedelta(days=2)
+    row = DoctorDateSchedule(
+        branch_id=branch.id,
+        doctor_id=doctor.id,
+        date=target,
+        sessions=[],
+    )
+    db.add(row)
+    await db.commit()
+    calls = []
+
+    class _Calendar:
+        async def replace_date_schedule_events(self, **kwargs):
+            calls.append(kwargs)
+            return len(kwargs["windows"])
+
+    monkeypatch.setattr(
+        "backend.services.calendar_service.GoogleCalendarService", _Calendar
+    )
+
+    assert await sync_date_schedule_events(db, branch.id, doctor.id, target) == 0
+    assert calls[-1]["windows"] == []
+    assert calls[-1]["cleanup_legacy"] is True
+
+    await db.delete(row)
+    await db.commit()
+    assert await sync_date_schedule_events(db, branch.id, doctor.id, target) == 0
+    assert calls[-1]["windows"] == []
+
+
+@pytest.mark.asyncio
+async def test_same_name_doctors_sharing_calendar_disable_legacy_cleanup(
+    db, redis, monkeypatch
+):
+    from backend.services.doctor_calendar import sync_date_schedule_events
+
+    branch, doctor = await _clinic(db)
+    branch.google_calendar_id = "shared-clinic-calendar"
+    db.add(
+        Doctor(
+            branch_id=branch.id,
+            name=doctor.name,
+            booking_type="appointment",
+            schedule_mode="date_specific",
+            recurring_schedule={},
+            slot_duration_minutes=30,
+            max_concurrent_per_slot=1,
+            status="active",
+        )
+    )
+    await db.commit()
+    calls = []
+
+    class _Calendar:
+        async def replace_date_schedule_events(self, **kwargs):
+            calls.append(kwargs)
+            return 0
+
+    monkeypatch.setattr(
+        "backend.services.calendar_service.GoogleCalendarService", _Calendar
+    )
+
+    target = date.today() + timedelta(days=2)
+    assert await sync_date_schedule_events(db, branch.id, doctor.id, target) == 0
+    assert calls[-1]["cleanup_legacy"] is False
+
+
+@pytest.mark.asyncio
+async def test_unpublish_commits_then_enqueues_calendar_cleanup(db, redis):
+    branch, doctor = await _clinic(db)
+    target = date.today() + timedelta(days=2)
+    row = DoctorDateSchedule(
+        branch_id=branch.id,
+        doctor_id=doctor.id,
+        date=target,
+        sessions=[{"start": "09:00", "end": "12:00"}],
+    )
+    db.add(row)
+    await db.commit()
+    row_id = row.id
+    background_tasks = BackgroundTasks()
+
+    await delete_date_schedule.__wrapped__(
+        branch_id=str(branch.id),
+        doctor_id=str(doctor.id),
+        date_str=target.isoformat(),
+        request=_request(),
+        background_tasks=background_tasks,
+        current_user=_user(branch.id, org_id=branch.org_id),
+        db=db,
+    )
+
+    assert await db.get(DoctorDateSchedule, row_id) is None
+    assert len(background_tasks.tasks) == 1
+    assert background_tasks.tasks[0].args == (branch.id, doctor.id, [target])
 
 
 @pytest.mark.asyncio

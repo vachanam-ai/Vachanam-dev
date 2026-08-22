@@ -1,13 +1,13 @@
 """30-minute pre-appointment reminder calls (appointment-type doctors only).
 
-Every minute: find confirmed appointment tokens whose time is 28-31 minutes
-away (branch-local time), mark reminder_sent, and dispatch an outbound
-LiveKit agent call with reminder context in the metadata. The agent confirms
-attendance or rebooks the patient (retention) and cancels the old token.
+Every minute: find confirmed appointment tokens up to 31 minutes away
+(branch-local time) and dispatch outbound LiveKit agent calls with reminder
+context in the metadata. The agent confirms attendance or rebooks the patient.
 
-reminder_sent is flipped BEFORE dispatch — a duplicate reminder is worse than
-a missed one, and the call itself confirms with the patient anyway.
+reminder_sent is flipped only after a worker accepts the dispatch. A failed
+handoff remains pending for the next scheduler tick.
 """
+import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -15,11 +15,12 @@ from zoneinfo import ZoneInfo
 
 import structlog
 from dotenv import load_dotenv
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select, update
 
 import backend.database as _db_module
 from backend.models.schema import Branch, Doctor, Organization, Patient, Token
 from backend.services.billing_math import PLANS
+from backend.services.outbound_guard import lock_key
 from backend.services.telephony import branch_outbound_trunk_id
 
 load_dotenv()
@@ -160,13 +161,14 @@ async def run_pre_appt_reminders() -> None:
         ).all()
         branches = [b for b, _ in branch_rows]
         plan_by_branch_id = {b.id: plan for b, plan in branch_rows}
+        due: list[tuple[Branch, str | None, Token, Doctor, Patient, int]] = []
         for branch in branches:
             tz = ZoneInfo(branch.timezone or "Asia/Kolkata")
             now_local = datetime.now(tz)
             lo, hi = reminder_window(now_local)
 
             # Candidate pull is date-bounded only (covers the midnight case
-            # where lo and hi are on different dates); the precise 14-17min
+            # where lo and hi are on different dates); the precise 0-31 minute
             # check happens in Python on full datetimes.
             rows = (
                 await db.execute(
@@ -223,25 +225,141 @@ async def run_pre_appt_reminders() -> None:
                 # (dispatch ok but the commit below fails) is acceptable — the
                 # call itself re-confirms with the patient — and far better than a
                 # silently dropped reminder.
-                plan = plan_by_branch_id.get(branch.id)
-                ok = await _deliver_reminder(
-                    branch, plan, token, doctor, patient,
-                    reminder_kind="30m",
-                    voice_plane_configured=_settings.voice_plane_configured,
+                due.append(
+                    (
+                        branch,
+                        plan_by_branch_id.get(branch.id),
+                        token,
+                        doctor,
+                        patient,
+                        int(token.reminder_30m_dial_attempts or 0),
+                    )
                 )
+        # One handset cannot receive two clinics at once. Process different
+        # handsets concurrently, but try one handset's due reminders in order
+        # until one handoff succeeds. A broken first clinic must not defer a
+        # healthy sibling to another scheduler tick; one success stops the group.
+        handset_groups: dict[str, list] = {}
+        for item in sorted(due, key=lambda candidate: candidate[5]):
+            handset = lock_key(item[4].phone)
+            handset_groups.setdefault(handset, []).append(item)
+
+        # A dispatch waits up to 30 seconds for an agent to join. Awaiting each
+        # row inline made unrelated clinics queue behind one slow dispatch;
+        # enough due rows turned a 17:30 reminder into 17:41. Hand every due
+        # reminder to LiveKit concurrently so one clinic cannot delay another.
+        # Bound this to the worker's ready-process count instead of flooding it.
+        delivery_slots = asyncio.Semaphore(_settings.voice_num_idle_processes)
+
+        async def _deliver_handset(items):
+            for item in items:
+                branch, plan, token, doctor, patient, _ = item
+                async with delivery_slots:
+                    ok = await _safe_deliver_reminder(
+                        branch,
+                        plan,
+                        token,
+                        doctor,
+                        patient,
+                        reminder_kind="30m",
+                        voice_plane_configured=_settings.voice_plane_configured,
+                    )
                 if ok:
-                    token.reminder_sent = True
-                    token.reminder_30m_dispatched_at = datetime.now(timezone.utc)
-                    await db.commit()
-                    # WA T8: WhatsApp reminder rides ALONGSIDE the voice call
-                    # (spec 2026-07-13 — not replacing it yet). Independent
-                    # guard: a WhatsApp hiccup never touches the voice path
-                    # (RULE 4/8); no-ops unless branch linked + plan gated.
+                    return item
+            return None
+
+        # Consume each handset as soon as its handoff completes. Waiting for
+        # every other handset before flipping this token left a duplicate-call
+        # window: a fast call could finish and release its lock while one slow
+        # provider handoff kept this row visible as reminder_sent=False.
+        deliveries = [
+            asyncio.create_task(_deliver_handset(items))
+            for items in handset_groups.values()
+        ]
+        try:
+            for completed in asyncio.as_completed(deliveries):
+                item = await completed
+                if item is None:
+                    continue
+                branch, _, token, _, _, dial_attempts = item
+                # A worker can join and get an immediate BUSY before this coroutine
+                # resumes. Its retry increments dial_attempts and resets sent=False.
+                # A blind ORM assignment here used to overwrite that reset and lose
+                # the reminder forever. This conditional update serializes the race.
+                marked = await _mark_dispatched_if_no_dial_failure(
+                    db, token.id, dial_attempts
+                )
+                if not marked:
+                    logger.info(
+                        "reminder_dispatch_not_marked_after_dial_state_changed",
+                        branch_id=str(branch.id),
+                        token_id=str(token.id),
+                    )
+        finally:
+            for delivery in deliveries:
+                if not delivery.done():
+                    delivery.cancel()
+            await asyncio.gather(*deliveries, return_exceptions=True)
 
         # #299: park until the next reminder is genuinely due, so every tick
         # before then is a Redis read and Postgres can suspend. Capped by
         # wake_gate.SAFETY_SECONDS, so a stale value self-heals within the hour.
         await wake_gate.set_next_at("reminders", await _next_due_epoch(db, branches))
+
+
+async def _safe_deliver_reminder(
+    branch: Branch,
+    plan: str | None,
+    token: Token,
+    doctor: Doctor,
+    patient: Patient,
+    *,
+    reminder_kind: str,
+    voice_plane_configured: bool,
+) -> bool:
+    """Isolate one clinic's delivery failure from every other due reminder."""
+    try:
+        return await _deliver_reminder(
+            branch,
+            plan,
+            token,
+            doctor,
+            patient,
+            reminder_kind=reminder_kind,
+            voice_plane_configured=voice_plane_configured,
+        )
+    except Exception as exc:  # noqa: BLE001 - retry remains armed on False
+        logger.error(
+            "reminder_delivery_failed",
+            branch_id=str(branch.id),
+            token_id=str(token.id),
+            error=str(exc)[:200],
+        )
+        return False
+
+
+async def _mark_dispatched_if_no_dial_failure(db, token_id, expected_dial_attempts: int) -> bool:
+    """Mark a joined dispatch only if its worker has not already requeued it."""
+    result = await db.execute(
+        update(Token)
+        .where(
+            Token.id == token_id,
+            Token.status == "confirmed",
+            Token.reminder_sent.is_(False),
+            Token.reminder_30m_dial_attempts == expected_dial_attempts,
+        )
+        .values(
+            reminder_sent=True,
+            # Preserve the FIRST handoff for incident timing. Retries used to
+            # overwrite 17:29 with 17:41, hiding the collision that caused them.
+            reminder_30m_dispatched_at=func.coalesce(
+                Token.reminder_30m_dispatched_at,
+                datetime.now(timezone.utc),
+            ),
+        )
+    )
+    await db.commit()
+    return bool(result.rowcount)
 
 
 async def _send_wa_reminder(
@@ -335,9 +453,10 @@ async def _dispatch_reminder_call(
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(
+    outbound_claim = await claim_outbound_call(
         patient.phone, f"reminder_{reminder_kind}", branch.id
-    ):
+    )
+    if not outbound_claim:
         return False
     try:
         from livekit import api as lk_api
@@ -356,6 +475,8 @@ async def _dispatch_reminder_call(
                             "branch_id": str(branch.id),  # outbound: no dialed DID
                             "outbound_trunk_id": outbound_trunk_id,
                             "token_id": str(token.id),
+                            "outbound_lock_key": lock_key(patient.phone),
+                            "outbound_lock_owner": outbound_claim,
                         }
                     ),
                 )
@@ -367,7 +488,9 @@ async def _dispatch_reminder_call(
             if not await verify_or_cleanup(lkapi, room, f"reminder:{token.id}"):
                 # Nobody claimed the dispatch, so no call happened — hand the
                 # number back rather than making a real retry wait out the TTL.
-                await release_outbound_call(patient.phone, branch.id)
+                await release_outbound_call(
+                    patient.phone, outbound_claim, branch.id
+                )
                 return False
             logger.info(
                 "reminder_call_dispatched",
@@ -378,8 +501,11 @@ async def _dispatch_reminder_call(
             )
             return True
         finally:
-            await lkapi.aclose()
+            try:
+                await lkapi.aclose()
+            except Exception as close_exc:  # noqa: BLE001 - handoff truth is authoritative
+                logger.warning("reminder_livekit_close_failed", error=str(close_exc)[:160])
     except Exception as e:
         logger.error("reminder_dispatch_failed", token_id=str(token.id), error=str(e))
-        await release_outbound_call(patient.phone, branch.id)
+        await release_outbound_call(patient.phone, outbound_claim, branch.id)
         return False

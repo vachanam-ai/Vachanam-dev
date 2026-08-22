@@ -41,10 +41,14 @@ def _is_due(task, now_ist: datetime) -> bool:
     return task.task_type in ("next_visit_book", "doctor_advice")
 
 
-async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
+async def _dispatch(task, branch, doctor, patient, target_date) -> bool | None:
     """Create the outbound agent dispatch AND verify a worker took it.
 
-    Returns True ONLY when an agent participant actually JOINED the room —
+    Returns True only when an agent participant joined, False after a real
+    handoff failure, and None when no attempt was made (configuration or an
+    active call already owns the handset). The caller must not burn a retry on
+    None.
+
     #423 (2026-07-19/20, three lost calls): create_dispatch succeeds even when
     NO worker is registered (deploy left the agent unconnected to LiveKit),
     so 'dispatch created' marked tasks done while the room sat empty and the
@@ -60,25 +64,31 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
             branch_id=str(branch.id),
             task_id=str(task.id),
         )
-        return False
+        return None
 
     # A follow-up and an appointment reminder falling due in the same minute
     # rang the same patient twice (Vinay 2026-08-08). Skipping leaves the task
     # pending, so the next tick retries — identical to a failed dispatch.
     from backend.services.outbound_guard import (
         claim_outbound_call,
+        lock_key,
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(patient.phone, "next_visit", branch.id):
-        return False
+    outbound_claim = await claim_outbound_call(
+        patient.phone, "next_visit", branch.id
+    )
+    if not outbound_claim:
+        return None
     try:
         from livekit import api as lk_api
         lkapi = lk_api.LiveKitAPI()
         try:
             meta = {"call_type": task.task_type, "branch_id": str(branch.id),
                     "outbound_trunk_id": outbound_trunk_id,
-                    "task_id": str(task.id)}
+                    "task_id": str(task.id),
+                    "outbound_lock_key": lock_key(patient.phone),
+                    "outbound_lock_owner": outbound_claim}
             # RULE 9: the NOTE's date is a booking concern belonging to the
             # next_visit_book task — never leak it onto a doctor_advice call
             # linked to the same note. A date the DOCTOR typed on this reply is
@@ -104,17 +114,22 @@ async def _dispatch(task, branch, doctor, patient, target_date) -> bool:
             if not await verify_or_cleanup(lkapi, room, f"followup:{task.id}"):
                 # No call happened — hand the number back so a real retry
                 # does not have to wait out the guard TTL.
-                await release_outbound_call(patient.phone, branch.id)
+                await release_outbound_call(
+                    patient.phone, outbound_claim, branch.id
+                )
                 return False
             logger.info("followup_call_dispatched", task_id=str(task.id),
                         call_type=task.task_type, room=room,
                         phone_last4=(patient.phone or "")[-4:])
             return True
         finally:
-            await lkapi.aclose()
+            try:
+                await lkapi.aclose()
+            except Exception as close_exc:  # noqa: BLE001 - handoff truth is authoritative
+                logger.warning("followup_livekit_close_failed", error=str(close_exc)[:160])
     except Exception as e:  # noqa: BLE001
         logger.error("followup_dispatch_failed", task_id=str(task.id), error=str(e)[:160])
-        await release_outbound_call(patient.phone, branch.id)
+        await release_outbound_call(patient.phone, outbound_claim, branch.id)
         return False
 
 
@@ -235,12 +250,16 @@ async def run_next_visit_followups(now: datetime | None = None) -> int:
             # before dialing — the run query only pulls 'pending' and NO job requeues a
             # stranded 'in_progress' FollowupTask, so a flip-before-dispatch crash strands
             # the task forever (permanent miss). Dispatch first; mutate on the result.
-            t.attempt_count = (t.attempt_count or 0) + 1
-            ok = (
+            result = (
                 await _dispatch(t, branch, doctor, patient, target_date)
                 if voice_requested else wa_accepted
             )
-            if ok:
+            if result is None:
+                # No call was attempted (most commonly this handset is already
+                # on another clinic call). Keep both retry budget and state.
+                continue
+            t.attempt_count = (t.attempt_count or 0) + 1
+            if result:
                 # Call dispatched. The agent enriches response_summary on call-end
                 # (later task); the task is now non-pending so the next 15-min tick
                 # will NOT re-dial it (no duplicate calls).

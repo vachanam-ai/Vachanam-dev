@@ -76,7 +76,7 @@ async def clinic(db):
     return {"branch": branch, "doc": doc}
 
 
-def _agent(state, db):
+def _agent(state, db, doctor):
     return VachanamAgent(
         instructions="t",
         state=state,
@@ -85,6 +85,7 @@ def _agent(state, db):
         calendar_service=FlakyCalendar(),
         meta_service=NullMeta(),
         transfer_to="",
+        doctor_contexts=[doctor],
     )
 
 
@@ -95,10 +96,27 @@ def _state(branch_id):
     return s
 
 
+def _authorize_booking(state, doctor, day, patient_name, *, age, different_person=False):
+    state.caller_asked_to_book = True
+    state.booking_confirmation_granted = True
+    state.booking_confirmation_snapshot = {
+        "patient_name": patient_name,
+        "doctor_id": str(doctor.id),
+        "doctor_name": doctor.name,
+        "booking_date": day.isoformat(),
+        "appointment_time": None,
+        "booking_type": "token",
+        "complaint": "fever",
+        "followup_consent": False,
+        "patient_age": age,
+        "different_person": different_person,
+    }
+
+
 async def test_phone_override_is_absent_from_tool_schema(clinic, db, redis):
     import inspect
 
-    agent = _agent(_state(clinic["branch"].id), db)
+    agent = _agent(_state(clinic["branch"].id), db, clinic["doc"])
     assert "patient_phone" not in inspect.signature(agent.confirm_booking).parameters
 
 
@@ -111,22 +129,32 @@ async def test_confirm_sets_existing_booking_intent_for_same_call_change(clinic,
 
     branch, doc = clinic["branch"], clinic["doc"]
     state = _state(branch.id)
-    agent = _agent(state, db)
+    agent = _agent(state, db, doc)
     assert state.existing_booking_intent is False
     # Before booking, a new-booking lookup still surfaces #279 (phone passed).
     assert _availability_caller_phone(state) == state.patient_phone
+
+    day = _tomorrow()
+    _authorize_booking(state, doc, day, "Selfy", age=30)
 
     r = await agent.confirm_booking(
         context=None,
         doctor_id=str(doc.id),
         patient_name="Selfy",
-        complaint="fever",
-        booking_date=_tomorrow().isoformat(),
+        booking_date=day.isoformat(),
         token_number=1,
-        followup_consent=False,
-        patient_age=30,
+        # These second-call values are model-authored transport and must not
+        # override the server snapshot the caller actually confirmed.
+        complaint="different model text",
+        followup_consent=True,
+        patient_age=99,
     )
     assert r.get("success"), r
+    patient = (
+        await db.execute(select(Patient).where(Patient.name == "Selfy"))
+    ).scalar_one()
+    assert patient.age == 30
+    assert patient.followup_consent is False
     # After confirming, further "change it" must NOT be blocked by ALREADY_BOOKED.
     assert state.existing_booking_intent is True
     assert _availability_caller_phone(state) is None
@@ -135,12 +163,16 @@ async def test_confirm_sets_existing_booking_intent_for_same_call_change(clinic,
 async def test_three_family_bookings_share_verified_caller_id(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["doc"]
     state = _state(branch.id)
-    agent = _agent(state, db)
+    agent = _agent(state, db, doc)
     day = _tomorrow().isoformat()
 
     for i in range(3):
         # fresh hold each booking
         state.token_held = False
+        _authorize_booking(
+            state, doc, _tomorrow(), f"Family {i}",
+            age=20 + i, different_person=True,
+        )
         r = await agent.confirm_booking(
             context=None,
             doctor_id=str(doc.id),
@@ -164,7 +196,7 @@ async def test_oversized_name_rejected(clinic, db, redis):
     from livekit.agents.llm import ToolError
 
     branch, doc = clinic["branch"], clinic["doc"]
-    agent = _agent(_state(branch.id), db)
+    agent = _agent(_state(branch.id), db, doc)
     with pytest.raises(ToolError):
         await agent.confirm_booking(
             context=None,
@@ -182,7 +214,7 @@ async def test_oversized_complaint_rejected(clinic, db, redis):
     from livekit.agents.llm import ToolError
 
     branch, doc = clinic["branch"], clinic["doc"]
-    agent = _agent(_state(branch.id), db)
+    agent = _agent(_state(branch.id), db, doc)
     with pytest.raises(ToolError):
         await agent.confirm_booking(
             context=None,
@@ -201,7 +233,7 @@ async def test_out_of_range_age_rejected(clinic, db, redis, bad_age):
     from livekit.agents.llm import ToolError
 
     branch, doc = clinic["branch"], clinic["doc"]
-    agent = _agent(_state(branch.id), db)
+    agent = _agent(_state(branch.id), db, doc)
     with pytest.raises(ToolError):
         await agent.confirm_booking(
             context=None,

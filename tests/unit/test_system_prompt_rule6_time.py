@@ -7,8 +7,9 @@ def test_prompt_fences_say_without_do():
     # the lookup tool was never called. The fence orders the tool call in the
     # SAME turn as any "checking/wait" phrasing.
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
-    assert "If you say you are checking, call the tool in the SAME turn" in p
-    assert "SAME turn" in p and "find_my_bookings" in p
+    assert "Never author \"let me check\"" in p
+    assert "Call the tool silently in the SAME turn" in p
+    assert "find_my_bookings" in p
 
 
 def test_prompt_never_sends_caller_back_to_clinic():
@@ -26,6 +27,7 @@ def test_prompt_keeps_times_natural_and_phone_digits_clear():
     p = build_system_prompt("ఆరోగ్య", [], "", "clinic", language="te")
     compact = " ".join(p.split())
     assert "Times, dates, ages, fees, tokens: natural spoken numbers" in p
-    assert "Add a day-part when a time remains genuinely ambiguous" in p
+    assert "compare both interpretations with that doctor's published sessions" in p
+    assert "ask one short morning/evening clarification" in p
     assert "PLAIN DIGITS" in p
     assert "never English number words inside another language" in compact

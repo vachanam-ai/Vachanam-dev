@@ -470,6 +470,12 @@ async def confirm(
         existing = await _existing_self_patient(db, branch_id, norm_phone or phone)
         name = existing.name if existing else ""
 
+    # Never create an anonymous patient record for a first-time WhatsApp
+    # booker. Age remains optional, but a real name is required before any
+    # Redis hold or database mutation occurs.
+    if not name:
+        return BookingResult(reason="missing_patient_details")
+
     # RULE 2 — the SAME atomic Redis INCR the voice path uses. offer_slots()
     # never called this; this is the first and only reservation for this
     # booking attempt.
@@ -500,7 +506,7 @@ async def confirm(
         result = await confirm_booking(
             doctor_id=slot.doctor_id,
             branch_id=branch_id,
-            patient_name=name or "WhatsApp Patient",
+            patient_name=name,
             patient_phone=norm_phone or phone,
             complaint=complaint if complaint is not None else slot.complaint,
             booking_date=slot.date,

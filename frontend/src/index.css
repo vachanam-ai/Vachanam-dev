@@ -90,7 +90,7 @@ p { text-wrap: pretty; }
 .tag-crit { background: rgb(var(--danger-bg)); color: rgb(var(--danger)); }
 
 .field, .input { @apply w-full rounded-xl px-3.5 py-2.5 text-sm text-ink transition; min-height: 44px; background: rgb(var(--surface)); border: 1px solid rgb(var(--line2)); }
-.field::placeholder, .input::placeholder { color: rgb(var(--slate)); }
+.field::placeholder, .input::placeholder { color: rgb(var(--ink-soft)); }
 .field:hover, .input:hover { border-color: rgb(var(--slate-light)); }
 .field:focus, .input:focus { outline: 0; border-color: rgb(var(--teal)); box-shadow: 0 0 0 4px rgb(var(--teal)/.1); }
 .label { @apply mb-1.5 block text-xs font-semibold text-ink-soft; }

@@ -14,11 +14,12 @@ from agent.livekit_minimal.faq_grounding import FaqMatch, natural_fallback
 from agent.prompts.grounded_prompt import supported_codes
 
 
+SERVICEABLE_LANGUAGES = ("te", "hi", "ta", "kn", "ml", "bn", "mr", "en")
 VOICE_LANGUAGES = ("te", "hi", "ta", "kn", "mr", "en")
 
 
-def test_matrix_covers_every_serviceable_production_language():
-    assert supported_codes() == VOICE_LANGUAGES
+def test_prompt_covers_every_serviceable_production_language():
+    assert supported_codes() == SERVICEABLE_LANGUAGES
 
 
 @pytest.mark.parametrize("language", VOICE_LANGUAGES)
@@ -94,8 +95,8 @@ async def test_common_facts_never_wait_for_a_second_llm(language, intent):
         ("Telugu lo matladandi", "te"), ("English please", "en"),
         ("Hindi mein baat kijiye", "hi"), ("Tamil la pesunga", "ta"),
         ("Kannada dalli matadi", "kn"), ("Marathi madhe bola", "mr"),
+        ("Malayalam samsarikkamo", "ml"), ("Bangla kotha bolben", "bn"),
     ),
 )
 def test_every_production_language_switch_is_deterministic(utterance, language):
     assert _explicit_language_request(utterance) == language
-

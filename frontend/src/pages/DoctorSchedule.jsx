@@ -7,7 +7,7 @@ import {
   fetchDoctorSchedules,
   fetchDoctors,
   fetchTodayQueue,
-  publishDoctorSchedule,
+  publishDoctorScheduleRange,
   stopWalkinsToday,
   updateDoctor
 } from "../api/client.js";
@@ -49,6 +49,18 @@ const localISO = (value) => {
   return new Date(d.getTime() - offset).toISOString().slice(0, 10);
 };
 
+export const datesInRange = (from, to) => {
+  if (!from || !to || from > to) return [];
+  const dates = [];
+  const current = new Date(`${from}T00:00:00Z`);
+  const end = new Date(`${to}T00:00:00Z`);
+  while (current <= end) {
+    dates.push(current.toISOString().slice(0, 10));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return dates;
+};
+
 const initials = (name) => {
   const parts = (name ?? "").replace(/^dr\.?\s*/i, "").trim().split(/\s+/).filter(Boolean);
   return ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase() || "Dr";
@@ -64,14 +76,14 @@ const scheduleForForm = (doctor) => {
   return Object.fromEntries(days.map((day) => [String(day), [{ start, end }]]));
 };
 
-function TimeSelect({ value, onChange, label }) {
+function TimeSelect({ value, onChange, label, disabled = false }) {
   const options = TIME_OPTIONS.some((option) => option.value === value)
     ? TIME_OPTIONS
     : [...TIME_OPTIONS, { value, label: formatTimeLabel(value) }]
         .sort((a, b) => a.value.localeCompare(b.value));
 
   return (
-    <select className="field numeral cursor-pointer" value={value} onChange={onChange} aria-label={label}>
+    <select className="field numeral cursor-pointer" value={value} onChange={onChange} aria-label={label} disabled={disabled}>
       {options.map((option) => (
         <option key={option.value} value={option.value}>{option.label}</option>
       ))}
@@ -79,26 +91,27 @@ function TimeSelect({ value, onChange, label }) {
   );
 }
 
-function SessionsEditor({ sessions, onChange }) {
+function SessionsEditor({ sessions, onChange, disabled = false }) {
   const update = (index, key, value) =>
     onChange(sessions.map((session, i) => i === index ? { ...session, [key]: value } : session));
   return (
     <div className="space-y-2">
       {sessions.map((session, index) => (
         <div key={index} className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto]">
-          <TimeSelect value={session.start} label={`Session ${index + 1} start time`}
+          <TimeSelect value={session.start} label={`Session ${index + 1} start time`} disabled={disabled}
             onChange={(e) => update(index, "start", e.target.value)} />
-          <span className="font-ui text-xs font-medium text-slate">to</span>
-          <TimeSelect value={session.end} label={`Session ${index + 1} end time`}
+          <span className="font-ui text-xs font-medium text-ink-soft">to</span>
+          <TimeSelect value={session.end} label={`Session ${index + 1} end time`} disabled={disabled}
             onChange={(e) => update(index, "end", e.target.value)} />
           {sessions.length > 1 && (
-            <button type="button" className="btn-ghost col-span-3 px-3 sm:col-span-1" onClick={() => onChange(sessions.filter((_, i) => i !== index))}>
+            <button type="button" className="btn-ghost col-span-3 px-3 sm:col-span-1" disabled={disabled}
+              onClick={() => onChange(sessions.filter((_, i) => i !== index))}>
               Remove
             </button>
           )}
         </div>
       ))}
-      <button type="button" className="btn-ghost px-3 py-1.5 text-sm"
+      <button type="button" className="btn-ghost px-3 py-1.5 text-sm" disabled={disabled}
         onClick={() => onChange([...sessions, { start: "17:00", end: "21:00" }])}>
         + Add another session
       </button>
@@ -270,15 +283,50 @@ function AddDoctorForm({ branchId, onDone, initial = null, doctorId = null, onCa
 
 const shortT = (t) => (t || "").replace(/^0/, "").replace(":00", "");
 
+const freshDateSessions = () => [
+  { start: "09:00", end: "12:00" },
+  { start: "17:00", end: "21:00" }
+];
+
+const scheduleDateLabel = (value, options = {}) =>
+  new Date(`${value}T00:00:00Z`).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+    ...options
+  });
+
+const scheduleEntryText = (entry) => {
+  if (entry.status === "unpublished") return "Not published";
+  if (entry.source === "leave") return "Leave";
+  if (!entry.sessions?.length) return "Unavailable";
+  return entry.sessions.map((session) => `${shortT(session.start)}-${shortT(session.end)}`).join(", ");
+};
+
+const publishScheduleError = (error) => {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (detail?.conflicts?.length) {
+    const conflicts = detail.conflicts.map((item) =>
+      `${scheduleDateLabel(item.date, { year: "numeric" })}: ${(item.reasons || []).join(" ")}`
+    ).join(" ");
+    return `${detail.message || "Schedule range has conflicts."} ${conflicts}`;
+  }
+  return error?.message ?? "Could not publish schedule";
+};
+
 function DateSchedulePublisher({ branchId, doctor }) {
   const qc = useQueryClient();
+  const fieldId = `doctor-date-${doctor.id}`;
+  const helpId = `${fieldId}-range-help`;
+  const rangeErrorId = `${fieldId}-range-error`;
+  const publishErrorId = `${fieldId}-publish-error`;
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
-  const [selectedDate, setSelectedDate] = useState(localISO(tomorrow));
-  const [sessions, setSessions] = useState([
-    { start: "09:00", end: "12:00" },
-    { start: "17:00", end: "21:00" }
-  ]);
+  const initialDate = localISO(tomorrow);
+  const [dateFrom, setDateFrom] = useState(initialDate);
+  const [dateTo, setDateTo] = useState(initialDate);
+  const [sessions, setSessions] = useState(freshDateSessions);
   const [tokenLimit, setTokenLimit] = useState(doctor.daily_token_limit ?? 50);
   const [notes, setNotes] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -286,115 +334,213 @@ function DateSchedulePublisher({ branchId, doctor }) {
   const rangeEndDate = new Date();
   rangeEndDate.setDate(rangeEndDate.getDate() + 14);
   const rangeEnd = localISO(rangeEndDate);
+  const scheduleMaxDate = new Date();
+  scheduleMaxDate.setDate(scheduleMaxDate.getDate() + 365);
+  const scheduleMax = localISO(scheduleMaxDate);
+  const selectedDates = datesInRange(dateFrom, dateTo);
+  const rangeTooLarge = selectedDates.length > 31;
+  const rangeError = !dateFrom || !dateTo
+    ? "Choose both From and To dates."
+    : dateFrom > dateTo
+      ? "To date must be on or after From date."
+      : rangeTooLarge ? "Choose a range of 31 days or fewer." : "";
+  const rangeDescribedBy = `${helpId}${rangeError ? ` ${rangeErrorId}` : ""}`;
 
-  const { data: dates = [] } = useQuery({
+  const upcoming = useQuery({
     queryKey: ["doctor-schedules", branchId, doctor.id, rangeStart, rangeEnd],
     queryFn: () => fetchDoctorSchedules(branchId, doctor.id, rangeStart, rangeEnd),
     enabled: Boolean(branchId && doctor.id)
   });
+  const selectedRange = useQuery({
+    queryKey: ["doctor-schedules", branchId, doctor.id, dateFrom, dateTo],
+    queryFn: () => fetchDoctorSchedules(branchId, doctor.id, dateFrom, dateTo),
+    enabled: Boolean(showForm && branchId && doctor.id && !rangeError)
+  });
   const publish = useMutation({
-    mutationFn: () => publishDoctorSchedule(branchId, doctor.id, selectedDate, {
-      sessions,
-      token_limit: doctor.booking_type === "token" ? Number(tokenLimit) : null,
-      notes: notes.trim() || null
-    }),
-    onSuccess: () => {
-      toast.success(`${doctor.name}'s ${selectedDate} schedule published`);
-      qc.invalidateQueries({ queryKey: ["doctor-schedules", branchId, doctor.id] });
-      setShowForm(false);
+    mutationFn: () => {
+      if (!selectedDates.length || rangeTooLarge) throw new Error("Choose a range of 31 days or fewer");
+      return publishDoctorScheduleRange(branchId, doctor.id, {
+        date_from: dateFrom,
+        date_to: dateTo,
+        sessions,
+        token_limit: doctor.booking_type === "token" ? Number(tokenLimit) : null,
+        notes: notes.trim() || null
+      });
     },
-    onError: (e) => toast.error(e?.response?.data?.detail ?? "Could not publish schedule")
+    onSuccess: async (result) => {
+      await qc.invalidateQueries({ queryKey: ["doctor-schedules", branchId, doctor.id] });
+      const count = result.schedules.length;
+      toast.success(`${doctor.name}'s schedule published for ${count} ${count === 1 ? "date" : "dates"}`);
+    },
+    onError: (e) => {
+      qc.invalidateQueries({ queryKey: ["doctor-schedules", branchId, doctor.id] });
+      toast.error(publishScheduleError(e));
+    }
   });
 
   // Weekday + day only ("Wed 29") — month shown just when it rolls over, to
   // keep chips one line. Load a chip into the form on click (opens the form).
   const loadDate = (entry) => {
-    setSelectedDate(entry.date);
-    if (entry.is_published) {
-      setSessions(entry.sessions);
-      setTokenLimit(entry.token_limit ?? doctor.daily_token_limit ?? 50);
-      setNotes(entry.notes ?? "");
-    }
+    publish.reset();
+    setDateFrom(entry.date);
+    setDateTo(entry.date);
+    setSessions(
+      entry.source === "leave" || entry.status === "unpublished"
+        ? []
+        : (entry.sessions || []).map((session) => ({ ...session }))
+    );
+    setTokenLimit(entry.token_limit ?? doctor.daily_token_limit ?? 50);
+    setNotes(entry.source === "date_override" ? (entry.notes ?? "") : "");
     setShowForm(true);
   };
+
+  const dates = upcoming.data ?? [];
+  const publishError = publish.isError ? publishScheduleError(publish.error) : "";
 
   return (
     <div>
       {/* Compact 15-day availability strip — the default view. */}
       <div className="mb-2 flex items-center justify-between">
         <p className="label mb-0">Next 15 days</p>
-        <button type="button" onClick={() => setShowForm((v) => !v)}
-          className="font-ui text-xs font-semibold text-ink underline-offset-4 hover:underline">
-          {showForm ? "Hide" : "＋ Publish a date"}
+        <button type="button" onClick={() => setShowForm((v) => !v)} disabled={publish.isPending}
+          className="inline-flex min-h-11 items-center px-2 font-ui text-xs font-semibold text-ink underline-offset-4 hover:underline">
+          {showForm ? "Hide" : "+ Publish dates"}
         </button>
       </div>
-      <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-7">
-        {dates.map((entry) => {
-          const d = new Date(`${entry.date}T00:00:00`);
-          const published = entry.status !== "unpublished";
-          const open = published && entry.sessions.length > 0;
-          const dot = open ? "var(--good)" : entry.source === "leave" ? "var(--warn)"
-            : published ? "var(--slate)" : "var(--faint, #b7b8b4)";
-          const hrs = !published ? "—"
-            : entry.sessions.length ? entry.sessions.map((s) => `${shortT(s.start)}–${shortT(s.end)}`).join(" ")
-            : entry.source === "leave" ? "Leave" : "Closed";
-          return (
-            <button key={entry.date} type="button" onClick={() => loadDate(entry)}
-              title={hrs}
-              className={`rounded-lg border px-2 py-1.5 text-left transition hover:border-line2 ${
-                selectedDate === entry.date && showForm ? "border-accent bg-pill" : "border-hairline"
-              }`}>
-              <div className="flex items-center justify-between gap-1">
-                <span className="font-ui text-[11px] font-semibold text-ink">
-                  {d.toLocaleDateString("en-IN", { weekday: "short" })} {d.getDate()}
-                </span>
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: dot }} />
-              </div>
-              <p className="mt-0.5 truncate font-ui text-[10.5px] leading-tight text-slate">{hrs}</p>
-            </button>
-          );
-        })}
-      </div>
+      {upcoming.isLoading ? (
+        <p className="font-ui text-sm text-ink-soft">Loading upcoming schedules...</p>
+      ) : upcoming.isError ? (
+        <div role="alert" className="flex min-h-11 items-center justify-between gap-3 font-ui text-sm text-danger">
+          <span>Could not load upcoming schedules.</span>
+          <button type="button" className="btn-ghost px-3" onClick={() => upcoming.refetch()}>Try again</button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-7">
+          {dates.map((entry) => {
+            const selected = showForm && entry.date >= dateFrom && entry.date <= dateTo;
+            const published = entry.status !== "unpublished";
+            const open = published && entry.sessions.length > 0;
+            const dot = open ? "rgb(var(--good))" : entry.source === "leave" ? "rgb(var(--warn))"
+              : published ? "rgb(var(--slate))" : "rgb(var(--slate-light))";
+            const status = scheduleEntryText(entry);
+            const fullDate = scheduleDateLabel(entry.date, { weekday: "long", year: "numeric" });
+            return (
+              <button key={entry.date} type="button" onClick={() => loadDate(entry)} disabled={publish.isPending}
+                aria-label={`${fullDate}, ${status}${selected ? ", in selected range" : ""}. Open this date.`}
+                title={status}
+                className={`min-h-11 rounded-lg border px-2 py-1.5 text-left transition hover:border-line2 ${
+                  selected ? "border-accent bg-pill ring-1 ring-accent" : "border-hairline"
+                }`}>
+                <div className="flex items-center justify-between gap-1">
+                  <span className="font-ui text-[11px] font-semibold text-ink">
+                    {scheduleDateLabel(entry.date, { weekday: "short" })}
+                  </span>
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: dot }} aria-hidden="true" />
+                </div>
+                <p className="mt-0.5 truncate font-ui text-[10.5px] leading-tight text-ink-soft">{status}</p>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Publish/override form — on demand only, so it never dominates the card. */}
       {showForm && (
-        <div className="mt-3 rounded-xl border border-hairline bg-pill/40 p-3 sm:p-4">
-          <p className="font-ui text-xs text-slate">Overrides the weekly pattern for one date. Empty sessions = unavailable.</p>
+        <form className="mt-3 rounded-xl border border-hairline bg-pill/40 p-3 sm:p-4"
+          aria-busy={publish.isPending}
+          onSubmit={(event) => { event.preventDefault(); publish.mutate(); }}>
+          <p id={helpId} className="font-ui text-xs text-ink-soft">
+            Apply the same sessions to every date in the range, up to 31 days. Existing schedules in the range will be replaced.
+          </p>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <div>
-              <label className="label">Date</label>
-              <input className="field" type="date" min={rangeStart} value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)} />
+              <label className="label" htmlFor={`${fieldId}-from`}>From date</label>
+              <input id={`${fieldId}-from`} className="field" type="date" min={rangeStart} max={scheduleMax} value={dateFrom}
+                disabled={publish.isPending} aria-invalid={Boolean(rangeError)} aria-describedby={rangeDescribedBy}
+                onChange={(e) => {
+                  publish.reset();
+                  setDateFrom(e.target.value);
+                  if (e.target.value > dateTo) setDateTo(e.target.value);
+                }} />
+            </div>
+            <div>
+              <label className="label" htmlFor={`${fieldId}-to`}>To date</label>
+              <input id={`${fieldId}-to`} className="field" type="date" min={dateFrom} max={scheduleMax} value={dateTo}
+                disabled={publish.isPending} aria-invalid={Boolean(rangeError)} aria-describedby={rangeDescribedBy}
+                onChange={(e) => { publish.reset(); setDateTo(e.target.value); }} />
             </div>
             {doctor.booking_type === "token" && (
               <div>
-                <label className="label">Token limit</label>
-                <input className="field" type="number" min={1} max={500} value={tokenLimit}
-                  onChange={(e) => setTokenLimit(e.target.value)} />
+                <label className="label" htmlFor={`${fieldId}-token-limit`}>Token limit</label>
+                <input id={`${fieldId}-token-limit`} className="field" type="number" min={1} max={500} value={tokenLimit}
+                  disabled={publish.isPending}
+                  onChange={(e) => { publish.reset(); setTokenLimit(e.target.value); }} />
               </div>
             )}
             <div className="sm:col-span-2">
               <label className="label">Sessions</label>
               {sessions.length ? (
-                <SessionsEditor sessions={sessions} onChange={setSessions} />
+                <SessionsEditor sessions={sessions} disabled={publish.isPending}
+                  onChange={(next) => { publish.reset(); setSessions(next); }} />
               ) : (
                 <p className="rounded-lg bg-band p-3 font-ui text-sm text-ink-soft">No sessions: publishes as unavailable.</p>
               )}
-              <button type="button" className="btn-ghost mt-2 px-3 py-1.5 text-xs"
-                onClick={() => setSessions(sessions.length ? [] : [{ start: "09:00", end: "12:00" }])}>
+              <button type="button" className="btn-ghost mt-2 px-3 py-1.5 text-xs" disabled={publish.isPending}
+                onClick={() => { publish.reset(); setSessions(sessions.length ? [] : [{ start: "09:00", end: "12:00" }]); }}>
                 {sessions.length ? "Mark unavailable all day" : "Add a session"}
               </button>
             </div>
             <div className="sm:col-span-2">
-              <label className="label">Internal note (optional)</label>
-              <input className="field" value={notes} onChange={(e) => setNotes(e.target.value)}
+              <label className="label" htmlFor={`${fieldId}-note`}>Internal note (optional)</label>
+              <input id={`${fieldId}-note`} className="field" value={notes} disabled={publish.isPending}
+                onChange={(e) => { publish.reset(); setNotes(e.target.value); }}
                 placeholder="Schedule shared by doctor at 7pm" />
             </div>
           </div>
-          <button className="btn-primary mt-3" disabled={publish.isPending} onClick={() => publish.mutate()}>
-            {publish.isPending ? "Publishing…" : "Publish this date"}
+          <section className="mt-3" aria-labelledby={`${fieldId}-selected-heading`}>
+            <div className="flex items-center justify-between gap-3">
+              <p id={`${fieldId}-selected-heading`} className="label mb-0">Selected range</p>
+              <span className="font-ui text-xs font-medium text-ink-soft">
+                {selectedDates.length} {selectedDates.length === 1 ? "date" : "dates"}
+              </span>
+            </div>
+            {!rangeError && selectedRange.isLoading && (
+              <p className="mt-2 font-ui text-sm text-ink-soft" aria-live="polite">Loading selected dates...</p>
+            )}
+            {!rangeError && selectedRange.isError && (
+              <div role="alert" className="mt-2 flex min-h-11 items-center justify-between gap-3 font-ui text-sm text-danger">
+                <span>Could not inspect the selected range.</span>
+                <button type="button" className="btn-ghost px-3" onClick={() => selectedRange.refetch()}>Try again</button>
+              </div>
+            )}
+            {!rangeError && selectedRange.data?.length > 0 && (
+              <ul className="mt-2 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                {selectedRange.data.map((entry) => (
+                  <li key={entry.date} className="min-w-0 rounded-lg border border-hairline bg-surface px-3 py-2">
+                    <time dateTime={entry.date} className="block font-ui text-xs font-semibold text-ink">
+                      {scheduleDateLabel(entry.date, { weekday: "short", year: "numeric" })}
+                    </time>
+                    <span className="mt-0.5 block truncate font-ui text-xs text-ink-soft">
+                      {scheduleEntryText(entry)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          {rangeError && (
+            <p id={rangeErrorId} role="alert" className="mt-3 font-ui text-xs font-medium text-danger">{rangeError}</p>
+          )}
+          {publishError && (
+            <p id={publishErrorId} role="alert" className="mt-3 font-ui text-xs font-medium text-danger">{publishError}</p>
+          )}
+          <button type="submit" className="btn-primary mt-3" disabled={publish.isPending || Boolean(rangeError)}
+            aria-describedby={publishError ? publishErrorId : undefined}>
+            {publish.isPending
+              ? `Publishing ${selectedDates.length} ${selectedDates.length === 1 ? "date" : "dates"}...`
+              : `Publish ${selectedDates.length} ${selectedDates.length === 1 ? "date" : "dates"}`}
           </button>
-        </div>
+        </form>
       )}
     </div>
   );

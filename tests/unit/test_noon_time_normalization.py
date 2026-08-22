@@ -1,10 +1,10 @@
 """Bare twelve is noon in appointment speech, without false positives."""
-from pathlib import Path
 from datetime import time
 
 import pytest
 
 from agent.livekit_minimal.agent import VachanamAgent, _is_bare_noon_request
+from agent.prompts.system_prompt import build_system_prompt
 from backend.services.wa_agent import SYSTEM_PROMPT as WA_SYSTEM_PROMPT
 
 
@@ -52,8 +52,8 @@ def test_unmarked_times_resolve_inside_the_clinic_day(spoken, expected):
 
 
 def test_grounding_contract_bans_morning_or_afternoon_for_twelve():
-    prompt = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8").lower()
+    prompt = build_system_prompt("Test", [], "", "clinic", language="en").lower()
     assert "bare 12" in prompt
-    assert "never ask \"morning or afternoon 12?\"" in prompt
-    assert "never ask am or pm" in prompt
+    assert "never ask" in prompt and "morning or afternoon 12?" in prompt
+    assert "explicit am or pm wins" in prompt
     assert "If the patient omits am/pm, never ask" in WA_SYSTEM_PROMPT

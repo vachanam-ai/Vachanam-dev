@@ -34,6 +34,8 @@ DISCLOSURES: dict[str, str] = {
     "hi": "यह क्लिनिक की AI असिस्टेंट है. आपके अपॉइंटमेंट के लिए यह कॉल रिकॉर्ड की जा रही है जी.",
     "ta": "இது கிளினிக் AI அசிஸ்டன்ட்ங்க. உங்க அப்பாயிண்ட்மென்ட் ப்ராசஸ் பண்ண இந்த கால் ரெக்கார்ட் செய்யப்படுதுங்க.",
     "kn": "ಇದು ಕ್ಲಿನಿಕ್ AI ಅಸಿಸ್ಟೆಂಟ್ ರೀ. ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಪ್ರೊಸೆಸ್ ಮಾಡೋಕೆ ಈ ಕಾಲ್ ರೆಕಾರ್ಡ್ ಆಗ್ತಿದೆ ರೀ.",
+    "ml": "ഇത് ക്ലിനിക്കിന്റെ AI അസിസ്റ്റന്റാണ്. നിങ്ങളുടെ അപ്പോയിന്റ്മെന്റിനായി ഈ കോൾ റെക്കോർഡ് ചെയ്യുന്നു.",
+    "bn": "এটি ক্লিনিকের AI অ্যাসিস্ট্যান্ট। আপনার অ্যাপয়েন্টমেন্টের জন্য এই কলটি রেকর্ড করা হচ্ছে।",
     "mr": "हे क्लिनिकचं AI असिस्टंट आहे. तुमच्या अपॉइंटमेंटसाठी हा कॉल रेकॉर्ड केला जात आहे.",
     "en": "This is the clinic AI assistant. This call is processed for your appointment.",
 }
@@ -52,8 +54,11 @@ def get_clinic_now(tz_identifier: str = "Asia/Kolkata") -> datetime:
     return datetime.now(tz=zoneinfo.ZoneInfo(tz_identifier))
 
 
+_DATE_LOOKAHEAD_DAYS = 35
+
+
 def build_date_table(today: dt_date) -> str:
-    """The eight-day date table, WITHOUT the wall clock.
+    """The exact five-week date table, WITHOUT the wall clock.
 
     Split out from build_date_context so the table can ride in the model
     INSTRUCTIONS while the clock stays out of them. Both halves have to live
@@ -75,7 +80,7 @@ def build_date_table(today: dt_date) -> str:
     rows = [
         f"  {labels.get(i, '')}{(today + timedelta(days=i)).strftime('%A')} "
         f"= {(today + timedelta(days=i)).isoformat()}"
-        for i in range(8)
+        for i in range(_DATE_LOOKAHEAD_DAYS)
     ]
     table = "\n".join(rows)
     return (
@@ -83,8 +88,9 @@ def build_date_table(today: dt_date) -> str:
         "DATE LOOKUP — when the caller names a weekday, 'today', or 'tomorrow', "
         "use the EXACT date from this list. NEVER calculate a date yourself:\n"
         f"{table}\n"
-        "Always pass booking_date as YYYY-MM-DD copied from this list. For a date "
-        "further out than next week, count forward from the matching weekday above. "
+        "Always pass booking_date as YYYY-MM-DD copied from this list. If the caller "
+        "asks for a date beyond this list, ask for an exact calendar date instead of "
+        "calculating or inventing an ISO date. "
         "Never announce a date the patient didn't ask about.\n"
         "SPEAK-CHECK: before SAYING any weekday together with a date ('Wednesday, "
         "July eight'), verify the pair against ONE row of the list above — if the "
@@ -136,4 +142,7 @@ def build_system_prompt(
         call_type=call_type,
     )
     
-    return prompt + date_table
+    # Keep the ordered contract's language lock as the actual final authority.
+    # An English date table appended after it used to pull non-English calls
+    # back toward English mid-conversation.
+    return date_table + prompt

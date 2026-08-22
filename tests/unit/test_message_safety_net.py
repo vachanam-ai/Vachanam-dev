@@ -4,6 +4,7 @@ Belt: prompt forbids the promise before the tool. Suspenders: teardown
 auto-captures the caller's words when a spoken promise has no recorded row."""
 from pathlib import Path
 
+from agent.prompts.system_prompt import build_system_prompt
 from agent.session_state import SessionState
 
 AGENT_SRC = Path("agent/livekit_minimal/agent.py").read_text(encoding="utf-8")
@@ -57,11 +58,19 @@ def _markers(net: str) -> list[str]:
 
 
 def test_prompt_forbids_promise_before_tool():
-    # v19 dropped the "SAYING IS NOT DOING" label; the rule now reads
-    # "Never send or promise ... from speech" + "claim delivery only after success".
-    assert "Never send or promise" in PROMPT_SRC and "from speech" in PROMPT_SRC
-    assert "take_message" in PROMPT_SRC
-    assert "claim delivery only after success" in PROMPT_SRC
+    # The ordered contract binds the spoken acknowledgement to a successful
+    # take_message result; speech itself is never proof of delivery.
+    prompt = build_system_prompt(
+        clinic_name="Test Clinic",
+        doctors=[],
+        emergency_contact="",
+        plan="clinic",
+        language="en",
+    )
+    flat = " ".join(prompt.split())
+    assert "Messages must use take_message before saying they were recorded" in flat
+    assert "Only after logged=true say it was recorded for the clinic" in flat
+    assert "If a write fails, do not claim it was logged" in flat
 
 
 def test_wrong_name_recovery_natural_398():

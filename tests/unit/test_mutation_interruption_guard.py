@@ -7,9 +7,20 @@ to some issue" and re-fired the tool. Guards:
   - every booking-mutation tool pins + plays a filler so there is no dead
     air to talk over in the first place.
 """
+import asyncio
 import inspect
+from types import SimpleNamespace
 
-from agent.livekit_minimal.agent import VachanamAgent, _protect_mutation
+import pytest
+from livekit.agents import StopResponse
+
+from agent.livekit_minimal.agent import (
+    VachanamAgent,
+    _protect_mutation,
+    _tracks_booking_lookup,
+)
+from agent.livekit_minimal.confirm_speech import build_booking_lookup_text
+from agent.session_state import SessionState
 
 
 class _Ctx:
@@ -51,3 +62,77 @@ def test_reschedule_lookup_has_filler():
     # #429: slow enough (it once sat silent for ~a minute) to get the wait phrase.
     src = inspect.getsource(VachanamAgent.find_my_bookings)
     assert "_say_wait_filler(context)" in src
+    assert "_protect_mutation(context)" in src
+
+
+@pytest.mark.asyncio
+async def test_booking_lookup_flag_covers_the_entire_read():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    @_tracks_booking_lookup
+    async def lookup(owner):
+        entered.set()
+        await release.wait()
+        return "database answer"
+
+    owner = SimpleNamespace(
+        _state=SessionState(last_user_utterance="When is my appointment?")
+    )
+    task = asyncio.create_task(lookup(owner))
+    await entered.wait()
+    assert owner._state.booking_lookup_in_flight is True
+    assert owner._state.booking_lookup_utterance == "When is my appointment?"
+    release.set()
+    assert await task == "database answer"
+    assert owner._state.booking_lookup_in_flight is False
+    assert owner._state.booking_lookup_utterance is None
+
+
+def test_lookup_probe_is_consumed_before_pending_answer_is_superseded():
+    src = inspect.getsource(VachanamAgent.on_user_turn_completed)
+    assert src.index("booking_lookup_in_flight") < src.index("sess.interrupt()")
+    assert "booking_lookup_probe_consumed" in src
+
+
+@pytest.mark.asyncio
+async def test_exact_live_failure_sequence_finishes_with_database_answer():
+    """Reproduce: lookup starts -> caller says hello -> answer must still land."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    spoken = []
+    state = SessionState(language="en")
+
+    @_tracks_booking_lookup
+    async def delayed_database_lookup(owner):
+        entered.set()
+        await release.wait()
+        row = {
+            "doctor": "Dr Rao",
+            "date": "2026-08-21",
+            "time": "17:00",
+            "token_number": 1,
+            "booking_type": "appointment",
+            "status": "confirmed",
+        }
+        spoken.append(build_booking_lookup_text("en", row))
+
+    fake = SimpleNamespace(
+        _state=state,
+        _message_text=VachanamAgent._message_text,
+    )
+    task = asyncio.create_task(delayed_database_lookup(fake))
+    await entered.wait()
+
+    message = SimpleNamespace(text_content="hello", content="hello", role="user")
+    with pytest.raises(StopResponse):
+        await VachanamAgent.on_user_turn_completed(
+            fake, SimpleNamespace(items=[]), message
+        )
+
+    assert not task.cancelled()
+    assert spoken == []
+    release.set()
+    await task
+    assert spoken == ["Your appointment with Dr Rao is on 21 August at 5:00 PM."]
+    assert state.booking_lookup_in_flight is False

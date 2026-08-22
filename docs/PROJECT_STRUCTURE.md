@@ -5,7 +5,7 @@
 `docs/MAIN_AGENDA.md` are authoritative for the current runtime. This document
 retains older file-by-file notes and should not override those live sources.
 
-**Last runtime correction:** 2026-08-16. The exhaustive inventory below was
+**Last runtime correction:** 2026-08-22. The exhaustive inventory below was
 last mechanically verified on 2026-06-04 and is retained for history.
 
 ---
@@ -81,21 +81,25 @@ grounding.
 | Path | Status | Purpose |
 |---|---|---|
 | `agent/__init__.py` | placeholder | Package marker. |
-| `agent/livekit_minimal/agent.py` | deployed | Production LiveKit pipeline: Soniox Japan STT/TTS, Gemini 2.5 Flash with fallback, deterministic booking tools, tenant-safe inbound/outbound routing, interruption handling, prompt caching, and latency telemetry. |
+| `agent/livekit_minimal/agent.py` | tested local candidate; deployed baseline | Production LiveKit pipeline plus server-bound mutation receipts, calendar-disconnect recovery, hard output-language and fake-success guards, caller-state binding, tracked read timeouts/answer settlement, interruption handling, prompt caching, and latency telemetry. The 2026-08-22 changes are not yet claimed deployed. |
 | `agent/bot.py` | archived compatibility path | Earlier Pipecat/Vobiz implementation retained for historical tooling; it is not the production Fly entrypoint. |
 | `agent/server.py` | working | FastAPI WS transport for Vobiz: `/answer` XML (inbound + outbound), `/ws` Pipecat bridge, transfer signal map, recording callback (testing-only). |
 | `agent/vobiz_minimal/` | frozen baseline | From-scratch Pipecat+Vobiz connector used to debug transport; reference only. |
 | `agent/livekit_minimal/` | working (in+out) | Live LiveKit voice agent: SIP trunks + dispatch rule, agent worker. |
-| `agent/session_state.py` | working | Per-call state dataclass (branch_id, doctor_id, token_held, token_redis_key, language, etc.). |
+| `agent/session_state.py` | tested local candidate | Per-call state for durable language lock, caller-bound booking/message/identity details, one-use verified speech receipts, transaction closure, and read-in-flight/answer-owed tracking. |
 | `agent/requirements.txt` | working | Voice-agent Python pins (livekit-agents 1.5.9, livekit-plugins-sarvam, turn-detector, google-genai, openai, structlog, tenacity, asyncpg, redis). |
 | `agent/prompts/__init__.py` | placeholder | Package marker. |
-| `agent/prompts/system_prompt.py` | working | Telugu / Hindi / English system-prompt builder with WAIT REQUESTS, SILENCE PROMPTS, GARBLED INPUT sections. LLM handles wait semantically via prompt (no keyword detection). |
+| `agent/prompts/system_prompt.py` | tested local candidate | Public prompt entrypoint; delegates to the grounded eight-language prompt and its single ordered conversation contract. |
+| `agent/prompts/grounded_prompt.py` | tested local candidate | Eight-language clinic-data composer and final language anchor; treats clinic content as data and delegates conversation policy to `ordered_contract.py`. |
+| `agent/prompts/ordered_contract.py` | tested local candidate | Single ordered source of truth for caller-only output, language, grounding, booking, mutations, messages, privacy, recovery, time, and call-type rules. |
 | `agent/services/__init__.py` | placeholder | Package marker. |
 | `agent/services/tts_sanitizer.py` | tested (11/11) | Strip markdown, expand digit spacing, normalize for Bulbul TTS. RULE 6 — every `session.say()` goes through this. |
+| `agent/services/caller_datetime.py` | tested local candidate | Deterministic caller-owned date and clock parsing for all eight languages; preserves AM/PM ambiguity and rejects alternatives, ranges, and unsafe date shapes. |
 | `agent/services/calendar_proxy.py` | working | Re-export shim of `backend/services/calendar_service.py` for the agent runtime (wired into `register_tools` in bot.py). |
 | `agent/services/meta_stub.py` | working | No-op WhatsApp `MetaService` stub (real impl = MVP2). Logs masked phone, never blocks booking. |
 | `agent/tools/__init__.py` | placeholder | Package marker. |
 | `agent/tools/booking_tools.py` | working | 4 LLM function tools: `route_to_doctor`, `check_availability`, `assign_token` (Redis INCR), `confirm_booking`. RULE 3 — token released on disconnect if not confirmed. |
+| `agent/eval/offline_call_red_team.py` | tested local candidate | No-telephony adversarial runner for production speech boundaries, language locks, mutation receipts, caller date/time binding, calendar failure, privacy, and read-liveness behavior under multiple stream chunkings. |
 
 **Open debt touching this dir:** TD-005 (romanized `padipoyadu` vs Telugu script), TD-020 (pre-cached greeting WAV not published via LiveKit track-publish API), TD-021 (STT confidence Layer A).
 
@@ -168,25 +172,14 @@ Owner: `backend-engineer` (routes, services, jobs), `database-engineer` (`models
 
 ## Section 5 — Frontend (`frontend/`)
 
-Owner: `frontend-engineer`. Target: React + Vite PWA on Cloudflare Pages.
+Owner: `frontend-engineer`. React + Vite clinic PWA, published with Cloudflare
+Workers Static Assets. The repository inventory is authoritative; release-relevant
+current paths are listed here.
 
-**Status: placeholder.** Directory + `public/` + `src/` exist but contain no tracked files. Built in Phase 7 (Receptionist PWA) and Phase 8 (Owner + Admin dashboards). See `docs/phases/07-frontend-receptionist/CLAUDE.md` + `docs/phases/08-frontend-dashboards/CLAUDE.md`.
-
-Planned layout (will be created in Phase 7+):
-
-```
-frontend/
-|-- package.json
-|-- vite.config.js
-|-- tailwind.config.js
-|-- public/manifest.json
-`-- src/
-    |-- main.jsx, App.jsx
-    |-- api/client.js                (axios + JWT interceptor)
-    |-- hooks/{useAuth,useQueue,useDashboard}.js
-    |-- pages/{Login,Queue,WalkIn,Dashboard,AdminDashboard}.jsx
-    `-- components/{PatientCard,HeroNumber,WeeklyChart,OfflineBanner}.jsx
-```
+| Path | Status | Purpose |
+|---|---|---|
+| `frontend/src/pages/DoctorSchedule.jsx` | tested local candidate; deployed baseline | Doctor schedule editor. Exact-date mode now accepts an inclusive From/To range, inspects every selected date, and submits one atomic range operation of at most 31 dates. |
+| `frontend/src/pages/DoctorSchedule.time.test.jsx` | release-gate coverage | Time-label and inclusive/inverted date-range regressions for the schedule editor. |
 
 ---
 
@@ -271,6 +264,13 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `tests/unit/test_tts_sanitizer.py` | tested (11/11) | TTS sanitization rules. |
 | `tests/unit/test_booking_confirmation_wording.py` | tested | Booking/reschedule confirmations require the punctuality message; cancellation excludes it. |
 | `tests/unit/test_live_call_aug10_regressions.py` | tested (14/14) | Dr. Lakshmi selection, one-word listening, reminder truth, language-safe filler audio, prompt-cache order, and Telugu clock-word regressions from the 2026-08-10 live call. |
+| `tests/unit/test_ordered_conversation_contract_aug20.py` | release-gate coverage | Ordered prompt sections, caller-only speech envelope, grounding, language, booking, message, privacy, and closure invariants. |
+| `tests/unit/test_prompt_integrity_aug21.py` | release-gate coverage | Real-tool vocabulary, first-booking flow, token/slot separation, final eight-language anchor, explicit switching, output drift, and unsupported-checking guards. |
+| `tests/unit/test_voice_mutation_outcomes_aug21.py` | release-gate coverage | One-use success receipts and fail-closed booking, reschedule, cancellation, message, and clinic-question outcomes. |
+| `tests/unit/test_voice_read_liveness_aug21.py` | release-gate coverage | Shared read tracking, result-evidence settlement, timeout/failure speech, streaming, and suppression of idle line checks while an answer is owed. |
+| `tests/unit/test_caller_datetime.py`, `test_booking_time_receipt.py` | release-gate coverage | Caller-owned multilingual dates/times, ambiguous clock handling, and exact booking receipt time binding. |
+| `tests/unit/test_patient_name_identity.py`, `test_message_patient_privacy.py` | release-gate coverage | Patient-name correction/identity binding and exact caller-message privacy. |
+| `tests/unit/test_offline_call_red_team.py` | release-gate coverage | Deterministic adversarial corpus gate over the same production speech and state helpers; no telephony call or clinic minutes. |
 | `tests/unit/test_doctor_multi_session_schedule.py` | tested | Multi-session validation, sorting, overlap rejection, weekday validation, and slot-boundary coverage. |
 | `tests/unit/test_migration_chain.py` | tested | Prevents the Phase 4.5 full-schema duplication, requires CI's real base-to-head upgrade, and requires missing ZAP reports to fail. |
 | `tests/unit/test_bot_pipeline_builder.py`, `test_bot_tools_and_fallback.py`, `test_bot_tts_sanitizer.py`, `test_pipecat_imports.py` | tested | Pipecat bot pipeline, tool registration, LLM fallback, sanitizer wiring. (Replaced LiveKit-era test_emergency/test_silence_handler/test_audio_quality — modules deleted with the Pipecat rewrite.) |
@@ -302,6 +302,7 @@ Owner: `tester` (writes), implementer-specialists (do not write tests for their 
 | `docs/TECH_DEBT.md` | working | Shortcut ledger — TD-005, 014, 018, 020, 021, 023, 024, 025, 026, 027, 028 open; TD-015, 019, 022 closed. |
 | `docs/DISPATCHES.md` | working | Chronological dispatch audit trail (append-only). |
 | `docs/PROJECT_STRUCTURE.md` | working | **This file.** Live repo map. |
+| `docs/VOICE_CONVERSATION_CONTRACT_2026-08-20.md` | working local candidate | Ordered voice invariants, edge-case decisions, local verification boundary, and explicit distinction between deterministic tests and live-call proof. |
 | `docs/phases/01-foundation/CLAUDE.md` | working | DONE. |
 | `docs/phases/02-voice-agent/CLAUDE.md` | working | DONE. |
 | `docs/phases/03-razorpay-checkout/CLAUDE.md` | working | DONE. |

@@ -107,13 +107,13 @@ def test_the_advice_call_looks_for_an_existing_booking_first():
 def test_the_advice_call_is_told_not_to_double_book():
     """The failure mode this whole change exists to prevent."""
     p = _advice_prompt().lower()
-    assert "two appointments" in p
-    assert "do not call confirm_booking" in p
+    assert "move an existing visit" in p
+    assert "only if none exists may confirm_booking create one" in p
 
 
 def test_a_patient_with_no_booking_still_gets_one():
     p = _advice_prompt()
-    assert "no upcoming booking" in p.lower() and "confirm_booking" in p
+    assert "only if none exists" in p.lower() and "confirm_booking" in p
 
 
 def test_the_patient_is_not_asked_who_they_are():
@@ -124,7 +124,7 @@ def test_the_patient_is_not_asked_who_they_are():
 
 def test_the_time_is_always_the_patients_choice():
     p = _advice_prompt().lower()
-    assert "never pick a time yourself" in p
+    assert "patient's chosen time" in p
 
 
 def test_no_date_means_no_reschedule_instructions_fire():
@@ -138,7 +138,7 @@ def test_no_date_means_no_reschedule_instructions_fire():
     now means absent — no text at all.
     """
     p = _advice_prompt(None)
-    assert "IF such a date is given above" in p, "the move branch must stay conditional"
+    assert "When a target date exists" in p, "the move branch must stay conditional"
     assert "none —" not in p, "a no-date placeholder must never reach the prompt"
     assert "THE DATE THE DOCTOR ASKED FOR" not in p
 
@@ -157,7 +157,7 @@ def test_a_date_is_spoken_as_words_with_the_iso_kept_out_of_speech():
 
 def test_the_relay_never_becomes_medical_advice():
     p = _advice_prompt().lower()
-    assert "rule 7" in p or "invent any medical content" in p
+    assert "do not add, interpret, diagnose, or invent" in p
 
 
 # ── the first call now offers the visit however the patient answers ─────────
@@ -177,25 +177,28 @@ def test_a_patient_in_pain_is_still_offered_the_visit():
     """Vinay 2026-08-04, superseding his 2026-07-03 rule: without a booking
     there is nothing for the doctor to move when they read the report."""
     p = _next_visit_prompt().lower()
-    assert "still offer the visit" in p
+    assert "offer the doctor-requested follow-up visit" in p
     assert "only on a good report" not in p
 
 
 def test_the_problem_still_reaches_the_doctor():
     p = _next_visit_prompt().lower()
-    assert "inform the doctor" in p
+    assert "call take_message" in p
+    assert "before saying it was recorded for the clinic" in p
 
 
 def test_offering_a_visit_is_not_dressed_up_as_treatment():
     """RULE 7 holds: offer the slot, never claim it helps or that it can wait."""
     p = _next_visit_prompt().lower()
-    assert "never say the appointment will fix anything" in p
-    assert "no diagnosis" in p
+    assert "give no medical opinion" in p
+    assert "offer the doctor-requested follow-up visit" in p
 
 
 def test_a_refusal_is_accepted():
     p = _next_visit_prompt().lower()
-    assert "if they say no" in p
+    assert "if they clearly decline" in p
+    assert "call followup_visit_declined" in p
+    assert "do not offer or book" in p
 
 
 @pytest.mark.parametrize("prompt_fn", [_advice_prompt, _next_visit_prompt])

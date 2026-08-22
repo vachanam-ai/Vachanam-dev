@@ -111,7 +111,24 @@ def _agent(clinic, db, state, calendar=None):
         calendar_service=calendar or FlakyCalendar(failures=0),
         meta_service=NullMeta(),
         transfer_to="",
+        doctor_contexts=[clinic["token_doc"], clinic["slot_doc"]],
     )
+
+
+def _grant_slot_booking(state, doctor, day, patient_name, appointment_time):
+    state.caller_asked_to_book = True
+    state.booking_confirmation_granted = True
+    state.booking_confirmation_snapshot = {
+        "patient_name": patient_name,
+        "doctor_id": str(doctor.id),
+        "doctor_name": doctor.name,
+        "booking_date": day.isoformat(),
+        "appointment_time": appointment_time,
+        "booking_type": "appointment",
+        "complaint": "skin",
+        "followup_consent": False,
+        "patient_age": 30,
+    }
 
 
 async def _book_slot(clinic, db, day, appt, name="Old Booking", phone="+919666444428"):
@@ -282,6 +299,7 @@ async def test_b2_confirm_without_time_uses_held_slot_not_null(clinic, db, redis
         appointment_time="16:00",
     )
     assert out["success"] is True
+    _grant_slot_booking(state, doc, day, "Null Time", "16:00")
 
     result = await agent.confirm_booking(
         context=None,
@@ -323,6 +341,7 @@ async def test_b2_confirm_with_different_time_regates_atomically(clinic, db, red
         appointment_time="16:00",
     )
     assert out["success"] is True
+    _grant_slot_booking(state, doc, day, "Time Drift", "17:00")
 
     result = await agent.confirm_booking(
         context=None,
@@ -341,9 +360,8 @@ async def test_b2_confirm_with_different_time_regates_atomically(clinic, db, red
     assert int(await redis.get(f"slot:{doc.id}:{branch.id}:{day}:1600") or 0) == 0
 
 
-async def test_b2_confirm_with_different_free_time_rebooks_cleanly(clinic, db, redis):
-    """Hold 16:00, confirm 15:00 (free): booking lands at 15:00 with a real
-    hold, and the stale 16:00 hold is released."""
+async def test_b2_caller_confirmed_time_change_rebooks_cleanly(clinic, db, redis):
+    """A caller receipt for 15:00 permits moving the stale 16:00 hold safely."""
     branch, doc = clinic["branch"], clinic["slot_doc"]
     day = _tomorrow()
     state = SessionState(session_id="b2c")
@@ -356,6 +374,9 @@ async def test_b2_confirm_with_different_free_time_rebooks_cleanly(clinic, db, r
         appointment_time="16:00",
     )
     assert out["success"] is True
+    # The caller then explicitly changes their selection to 15:00.
+    state.caller_booking_time = "15:00"
+    _grant_slot_booking(state, doc, day, "Moved Time", "15:00")
 
     result = await agent.confirm_booking(
         context=None,

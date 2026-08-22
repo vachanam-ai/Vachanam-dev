@@ -23,12 +23,12 @@ def test_complaint_block_apology_first_and_logged():
     """angry_caller overall=2: agent answered a wait-time grievance with the
     off-task redirect and looped one identical line. Complaints get apology
     FIRST, get logged, then ONE open help question."""
-    p = _prompt()
+    p = " ".join(_prompt().split())
     assert "COMPLAINT ABOUT THE CLINIC" in p
     assert "apologise first and specifically" in p
-    assert "log_clinic_question" in p
-    assert "only after its returned logged=true say it was logged" in p
-    assert "without claiming it was logged" in p
+    assert "take_message" in p
+    assert "Only after logged=true say it was recorded for the clinic" in p
+    assert "on failure continue helping without claiming delivery" in p
     assert "ఇప్పుడు నేను ఏం చేయగలనండి?" in p
     assert "Never repeat a sentence verbatim" in p
 
@@ -53,9 +53,9 @@ def test_anxious_caller_gets_calm_line_no_medical_opinion():
 def test_urgent_caller_gets_first_slot_directly():
     """"వీలైనంత తొందరగా" got a windows recital + "ఏ టైమ్ వీలవుతుంది?" —
     urgency means offer the FIRST free slot as one yes/no question."""
-    p = _prompt()
+    p = " ".join(_prompt().split())
     assert "URGENT NOW" in p
-    assert 'request_human_transfer(reason="urgent") immediately' in p
+    assert 'request_human_transfer(reason="urgent") silently and immediately' in p
 
 
 def test_taken_slot_offers_nearest_not_full_windows():
@@ -95,8 +95,8 @@ def test_message_leaver_insistence_routes_to_human_transfer():
     """Patients insist on the doctor. Softly ask the matter once; serious
     persistent insistence follows the HUMAN TRANSFER rule — which since #350
     caps deflection at two offers (third ask always transfers)."""
-    p = _prompt()
-    assert "offer help at most TWICE; the 3rd ask transfers" in p
+    p = " ".join(_prompt().split())
+    assert "offer receptionist help at most TWICE; the 3rd ask transfers" in p
 
 
 def test_trailing_off_fragment_is_not_a_turn():

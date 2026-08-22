@@ -354,7 +354,7 @@ async def test_specialty_roster_turn_bypasses_gemini():
 
 
 @pytest.mark.asyncio
-async def test_last_call_telugu_roster_turn_bypasses_wrong_language_model():
+async def test_telugu_roster_handoff_requires_two_complete_turns_then_locks():
     doctors = (
         _doctor('Srinivas', 'Dermatology'),
         _doctor('Lakshmi', 'General Medicine'),
@@ -372,14 +372,24 @@ async def test_last_call_telugu_roster_turn_bypasses_wrong_language_model():
     with pytest.raises(StopResponse):
         await agent.on_user_turn_completed(ChatContext.empty(), message)
 
+    assert session.updated_agent is None
+    assert state.language == 'en'
+    assert state.language_candidate == 'te'
+    assert state.language_candidate_turns == 1
+    assert session.say.await_count == 1
+
+    with pytest.raises(StopResponse):
+        await agent.on_user_turn_completed(ChatContext.empty(), message)
+
     assert session.updated_agent is replacement
     assert state.language == 'te'
     assert state.preferred_language == 'te'
+    assert state.explicit_language_lock == 'te'
     assert state.quality_intent == 'doctor_roster'
     assert replacement._handoff_user_input is None
     assert 'Srinivas' in replacement._handoff_speech
     assert 'Lakshmi' in replacement._handoff_speech
-    session.say.assert_not_awaited()
+    assert session.say.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -422,13 +432,22 @@ def test_current_doctors_wording_claims_shift_not_free_slot():
 
 
 @pytest.mark.asyncio
-async def test_non_roster_native_turn_is_replayed_once_after_handoff():
+async def test_non_roster_native_turn_switches_only_after_two_complete_turns():
     replacement = SimpleNamespace(_tts_override=None)
     agent, state, session = _agent(
         language='en',
         factory=lambda code, chat_ctx=None: replacement,
     )
     utterance = 'నాకు చర్మం మీద దురదగా ఉంది'
+
+    await agent.on_user_turn_completed(
+        ChatContext.empty(), SimpleNamespace(content=[utterance])
+    )
+
+    assert session.updated_agent is None
+    assert state.language == 'en'
+    assert state.language_candidate == 'te'
+    assert state.language_candidate_turns == 1
 
     with pytest.raises(StopResponse):
         await agent.on_user_turn_completed(
@@ -437,6 +456,7 @@ async def test_non_roster_native_turn_is_replayed_once_after_handoff():
 
     assert session.updated_agent is replacement
     assert state.language == 'te'
+    assert state.explicit_language_lock == 'te'
     assert replacement._handoff_user_input == utterance
     assert replacement._handoff_speech is None
 

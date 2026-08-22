@@ -226,7 +226,7 @@ _BOOKING_TROUBLE_REPLY = (
 _REFUSAL_REPLIES: dict[str, str] = {
     "missing_patient_details": (
         "This looks like your first visit here — could you share your "
-        "name and age so I can complete the booking?"
+        "name so I can complete the booking? Age is optional."
     ),
     "not_bookable": "That doctor isn't available on that day — could you try a different day?",
     "off_grid_time": (

@@ -45,9 +45,14 @@ def compose_message(question: str, answer: str) -> str:
     )
 
 
-async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> bool:
-    """Create the dispatch AND verify a worker actually joined (#423). Returns
-    False when nobody picked it up — the row stays queued for the next tick."""
+async def _dispatch(
+    q: ClinicQuestion, branch: Branch, patient_name: str
+) -> bool | None:
+    """Create and verify a dispatch (#423).
+
+    True means a worker joined, False means a real handoff failed, and None
+    means no attempt was made. Contention/configuration must not burn a retry.
+    """
     try:
         outbound_trunk_id = branch_outbound_trunk_id(branch)
     except RuntimeError:
@@ -56,16 +61,20 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
             branch_id=str(branch.id),
             question_id=str(q.id),
         )
-        return False
+        return None
 
     # Same collision guard as the other three dialers (Vinay 2026-08-08).
     from backend.services.outbound_guard import (
         claim_outbound_call,
+        lock_key,
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(q.caller_phone, "question_answer", branch.id):
-        return False
+    outbound_claim = await claim_outbound_call(
+        q.caller_phone, "question_answer", branch.id
+    )
+    if not outbound_claim:
+        return None
     try:
         from livekit import api as lk_api
 
@@ -76,6 +85,8 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
                 "branch_id": str(branch.id),
                 "outbound_trunk_id": outbound_trunk_id,
                 "question_id": str(q.id),
+                "outbound_lock_key": lock_key(q.caller_phone),
+                "outbound_lock_owner": outbound_claim,
             }
             room = f"qanswer-{uuid.uuid4().hex[:10]}"
             await lkapi.agent_dispatch.create_dispatch(
@@ -86,7 +97,9 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
             from backend.services.dispatch_verify import verify_or_cleanup
 
             if not await verify_or_cleanup(lkapi, room, f"question:{q.id}"):
-                await release_outbound_call(q.caller_phone, branch.id)
+                await release_outbound_call(
+                    q.caller_phone, outbound_claim, branch.id
+                )
                 return False
             logger.info(
                 "question_callback_dispatched",
@@ -96,11 +109,17 @@ async def _dispatch(q: ClinicQuestion, branch: Branch, patient_name: str) -> boo
             )
             return True
         finally:
-            await lkapi.aclose()
+            try:
+                await lkapi.aclose()
+            except Exception as close_exc:  # noqa: BLE001 - handoff truth is authoritative
+                logger.warning(
+                    "question_callback_livekit_close_failed",
+                    error=str(close_exc)[:160],
+                )
     except Exception as e:  # noqa: BLE001 — RULE 8
         logger.error("question_callback_dispatch_failed", question_id=str(q.id),
                      error=str(e)[:160])
-        await release_outbound_call(q.caller_phone, branch.id)
+        await release_outbound_call(q.caller_phone, outbound_claim, branch.id)
         return False
 
 
@@ -140,8 +159,13 @@ async def run_question_callbacks(now: datetime | None = None) -> int:
                 ).scalar_one_or_none() or ""
             # DISPATCH-THEN-MUTATE (FIXLOG #160): never flip status before the
             # phone actually rings, or a crash strands the callback forever.
+            result = await _dispatch(q, branch, name)
+            if result is None:
+                # Another live call owns this handset (or this branch cannot
+                # currently route a call). No patient attempt happened.
+                continue
             q.call_attempts = (q.call_attempts or 0) + 1
-            if await _dispatch(q, branch, name):
+            if result:
                 q.status = "called"
                 dispatched += 1
             elif q.call_attempts >= MAX_ATTEMPTS:

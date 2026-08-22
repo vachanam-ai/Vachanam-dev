@@ -134,9 +134,8 @@ def test_schedule_resolution_remains_provable_in_logs():
 
 
 def test_prompt_answers_only_the_latest_question():
-    from agent.prompts.grounded_prompt import build_grounded_prompt  # noqa: F401
-    from pathlib import Path
+    from agent.prompts.system_prompt import build_system_prompt
 
-    src = Path("agent/prompts/grounded_prompt.py").read_text(encoding="utf-8")
-    assert "ANSWER THE QUESTION THE CALLER JUST ASKED, AND ONLY THAT ONE." in src
-    assert "absorb it silently and answer the new question" in src
+    prompt = build_system_prompt("Test", [], "", "clinic", language="en")
+    assert "ANSWER THE QUESTION THE CALLER JUST ASKED, AND ONLY THAT ONE." in prompt
+    assert "silently and answer the new question" in prompt

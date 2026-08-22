@@ -60,9 +60,9 @@ class Lines:
 
 # Shared English brevity directive for non-Telugu languages (LLM instruction).
 _BREVITY_EN = (
-    "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: every spoken reply must be "
-    "very short, one or two phrases. Do not repeat the disclosure. Ask only one "
-    "question at a time."
+    "\n\nVOICE BREVITY: prefer one or two short phrases and ask only one question "
+    "at a time. Never repeat the disclosure. Brevity never overrides safety, "
+    "tool truth, a complete answer, or the active-language lock."
 )
 
 
@@ -134,19 +134,19 @@ LINES: dict[str, Lines] = {
         # Verbatim honorific pattern from known_caller_greeting ("{patient} గారు").
         followup_name_prefix="{patient} గారు, ",
         brevity=(
-            "\n\nVOICE BREVITY — OVERRIDES EVERYTHING ABOVE: ప్రతి ఆన్సర్ చాలా చిన్నగా, "
-            "ఒకటి లేదా రెండు ముక్కల్లో ఉండాలి. డిస్క్లోజర్ మళ్ళీ చెప్పొద్దు. "
-            "ఒకసారి ఒకే ఒక్క ప్రశ్న అడుగు."
+            "\n\nVOICE BREVITY: ప్రతి ఆన్సర్ చిన్నగా, ఒకటి లేదా రెండు ముక్కల్లో "
+            "ఉండాలి. డిస్క్లోజర్ మళ్ళీ చెప్పొద్దు. ఒకసారి ఒకే ఒక్క ప్రశ్న అడుగు. "
+            "కానీ safety, tool truth, పూర్తి answer, language lock ఎప్పుడూ override కావు."
         ),
         confirm_booked_token=(
             "[happily] బుక్ అయిపోయిందండి. {date}కి, మీ టోకెన్ నంబర్ {token}. "
             "టైంకి రండి."
         ),
         confirm_booked_slot=(
-            "[happily] బుక్ అయిపోయిందండి. {date}, {time}కి. టైంకి రండి."
+            "[happily] బుక్ అయిపోయిందండి. {date}, {time}. టైంకి రండి."
         ),
         confirm_resched_slot=(
-            "[happily] అపాయింట్‌మెంట్ మార్చేశానండి. ఇప్పుడు {date}, {time}కి. "
+            "[happily] అపాయింట్‌మెంట్ మార్చేశానండి. ఇప్పుడు {date}, {time}. "
             "పాతది క్యాన్సిల్ అయింది. టైంకి రండి."
         ),
         confirm_resched_token=(
@@ -269,11 +269,11 @@ LINES: dict[str, Lines] = {
             "कृपया समय पर आइए।"
         ),
         confirm_booked_slot=(
-            "[happily] अपॉइंटमेंट कन्फ़र्म हो गया है। {date} को {time} बजे। "
+            "[happily] अपॉइंटमेंट कन्फ़र्म हो गया है। {date} को {time}। "
             "कृपया समय पर आइए।"
         ),
         confirm_resched_slot=(
-            "[happily] अपॉइंटमेंट बदल दिया है। अब {date} को {time} बजे। "
+            "[happily] अपॉइंटमेंट बदल दिया है। अब {date} को {time}। "
             "पुराना कैंसिल हो गया है। कृपया समय पर आइए।"
         ),
         confirm_resched_token=(
@@ -323,6 +323,23 @@ LINES: dict[str, Lines] = {
             "வணக்கம், {clinic} கிளினிக்கின் AI அசிஸ்டெண்ட் பேசுறேன். சொல்லுங்க {patient}, என்ன உதவி வேணும்?"
         ),
         brevity=_BREVITY_EN,
+        confirm_booked_token=(
+            "[happily] புக்கிங் கன்ஃபர்ம் ஆயிடுச்சுங்க. {date}க்கு உங்க டோக்கன் "
+            "நம்பர் {token}. டைம்க்கு வந்துடுங்க."
+        ),
+        confirm_booked_slot=(
+            "[happily] அப்பாயிண்ட்மென்ட் கன்ஃபர்ம் ஆயிடுச்சுங்க. {date}, "
+            "{time}. டைம்க்கு வந்துடுங்க."
+        ),
+        confirm_resched_slot=(
+            "[happily] அப்பாயிண்ட்மென்ட்டை மாத்திட்டேங்க. இப்ப {date}, {time}. "
+            "பழையது கேன்சல் ஆயிடுச்சு. டைம்க்கு வந்துடுங்க."
+        ),
+        confirm_resched_token=(
+            "[happily] அப்பாயிண்ட்மென்ட்டை {date}க்கு மாத்திட்டேங்க. புது டோக்கன் "
+            "நம்பர் {token}. பழையது கேன்சல் ஆயிடுச்சு. டைம்க்கு வந்துடுங்க."
+        ),
+        confirm_cancelled="[softly] உங்க அப்பாயிண்ட்மென்ட் கேன்சல் ஆயிடுச்சுங்க.",
     ),
 
     # ── Kannada — FIRST-PASS ⚠ needs native validation ───────────────────────
@@ -364,6 +381,23 @@ LINES: dict[str, Lines] = {
             "ನಮಸ್ಕಾರ, {clinic} ಕ್ಲಿನಿಕ್‌ನ AI ಅಸಿಸ್ಟೆಂಟ್ ಮಾತಾಡ್ತಿದ್ದೀನಿ. ಹೇಳಿ {patient}, ಏನು ಸಹಾಯ ಬೇಕು?"
         ),
         brevity=_BREVITY_EN,
+        confirm_booked_token=(
+            "[happily] ಬುಕಿಂಗ್ ಕನ್ಫರ್ಮ್ ಆಗಿದೆ ರೀ. {date}ಕ್ಕೆ ನಿಮ್ಮ ಟೋಕನ್ ನಂಬರ್ "
+            "{token}. ಟೈಮ್‌ಗೆ ಬನ್ನಿ."
+        ),
+        confirm_booked_slot=(
+            "[happily] ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಕನ್ಫರ್ಮ್ ಆಗಿದೆ ರೀ. {date}, {time}. "
+            "ಟೈಮ್‌ಗೆ ಬನ್ನಿ."
+        ),
+        confirm_resched_slot=(
+            "[happily] ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬದಲಾಯಿಸಿದ್ದೀನಿ ರೀ. ಈಗ {date}, {time}. "
+            "ಹಳೆಯದು ಕ್ಯಾನ್ಸಲ್ ಆಗಿದೆ. ಟೈಮ್‌ಗೆ ಬನ್ನಿ."
+        ),
+        confirm_resched_token=(
+            "[happily] ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಅನ್ನು {date}ಕ್ಕೆ ಬದಲಾಯಿಸಿದ್ದೀನಿ ರೀ. ಹೊಸ ಟೋಕನ್ "
+            "ನಂಬರ್ {token}. ಹಳೆಯದು ಕ್ಯಾನ್ಸಲ್ ಆಗಿದೆ. ಟೈಮ್‌ಗೆ ಬನ್ನಿ."
+        ),
+        confirm_cancelled="[softly] ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಕ್ಯಾನ್ಸಲ್ ಆಗಿದೆ ರೀ.",
     ),
 
     # ── Malayalam — FIRST-PASS ⚠ needs native validation ─────────────────────
@@ -406,6 +440,23 @@ LINES: dict[str, Lines] = {
             "നമസ്കാരം, {clinic} ക്ലിനിക്കിലെ AI അസിസ്റ്റന്റാണ്. പറയൂ {patient}, എന്ത് സഹായം വേണം?"
         ),
         brevity=_BREVITY_EN,
+        confirm_booked_token=(
+            "[happily] ബുക്കിംഗ് കൺഫേം ആയി. {date}ന് നിങ്ങളുടെ ടോക്കൺ നമ്പർ "
+            "{token}. സമയത്ത് വരൂ."
+        ),
+        confirm_booked_slot=(
+            "[happily] അപ്പോയിന്റ്മെന്റ് കൺഫേം ആയി. {date}, {time}. "
+            "സമയത്ത് വരൂ."
+        ),
+        confirm_resched_slot=(
+            "[happily] അപ്പോയിന്റ്മെന്റ് മാറ്റി. ഇപ്പോൾ {date}, {time}. പഴയത് "
+            "ക്യാൻസൽ ആയി. സമയത്ത് വരൂ."
+        ),
+        confirm_resched_token=(
+            "[happily] അപ്പോയിന്റ്മെന്റ് {date}ലേക്ക് മാറ്റി. പുതിയ ടോക്കൺ നമ്പർ "
+            "{token}. പഴയത് ക്യാൻസൽ ആയി. സമയത്ത് വരൂ."
+        ),
+        confirm_cancelled="[softly] നിങ്ങളുടെ അപ്പോയിന്റ്മെന്റ് ക്യാൻസൽ ആയി.",
     ),
 
     # ── Marathi — FIRST-PASS ⚠ needs native validation ───────────────────────
@@ -447,6 +498,23 @@ LINES: dict[str, Lines] = {
             "नमस्कार, मी {clinic} क्लिनिकची AI असिस्टंट बोलत आहे. सांगा {patient}, काय मदत करू?"
         ),
         brevity=_BREVITY_EN,
+        confirm_booked_token=(
+            "[happily] बुकिंग कन्फर्म झाली आहे. {date} साठी तुमचा टोकन नंबर "
+            "{token} आहे. वेळेवर या."
+        ),
+        confirm_booked_slot=(
+            "[happily] अपॉइंटमेंट कन्फर्म झाली आहे. {date} रोजी {time}. "
+            "वेळेवर या."
+        ),
+        confirm_resched_slot=(
+            "[happily] अपॉइंटमेंट बदलली आहे. आता {date} रोजी {time}. "
+            "जुनी कॅन्सल झाली आहे. वेळेवर या."
+        ),
+        confirm_resched_token=(
+            "[happily] अपॉइंटमेंट {date} साठी बदलली आहे. नवीन टोकन नंबर "
+            "{token} आहे. जुनी कॅन्सल झाली आहे. वेळेवर या."
+        ),
+        confirm_cancelled="[softly] तुमची अपॉइंटमेंट कॅन्सल झाली आहे.",
     ),
 
     # ── Bengali — FIRST-PASS ⚠ needs native validation ───────────────────────
@@ -488,6 +556,23 @@ LINES: dict[str, Lines] = {
             "নমস্কার, আমি {clinic} ক্লিনিকের AI অ্যাসিস্ট্যান্ট বলছি। বলুন {patient}, কী সাহায্য করতে পারি?"
         ),
         brevity=_BREVITY_EN,
+        confirm_booked_token=(
+            "[happily] বুকিং কনফার্ম হয়েছে। {date}-এর জন্য আপনার টোকেন নম্বর "
+            "{token}। সময়মতো আসবেন।"
+        ),
+        confirm_booked_slot=(
+            "[happily] অ্যাপয়েন্টমেন্ট কনফার্ম হয়েছে। {date} তারিখে "
+            "{time}। সময়মতো আসবেন।"
+        ),
+        confirm_resched_slot=(
+            "[happily] অ্যাপয়েন্টমেন্ট বদলে দিয়েছি। এখন {date} তারিখে {time}। "
+            "আগেরটা ক্যানসেল হয়েছে। সময়মতো আসবেন।"
+        ),
+        confirm_resched_token=(
+            "[happily] অ্যাপয়েন্টমেন্ট {date}-এ বদলে দিয়েছি। নতুন টোকেন নম্বর "
+            "{token}। আগেরটা ক্যানসেল হয়েছে। সময়মতো আসবেন।"
+        ),
+        confirm_cancelled="[softly] আপনার অ্যাপয়েন্টমেন্ট ক্যানসেল হয়েছে।",
     ),
 }
 

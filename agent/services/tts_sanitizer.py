@@ -7,11 +7,17 @@ import unicodedata
 # identifiers and explicit execution narration.
 _INTERNAL_TRACE = re.compile(
     r"(?i)(?:\bexecuting\b|\btool[ _-]?call\b|\bfunction[ _-]?call\b|"
-    r"\bthe user (?:is|has|asked|wants|requested|provided|mentioned)\b|"
-    r"\bI (?:need|must|have) to\b|\bI should\b|"
+    r"\b(?:the|this) (?:user|caller|patient) (?:(?:is|was) "
+    r"(?:asking|requesting|seeking|wanting)|(?:has|had) (?:not )?"
+    r"(?:asked|requested|provided|mentioned|supplied|stated)|"
+    r"(?:asked|requests?|requested|wants?|provided|mentioned|supplied|stated))\b|"
+    r"\bI (?:need|must|have) to (?:use|call|run|invoke|query|retrieve|look up)\b|"
+    r"\bI should (?:use|call|run|invoke|query|retrieve|look up)\b|"
+    r"\bI should (?:list|tell|explain|answer|respond|say|mention)\b|"
     r"\b(?:this|that) information (?:is|comes)\b|"
     r"\b(?:my|our) (?:task|instructions?|reasoning)\b|"
-    r"\b(?:based on|according to) (?:the )?(?:context|instructions?|clinic_facts|tool)\b|"
+    r"\b(?:based on|according to) (?:the )?(?:private )?"
+    r"(?:context|instructions?|clinic_facts|tool)\b|"
     r"\bclinic_facts\b|<\/?(?:doctors?|clinic_facts)\b|"
     r"calendar\.tool|\b(?:old_token_id|new_date|new_time|booking_date|appointment_time|token_id|doctor_id|patient_name|"
     r"patient_phone|different_person|booking_for_other)\b\s*[:=]?|"
@@ -22,8 +28,8 @@ _INTERNAL_TRACE = re.compile(
 # Wider fail-closed classifier for free-form meta narration. These are
 # structural reasoning forms, not clinic-facing speech.
 _INTERNAL_META = re.compile(
-    r"(?i)(?:(?:the|this) (?:user|caller|patient)|"
-    r"(?:i|we) (?:need|should|must|have|plan) to|"
+    r"(?i)(?:(?:i|we) (?:need|should|must|have|plan) to "
+    r"(?:use|call|run|invoke|query|retrieve|look up)|"
     r"(?:i|we) (?:will|would|can|cannot|can not|do not) "
     r"(?:use|call|retrieve|look up|proceed)|"
     r"the [a-z_ -]+ tool|(?:available|provided) information|"
@@ -49,20 +55,43 @@ _MODEL_CONTROL_TOKEN = re.compile(
 # LLM chunk. The old unconditional 24-character carry delayed all safe speech
 # (often until a short reply had fully generated) before Soniox could start.
 _INTERNAL_STREAM_MARKERS = (
-    "the user", "this user", "the caller", "this caller",
-    "the patient", "this patient", "we need to", "we should",
+    "we need to", "we should",
     "we must", "we have to", "i plan to", "we plan to",
     "i will use", "i would use", "i can use", "i cannot use",
     "i can not use", "i do not use", "we will use",
     "available information", "provided information", "the tool", "<", "`",
     "executing", "tool call", "tool_call", "tool-call",
-    "the user is", "the user has", "the user asked", "the user wants",
-    "the user requested", "the user provided", "the user mentioned",
-    "i need to", "i should", "i must", "i have to", "this information",
+    "the user is asking", "the user is requesting", "the user is seeking",
+    "the user is wanting", "the user was asking", "the user was requesting",
+    "the user has asked", "the user has not asked", "the user had asked",
+    "the user asked", "the user requests", "the user requested",
+    "the user wants", "the user provided", "the user mentioned",
+    "the user supplied", "the user stated",
+    "this user is asking", "this user asked", "this user wants",
+    "this user requested", "this user provided", "this user mentioned",
+    "the caller is asking", "the caller asked", "the caller wants",
+    "the caller requested", "the caller provided", "the caller mentioned",
+    "this caller is asking", "this caller asked", "this caller wants",
+    "this caller requested", "this caller provided", "this caller mentioned",
+    "the patient is asking", "the patient asked", "the patient wants",
+    "the patient requested", "the patient provided", "the patient mentioned",
+    "this patient is asking", "this patient asked", "this patient wants",
+    "this patient requested", "this patient provided", "this patient mentioned",
+    "the user has not supplied", "the caller has not supplied",
+    "the patient has not supplied",
+    "i need to use", "i need to call", "i need to run", "i need to invoke",
+    "i need to query", "i need to retrieve", "i need to look up",
+    "i should use", "i should call", "i should run", "i should invoke",
+    "i should query", "i should retrieve", "i should look up",
+    "i should list", "i should tell", "i should explain", "i should answer",
+    "i should respond", "i should say", "i should mention",
+    "i must use", "i must call", "i have to use", "i have to call",
+    "this information",
     "that information", "my task", "our task", "my instructions",
     "our instructions", "my reasoning", "our reasoning", "based on the context",
     "according to the context", "based on the instructions",
-    "according to the instructions", "clinic_facts", "<doctor", "</doctor",
+    "according to the instructions", "based on the private context",
+    "according to the private context", "clinic_facts", "<doctor", "</doctor",
     "<clinic_facts", "</clinic_facts",
     "function call", "function_call", "function-call", "calendar.tool",
     "old_token_id", "new_date", "new_time", "booking_date",

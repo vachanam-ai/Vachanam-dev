@@ -37,6 +37,9 @@ async def run_finalize_stale_calls() -> None:
                     and_(
                         CallLog.duration_seconds == 0,
                         CallLog.started_at < cutoff,
+                        # Provider CDR rows are already authoritative: an
+                        # unanswered call is correctly billed as zero seconds.
+                        CallLog.provider_call_id.is_(None),
                     )
                 )
             )

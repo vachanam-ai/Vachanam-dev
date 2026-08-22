@@ -35,6 +35,6 @@ def test_booking_close_is_once_no_take_care_then_offer_help():
 def test_prompt_says_punctuality_message_only_after_booking_or_reschedule():
     prompt = build_system_prompt("Clinic", [], "", "clinic")
     come_on_time = PACKS['te'].come_on_time
-    assert 'On success' in prompt and come_on_time in prompt
+    assert 'success=true' in prompt and come_on_time in prompt
     reschedule = prompt.split("RESCHEDULE:", 1)[1].split("CANCEL:", 1)[0]
     assert come_on_time in reschedule

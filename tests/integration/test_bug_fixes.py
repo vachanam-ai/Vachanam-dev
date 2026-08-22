@@ -510,7 +510,7 @@ async def test_reschedule_twice_in_one_call_with_stale_token(clinic, db, redis):
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
-        transfer_to="",
+        transfer_to="", doctor_contexts=[doc],
     )
 
     # First move 10:00 -> 11:00 (cancels the original token, makes a new one).
@@ -727,32 +727,26 @@ async def test_check_availability_offers_nearest_time(clinic, db, redis):
     assert ("9:30 AM" in msg) or ("10:30 AM" in msg)
 
 
-# ── Fix 33: first-time patient details are mandatory at the tool boundary ────
+# ── First-time patients may decline optional demographic details ────────
 
 
-async def test_confirm_booking_first_time_patient_requires_age(clinic, db, redis):
+async def test_confirm_booking_first_time_patient_allows_missing_age(clinic, db, redis):
     branch, doc = clinic["branch"], clinic["token_doc"]
     day = _tomorrow()
     assigned = await assign_token(doc.id, branch.id, day, db)
 
-    missing = await confirm_booking(
+    result = await confirm_booking(
         doctor_id=doc.id, branch_id=branch.id, patient_name="Brand New",
         patient_phone="+919666444433", complaint="fever", booking_date=day,
         token_number=assigned["token_number"], followup_consent=False,
         appointment_time=None, source="voice", db=db,
         calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
     )
-    assert missing["success"] is False
-    assert missing["reason"] == "missing_patient_details"
-
-    ok = await confirm_booking(
-        doctor_id=doc.id, branch_id=branch.id, patient_name="Brand New",
-        patient_phone="+919666444433", complaint="fever", booking_date=day,
-        token_number=assigned["token_number"], followup_consent=False,
-        patient_age=42, appointment_time=None, source="voice", db=db,
-        calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
-    )
-    assert ok["success"], ok
+    assert result["success"], result
+    patient = (
+        await db.execute(select(Patient).where(Patient.phone == "+919666444433"))
+    ).scalar_one()
+    assert patient.age is None
 
 
 async def test_confirm_booking_stores_english_name_and_numeric_age(clinic, db, redis):
@@ -879,6 +873,7 @@ async def test_decline_rebook_completes_followup_task(clinic, db, redis):
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=None, meta_service=NullMeta(), transfer_to="",
+        doctor_contexts=[doc],
     )
     assert await agent._complete_followup_task("patient_declined: test") is True
 
@@ -1126,13 +1121,13 @@ async def test_assign_token_wrapper_hides_queue_number_for_appointment_doctor(cl
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=FlakyCalendar(failures=0), meta_service=NullMeta(),
-        transfer_to="",
+        transfer_to="", doctor_contexts=[doc],
     )
     out = await agent.assign_token(
         context=None, doctor_id=str(doc.id), booking_date=day.isoformat(),
         appointment_time="11:00",
     )
-    assert out["success"] is True
+    assert out["success"] is True, out
     assert out["announce"] == "time_only"
     assert out["appointment_time"] == "11:00"
     assert "token_number" not in out  # the LLM never sees a queue number
@@ -1153,11 +1148,12 @@ async def test_assign_token_wrapper_keeps_queue_number_for_token_doctor(clinic, 
     agent = VachanamAgent(
         instructions="t", state=state, db=db, room=None,
         calendar_service=None, meta_service=NullMeta(), transfer_to="",
+        doctor_contexts=[doc],
     )
     out = await agent.assign_token(
         context=None, doctor_id=str(doc.id), booking_date=day.isoformat(),
     )
-    assert out["success"] is True
+    assert out["success"] is True, out
     assert out["token_number"] == 1  # walk-in queue number surfaced
     assert out.get("booking_type") == "token"
 

@@ -42,7 +42,7 @@ from datetime import date, datetime, timedelta
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,6 +158,11 @@ class DateScheduleIn(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=500)
 
 
+class DateScheduleRangeIn(DateScheduleIn):
+    date_from: date
+    date_to: date
+
+
 class DateScheduleOut(BaseModel):
     date: str
     status: str
@@ -166,6 +171,10 @@ class DateScheduleOut(BaseModel):
     token_limit: Optional[int]
     notes: Optional[str]
     is_published: bool
+
+
+class DateScheduleRangeOut(BaseModel):
+    schedules: list[DateScheduleOut]
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +229,229 @@ def _date_slots(sessions: list[dict[str, str]], duration: int | None) -> set:
     return result
 
 
+async def _sync_date_schedule_range_events(
+    branch_id: uuid.UUID,
+    doctor_id: uuid.UUID,
+    target_dates: list[date],
+) -> None:
+    """Best-effort calendar projection after the authoritative response."""
+    from backend.database import AsyncSessionLocal
+    from backend.services.doctor_calendar import sync_date_schedule_events
+
+    for target_date in target_dates:
+        async with AsyncSessionLocal() as db:
+            try:
+                await sync_date_schedule_events(db, branch_id, doctor_id, target_date)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "date_schedule_calendar_sync_failed",
+                    branch_id=str(branch_id),
+                    doctor_id=str(doctor_id),
+                    date=target_date.isoformat(),
+                    error=str(exc)[:200],
+                )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@router.put(
+    "/{branch_id}/{doctor_id}/schedule-range",
+    response_model=DateScheduleRangeOut,
+)
+@audit("availability.schedule_range_publish", resource_type="doctor_date_schedule")
+async def publish_date_schedule_range(
+    branch_id: str,
+    doctor_id: str,
+    body: DateScheduleRangeIn,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DateScheduleRangeOut:
+    """Atomically publish identical sessions for an inclusive 1-31 date range."""
+    await assert_branch_access(current_user, branch_id, db)
+    try:
+        branch_uuid = uuid.UUID(branch_id)
+        doctor_uuid = uuid.UUID(doctor_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    span = (body.date_to - body.date_from).days
+    if span < 0 or span > 30:
+        raise HTTPException(status_code=422, detail="Schedule range must contain 1 to 31 dates")
+    target_dates = [body.date_from + timedelta(days=offset) for offset in range(span + 1)]
+
+    # Shared counterpart to doctor.update's exclusive config lock. Acquire it
+    # before loading booking_type/slot duration so range validation cannot use
+    # a stale doctor shape while those fields are being committed.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock_shared(hashtextextended(:k, 0))"),
+        {"k": f"schedule-config:{branch_uuid}:{doctor_uuid}"},
+    )
+
+    doctor = (
+        await db.execute(
+            select(Doctor).where(
+                Doctor.id == doctor_uuid,
+                Doctor.branch_id == branch_uuid,
+                Doctor.status == "active",
+            )
+        )
+    ).scalar_one_or_none()
+    if doctor is None:
+        raise HTTPException(status_code=404, detail="Doctor not found")
+    _schedule_writer_allowed(current_user, doctor)
+
+    from backend.routers.queue import _branch_today
+
+    branch_today = await _branch_today(branch_uuid, db)
+    if body.date_from < branch_today:
+        raise HTTPException(status_code=422, detail="Cannot change a past schedule")
+    if body.date_to > branch_today + timedelta(days=365):
+        raise HTTPException(status_code=422, detail="Schedule date cannot exceed 365 days")
+    try:
+        sessions = validate_sessions(body.sessions)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Every schedule writer uses this key. Sorted acquisition prevents two
+    # overlapping ranges from deadlocking and makes validation + write atomic.
+    for target_date in target_dates:
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+            {"k": f"schedule:{branch_uuid}:{doctor_uuid}:{target_date}"},
+        )
+
+    leaves = (
+        await db.execute(
+            select(DoctorUnavailability).where(
+                DoctorUnavailability.branch_id == branch_uuid,
+                DoctorUnavailability.doctor_id == doctor_uuid,
+                DoctorUnavailability.date.in_(target_dates),
+            )
+        )
+    ).scalars().all()
+    confirmed = (
+        await db.execute(
+            select(Token).where(
+                Token.branch_id == branch_uuid,
+                Token.doctor_id == doctor_uuid,
+                Token.date.in_(target_dates),
+                Token.status == "confirmed",
+            )
+        )
+    ).scalars().all()
+    leave_dates = {row.date for row in leaves}
+    confirmed_by_date: dict[date, list[Token]] = {}
+    for token in confirmed:
+        confirmed_by_date.setdefault(token.date, []).append(token)
+
+    conflicts: dict[date, list[str]] = {}
+    valid_slots = _date_slots(sessions, doctor.slot_duration_minutes)
+    effective_limit = body.token_limit if body.token_limit is not None else doctor.daily_token_limit
+    for target_date in target_dates:
+        booked = confirmed_by_date.get(target_date, [])
+        if sessions and target_date in leave_dates:
+            conflicts.setdefault(target_date, []).append(
+                "Doctor is marked on leave; remove leave before publishing sessions."
+            )
+        if doctor.booking_type == "appointment":
+            invalid = [
+                token for token in booked
+                if token.appointment_time is None or token.appointment_time not in valid_slots
+            ]
+            if invalid:
+                conflicts.setdefault(target_date, []).append(
+                    f"Schedule would invalidate {len(invalid)} confirmed appointment(s)."
+                )
+        elif booked and not sessions:
+            conflicts.setdefault(target_date, []).append(
+                f"Schedule would invalidate {len(booked)} confirmed token booking(s)."
+            )
+        elif effective_limit is not None and len(booked) > effective_limit:
+            conflicts.setdefault(target_date, []).append(
+                f"Token limit cannot be below {len(booked)} already-confirmed patients."
+            )
+
+    if conflicts:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Schedule range has conflicts. No dates were changed.",
+                "conflicts": [
+                    {"date": target_date.isoformat(), "reasons": conflicts[target_date]}
+                    for target_date in target_dates
+                    if target_date in conflicts
+                ],
+            },
+        )
+
+    existing = (
+        await db.execute(
+            select(DoctorDateSchedule).where(
+                DoctorDateSchedule.branch_id == branch_uuid,
+                DoctorDateSchedule.doctor_id == doctor_uuid,
+                DoctorDateSchedule.date.in_(target_dates),
+            )
+        )
+    ).scalars().all()
+    by_date = {row.date: row for row in existing}
+    note = body.notes.strip() if body.notes and body.notes.strip() else None
+    for target_date in target_dates:
+        row = by_date.get(target_date)
+        if row is None:
+            row = DoctorDateSchedule(
+                branch_id=branch_uuid,
+                doctor_id=doctor_uuid,
+                date=target_date,
+                sessions=sessions,
+            )
+            db.add(row)
+        row.sessions = sessions
+        row.token_limit = body.token_limit
+        row.notes = note
+        row.updated_by_user_id = uuid.UUID(current_user.user_id)
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    await invalidate_clinic_cache(branch_uuid)
+
+    background_tasks.add_task(
+        _sync_date_schedule_range_events,
+        branch_uuid,
+        doctor_uuid,
+        target_dates,
+    )
+
+    request.state.audit_resource_id = doctor_id
+    request.state.audit_user_id = current_user.user_id
+    request.state.audit_branch_id = branch_id
+    request.state.audit_metadata = {
+        "doctor_id": doctor_id,
+        "date_from": body.date_from.isoformat(),
+        "date_to": body.date_to.isoformat(),
+        "dates_published": len(target_dates),
+        "sessions": sessions,
+        "token_limit": body.token_limit,
+    }
+    return DateScheduleRangeOut(schedules=[
+        DateScheduleOut(
+            date=target_date.isoformat(),
+            status="available" if sessions else "unavailable",
+            source="date_override",
+            sessions=sessions,
+            token_limit=body.token_limit if body.token_limit is not None else doctor.daily_token_limit,
+            notes=note,
+            is_published=True,
+        )
+        for target_date in target_dates
+    ])
 
 @router.put(
     "/{branch_id}/{doctor_id}/schedule/{date_str}",
@@ -251,6 +480,13 @@ async def publish_date_schedule(
         target_date = date.fromisoformat(date_str)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID or date format")
+
+    # Keep exact-date validation on the same doctor configuration snapshot as
+    # booking confirmation and range publication.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock_shared(hashtextextended(:k, 0))"),
+        {"k": f"schedule-config:{branch_uuid}:{doctor_uuid}"},
+    )
 
     doctor = (
         await db.execute(
@@ -498,6 +734,7 @@ async def delete_date_schedule(
     doctor_id: str,
     date_str: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: CurrentUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
@@ -545,6 +782,12 @@ async def delete_date_schedule(
     await db.delete(row)
     await db.commit()
     await invalidate_clinic_cache(branch_uuid)
+    background_tasks.add_task(
+        _sync_date_schedule_range_events,
+        branch_uuid,
+        doctor_uuid,
+        [target_date],
+    )
     request.state.audit_resource_id = row_id
     request.state.audit_user_id = current_user.user_id
     request.state.audit_branch_id = branch_id

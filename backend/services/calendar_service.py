@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 from datetime import date as _date
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import structlog
 from google.oauth2 import service_account
@@ -45,6 +47,7 @@ WEEKDAY_TO_RFC5545: dict[int, str] = {
 }
 
 _SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+_DATE_SCHEDULE_PROPERTY = "vachanam_schedule"
 
 
 class CalendarNotConfiguredError(Exception):
@@ -397,6 +400,178 @@ class GoogleCalendarService:
                 calendar_id=calendar_id, error=str(exc),
             )
             raise CalendarWriteFailed(str(exc)) from exc
+
+    async def replace_date_schedule_events(
+        self,
+        *,
+        calendar_id: str,
+        branch_id: object,
+        doctor_id: object,
+        target_date: _date,
+        doctor_name: str,
+        windows: list[tuple[time, time]],
+        timezone_name: str = "Asia/Kolkata",
+        cleanup_legacy: bool = False,
+    ) -> int:
+        """Make one doctor's exact-date calendar blocks match ``windows``.
+
+        Stable event IDs and a private projection tag make republishing
+        idempotent across retries and concurrent background tasks. Old managed
+        blocks are removed only after every desired block has been upserted, so
+        a partial provider failure preserves the prior projection.
+        """
+        projection_key = f"{branch_id}|{doctor_id}|{target_date.isoformat()}"
+        summary = f"Dr {doctor_name} — clinic hours"
+        tz = ZoneInfo(timezone_name)
+        day_start = datetime.combine(target_date, time.min, tzinfo=tz)
+        day_end = day_start + timedelta(days=1)
+
+        existing: list[dict] = []
+        page_token = None
+        try:
+            while True:
+                response = await asyncio.to_thread(
+                    lambda token=page_token: self._service.events()
+                    .list(
+                        calendarId=calendar_id,
+                        timeMin=day_start.isoformat(),
+                        timeMax=day_end.isoformat(),
+                        singleEvents=True,
+                        # Include tombstones so a previously removed stable ID
+                        # can be restored if the same hours are published again.
+                        showDeleted=True,
+                        maxResults=2500,
+                        pageToken=token,
+                    )
+                    .execute()
+                )
+                existing.extend(response.get("items", []))
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break
+        except Exception as exc:
+            logger.error(
+                "calendar_date_schedule_list_failed",
+                calendar_id=calendar_id,
+                doctor_id=str(doctor_id),
+                date=target_date.isoformat(),
+                error=str(exc)[:200],
+            )
+            raise CalendarWriteFailed(str(exc)) from exc
+
+        managed: dict[str, dict] = {}
+        for event in existing:
+            event_id = event.get("id")
+            private = (
+                (event.get("extendedProperties") or {}).get("private") or {}
+            )
+            tagged = private.get(_DATE_SCHEDULE_PROPERTY) == projection_key
+            # Before projection tags existed, this exact one-off summary was
+            # the only marker. Restrict cleanup to non-recurring events starting
+            # on this date so another doctor's/manual/recurring block is safe.
+            legacy = (
+                cleanup_legacy
+                and event.get("summary") == summary
+                and event.get("description", "") == ""
+                and not event.get("recurrence")
+                and not event.get("recurringEventId")
+                and ((event.get("start") or {}).get("dateTime") or "")[:10]
+                == target_date.isoformat()
+            )
+            if event_id and (tagged or legacy):
+                managed[event_id] = event
+
+        desired: dict[str, dict] = {}
+        for start, end in windows:
+            if start >= end:
+                continue
+            digest = hashlib.sha256(
+                f"{projection_key}|{start.isoformat()}|{end.isoformat()}".encode()
+            ).hexdigest()[:40]
+            event_id = f"v{digest}"
+            desired[event_id] = {
+                "id": event_id,
+                "status": "confirmed",
+                "summary": summary,
+                "description": "",
+                "start": {
+                    "dateTime": datetime.combine(target_date, start).isoformat(),
+                    "timeZone": timezone_name,
+                },
+                "end": {
+                    "dateTime": datetime.combine(target_date, end).isoformat(),
+                    "timeZone": timezone_name,
+                },
+                "extendedProperties": {
+                    "private": {_DATE_SCHEDULE_PROPERTY: projection_key}
+                },
+            }
+
+        try:
+            for event_id, body in desired.items():
+                if event_id in managed:
+                    patch_body = {key: value for key, value in body.items() if key != "id"}
+                    await asyncio.to_thread(
+                        lambda eid=event_id, payload=patch_body: self._service.events()
+                        .patch(
+                            calendarId=calendar_id,
+                            eventId=eid,
+                            body=payload,
+                        )
+                        .execute()
+                    )
+                    continue
+                try:
+                    await asyncio.to_thread(
+                        lambda payload=body: self._service.events()
+                        .insert(calendarId=calendar_id, body=payload)
+                        .execute()
+                    )
+                except HttpError as exc:
+                    if getattr(exc.resp, "status", None) != 409:
+                        raise
+                    # A concurrent projection inserted the same deterministic
+                    # event after our list. Patch it to the current truth.
+                    patch_body = {key: value for key, value in body.items() if key != "id"}
+                    await asyncio.to_thread(
+                        lambda eid=event_id, payload=patch_body: self._service.events()
+                        .patch(
+                            calendarId=calendar_id,
+                            eventId=eid,
+                            body=payload,
+                        )
+                        .execute()
+                    )
+        except Exception as exc:
+            logger.error(
+                "calendar_date_schedule_write_failed",
+                calendar_id=calendar_id,
+                doctor_id=str(doctor_id),
+                date=target_date.isoformat(),
+                error=str(exc)[:200],
+            )
+            raise CalendarWriteFailed(str(exc)) from exc
+
+        for stale_id in managed.keys() - desired.keys():
+            if managed[stale_id].get("status") == "cancelled":
+                continue
+            try:
+                await self.delete_event(calendar_id, stale_id)
+            except Exception as exc:  # noqa: BLE001 - next projection retries cleanup
+                logger.warning(
+                    "calendar_date_schedule_cleanup_failed",
+                    calendar_id=calendar_id,
+                    event_id=stale_id,
+                    error=str(exc)[:160],
+                )
+        logger.info(
+            "calendar_date_schedule_replaced",
+            calendar_id=calendar_id,
+            doctor_id=str(doctor_id),
+            date=target_date.isoformat(),
+            events=len(desired),
+        )
+        return len(desired)
 
     # ── SHARED HELPERS ────────────────────────────────────────────────────────
 

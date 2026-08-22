@@ -93,21 +93,18 @@ def test_a_negative_instruction_never_authorizes():
 
 # ── the blocked path must ASK, never lecture ───────────────────────────────
 
-def test_the_block_message_drives_a_question_and_forbids_narrating_the_rule():
-    """The caller heard "you haven't explicitly told to book appointment,
-    without that i can't book". The tool error is what the model paraphrases,
-    so it must instruct the ASK and ban the excuse."""
+def test_the_server_builds_and_verifies_the_booking_question():
+    """The question is deterministic and arms consent only after playout."""
     import inspect
 
-    from agent.livekit_minimal import agent as agent_mod
+    from agent.livekit_minimal.agent import VachanamAgent
 
-    src = inspect.getsource(agent_mod)
-    block = src[src.index("Not authorized YET"):][:600]
-    assert "Ask exactly one short question now" in block
-    assert "Shall I book it?" in block
-    assert "Do NOT tell the caller anything about permission or rules" in block
-    assert "call confirm_booking again immediately" in block
-    # The wording that produced the refusal must be gone for good.
+    src = inspect.getsource(VachanamAgent.confirm_booking)
+    assert "build_booking_confirmation_question" in src
+    assert "wait_for_playout" in src
+    assert "booking_confirmation_snapshot = snapshot" in src
+    assert 'pending_confirmation = "book"' in src
+    assert "booking_confirmation_playout_interrupted" in src
     assert "Wait for an explicit booking request" not in src
 
 
@@ -125,16 +122,13 @@ def test_cancel_and_reschedule_carry_the_same_fix():
     Cancel keeps the ask because it is destructive."""
     import inspect
 
-    from agent.livekit_minimal import agent as agent_mod
+    from agent.livekit_minimal.agent import VachanamAgent
 
-    src = inspect.getsource(agent_mod)
-    assert "Shall I cancel it?" in src, "cancel must still ask, not refuse"
-    assert "Shall I move it?" not in src, \
-        "reschedule must not ask for confirmation at all"
-    for dead in (
-        "Answer availability only and wait for explicit confirmation",
-        "Do not call cancel_booking until they explicitly request it",
-    ):
-        assert dead not in src, f"refuse-instead-of-ask wording survived: {dead}"
-    assert src.count("Not authorized YET") == 2, \
-        "book and cancel must ask rather than refuse; reschedule must not ask"
+    cancel = inspect.getsource(VachanamAgent.cancel_booking)
+    reschedule = inspect.getsource(VachanamAgent.reschedule_booking)
+    assert "build_cancellation_confirmation_question" in cancel
+    assert "wait_for_playout" in cancel
+    assert "cancellation_confirmation_snapshot" in cancel
+    assert 'pending_confirmation = "cancel"' in cancel
+    assert "build_cancellation_confirmation_question" not in reschedule
+    assert "NO CONFIRMATION QUESTION AT ALL" in reschedule

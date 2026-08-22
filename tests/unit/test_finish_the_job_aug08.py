@@ -21,10 +21,11 @@ resting only on utterance recognition would have shipped with the same Telugu
 blind spot that caused the bug it is meant to prevent.
 """
 import inspect
+from types import SimpleNamespace
 
 import pytest
 
-from agent.livekit_minimal.agent import VachanamAgent
+from agent.livekit_minimal.agent import VachanamAgent, _tracks_mutation
 from agent.session_state import SessionState
 
 check = VachanamAgent._check_end_allowed
@@ -109,39 +110,32 @@ SRC = inspect.getsource(VachanamAgent)
 ])
 def test_each_mutation_marks_itself_underway(tool, value):
     src = inspect.getsource(getattr(VachanamAgent, tool))
-    assert f'mutation_in_flight = "{value}"' in src, (
+    assert f"@_tracks_mutation('{value}')" in src, (
         f"{tool} never marks itself in flight, so the call can end in the "
         f"middle of it"
     )
 
 
-@pytest.mark.parametrize("tool,worker", [
-    ("confirm_booking", None),
-    ("reschedule_booking", "_do_reschedule"),
-    ("cancel_booking", "_do_cancel"),
-])
-def test_each_mutation_clears_the_flag_when_it_succeeds(tool, worker):
-    """A flag that is never cleared is an outage: the agent could never hang up
-    again for the rest of the call.
+@pytest.mark.asyncio
+async def test_mutation_tracker_restores_the_previous_flag_on_every_exit():
+    """In-flight describes an executing coroutine, not a sticky retry intent."""
+    target = SimpleNamespace(_state=SimpleNamespace(mutation_in_flight="outer"))
+    observed = []
 
-    Reschedule and cancel do the write in a private worker, so the clear lives
-    there — beside the caller_asked_to_* consent-spend that older tests already
-    pin to the success path."""
-    src = inspect.getsource(getattr(VachanamAgent, worker or tool))
-    assert "mutation_in_flight = None" in src, f"{worker or tool} leaves it set"
-    # On the SUCCESS path specifically: right where consent is spent. Anchored
-    # on the ASSIGNMENT — confirm_booking also READS caller_asked_to_book near
-    # the top as part of its authorization test, hundreds of lines earlier.
-    import re
+    @_tracks_mutation("book")
+    async def operation(self, fail=False):
+        observed.append(self._state.mutation_in_flight)
+        if fail:
+            raise RuntimeError("write failed")
 
-    m = re.search(r"caller_asked_to_\w+ = False", src)
-    assert m, f"{worker or tool} no longer spends consent on success"
-    spend = m.start()
-    clear = src.index("mutation_in_flight = None")
-    assert abs(clear - spend) < 400, (
-        f"{worker or tool} clears the flag somewhere other than the success "
-        f"path — a failed write must stay in flight"
-    )
+    await operation(target)
+    assert observed == ["book"]
+    assert target._state.mutation_in_flight == "outer"
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        await operation(target, fail=True)
+    assert observed == ["book", "book"]
+    assert target._state.mutation_in_flight == "outer"
 
 
 def test_the_flag_is_marked_after_the_authorization_gate():
@@ -154,7 +148,9 @@ def test_the_flag_is_marked_after_the_authorization_gate():
 def test_a_refusal_clears_the_in_flight_flag_too():
     """Otherwise "no, leave it" would hold the line open for cancelled work."""
     turn = inspect.getsource(VachanamAgent.on_user_turn_completed)
-    refusal = turn.split("_caller_refused_outright")[1].split("else:")[0]
+    refusal = turn.split(
+        "declined_turn = _caller_refused_outright(utterance)", 1
+    )[1].split("else:", 1)[0]
     assert "mutation_in_flight = None" in refusal
 
 

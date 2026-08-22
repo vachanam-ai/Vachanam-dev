@@ -15,8 +15,6 @@ Sensitive data: DID and phone number values in assertions use obviously-fake tes
 values — never real credentials.
 """
 
-import os
-import sys
 import pytest
 
 from sqlalchemy import func, select
@@ -115,66 +113,15 @@ async def test_seed_phase1_idempotent(db):
 
 
 @pytest.mark.asyncio
-async def test_seed_phase1_missing_did_exits_cleanly(tmp_path):
-    """When VOBIZ_DID_NUMBER is absent from both env and .env, the script must
-    exit with code 1 and a clear error message — not raise an unhandled exception.
+async def test_seed_phase1_missing_did_exits_cleanly(monkeypatch, capsys):
+    """The CLI guard exits clearly before opening a database session."""
+    from scripts import seed_phase1
 
-    Strategy: write a minimal .env file (without VOBIZ_DID_NUMBER) to a tmp dir,
-    then run the seed script as a subprocess pointing at that tmp dir as the repo
-    root. This bypasses load_dotenv reading the real .env which does have the var.
-    """
-    import subprocess
+    monkeypatch.setattr(seed_phase1, "_VOBIZ_DID_NUMBER", "")
+    monkeypatch.setattr(seed_phase1, "_ADMIN_PHONE", "+919000000001")
 
-    # Write a minimal .env that has DATABASE_URL and other required vars but
-    # deliberately omits VOBIZ_DID_NUMBER.
-    fake_env_file = tmp_path / ".env"
-    # These values let the script load settings without hitting unrelated errors,
-    # but VOBIZ_DID_NUMBER is absent so the guard fires before any DB query.
-    fake_env_file.write_text(
-        "DATABASE_URL=postgresql+asyncpg://vachanam:localdev123@localhost:5432/vachanam_dev\n"
-        "REDIS_URL=redis://localhost:6379\n"
-        "JWT_SECRET=fakesecretfortestonly\n"
-        "SARVAM_API_KEY=fake\n"
-        "OPENAI_API_KEY=fake\n"
-        "GEMINI_API_KEY=fake\n"
-        "ADMIN_PHONE=+919000000001\n"
-        # VOBIZ_DID_NUMBER intentionally absent
-    )
+    with pytest.raises(SystemExit) as exc:
+        seed_phase1._require_cli_env()
 
-    # Copy scripts/ directory into tmp_path so the subprocess can find seed_phase1.py
-    import shutil
-
-    repo_root = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
-    shutil.copytree(
-        os.path.join(repo_root, "scripts"),
-        str(tmp_path / "scripts"),
-    )
-    # Copy backend/ so imports resolve
-    shutil.copytree(
-        os.path.join(repo_root, "backend"),
-        str(tmp_path / "backend"),
-    )
-
-    # Run from tmp_path so load_dotenv finds the fake .env (not the real one)
-    env = os.environ.copy()
-    env.pop("VOBIZ_DID_NUMBER", None)  # Belt-and-suspenders: remove from proc env too
-
-    result = subprocess.run(
-        [sys.executable, "scripts/seed_phase1.py"],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(tmp_path),
-    )
-
-    assert result.returncode != 0, (
-        f"Expected non-zero exit when VOBIZ_DID_NUMBER is missing, got 0. "
-        f"stdout: {result.stdout!r}  stderr: {result.stderr!r}"
-    )
-    # The error message must clearly name the missing variable
-    assert "VOBIZ_DID_NUMBER" in result.stderr, (
-        f"Expected 'VOBIZ_DID_NUMBER' in stderr error message. "
-        f"Got: {result.stderr!r}"
-    )
+    assert exc.value.code == 1
+    assert "VOBIZ_DID_NUMBER" in capsys.readouterr().err

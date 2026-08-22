@@ -45,9 +45,19 @@ async def test_stale_zero_duration_call_is_finalized(branch, db):
     done = CallLog(branch_id=branch.id, call_type="inbound", answered=True,
                    started_at=now - timedelta(hours=3), duration_seconds=100,
                    booking_made=True)
-    db.add_all([stale, recent, done])
+    provider_unanswered = CallLog(
+        branch_id=branch.id,
+        call_type="outbound",
+        answered=False,
+        started_at=now - timedelta(hours=3),
+        duration_seconds=0,
+        booking_made=False,
+        provider_call_id=f"provider-{uuid.uuid4().hex}",
+    )
+    db.add_all([stale, recent, done, provider_unanswered])
     await db.commit()
     stale_id, recent_id, done_id = stale.id, recent.id, done.id
+    provider_unanswered_id = provider_unanswered.id
     bid = branch.id  # capture before expire (avoid sync lazy-load on async session)
 
     await run_finalize_stale_calls()
@@ -59,6 +69,7 @@ async def test_stale_zero_duration_call_is_finalized(branch, db):
             await db.execute(select(CallLog).where(CallLog.branch_id == bid))
         ).scalars().all()
     }
+    assert rows[provider_unanswered_id].duration_seconds == 0
     assert rows[stale_id].duration_seconds == 180   # finalized to 3-min estimate
     assert rows[recent_id].duration_seconds == 0    # still live — untouched
     assert rows[done_id].duration_seconds == 100    # already finalized — untouched

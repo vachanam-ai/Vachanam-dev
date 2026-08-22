@@ -26,9 +26,12 @@ def test_dispatch_metadata_contains_no_patient_pii():
         ("backend.jobs.question_callback_caller", "_dispatch"),
     )
     forbidden = {"phone_number", "patient_name", "patient_phone", "message"}
+    required_claim = {"outbound_lock_key", "outbound_lock_owner"}
     for module_name, function_name in cases:
         function = getattr(importlib.import_module(module_name), function_name)
-        assert _dict_keys(function).isdisjoint(forbidden), module_name
+        keys = _dict_keys(function)
+        assert keys.isdisjoint(forbidden), module_name
+        assert required_claim <= keys, module_name
 
 
 def test_worker_hydrates_every_outbound_type_from_branch_scoped_ids():
@@ -43,3 +46,14 @@ def test_worker_hydrates_every_outbound_type_from_branch_scoped_ids():
     assert "Token.branch_id == branch_id" in source
     assert "FollowupTask.branch_id == branch_id" in source
     assert "question.branch_id != branch_id" in source
+
+
+def test_worker_consumes_claim_before_hydration_and_releases_on_shutdown():
+    source = inspect.getsource(agent_mod.entrypoint)
+    consumed = source.index('meta.pop("outbound_lock_key"')
+    hydrated = source.index("meta = await _hydrate_outbound_meta(meta)")
+    registered = source.index("ctx.add_shutdown_callback(_finish_worker_outbound_claim)")
+
+    assert consumed < registered < hydrated
+    assert "maintain_outbound_claim" in source
+    assert "finish_outbound_claim" in source

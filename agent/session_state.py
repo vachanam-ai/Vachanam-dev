@@ -16,6 +16,10 @@ class SessionState:
     # routing, never by an LLM-authored tool argument.
     caller_named_doctor_id: UUID | None = None
     patient_name: str | None = None
+    # Exact name the caller introduced for the patient in this call. This is
+    # independent of an LLM tool argument and prevents "Asha" becoming "Usha"
+    # at the booking boundary.
+    caller_patient_name: str | None = None
     patient_phone: str | None = None
     complaint: str | None = None
 
@@ -43,6 +47,17 @@ class SessionState:
     # delivery promise was actually backed by a recorded row.
     message_taken: bool = False
     question_logged: bool = False
+    # Exact failed booking request offered as a clinic message. It is armed
+    # only after a verified booking/calendar non-result; a following caller
+    # yes lets take_message persist this server-bound snapshot rather than a
+    # model paraphrase. Cleared on use or refusal.
+    pending_clinic_message: str | None = None
+    # Most recent caller-authored clinic question/message candidate.  This is
+    # deliberately separate from the model's tool argument: if the agent
+    # restates the content and the caller answers "yes", the durable write can
+    # still use the caller's exact words instead of accepting a model rewrite.
+    relay_snapshot_text: str | None = None
+    relay_snapshot_kind: str | None = None  # "question" | "message" | "content"
 
     token_redis_key: str | None = None
     token_number: int | None = None
@@ -105,6 +120,47 @@ class SessionState:
     # finished. The two are kept together on purpose, one catching intent
     # stated before any tool ran, the other catching work already underway.
     mutation_in_flight: str | None = None
+    # Exact deterministic mutation acknowledgement most recently derived from
+    # a committed database result.  The final TTS firewall permits a success
+    # claim only when the complete utterance equals this receipt; model-authored
+    # paraphrases never inherit trust from a prior write.
+    verified_mutation_speech: str | None = None
+    verified_mutation_action: str | None = None
+    # One-use receipts already spoken during this call. Retaining their compact
+    # keys prevents an exact old acknowledgement from being replayed later.
+    consumed_mutation_receipts: dict[str, str] = field(default_factory=dict)
+    # Read-only booking lookup currently executing. Caller probes such as
+    # "hello?" must not supersede and discard its eventual database answer.
+    booking_lookup_in_flight: bool = False
+    booking_lookup_utterance: str | None = None
+    read_in_flight_count: int = 0
+    read_owed_utterance: str | None = None
+    # Set from the finalized caller turn before Gemini runs.  This closes the
+    # tool-omission path: mutable appointment/availability/queue assertions are
+    # held at TTS even when the model never calls the required read tool.
+    # Clarification questions remain allowed until a read actually returns.
+    mutable_read_intent: str | None = None
+    mutable_read_utterance: str | None = None
+    # A successful tool return still owes patient-facing speech. Keep this
+    # armed until a safe TTS chunk leaves the final boundary; otherwise an
+    # empty post-tool model response turns into "hello, are you there?".
+    read_answer_owed: bool = False
+    # Exact deterministic read speech (lookup/FAQ/schedule) may contain Latin
+    # patient/doctor entities inside an Indic sentence. It is trusted only for
+    # one exact TTS occurrence, then cleared.
+    verified_read_speech: str | None = None
+    consumed_read_receipts: set[str] = field(default_factory=set)
+    # Stable server-result facts that a model-rendered read answer must contain
+    # before it can settle the owed-answer latch.
+    read_result_evidence: tuple[str, ...] = ()
+    read_fallback_task: object | None = field(
+        default=None, repr=False, compare=False
+    )
+    # A direct timeout/dependency failure already gave this caller turn its
+    # terminal answer. Keep the final TTS boundary closed to any model output
+    # that finishes late; the next committed caller turn clears this latch.
+    read_terminal_failure_armed: bool = False
+    read_terminal_failure_delivered: bool = False
     # `time.monotonic()` of the last moment the CALLER started speaking. 0.0 =
     # they have not spoken yet.
     #
@@ -124,6 +180,42 @@ class SessionState:
     # this id instead of trusting an older/arbitrary id selected by the LLM.
     last_confirmed_token_id: UUID | None = None
     appointment_time: str | None = None  # "HH:MM" for appointment-type
+    # Latest date/time selected by the caller for a new booking. A bare
+    # one-to-eleven clock deliberately keeps both AM/PM candidates until the
+    # exact spoken confirmation narrows it; model/tool arguments are never the
+    # source of these receipts.
+    caller_booking_times: tuple[str, ...] = ()
+    caller_booking_date: str | None = None
+    # Backward-compatible exact-time mirror used by older tests/call paths.
+    # New mutation guards use ``caller_booking_times``.
+    caller_booking_time: str | None = None
+    # Rescheduling has a separate destination receipt so "move it to five"
+    # cannot be rewritten by the model as six, and cannot overwrite a separate
+    # in-progress new-family booking.
+    caller_reschedule_times: tuple[str, ...] = ()
+    caller_reschedule_date: str | None = None
+    # Date/time identifying the existing appointment the caller referred to
+    # (for example "cancel the five PM appointment").
+    caller_existing_times: tuple[str, ...] = ()
+    caller_existing_date: str | None = None
+    # A booking request is not the final write authorization. This latch is
+    # armed only after the receptionist audibly asks the one complete booking
+    # confirmation question and the caller affirmatively answers it.
+    booking_confirmation_granted: bool = False
+    cancellation_confirmation_granted: bool = False
+    # A guard demanding a question is not proof the caller heard one. These
+    # server-built snapshots are armed only when the deterministic question is
+    # queued to TTS, then spent by the immediately following affirmative turn.
+    booking_confirmation_snapshot: dict[str, object] = field(
+        default_factory=dict
+    )
+    cancellation_confirmation_snapshot: dict[str, str | None] = field(
+        default_factory=dict
+    )
+    # Exact identity-scoped rows most recently returned by find_my_bookings.
+    # Cancel/reschedule must choose from this ledger; a model-invented UUID is
+    # never a mutation target.
+    verified_booking_choices: dict[str, dict] = field(default_factory=dict)
     # Exact stale-id recovery inside this call: old token id -> its current
     # replacement. Never guess by picking an arbitrary later appointment.
     booking_replacements: dict[str, str] = field(default_factory=dict)
@@ -178,6 +270,10 @@ class SessionState:
     # call start; updated by the switch_language tool; confirm_booking persists
     # it on a patient row created later in the same call.
     preferred_language: str | None = None
+    # An explicit request ("English please", "Hindi mein baat karo") locks the
+    # call to that language. Soniox may transcribe borrowed words or a sentence
+    # in another script; that is content, not permission to undo the choice.
+    explicit_language_lock: str | None = None
     # Language switching is an infrastructure decision. Native scripts are
     # unambiguous in one turn; English needs two clear, complete turns so a few
     # borrowed words do not flip a Telugu/Hindi call. The streak is shared

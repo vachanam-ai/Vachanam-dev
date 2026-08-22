@@ -114,7 +114,7 @@ def _src(name):
 ])
 def test_each_guard_arms_its_flag_before_demanding_the_question(tool, kind):
     src = _src(tool)
-    assert f"pending_confirmation = '{kind}'" in src, (
+    assert f'pending_confirmation = "{kind}"' in src, (
         f"{tool} demands a confirmation question but never arms the flag, so "
         f"the caller's yes can never authorize it — that IS the loop"
     )

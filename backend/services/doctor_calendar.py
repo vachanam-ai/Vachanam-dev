@@ -97,6 +97,35 @@ def doctor_windows(doctor) -> list[tuple[time, time, list[int]]]:
 
 
 async def sync_date_schedule_events(db, branch_id, doctor_id, target_date) -> int:
+    """Serialize projection per doctor/date, then read the latest DB truth."""
+    from sqlalchemy import text
+
+    key = f"calendar-schedule:{branch_id}:{doctor_id}:{target_date}"
+    await db.execute(
+        text("SELECT pg_advisory_lock(hashtextextended(:k, 0))"), {"k": key}
+    )
+    try:
+        return await _sync_date_schedule_events_unlocked(
+            db, branch_id, doctor_id, target_date
+        )
+    finally:
+        try:
+            await db.execute(
+                text("SELECT pg_advisory_unlock(hashtextextended(:k, 0))"),
+                {"k": key},
+            )
+        except Exception as exc:  # noqa: BLE001 - connection close is the backstop
+            logger.warning(
+                "date_schedule_projection_unlock_failed",
+                doctor_id=str(doctor_id),
+                date=str(target_date),
+                error=str(exc)[:150],
+            )
+
+
+async def _sync_date_schedule_events_unlocked(
+    db, branch_id, doctor_id, target_date
+) -> int:
     """Publish ONE published date's sessions as one-off calendar events.
 
     Date-specific schedules are the case the weekly RRULE cannot cover: a
@@ -106,9 +135,7 @@ async def sync_date_schedule_events(db, branch_id, doctor_id, target_date) -> in
     Returns how many events were written. Best-effort by contract — the caller
     has already committed the schedule, and a calendar outage must not undo it.
     """
-    from datetime import datetime
-
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from backend.models.schema import Branch, Doctor, DoctorDateSchedule
     from backend.services.calendar_service import GoogleCalendarService
@@ -134,30 +161,37 @@ async def sync_date_schedule_events(db, branch_id, doctor_id, target_date) -> in
             )
         )
     ).scalar_one_or_none()
-    if row is None:
-        return 0
-
+    matching_active_doctors = (
+        await db.execute(
+            select(func.count(Doctor.id))
+            .select_from(Doctor)
+            .join(Branch, Branch.id == Doctor.branch_id)
+            .where(
+                Branch.google_calendar_id == branch.google_calendar_id,
+                Branch.status == "active",
+                Doctor.status == "active",
+                Doctor.name == doctor.name,
+            )
+        )
+    ).scalar_one()
     svc = GoogleCalendarService()
-    written = 0
-    for session in row.sessions or []:
+    windows = []
+    for session in (row.sessions if row is not None else []) or []:
         start = _parse((session or {}).get("start"))
         end = _parse((session or {}).get("end"))
         if start is None or end is None or start >= end:
             continue
-        try:
-            await svc.create_timed_event(
-                calendar_id=branch.google_calendar_id,
-                summary=f"Dr {doctor.name} — clinic hours",
-                start_dt=datetime.combine(target_date, start),
-                end_dt=datetime.combine(target_date, end),
-                timezone_name=branch.timezone or "Asia/Kolkata",
-            )
-            written += 1
-        except Exception as exc:  # noqa: BLE001 — one bad session is not fatal
-            logger.warning(
-                "date_schedule_event_failed",
-                doctor_id=str(doctor_id), error=str(exc)[:150],
-            )
+        windows.append((start, end))
+    written = await svc.replace_date_schedule_events(
+        calendar_id=branch.google_calendar_id,
+        branch_id=branch_id,
+        doctor_id=doctor_id,
+        target_date=target_date,
+        doctor_name=doctor.name,
+        windows=windows,
+        timezone_name=branch.timezone or "Asia/Kolkata",
+        cleanup_legacy=matching_active_doctors == 1,
+    )
     logger.info(
         "date_schedule_events_published",
         doctor_id=str(doctor_id), date=str(target_date), events=written,

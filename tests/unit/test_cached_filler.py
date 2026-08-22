@@ -111,6 +111,11 @@ async def test_soniox_filler_cache_preserves_long_pause(monkeypatch):
         captured.extend(texts)
         return [_make_wav() for _ in texts]
 
+    ag._FILLER_CLIP_CACHE.clear()
+    async def _cache_miss(_key):
+        return None
+
+    monkeypatch.setattr(ag, "_greeting_cache_get", _cache_miss)
     monkeypatch.setattr(ag, "synth_wavs", _fake_synth)
     await ag.cache_filler_clips(
         sess, ud["wait_fillers"], "Priya", "te", key="wait_clips"

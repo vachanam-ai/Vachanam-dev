@@ -105,6 +105,13 @@ async def run_cascade_rebook_calls() -> None:
                     task_id=str(task.id),
                 )
                 continue
+            result = await _dispatch_rebook_call(
+                task, patient, doctor, token, branch, outbound_trunk_id
+            )
+            if result is None:
+                # No patient attempt occurred (for example, another clinic is
+                # already using this handset). Preserve its entire retry budget.
+                continue
             task.attempt_count += 1
             task.scheduled_at = now + timedelta(minutes=RETRY_BACKOFF_MIN)
             if task.attempt_count >= task.max_attempts:
@@ -114,9 +121,6 @@ async def run_cascade_rebook_calls() -> None:
             else:
                 task.status = "in_progress"
             await db.commit()
-            await _dispatch_rebook_call(
-                task, patient, doctor, token, branch, outbound_trunk_id
-            )
 
         # #299: park until the next cascade task is actually due (retry backoff
         # included), so idle ticks never touch Postgres.
@@ -125,7 +129,7 @@ async def run_cascade_rebook_calls() -> None:
 
 async def _dispatch_rebook_call(
     task, patient, doctor, token, branch, outbound_trunk_id
-) -> None:
+) -> bool | None:
     try:
         outbound_trunk_id = validate_branch_outbound_trunk(
             branch, outbound_trunk_id
@@ -136,20 +140,22 @@ async def _dispatch_rebook_call(
             branch_id=str(branch.id),
             task_id=str(task.id),
         )
-        return
+        return None
 
     # One outbound call per patient at a time across every dialing job — a
     # rebook landing in the same minute as a reminder rang the patient twice
     # (Vinay 2026-08-08). Skipping leaves the task queued for the next tick.
     from backend.services.outbound_guard import (
         claim_outbound_call,
+        lock_key,
         release_outbound_call,
     )
 
-    if not await claim_outbound_call(
+    outbound_claim = await claim_outbound_call(
         getattr(patient, "phone", None), "rebook", branch.id
-    ):
-        return
+    )
+    if not outbound_claim:
+        return None
     try:
         from livekit import api as lk_api
 
@@ -169,6 +175,8 @@ async def _dispatch_rebook_call(
                             "branch_id": str(task.branch_id),
                             "outbound_trunk_id": outbound_trunk_id,
                             "followup_task_id": str(task.id),
+                            "outbound_lock_key": lock_key(patient.phone),
+                            "outbound_lock_owner": outbound_claim,
                         }
                     ),
                 )
@@ -178,16 +186,30 @@ async def _dispatch_rebook_call(
             # via attempt_count regardless of this dispatch's fate.
             from backend.services.dispatch_verify import verify_or_cleanup
 
-            await verify_or_cleanup(lkapi, room, f"cascade:{task.id}")
+            if not await verify_or_cleanup(lkapi, room, f"cascade:{task.id}"):
+                await release_outbound_call(
+                    getattr(patient, "phone", None), outbound_claim, branch.id
+                )
+                return False
             logger.info(
                 "cascade_rebook_call_dispatched",
                 branch_id=str(task.branch_id),
                 task_id=str(task.id),
-                attempt=task.attempt_count,
+                attempt=int(task.attempt_count or 0) + 1,
                 patient_phone=patient.phone[-4:],
             )
+            return True
         finally:
-            await lkapi.aclose()
+            try:
+                await lkapi.aclose()
+            except Exception as close_exc:  # noqa: BLE001 - handoff truth is authoritative
+                logger.warning(
+                    "cascade_rebook_livekit_close_failed",
+                    error=str(close_exc)[:160],
+                )
     except Exception as e:
         logger.error("cascade_rebook_dispatch_failed", task_id=str(task.id), error=str(e))
-        await release_outbound_call(getattr(patient, "phone", None), branch.id)
+        await release_outbound_call(
+            getattr(patient, "phone", None), outbound_claim, branch.id
+        )
+        return False

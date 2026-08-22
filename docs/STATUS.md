@@ -1,5 +1,41 @@
 # Vachanam — Status (single source of truth)
 
+> **2026-08-22 - VOICE SAFETY + RANGE-SCHEDULE RELEASE CANDIDATE; RELEASE GATES GREEN, DEPLOYMENT PENDING.**
+> The first-clinic failure modes are now guarded in code as well as in one
+> ordered prompt contract. Booking, reschedule, cancellation, clinic-message,
+> and clinic-question success may be spoken only from the matching successful
+> server result and one-use receipt. A disconnected or failed calendar for a
+> time-slot doctor fails closed: no appointment is claimed, booking is described
+> as temporarily unavailable, and the caller is offered exact-message logging.
+> Token-queue booking does not require Google Calendar and may announce only the
+> token returned by a successful write.
+>
+> Explicit language requests create a durable lock across English, Telugu,
+> Hindi, Tamil, Kannada, Malayalam, Marathi, and Bengali. The final speech
+> boundary rejects wrong-language and mixed-language drift while preserving
+> names and normal clinic loanwords. Caller-provided doctor, patient name,
+> date/time, message text, question text, consent, and action targets are bound
+> outside model-authored tool arguments. Read operations now track whether an
+> answer is still owed, time out deterministically, require result evidence
+> before settling, and suppress the idle "hello/are you there" path while the
+> answer is pending.
+>
+> The exact-date schedule UI now publishes one set of sessions over an inclusive
+> From/To range of at most 31 dates. The backend validates and locks every date,
+> then commits the range once; a leave or confirmed-booking conflict returns the
+> exact blocked dates and changes none of them. No schema migration is required.
+>
+> Deterministic offline adversarial and focused regression coverage now exercises
+> production stream chunking, fake mutation claims, stale receipts, all-language
+> switching/drift, ambiguous caller times, calendar disconnect, message privacy,
+> and read-liveness. These tests use no clinic call minutes and do not constitute
+> a live-call or production proof. Final evidence: 3,241 unit tests passed;
+> 209 security tests passed with one intentional skip; 97 frontend tests passed;
+> the frontend production build transformed 4,731 modules; Ruff and diff checks
+> are clean; and the canonical offline report passed 2,930/2,930 executions from
+> 1,436 semantic scenarios. Deployment and post-deploy health verification remain
+> pending. No billable clinic call was made for these gates.
+
 > **2026-08-16 — CLINIC-LAUNCH RELEASE CANDIDATE.**
 > Consolidated the production hardening work for booking, rescheduling,
 > cancellation, reminder/follow-up controls, patient CSV/XLSX import, Latin

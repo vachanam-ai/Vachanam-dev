@@ -97,24 +97,14 @@ def test_a_different_day_is_a_different_cache():
     assert _digest(a) != _digest(b)
 
 
-def test_recording_active_does_not_currently_reach_the_prompt():
-    """PINS A SEPARATE BUG, found by this file's own failure.
-
-    The warmer warms both recording variants on the assumption they differ.
-    They do not: `{recording}` appears in the template (grounded_prompt.py:967)
-    and `recording_active` is computed into it (line 793), yet the rendered
-    output is byte-identical either way — so the model is never told whether a
-    recording notice was spoken, and half the warmer's Vertex cache creations
-    are wasted.
-
-    Asserted as-is rather than "fixed" in passing: it is not the cache-miss
-    cause (identical strings cannot cause a miss) and changing prompt content
-    needs its own real-call validation. If this test starts failing, the
-    recording state has begun reaching the prompt — which is probably correct,
-    and at that point the warmer's two variants become meaningful."""
+def test_recording_variants_have_distinct_truthful_cache_entries():
+    """The prompt must know whether the deterministic notice already played,
+    otherwise it can repeat it or falsely imply that recording is active."""
     a = compose_clinic_instructions(**{**BASE, "recording_active": False})
     b = compose_clinic_instructions(**{**BASE, "recording_active": True})
-    assert _digest(a) == _digest(b)
+    assert _digest(a) != _digest(b)
+    assert "Recording is off" in a
+    assert "already delivered the recording notice" in b
 
 
 # ── and there must be exactly ONE of them ────────────────────────────────────

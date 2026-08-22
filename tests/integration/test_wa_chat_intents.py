@@ -267,7 +267,7 @@ async def test_book_intent_assigns_an_atomic_token(db, branch, wa_env, monkeypat
 
 
 async def test_book_intent_asks_for_missing_first_time_details(db, branch, wa_env, monkeypatch):
-    """No name/age extracted -> a friendly ask, never a crash, never a
+    """No name extracted -> a friendly ask, never a crash, never a
     silent 'WhatsApp Patient' record, and no token allocated for the refused
     attempt (assign_token's own hold is released by wa_booking.confirm)."""
     monkeypatch.setattr(wa_chat, "_call_gemini", _gemini({"intent": "book"}))
@@ -277,7 +277,7 @@ async def test_book_intent_asks_for_missing_first_time_details(db, branch, wa_en
     )
 
     assert await _token_count(db, branch) == 0
-    assert "name and age" in wa_env[-1].lower()
+    assert "name" in wa_env[-1].lower()
 
 
 # ── the ordering hazard: append AFTER confirm(), never inside it ────────────
@@ -301,8 +301,19 @@ async def test_calendar_failure_leaves_no_token_and_no_success_turn(
     persist a phantom booking even though confirm() itself rolled back."""
     from backend.services import wa_booking
 
+    doctor = (
+        await db.execute(select(Doctor).where(Doctor.branch_id == branch.id))
+    ).scalars().one()
+    doctor.booking_type = "appointment"
+    doctor.slot_duration_minutes = 15
+    await db.commit()
+
     monkeypatch.setattr(wa_booking, "_LazyGoogleCalendar", lambda: _RaisingCalendar())
-    monkeypatch.setattr(wa_chat, "_call_gemini", _gemini({"intent": "book"}))
+    monkeypatch.setattr(
+        wa_chat,
+        "_call_gemini",
+        _gemini({"intent": "book", "chosen_time": "10:00", "patient_name": "Ravi"}),
+    )
 
     await wa_chat.handle_text(
         db, branch, "wa", "919000000018", "book me an appointment tomorrow"

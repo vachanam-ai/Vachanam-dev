@@ -48,5 +48,5 @@ def test_prompt_handles_garbled_switch_requests():
         plan="clinic", language="te", faq=None,
     )
     assert "EXPLICIT SWITCH TRIGGER" in p
-    assert "TWO consecutive full utterances in another language" in p
+    assert "TWO consecutive complete utterances in the same other language" in p
     assert "Execute tool `switch_language(code)` IMMEDIATELY" in p

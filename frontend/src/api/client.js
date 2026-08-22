@@ -172,6 +172,9 @@ export const fetchDoctorSchedules = (branchId, doctorId, from, to) =>
 export const publishDoctorSchedule = (branchId, doctorId, date, payload) =>
   api.put(`/availability/${branchId}/${doctorId}/schedule/${date}`, payload)
     .then((r) => r.data);
+export const publishDoctorScheduleRange = (branchId, doctorId, payload) =>
+  api.put(`/availability/${branchId}/${doctorId}/schedule-range`, payload)
+    .then((r) => r.data);
 export const deleteDoctorSchedule = (branchId, doctorId, date) =>
   api.delete(`/availability/${branchId}/${doctorId}/schedule/${date}`);
 

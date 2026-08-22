@@ -73,8 +73,9 @@ def test_grounded_prompt_locks_exact_active_language(language):
 
 def test_prompt_requires_database_truth_before_availability_claims():
     prompt = _grounded('en')
-    assert 'Tools must run BEFORE stating dates, slots, fees, or status' in prompt
-    assert 'NEVER GUESS HOURS, SLOTS, OR DAYS' in prompt
+    flat = ' '.join(prompt.split())
+    assert 'Tools must run BEFORE stating live dates, slots, queue or action status' in flat
+    assert 'NEVER GUESS HOURS, SLOTS, OR DAYS' in flat
     assert 'never say available or unavailable before check_availability' in prompt
     assert 'Only confirm_booking may create or announce a booking' in prompt
     assert 'Availability questions are read-only' in prompt
@@ -106,10 +107,11 @@ def test_prompt_limits_scope_and_medical_advice():
 
 def test_prompt_encodes_booking_reschedule_cancel_workflows():
     prompt = _grounded('en')
-    assert 'CHECK EXISTING HOLDINGS' in prompt
+    assert 'NEVER call find_my_bookings merely because' in prompt
+    assert 'call verify_caller_identity silently' in prompt
     assert 'RESCHEDULE:' in prompt
     assert 'CANCEL:' in prompt
-    assert 'check availability tool' in prompt
+    assert 'check_availability' in prompt
     assert 'execute cancel' in prompt
 
 
@@ -134,22 +136,25 @@ def test_runtime_system_prompt_adds_exact_date_table():
     assert 'tomorrow ' in prompt
 
 
-def test_date_context_has_eight_consecutive_authoritative_rows():
+def test_date_context_has_five_weeks_of_authoritative_rows():
     now = datetime(2026, 8, 2, 9, 30, tzinfo=ZoneInfo('Asia/Kolkata'))
     context = build_date_context(now)
     assert 'Sunday = 2026-08-02' in context
     assert 'Monday = 2026-08-03' in context
     assert 'Sunday = 2026-08-09' in context
-    assert context.count('= 2026-') == 8
+    assert context.count('= 2026-') == 35
+    assert 'calculating or inventing an ISO date' in context
 
 
-def test_recording_notice_is_not_delegated_to_model_prompt():
+def test_recording_state_prevents_duplicate_or_false_notice_in_model_prompt():
     off = _grounded('te', recording_active=False)
     on = _grounded('te', recording_active=True)
-    # The deterministic greeting path owns the legal notice. The model prompt
-    # stays identical, which also prevents duplicate prompt-cache variants.
-    assert off == on
-    assert 'No recording notice spoken' in off
+    # The deterministic greeting path still owns the legal notice. The prompt
+    # receives only the true state so it cannot repeat a notice that was spoken
+    # or imply recording when it is off.
+    assert off != on
+    assert 'Recording is off, so no recording notice was spoken' in off
+    assert 'already delivered the recording notice; never repeat it' in on
 
 
 def test_missing_address_is_explicit_not_invented():

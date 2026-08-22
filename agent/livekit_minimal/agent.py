@@ -103,8 +103,22 @@ from agent.i18n.transliterate import (  # noqa: E402
     spoken_text,
 )
 from agent.livekit_minimal.confirm_speech import (  # noqa: E402
+    build_action_continue_text,
+    build_booking_failure_text,
+    build_booking_confirmation_question,
+    build_booking_unavailable_text,
+    build_booking_lookup_text,
+    build_cancellation_confirmation_question,
+    build_clinic_message_ack,
     build_clinic_question_ack,
     build_confirm_text,
+    build_mutation_failure_text,
+    build_no_booking_found_text,
+    build_read_failure_text,
+    build_relay_content_request_text,
+    build_transfer_failure_text,
+    _spoken_date as _receipt_spoken_date,
+    _spoken_time as _receipt_spoken_time,
 )
 from agent.prompts.system_prompt import (  # noqa: E402
     DoctorContext,
@@ -117,6 +131,11 @@ from agent.prompts.grounded_prompt import (  # noqa: E402
 # CalendarService (legacy-signature shim), NOT GoogleCalendarService —
 # booking_tools.confirm_booking calls the legacy create_booking_event kwargs.
 from agent.services.calendar_proxy import CalendarService  # noqa: E402
+from agent.services.caller_datetime import (  # noqa: E402
+    clock_time_mentions,
+    explicit_booking_date,
+    explicit_clock_times,
+)
 from agent.services.meta_stub import MetaService  # noqa: E402
 from agent.services.telugu_dates import (  # noqa: E402
     telugu_date,
@@ -169,6 +188,7 @@ from agent.tools.booking_tools import (  # noqa: E402
 )
 from backend.config import settings  # noqa: E402
 from backend.database import AsyncSessionLocal, get_loop_engine  # noqa: E402
+from backend.services.call_quality_rules import has_unresolved_check  # noqa: E402
 from backend.models.schema import (  # noqa: E402
     Branch,
     Doctor,
@@ -466,6 +486,23 @@ def _protect_mutation(context) -> None:
         logger.warning("mutation_unprotected: %s", str(e)[:120])
 
 
+class _DeterministicMutationContext:
+    """Run a callback-owned write outside LiveKit's abortable tool step.
+
+    ``on_user_turn_completed`` awaits these writes directly, so a speculative
+    speech interruption cannot cancel them the way it can cancel an LLM tool
+    execution. Exposing ``disallow_interruptions`` also keeps the shared
+    mutation wrapper's protection contract explicit and warning-free.
+    """
+
+    def __init__(self, session) -> None:
+        self.session = session
+        self.protected = False
+
+    def disallow_interruptions(self) -> None:
+        self.protected = True
+
+
 # Caller-intent flags can stay armed after retryable failures, but
 # mutation_in_flight only means that a write coroutine is executing now.
 # Restoring it on every exit prevents a normal tool failure from leaving the
@@ -485,6 +522,647 @@ def _tracks_mutation(kind: str):
         return tracked
 
     return decorate
+
+
+try:
+    _READ_TOOL_TIMEOUT_SECONDS = max(
+        5.0, float(os.getenv("VOICE_READ_TOOL_TIMEOUT_SECONDS", "15"))
+    )
+except ValueError:
+    _READ_TOOL_TIMEOUT_SECONDS = 15.0
+
+
+def _read_result_evidence(result, lang_code: str = "en") -> tuple[str, ...]:
+    """Extract compact patient-facing facts from a structured read result."""
+    if not isinstance(result, dict):
+        return ()
+    evidence: list[str] = []
+
+    small_numbers = (
+        "zero", "one", "two", "three", "four", "five", "six", "seven",
+        "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+        "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+        "nineteen", "twenty",
+    )
+
+    def _add(
+        value, *, kind: str = "", evidence_kind_override: str | None = None
+    ) -> None:
+        variants: list[str] = []
+
+        def _variant(raw) -> None:
+            normalized = " ".join(
+                str("" if raw is None else raw).strip().casefold().split()
+            )
+            if normalized and normalized not in variants:
+                variants.append(normalized)
+
+        compact = " ".join(
+            str("" if value is None else value).strip().casefold().split()
+        )
+        _variant(compact)
+        spoken = " ".join(
+            sanitize_for_tts(str("" if value is None else value))
+            .casefold()
+            .split()
+        )
+        _variant(spoken)
+        if kind == "available" and isinstance(value, bool):
+            _variant("available" if value else "unavailable")
+            _variant("is available" if value else "not available")
+        if kind == "queue_not_started":
+            for variant in {
+                "en": ("queue not started", "queue has not started", "not started yet"),
+                "te": ("క్యూ ఇంకా ప్రారంభం కాలేదు",),
+                "hi": ("कतार अभी शुरू नहीं हुई",),
+                "ta": ("வரிசை இன்னும் தொடங்கவில்லை",),
+                "kn": ("ಸರತಿ ಇನ್ನೂ ಪ್ರಾರಂಭವಾಗಿಲ್ಲ",),
+                "ml": ("ക്യൂ ഇതുവരെ തുടങ്ങിയിട്ടില്ല",),
+                "mr": ("रांग अजून सुरू झालेली नाही",),
+                "bn": ("সারি এখনও শুরু হয়নি",),
+            }.get(lang_code, ()):
+                _variant(variant)
+        if kind in {
+            "date", "spoken_date", "next_available_date", "leave_through"
+        }:
+            try:
+                parsed_date = date_cls.fromisoformat(str(value))
+                for variant in (
+                    _receipt_spoken_date(parsed_date, lang_code),
+                    _receipt_spoken_date(parsed_date, "en"),
+                    parsed_date.strftime("%B %d").replace(" 0", " "),
+                ):
+                    _variant(variant)
+            except (TypeError, ValueError):
+                pass
+        if kind in {
+            "time", "appointment_time", "available_time", "sitting_time",
+            "next_available_time", "unavailable_time", "occupied_time",
+            "unpublished_time", "past_time", "unfree_window_time",
+        }:
+            try:
+                parsed_time = time_cls.fromisoformat(str(value))
+                for variant in (
+                    _receipt_spoken_time(parsed_time, lang_code),
+                    _receipt_spoken_time(parsed_time, "en"),
+                ):
+                    _variant(sanitize_for_tts(variant))
+            except (TypeError, ValueError):
+                pass
+        if kind in {
+            "token_number", "new_token_number", "now_serving",
+            "your_token", "people_ahead",
+        }:
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if 0 <= number < len(small_numbers):
+                    _variant(small_numbers[number])
+        if kind == "booking_type":
+            normalized_type = str(value or "").strip().casefold()
+            if normalized_type == "token":
+                for variant in (
+                    "token", "token queue", "token-queue booking",
+                    "queue token",
+                ):
+                    _variant(variant)
+            elif normalized_type in {"appointment", "slot"}:
+                for variant in (
+                    "appointment", "slot", "fixed-time slot",
+                    "fixed appointment time",
+                ):
+                    _variant(variant)
+        if variants:
+            evidence_kind = evidence_kind_override or (
+                "doctor"
+                if kind in {"doctor", "doctor_name"}
+                else "patient"
+                if kind == "patient_name"
+                else "date"
+                if kind in {"date", "spoken_date"}
+                else kind
+                if kind in {"next_available_date", "leave_through"}
+                else "time"
+                if kind in {"time", "appointment_time"}
+                else kind
+                if kind in {
+                    "available_time", "sitting_time", "next_available_time",
+                    "unavailable_time", "occupied_time", "unpublished_time",
+                    "past_time", "unfree_window_time",
+                }
+                else "availability"
+                if kind in {"availability", "available"}
+                else kind
+                if kind in {
+                    "token_number",
+                    "new_token_number",
+                    "now_serving",
+                    "your_token",
+                    "people_ahead",
+                    "availability",
+                    "free_now",
+                    "sitting_hours",
+                    "status",
+                    "queue_not_started",
+                    "queue_status",
+                    "queue_capacity",
+                    "queue_capacity_remaining",
+                    "queue_unassigned",
+                    "availability_state",
+                    "booking_type",
+                }
+                else "text"
+            )
+            group = evidence_kind + "\x1e" + "\x1f".join(variants)
+            if group not in evidence:
+                evidence.append(group)
+
+    for key in (
+        "doctor", "doctor_name", "date", "spoken_date", "time",
+        "appointment_time", "token_number", "new_token_number",
+        "now_serving", "your_token", "people_ahead",
+    ):
+        if result.get(key) is not None:
+            _add(result[key], kind=key)
+    if result.get("specialization") is not None:
+        _add(
+            result["specialization"],
+            evidence_kind_override="route_specialization",
+        )
+    if result.get("clarification") is not None:
+        _add(
+            result["clarification"],
+            evidence_kind_override="route_clarification",
+        )
+    candidates = result.get("candidates")
+    if isinstance(candidates, list):
+        for index, candidate in enumerate(candidates):
+            if not isinstance(candidate, dict):
+                continue
+            doctor = candidate.get("doctor_name") or candidate.get("doctor")
+            if doctor is not None:
+                _add(doctor, kind="doctor")
+                _add(
+                    doctor,
+                    kind="doctor",
+                    evidence_kind_override=f"route_candidate:{index}:doctor",
+                )
+            specialization = candidate.get("specialization")
+            if specialization is not None:
+                _add(
+                    specialization,
+                    evidence_kind_override="route_specialization",
+                )
+                _add(
+                    specialization,
+                    evidence_kind_override=(
+                        f"route_candidate:{index}:specialization"
+                    ),
+                )
+    def _add_embedded_facts(
+        value, *, time_kind: str | None = "time"
+    ) -> None:
+        source = str(value)
+        for fact in re.findall(r"\b\d{4}-\d{2}-\d{2}\b", source, re.I):
+            _add(fact, kind="date")
+        for fact in re.findall(
+            r"\b(?:\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|"
+            r"April|May|June|July|August|September|October|November|December)|"
+            r"(?:January|February|March|April|May|June|July|August|September|"
+            r"October|November|December)\s+\d{1,2}(?:st|nd|rd|th)?)\b",
+            source,
+            re.I,
+        ):
+            _add(fact, kind="date")
+        for fact in re.findall(
+            r"\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|"
+            r"friday|saturday|sunday)\b",
+            source,
+            re.I,
+        ):
+            _add(fact, kind="date")
+        if time_kind is not None:
+            for match in re.finditer(
+                r"\b\d{1,2}:[0-5]\d(?:\s*[ap](?:\.?\s*m\.?)?)?",
+                source,
+                re.I,
+            ):
+                fact = match.group(0)
+                mentions = clock_time_mentions(fact, lang_code)
+                candidates = {
+                    candidate for mention in mentions for candidate in mention
+                }
+                if re.search(r"[ap](?:\.?\s*m\.?)?\s*$", fact, re.I):
+                    for candidate in candidates:
+                        _add(candidate, kind=time_kind)
+                else:
+                    # Tool payloads use canonical 24-hour values. Keep 09:00
+                    # exact here; caller speech without a daypart is ambiguous.
+                    _add(fact, kind=time_kind)
+        for fact in re.findall(r"\btoken\s+(\d{1,3})\b", source, re.I):
+            _add(fact, kind="token_number")
+
+    def _add_availability_facts(value) -> None:
+        source = str(value)
+        folded = source.casefold()
+        _add_embedded_facts(source, time_kind=None)
+        if (
+            "no token is reserved or assigned" in folded
+            or "you will be token number" in folded
+        ):
+            for variant in ("token queue capacity", "capacity remains"):
+                _add(variant, kind="queue_capacity_remaining")
+            for variant in (
+                "no clock-time slot is assigned", "no token is assigned",
+            ):
+                _add(variant, kind="queue_unassigned")
+            _add_embedded_facts(source, time_kind="sitting_time")
+            return
+        terminal_states = (
+            (
+                "schedule not published",
+                ("timing not confirmed", "not confirmed yet", "schedule not published"),
+            ),
+            (" is on leave", ("on leave", "unavailable")),
+            ("published no sessions", ("no sessions", "unavailable")),
+            (
+                "finished the final published session",
+                ("finished the final session", "finished for today"),
+            ),
+            (" is in the past", ("date is in the past", "past date")),
+            (
+                "schedule is not configured",
+                ("schedule not configured", "schedule is not configured"),
+            ),
+            ("doctor not found", ("doctor not found",)),
+            ("closed bookings for today", ("bookings closed", "closed for today")),
+            ("fully booked", ("fully booked", "no slots available")),
+        )
+        terminal_found = False
+        for marker, variants in terminal_states:
+            if marker not in folded:
+                continue
+            for variant in variants:
+                _add(variant, kind="availability_state")
+            terminal_found = True
+            break
+        for pattern in (
+            r"schedule not published for (?P<doctor>.+?) on \d",
+            r"(?P<doctor>.+?) is on leave on \d",
+            r"no sessions for (?P<doctor>.+?) on \d",
+            r"(?P<doctor>.+?) has finished the final published session",
+            r"(?P<doctor>.+?)(?:'s|’s) schedule is not configured",
+            r"(?P<doctor>.+?) is fully booked on \d",
+        ):
+            match = re.search(pattern, source, re.I)
+            if match is not None:
+                _add(match.group("doctor"), kind="doctor")
+                break
+        if terminal_found:
+            _add_embedded_facts(source, time_kind="sitting_time")
+            return
+        negative_kind = None
+        if "not a bookable appointment start" in folded:
+            negative_kind = "unpublished_time"
+        elif "already passed" in folded:
+            negative_kind = "past_time"
+        elif " is occupied" in folded:
+            negative_kind = "occupied_time"
+        elif "requested window is not free" in folded:
+            negative_kind = "unfree_window_time"
+        free_markers = [
+            position
+            for marker in (
+                "nearest free", "all bookable appointment starts",
+                "bookable appointment starts", " is available at ",
+            )
+            if (position := folded.find(marker)) >= 0
+        ]
+        free_from = min(free_markers) if free_markers else 0
+        for match in re.finditer(
+            r"\b\d{1,2}:[0-5]\d(?:\s*[ap](?:\.?\s*m\.?)?)?",
+            source,
+            re.I,
+        ):
+            fact = match.group(0)
+            mentions = clock_time_mentions(fact, lang_code)
+            candidates = {
+                candidate for mention in mentions for candidate in mention
+            }
+            if not re.search(r"[ap](?:\.?\s*m\.?)?\s*$", fact, re.I):
+                candidates = {fact}
+            fact_kind = (
+                negative_kind
+                if negative_kind is not None and match.start() < free_from
+                else "available_time"
+            )
+            for candidate in candidates:
+                _add(candidate, kind=fact_kind)
+            if fact_kind != "available_time":
+                for candidate in candidates:
+                    _add(candidate, kind="unavailable_time")
+
+    for key in ("availability", "available", "free_now", "sitting_hours"):
+        value = result.get(key)
+        if value is None:
+            continue
+        # Some valid read results are textual terminal states (doctor not
+        # found, schedule unpublished, bookings closed) with no date/time to
+        # extract.  Keeping the exact server text gives those answers a safe
+        # grounding path without accepting a generic "I found it" preface.
+        _add(value, kind=key)
+        if key == "sitting_hours":
+            _add_embedded_facts(value, time_kind="sitting_time")
+        elif key == "available":
+            _add_embedded_facts(value, time_kind=None)
+        else:
+            _add_availability_facts(value)
+    for key in ("reason", "error", "status"):
+        if result.get(key) is not None:
+            _add(result[key], kind=key)
+            _add_embedded_facts(result[key])
+    specialties = result.get("treated_specialties")
+    if isinstance(specialties, (list, tuple)):
+        for specialty in specialties:
+            _add(specialty, evidence_kind_override="route_specialization")
+    bookings = result.get("bookings")
+    if isinstance(bookings, list):
+        if not bookings:
+            _add(
+                build_no_booking_found_text(lang_code),
+                evidence_kind_override="bookings_empty",
+            )
+        for index, booking in enumerate(bookings):
+            if not isinstance(booking, dict):
+                continue
+            for key in ("patient_name", "doctor", "date", "time", "token_number"):
+                if booking.get(key) is not None:
+                    _add(booking[key], kind=key)
+                    if key in {
+                        "patient_name", "doctor", "date", "time",
+                        "token_number",
+                    }:
+                        record_key = (
+                            "patient" if key == "patient_name" else key
+                        )
+                        _add(
+                            booking[key],
+                            kind=key,
+                            evidence_kind_override=(
+                                f"booking_record:{index}:{record_key}"
+                            ),
+                        )
+            booking_type = booking.get("booking_type")
+            if booking_type is None:
+                # Older in-memory/read fixtures predate the explicit field, but
+                # these shapes are still unambiguous: token rows have a token
+                # number and slot rows have an appointment clock time.
+                if booking.get("token_number") is not None:
+                    booking_type = "token"
+                elif booking.get("time") is not None:
+                    booking_type = "appointment"
+            if booking_type is not None:
+                _add(booking_type, kind="booking_type")
+                _add(
+                    booking_type,
+                    kind="booking_type",
+                    evidence_kind_override=(
+                        f"booking_record:{index}:booking_type"
+                    ),
+                )
+    queue = result.get("queue")
+    if isinstance(queue, list):
+        _add("queue status", kind="queue_status")
+        for index, entry in enumerate(queue):
+            if not isinstance(entry, dict):
+                continue
+            for key in ("patient_name", "doctor", "token_number", "now_serving"):
+                if entry.get(key) is not None:
+                    _add(entry[key], kind=key)
+                    record_key = (
+                        "patient" if key == "patient_name" else key
+                    )
+                    _add(
+                        entry[key],
+                        kind=key,
+                        evidence_kind_override=(
+                            f"queue_record:{index}:{record_key}"
+                        ),
+                    )
+            if entry.get("patients_ahead") is not None:
+                _add(entry["patients_ahead"], kind="people_ahead")
+                _add(
+                    entry["patients_ahead"],
+                    kind="people_ahead",
+                    evidence_kind_override=(
+                        f"queue_record:{index}:people_ahead"
+                    ),
+                )
+            if "now_serving" in entry and entry.get("now_serving") is None:
+                _add("queue not started", kind="queue_not_started")
+                _add(
+                    "queue not started",
+                    kind="queue_not_started",
+                    evidence_kind_override=(
+                        f"queue_record:{index}:now_serving"
+                    ),
+                )
+    next_available = result.get("next_available")
+    if isinstance(next_available, dict):
+        for key in ("date", "spoken_date"):
+            if next_available.get(key) is not None:
+                _add(next_available[key], kind="next_available_date")
+        if next_available.get("leave_through") is not None:
+            _add(next_available["leave_through"], kind="leave_through")
+        for key in ("availability", "free_now", "sitting_hours"):
+            value = next_available.get(key)
+            if value is not None:
+                _add(value, kind=key)
+                _add_embedded_facts(value, time_kind="next_available_time")
+    return tuple(evidence[:64])
+
+
+_MUTABLE_READ_TOOLS = {
+    "booking": frozenset(("find_my_bookings",)),
+    "records": frozenset(("find_my_bookings",)),
+    "queue": frozenset(("get_queue_status",)),
+    "availability": frozenset(
+        (
+            "check_availability",
+            "get_doctor_return_availability",
+            "get_doctor_schedule",
+        )
+    ),
+}
+
+
+def _read_tool_matches_intent(intent: str | None, tool_name: str) -> bool:
+    if not intent:
+        return True
+    return tool_name in _MUTABLE_READ_TOOLS.get(intent, frozenset())
+
+
+def _tracks_read(fn):
+    """Keep every slow read visible, bounded, and patient-facing on failure."""
+    @wraps(fn)
+    async def wrapped(self, *args, **kwargs):
+        pending_intent = self._state.mutable_read_intent
+        pending_utterance = self._state.mutable_read_utterance
+        matches_intent = _read_tool_matches_intent(pending_intent, fn.__name__)
+        if matches_intent:
+            self._state.mutable_read_intent = None
+            self._state.mutable_read_utterance = None
+        self._state.read_in_flight_count += 1
+        if self._state.read_in_flight_count == 1:
+            self._state.read_owed_utterance = self._state.last_user_utterance
+        try:
+            async with asyncio.timeout(_READ_TOOL_TIMEOUT_SECONDS):
+                result = await fn(self, *args, **kwargs)
+            if pending_intent and not matches_intent:
+                # A different read can be useful during a dialogue, but its
+                # dates/times must never authorize an answer to the unresolved
+                # mutable question (for example availability laundering a
+                # fabricated existing appointment time).
+                self._state.read_answer_owed = False
+                self._state.read_result_evidence = ()
+                logger.error(
+                    "wrong_read_tool_for_intent intent=%s tool=%s",
+                    pending_intent,
+                    fn.__name__,
+                )
+                return result
+            self._state.read_answer_owed = True
+            language = self._state.language or getattr(self, "_lang_code", "en")
+            self._state.read_result_evidence = _read_result_evidence(
+                result, language
+            )
+            self._state.mutable_read_intent = None
+            self._state.mutable_read_utterance = None
+            context = args[0] if args else kwargs.get("context")
+            session = getattr(context, "session", None)
+            if isinstance(session, AgentSession):
+                previous = self._state.read_fallback_task
+                if isinstance(previous, asyncio.Task) and not previous.done():
+                    previous.cancel()
+
+                async def _settle_empty_model_reply() -> None:
+                    this_task = asyncio.current_task()
+                    try:
+                        await asyncio.sleep(3.0)
+                        if not self._state.read_answer_owed:
+                            return
+                        language = self._state.language or getattr(
+                            self, "_lang_code", "en"
+                        )
+                        self._state.read_answer_owed = False
+                        self._state.read_owed_utterance = None
+                        self._state.read_result_evidence = ()
+                        self._state.read_terminal_failure_armed = True
+                        self._state.read_terminal_failure_delivered = False
+                        session.say(
+                            sanitize_for_tts(build_read_failure_text(language))
+                        )
+                        logger.error(
+                            "read_result_speech_missing tool=%s lang=%s",
+                            fn.__name__,
+                            language,
+                        )
+                    except asyncio.CancelledError:
+                        return
+                    finally:
+                        if self._state.read_fallback_task is this_task:
+                            self._state.read_fallback_task = None
+
+                self._state.read_fallback_task = asyncio.create_task(
+                    _settle_empty_model_reply()
+                )
+            return result
+        except ToolError:
+            self._state.read_answer_owed = False
+            self._state.read_result_evidence = ()
+            # A missing identity/doctor/date prerequisite is not an answer.
+            # Preserve the pre-model latch while the caller supplies it.
+            self._state.mutable_read_intent = pending_intent
+            self._state.mutable_read_utterance = pending_utterance
+            raise
+        except StopResponse:
+            self._state.read_answer_owed = False
+            self._state.read_result_evidence = ()
+            if matches_intent:
+                self._state.mutable_read_intent = None
+                self._state.mutable_read_utterance = None
+            raise
+        except Exception as exc:  # noqa: BLE001 — dependency failure is patient-facing
+            # A read often starts after "let me check".  If its DB/cache call
+            # fails, propagating the exception leaves that filler as the last
+            # thing the caller hears.  Always settle the owed answer directly;
+            # test/simulation contexts receive the same fail-closed contract as
+            # structured data.
+            logger.error("read_tool_failed tool=%s error=%s", fn.__name__, exc)
+            self._state.read_answer_owed = False
+            self._state.read_result_evidence = ()
+            if matches_intent:
+                self._state.mutable_read_intent = None
+                self._state.mutable_read_utterance = None
+            language = self._state.language or getattr(self, "_lang_code", "en")
+            speech = sanitize_for_tts(build_read_failure_text(language))
+            context = args[0] if args else kwargs.get("context")
+            session = getattr(context, "session", None)
+            if isinstance(session, AgentSession):
+                try:
+                    self._state.read_terminal_failure_armed = True
+                    self._state.read_terminal_failure_delivered = False
+                    session.say(speech)
+                    logger.warning(
+                        "deterministic_read_failure_spoken tool=%s lang=%s",
+                        fn.__name__,
+                        language,
+                    )
+                    raise StopResponse()
+                except StopResponse:
+                    raise
+                except Exception as speech_error:  # noqa: BLE001
+                    logger.warning(
+                        "deterministic_read_failure_speech_failed tool=%s: %s",
+                        fn.__name__,
+                        speech_error,
+                    )
+            return {
+                "success": False,
+                "error": "read_failed",
+                "instruction": (
+                    "Say the check could not be completed and ask the caller "
+                    "to retry or call the clinic. Do not invent an answer."
+                ),
+            }
+        finally:
+            self._state.read_in_flight_count = max(
+                0, self._state.read_in_flight_count - 1
+            )
+            if (
+                self._state.read_in_flight_count == 0
+                and not self._state.read_answer_owed
+            ):
+                self._state.read_owed_utterance = None
+
+    return wrapped
+
+
+def _tracks_booking_lookup(fn):
+    """Keep caller probes from cancelling a read that owes them an answer."""
+    @wraps(fn)
+    async def wrapped(self, *args, **kwargs):
+        self._state.booking_lookup_in_flight = True
+        self._state.booking_lookup_utterance = self._state.last_user_utterance
+        try:
+            return await fn(self, *args, **kwargs)
+        finally:
+            self._state.booking_lookup_in_flight = False
+            self._state.booking_lookup_utterance = None
+
+    return wrapped
 
 
 def _build_caller_context(rows, now_local) -> tuple[str | None, str]:
@@ -678,7 +1356,61 @@ async def _filter_soniox_expression_stream(text):
 _SPEECH_BOUNDARY = re.compile(r"[.!?।\n]")
 
 
-async def _guard_internal_speech_stream(text):
+class _SpeechEnvelope:
+    """Stream only model text inside one <speak>...</speak> envelope."""
+
+    def __init__(self) -> None:
+        self.pending = ""
+        self.open = False
+        self.seen = False
+
+    def feed(self, text: str) -> list[str]:
+        self.pending += text or ""
+        out: list[str] = []
+        while self.pending:
+            if not self.open:
+                start = self.pending.casefold().find("<speak>")
+                if start < 0:
+                    self.pending = self.pending[-6:]
+                    break
+                self.pending = self.pending[start + 7:]
+                self.open = self.seen = True
+            end = self.pending.casefold().find("</speak>")
+            if end < 0:
+                keep = min(7, len(self.pending))
+                if len(self.pending) > keep:
+                    out.append(self.pending[:-keep])
+                    self.pending = self.pending[-keep:]
+                break
+            if end:
+                out.append(self.pending[:end])
+            self.pending = self.pending[end + 8:]
+            self.open = False
+        return [piece for piece in out if piece]
+
+    def finish(self) -> list[str]:
+        if self.open and self.pending:
+            value = self.pending
+            self.pending = ""
+            return [value]
+        self.pending = ""
+        return []
+
+
+def _safe_output_recovery(language: str) -> str:
+    return {
+        "te": "[hesitates] క్షమించండి అండి, మీ చివరి మాట ఇంకోసారి చెప్పగలరా?",
+        "hi": "[hesitates] माफ़ कीजिए जी, अपनी आख़िरी बात एक बार फिर बताएँगे?",
+        "ta": "[hesitates] மன்னிக்கணும், கடைசியாக சொன்னதை இன்னொரு முறை சொல்றீங்களா?",
+        "kn": "[hesitates] ಕ್ಷಮಿಸಿ ರೀ, ಕೊನೆಯ ಮಾತನ್ನು ಇನ್ನೊಮ್ಮೆ ಹೇಳ್ತೀರಾ?",
+        "mr": "[hesitates] माफ करा, शेवटचं वाक्य पुन्हा सांगाल का?",
+        "ml": "[hesitates] ക്ഷമിക്കണം, അവസാനം പറഞ്ഞത് ഒന്നുകൂടി പറയാമോ?",
+        "bn": "[hesitates] দুঃখিত, শেষ কথাটা আরেকবার বলবেন?",
+        "en": "[hesitates] Sorry, could you say that last part once more?",
+    }.get(language, "[hesitates] Sorry, could you say that last part once more?")
+
+
+async def _guard_internal_speech_stream(text, lang_code: str = "en"):
     """Streaming, chunk-split-safe firewall for private tool narration.
 
     A short carry prevents a marker split across LLM chunks (``new_`` +
@@ -693,6 +1425,8 @@ async def _guard_internal_speech_stream(text):
     # only its first full stop. Normal replies never enter this path, so their
     # time-to-first-audio is unchanged.
     recovering = False
+    private_seen = False
+    safe_emitted = False
     async for chunk in text:
         pending += chunk
         pending = strip_model_control_tokens(pending)
@@ -713,14 +1447,18 @@ async def _guard_internal_speech_stream(text):
                 sentence = pending[:boundary.end()]
                 pending = pending[boundary.end():].lstrip()
                 if internal_trace_match(sentence):
+                    private_seen = True
                     continue
+                safe_emitted = safe_emitted or bool(sentence.strip())
                 yield sentence
                 recovering = False
                 continue
             marker = internal_trace_match(pending)
             if marker:
+                private_seen = True
                 safe = pending[:marker.start()]
                 if safe:
+                    safe_emitted = safe_emitted or bool(safe.strip())
                     yield safe
                 pending = pending[marker.start():]
                 dropping = True
@@ -729,13 +1467,19 @@ async def _guard_internal_speech_stream(text):
             if carry:
                 safe, pending = pending[:-carry], pending[-carry:]
                 if safe:
+                    safe_emitted = safe_emitted or bool(safe.strip())
                     yield safe
                 break
+            safe_emitted = safe_emitted or bool(pending.strip())
             yield pending
             pending = ""
     pending = strip_model_control_tokens(pending)
     if pending and not dropping and not internal_trace_match(pending):
+        safe_emitted = safe_emitted or bool(pending.strip())
         yield pending
+    if private_seen and not safe_emitted:
+        logger.error("internal_speech_only_reply_recovered lang=%s", lang_code)
+        yield _safe_output_recovery(lang_code)
 
 
 _STALE_BOOKING_SPEECH = re.compile(
@@ -749,7 +1493,10 @@ _STALE_BOOKING_SPEECH = re.compile(
     r"బుక్\s+(?:చేయనా|చేయమంటారా|కాలేదు|అవ్వలేదు)|"
     r"बुक\s+(?:कर दूँ|कर दूं|नहीं हुई|नहीं हो पाई)|"
     r"புக்\s+(?:செய்யவா|ஆகவில்லை)|"
-    r"ಬುಕ್\s+(?:ಮಾಡಲಾ|ಆಗಿಲ್ಲ)"
+    r"ಬುಕ್\s+(?:ಮಾಡಲಾ|ಆಗಿಲ್ಲ)|"
+    r"ബുക്ക്\s+(?:ചെയ്യട്ടേ|ചെയ്യാമോ|ആയില്ല)|"
+    r"बुक\s+(?:करू\s+का|झाली\s+नाही)|"
+    r"বুক\s+(?:করব|করবো|হয়নি)"
     r")",
     re.I,
 )
@@ -761,7 +1508,9 @@ def _confirmed_booking_status(lang_code: str) -> str:
         "hi": "आपकी अपॉइंटमेंट पहले ही कन्फर्म हो चुकी है। और कोई मदद चाहिए?",
         "ta": "உங்கள் அப்பாயின்ட்மென்ட் ஏற்கனவே உறுதி செய்யப்பட்டுள்ளது. வேறு உதவி வேண்டுமா?",
         "kn": "ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಈಗಾಗಲೇ ದೃಢವಾಗಿದೆ. ಇನ್ನೇನಾದರೂ ಸಹಾಯ ಬೇಕೇ?",
+        "ml": "നിങ്ങളുടെ അപ്പോയിന്റ്മെന്റ് ഇതിനകം ഉറപ്പായിട്ടുണ്ട്. മറ്റെന്തെങ്കിലും സഹായം വേണമോ?",
         "mr": "तुमची अपॉइंटमेंट आधीच कन्फर्म झाली आहे. आणखी काही मदत हवी आहे का?",
+        "bn": "আপনার অ্যাপয়েন্টমেন্ট ইতিমধ্যে নিশ্চিত হয়েছে। আর কোনো সাহায্য লাগবে?",
         "en": "Your appointment is already confirmed. Is there anything else I can help with?",
     }.get(lang_code, "Your appointment is already confirmed. Is there anything else I can help with?")
 
@@ -783,7 +1532,7 @@ async def _guard_closed_booking_speech_stream(text, lang_code: str):
             if boundary is None:
                 break
             sentence = pending[:boundary.end()]
-            pending = pending[boundary.end():].lstrip()
+            pending = pending[boundary.end():]
             if _STALE_BOOKING_SPEECH.search(sanitize_for_tts(sentence)):
                 if not replaced:
                     yield _confirmed_booking_status(lang_code)
@@ -796,6 +1545,2747 @@ async def _guard_closed_booking_speech_stream(text, lang_code: str):
                 yield _confirmed_booking_status(lang_code)
         else:
             yield pending
+
+
+_UNVERIFIED_BOOKING_SUCCESS = re.compile(
+    r"(?:"
+    r"\b(?:appointment|slot)\b.{0,55}\b(?:booked|confirmed|reserved|scheduled)\b|"
+    r"\b(?:booked|confirmed|reserved|scheduled)\b.{0,55}\b(?:appointment|slot|you)\b|"
+    r"\b(?:i(?:'ve| have)?|we(?:'ve| have)?)\s+booked\b|"
+    r"\bi\s+(?:made|created|set up)\s+(?:your|the|an?)\s+appointment\b|"
+    r"\byou(?:'re| are)\s+on\s+(?:the\s+)?calendar\b|"
+    r"\b(?:done[,.!]?\s*)?you(?:'re| are)\s+(?:all\s+)?set\b.{0,25}\b(?:at|for)\b|"
+    r"\bi\s+(?:fixed|set)\s+your\s+time\b|"
+    r"\b(?:booking\s+(?:is\s+)?(?:successful|complete)|you(?:'re| are)\s+(?:all set|confirmed))\b|"
+    r"\b(?:i(?:'ve| have)?\s+)?(?:put|pencilled|penciled)\s+you\s+down\b|"
+    r"\byour\s+(?:visit|spot|appointment)\s+(?:is\s+)?(?:arranged|secured|locked\s+in)\b|"
+    r"\byou(?:'re| are)\s+in\s+for\b|"
+    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})"
+    r"(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)?\s+is\s+yours\b|"
+    r"\bi\s+added\s+you\s+to\b.{0,35}\b(?:calendar|list|schedule)\b|"
+    r"(?:అపాయింట్‌మెంట్|స్లాట్|బుకింగ్|బుక్).{0,35}(?:బుక్|కన్ఫర్మ్|నమోదు|సక్సెస్|అయింది|అయిపోయింది|అయిపోయిందండి|చేశాను|చేసాం)|"
+    r"టైం\s+ఫిక్స్\s+చేశాను|"
+    r"(?:अपॉइंटमेंट|स्लॉट|बुकिंग|बुक).{0,35}(?:बुक|कन्फर्म|तय|सफल|पूरी|हो गई|कर दिया|कर दी)|"
+    r"समय.{0,25}तय\s+कर\s+दिया|"
+    r"(?:அப்பாயின்ட்மென்ட்|ஸ்லாட்|புக்கிங்|புக்).{0,35}(?:புக்|கன்ஃபர்ம்|உறுதி|வெற்றி|முடிந்துவிட்டது|ஆகிவிட்டது|செய்துவிட்டேன்)|"
+    r"நேரம்\s+வைத்துவிட்டேன்|"
+    r"(?:ಅಪಾಯಿಂಟ್ಮೆಂಟ್|ಸ್ಲಾಟ್|ಬುಕಿಂಗ್|ಬುಕ್).{0,35}(?:ಬುಕ್|ಕನ್ಫರ್ಮ್|ನಿಗದಿ|ಯಶಸ್ವಿ|ಪೂರ್ಣ|ಆಗಿದೆ|ಮಾಡಿದ್ದೇನೆ)|"
+    r"ಸಮಯ\s+ನಿಗದಿ\s+ಮಾಡಿದ್ದೇನೆ|"
+    r"(?:അപ്പോയിന്റ്മെന്റ്|സ്ലോട്ട്|ബുക്കിംഗ്|ബുക്ക്).{0,35}(?:ബുക്ക്|കൺഫേം|ഉറപ്പിച്ചു|വിജയിച്ചു|പൂർത്തിയായി|ആയി|ചെയ്തു)|"
+    r"സമയം\s+ഉറപ്പാക്കി|"
+    r"(?:अपॉइंटमेंट|स्लॉट|बुकिंग|बुक).{0,35}(?:बुक|कन्फर्म|ठरली|यशस्वी|पूर्ण|झाली|केली|केले)|"
+    r"वेळ.{0,25}ठरवली|"
+    r"(?:অ্যাপয়েন্টমেন্ট|স্লট|বুকিং|বুক).{0,35}(?:বুক|কনফার্ম|নিশ্চিত|সফল|সম্পূর্ণ|হয়েছে|করেছি)"
+    r"|সময়.{0,25}ঠিক\s+করে\s+দিয়েছি"
+    r")",
+    re.I | re.S,
+)
+
+_UNVERIFIED_MESSAGE_SUCCESS = re.compile(
+    r"(?:"
+    r"\b(?:i\s+)?(?:logged|recorded|noted)\s+(?:your\s+)?(?:question|message)\b|"
+    r"\b(?:question|message)\b.{0,40}\b(?:logged|recorded|noted|sent|delivered)\b|"
+    r"\b(?:clinic|doctor|staff)\s+has\s+your\s+(?:message|question)\b|"
+    r"\bi\s+(?:passed|forwarded|sent)\s+your\s+(?:message|question)\b|"
+    r"\bi\s+(?:told|informed)\s+(?:the\s+)?clinic\b|"
+    r"\bi\s+passed\s+it\s+(?:along|on)\b|"
+    r"\bthey\s+have\s+it\s+now\b|"
+    r"\bi(?:'ve| have)?\s+left\s+(?:your\s+)?(?:a\s+)?note\b|"
+    r"\bthey(?:'ll|\s+will)\s+see\s+your\s+note\b|"
+    r"\bit(?:'s|\s+is)\s+with\s+(?:the\s+)?clinic\s+now\b|"
+    r"\bi(?:'ve| have)?\s+added\s+it\s+to\s+(?:the\s+)?clinic\s+inbox\b|"
+    r"(?:ప్రశ్న|మెసేజ్|సందేశం).{0,30}(?:నమోదు చేశాను|పంపించాను|పంపాను)|"
+    r"(?:सवाल|संदेश).{0,30}(?:दर्ज कर लिया|भेज दिया)|"
+    r"(?:கேள்வி|மெசேஜ்|மெசேஜை|செய்தி).{0,30}(?:பதிவு செய்துவிட்டேன்|அனுப்பிவிட்டேன்)|"
+    r"(?:ಪ್ರಶ್ನೆ|ಸಂದೇಶ).{0,30}(?:ದಾಖಲಿಸಿದ್ದೇನೆ|ಕಳುಹಿಸಿದ್ದೇನೆ)|"
+    r"(?:ചോദ്യം|സന്ദേശം).{0,30}(?:രേഖപ്പെടുത്തി|അയച്ചു)|"
+    r"(?:प्रश्न|संदेश).{0,30}(?:नोंदवला|पाठवला)|"
+    r"(?:প্রশ্ন|বার্তা).{0,30}(?:নথিভুক্ত করেছি|পাঠিয়েছি)"
+    r")",
+    re.I | re.S,
+)
+
+_UNVERIFIED_QUESTION_SUCCESS = re.compile(
+    r"(?:"
+    r"\b(?:i\s+)?(?:logged|recorded|noted)\s+(?:your\s+)?question\b|"
+    r"\bquestion\b.{0,40}\b(?:logged|recorded|noted|sent|delivered)\b|"
+    r"\bi\s+put\s+your\s+question\s+in\s+(?:their|the)\s+queue\b|"
+    r"\b(?:the\s+)?clinic\s+will\s+review\s+your\s+question\b|"
+    r"ప్రశ్న.{0,30}నమోదు చేశాను|"
+    r"सवाल.{0,30}दर्ज कर लिया|"
+    r"கேள்வி.{0,30}பதிவு செய்துவிட்டேன்|"
+    r"ಪ್ರಶ್ನೆ.{0,30}ದಾಖಲಿಸಿದ್ದೇನೆ|"
+    r"ചോദ്യം.{0,30}രേഖപ്പെടുത്തി|"
+    r"प्रश्न.{0,30}नोंदवला|"
+    r"প্রশ্ন.{0,30}নথিভুক্ত করেছি"
+    r")",
+    re.I | re.S,
+)
+
+_UNVERIFIED_CANCEL_SUCCESS = re.compile(
+    r"(?:"
+    r"\b(?:appointment|booking)\b.{0,45}\b(?:has been\s+)?cancelled\b|"
+    r"\bi\s+cancelled\s+(?:(?:your|the)\s+)?(?:appointment|booking)\b|"
+    r"\bi\s+removed\s+(?:(?:your|the)\s+)?(?:appointment|booking)\b|"
+    r"\bi\s+removed\s+it\s+from\s+(?:the\s+)?calendar\b|"
+    r"\bit\s+is\s+off\s+(?:the\s+)?schedule\s+now\b|"
+    r"\bthat\s+appointment\s+is\s+gone\b|"
+    r"\bi(?:'ve| have)?\s+taken\s+it\s+off\b|"
+    r"(?:అపాయింట్‌మెంట్|బుకింగ్).{0,30}(?:క్యాన్సిల్ చేశాను|క్యాన్సిల్ అయింది|రద్దు చేశాను)|"
+    r"(?:अपॉइंटमेंट|बुकिंग).{0,30}(?:कैंसिल कर दी|रद्द कर दी)|"
+    r"(?:அப்பாயின்ட்மென்ட்|புக்கிங்).{0,30}(?:கேன்சல் செய்துவிட்டேன்|ரத்து ஆகிவிட்டது)|"
+    r"(?:ಅಪಾಯಿಂಟ್ಮೆಂಟ್|ಬುಕಿಂಗ್).{0,30}(?:ಕ್ಯಾನ್ಸಲ್ ಮಾಡಿದ್ದೇನೆ|ರದ್ದಾಗಿದೆ)|"
+    r"(?:അപ്പോയിന്റ്മെന്റ്|ബുക്കിംഗ്).{0,30}(?:ക്യാൻസൽ ചെയ്തു|റദ്ദാക്കി)|"
+    r"(?:अपॉइंटमेंट|बुकिंग).{0,30}(?:कॅन्सल केली|रद्द केली)|"
+    r"(?:অ্যাপয়েন্টমেন্ট|বুকিং).{0,30}(?:ক্যানসেল করেছি|বাতিল হয়েছে)"
+    r")",
+    re.I | re.S,
+)
+
+_UNVERIFIED_RESCHEDULE_SUCCESS = re.compile(
+    r"(?:"
+    r"\b(?:appointment|booking)\b.{0,55}\b(?:rescheduled|moved)\b|"
+    r"\bi\s+moved\s+(?:(?:your|the)\s+)?(?:appointment|booking)\b|"
+    r"\bi\s+changed\s+(?:(?:your|the)\s+)?(?:appointment|booking)\b|"
+    r"\bi\s+(?:shifted|moved)\s+it\s+to\b|"
+    r"\bit\s+is\s+now\s+at\b|"
+    r"\byou(?:'re| are)\s+now\s+down\s+for\b|"
+    r"\bthe\s+new\s+time\s+is\s+locked\s+in\b|"
+    r"(?:అపాయింట్‌మెంట్|బుకింగ్).{0,35}(?:మార్చాను|రీషెడ్యూల్ అయింది)|"
+    r"(?:अपॉइंटमेंट|बुकिंग).{0,35}(?:रीशेड्यूल कर दी|6 बजे कर दी)|"
+    r"(?:அப்பாயின்ட்மென்ட்|புக்கிங்).{0,35}(?:மாற்றிவிட்டேன்|ரீஷெட்யூல் ஆகிவிட்டது)|"
+    r"(?:ಅಪಾಯಿಂಟ್ಮೆಂಟ್|ಬುಕಿಂಗ್).{0,35}(?:ಬದಲಾಯಿಸಿದ್ದೇನೆ|ರೀಶೆಡ್ಯೂಲ್ ಆಗಿದೆ)|"
+    r"(?:അപ്പോയിന്റ്മെന്റ്|ബുക്കിംഗ്).{0,35}(?:മാറ്റി|റീഷെഡ്യൂൾ ചെയ്തു)|"
+    r"(?:अपॉइंटमेंट|बुकिंग).{0,35}(?:बदलली|रीशेड्यूल केली)|"
+    r"(?:অ্যাপয়েন্টমেন্ট|বুকিং).{0,35}(?:পরিবর্তন করেছি|রিশিডিউল হয়েছে)"
+    r")",
+    re.I | re.S,
+)
+
+_UNVERIFIED_ACTION_SUCCESS = (
+    ("reschedule", _UNVERIFIED_RESCHEDULE_SUCCESS),
+    ("cancel", _UNVERIFIED_CANCEL_SUCCESS),
+    ("question", _UNVERIFIED_QUESTION_SUCCESS),
+    ("message", _UNVERIFIED_MESSAGE_SUCCESS),
+    ("booking", _UNVERIFIED_BOOKING_SUCCESS),
+)
+_UNVERIFIED_GENERIC_SUCCESS = re.compile(
+    r"^\s*(?:"
+    r"all\s+done|done|completed|finished|consider\s+it\s+done|"
+    r"(?:that|it)\s+(?:is|has\s+been)\s+(?:taken\s+care\s+of|handled)|"
+    r"(?:your\s+)?request\s+(?:(?:has\s+)?gone|went)\s+through|"
+    r"everything\s+is\s+sorted|we\s+are\s+good\s+to\s+go"
+    r")[.!]?\s*$",
+    re.I,
+)
+
+# Vocabulary blacklists alone cannot close an outcome-truth boundary: there is
+# always another way to say "I booked it".  While an action is pending, treat a
+# declarative sentence about ownership/completion of that action as unsafe.
+# Questions, explicit non-results, and provisional availability remain valid
+# pre-write dialogue.  A successful mutation is admitted only by the exact,
+# one-use server receipt handled below.
+_PENDING_BOOKING_TOPIC = re.compile(
+    r"\b(?:appointment|booking|visit|slot|schedule|calendar|name)\b|"
+    r"\b(?:a\.?m\.?|p\.?m\.?|o['’]?clock)\b|"
+    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b|"
+    r"\b\d{1,2}(?::[0-5]\d)?\b",
+    re.I,
+)
+_PENDING_BOOKING_OWNERSHIP = re.compile(
+    r"\b(?:i|we)\s+(?:have\s+|have\s+got\s+)?(?:you|your|slotted)|"
+    r"\b(?:doctor|dr\.?|provider|reception|front\s+desk)\b.{0,45}"
+    r"\b(?:has|have|expects?|expecting|knows?)\b.{0,35}\b(?:you|your\s+name)\b|"
+    r"\b(?:you|your|yours|your\s+name|the\s+doctor)\b.{0,55}"
+    r"\b(?:have|has|belongs|taken\s+care|will\s+see|went\s+through|"
+    r"on\s+the|in\s+for|locked|secured|arranged|booked|confirmed|reserved|scheduled)\b|"
+    r"\b(?:put|pencilled|penciled|slotted|added)\b.{0,45}\b(?:you|your\s+name)\b|"
+    r"\b(?:slot|time|appointment)\b.{0,35}\b(?:belongs\s+to|is\s+for)\s+you\b|"
+    r"\b(?:your\s+)?name\b.{0,45}\b(?:appears?|is|sits?)\b.{0,25}"
+    r"\b(?:beside|against|on)\b|"
+    r"\b(?:booked|confirmed|reserved|scheduled|secured|arranged|locked|sorted|"
+    r"fixed|covered|allocated|assigned|guaranteed|complete|accepted)\b|"
+    r"\b(?:slot|appointment|booking)\b.{0,35}\bhas\b.{0,20}\byour\s+name\b|"
+    r"\b(?:reception|receptionist|front\s+desk)\b.{0,35}\bwrote\b"
+    r".{0,30}\byour\s+name\b|"
+    r"\b(?:good\s+to\s+go|taken\s+care\s+of|all\s+(?:sorted|set))\b|"
+    r"\b(?:reception|front\s+desk)\b.{0,45}\b(?:has|have|knows?|expects?)\b|"
+    r"\b(?:consultation|time|five|six|seven|eight|nine|ten|eleven|twelve)\b"
+    r".{0,45}\b(?:fixed|arranged|sorted|yours|allocated|assigned)\b",
+    re.I | re.S,
+)
+_PENDING_BOOKING_ENCOUNTER = re.compile(
+    r"\b(?:doctor\b.{0,30}\b(?:expecting|will\s+see)|"
+    r"(?:doctor|dr\.?|provider)\b.{0,45}\bwill\s+be\s+waiting\s+for\s+you|"
+    r"consultation\b.{0,30}\b(?:goes\s+ahead|will\s+happen|fixed)|"
+    r"(?:please\s+)?(?:arrive|come(?:\s+in)?|show\s+up|be\s+there|"
+    r"head\s+over)\b.{0,45}\b(?:at|on)\b|"
+    r"plan\s+on\s+(?:coming|seeing|visiting)\b.{0,55}\b(?:at|on)\b|"
+    r"see\s+you\s+(?:at|on)\b|"
+    r"expect\b.{0,30}\bdoctor|"
+    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
+    r"twelve|\d{1,2})(?::[0-5]\d)?\s*(?:a\.?m\.?|p\.?m\.?)?\s+"
+    r"(?:is|will\s+be)\s+your\s+(?:time|slot)|"
+    r"(?:you|your)\b.{0,35}\b(?:expected|due|attend|come|arrive))\b",
+    re.I | re.S,
+)
+_PENDING_MESSAGE_TOPIC = re.compile(
+    r"\b(?:message|question|query|note|clinic|doctor|staff|inbox|queue|"
+    r"front\s+desk|reception|what\s+you\s+said|concern|words?|team|radar|"
+    r"they|them|hands|it|this)\b",
+    re.I,
+)
+_PENDING_MESSAGE_COMPLETION = re.compile(
+    r"\b(?:logged|recorded|noted|sent|forwarded|passed|left|added|informed|"
+    r"told|received|reached|submitted|queued|escalated|asked|aware|notified|"
+    r"has|have|knows|got|will\s+review|will\s+see|awaiting\s+(?:their\s+)?review|"
+    r"will\s+(?:get|hear)|now\s+know|waiting\s+for|on\s+(?:their\s+)?radar|"
+    r"passed\s+along|can\s+read|visible(?:\s+to)?|captured|awaits?|saved|"
+    r"acknowledged|on\s+file|"
+    r"with\s+(?:the\s+)?(?:clinic|them)|"
+    r"with\s+(?:the\s+)?(?:team|staff)|"
+    r"in\s+(?:(?:their|the)\s+)?(?:hands|queue|inbox))\b",
+    re.I,
+)
+_PENDING_CANCEL_TOPIC = re.compile(
+    r"\b(?:appointment|booking|visit|calendar|schedule|it)\b.{0,45}"
+    r"\b(?:cancelled|canceled|removed|gone|off|taken\s+off|deleted|freed|"
+    r"cleared|erased|inactive|not\s+active|will\s+not\s+take\s+place|"
+    r"no\s+longer\s+(?:exists|active|scheduled|shows?|expected))\b|"
+    r"\b(?:you|your)\b.{0,35}\bno\s+longer\s+(?:have|has)\b.{0,25}"
+    r"\b(?:appointment|booking|visit|slot)\b|"
+    r"\b(?:your\s+)?name\b.{0,45}\bno\s+longer\b.{0,35}"
+    r"\b(?:schedule|calendar|list)\b|"
+    r"\b(?:you|your)\b.{0,45}\b(?:do\s+not\s+have|no\s+longer\s+expected)\b|"
+    r"\b(?:doctor|dr\.?|provider)\b.{0,45}\bwill\s+not\s+expect\b|"
+    r"\b(?:doctor|dr\.?|provider)\b.{0,45}\b(?:will\s+not|won't)\s+"
+    r"(?:be\s+)?seeing\s+you\b|"
+    r"\b(?:appointment|booking|visit)\b.{0,45}\b(?:will\s+not|won't)\s+happen\b|"
+    r"\b(?:appointment|booking|visit)\b.{0,45}\bnot\s+on\b.{0,25}"
+    r"\b(?:calendar|schedule|list)\b|"
+    r"\b(?:slot|time)\b.{0,45}\bavailable\s+to\s+someone\s+else\b|"
+    r"\b(?:cancelled|canceled|removed|taken\s+off|deleted|freed|cleared|"
+    r"erased|voided|released|undone|closed|struck|no\s+longer\s+exists)\b|"
+    r"\bno\s+(?:appointment|booking|visit)\b.{0,25}\b(?:anymore|now|left)\b",
+    re.I | re.S,
+)
+_PENDING_RESCHEDULE_TOPIC = re.compile(
+    r"\b(?:appointment|booking|visit|slot|time|it|you)\b.{0,55}"
+    r"\b(?:rescheduled|moved|changed|shifted|now\s+(?:at|for)|new\s+time|locked|instead)\b|"
+    r"\b(?:appointment|booking|visit|slot|it|name)\b.{0,55}"
+    r"\b(?:at|for|beside|belongs\s+to)\b.{0,30}\bnow\b|"
+    r"\b(?:appointment|booking|visit|slot|it|name)\b.{0,30}\bnow\b.{0,45}"
+    r"\b(?:at|for|beside|belongs\s+to)\b|"
+    r"\b(?:rescheduled|moved|changed|shifted|new\s+slot|put\s+you\s+at|"
+    r"revised\s+time|updated\s+time|new\s+time|brought\s+forward|replaced|"
+    r"pushed\s+(?:it\s+)?to)\b|"
+    r"\bcalendar\b.{0,35}\b(?:now\s+shows?|shows?\s+.+\s+now)\b|"
+    r"\b(?:please\s+)?come\b.{0,45}\b(?:instead|not)\b|"
+    r"\b(?:doctor|dr\.?|provider)\b.{0,45}\bwill\s+see\s+you\b.{0,35}\binstead\b",
+    re.I | re.S,
+)
+_EXPLICIT_NON_RESULT = re.compile(
+    r"\b(?:not|never|nothing)\b.{0,35}"
+    r"\b(?:booked|confirmed|reserved|scheduled|logged|recorded|sent|"
+    r"cancelled|canceled|rescheduled|moved|created)\b|"
+    r"\b(?:could(?:n't| not)|was(?:n't| not)|did(?:n't| not)|failed|"
+    r"temporarily\s+unavailable|not\s+yet)\b",
+    re.I | re.S,
+)
+_PROVISIONAL_AVAILABILITY = re.compile(
+    r"\b(?:available|availability|free|open|option|can\s+offer|could\s+offer|"
+    r"can\s+choose|could\s+choose|sits|sitting\s+hours|session)\b",
+    re.I,
+)
+_PENDING_ACTION_REFUSAL = re.compile(
+    r"^\s*(?:"
+    r"(?:i|we)\s+(?:cannot|can['â€™]?t|can\s+not|do\s+not|don['â€™]?t)\s+"
+    r"(?:(?:have\s+)?(?:permission|ability)\s+to\s+)?"
+    r"(?:help|assist|book|schedule|make|create|record|log|note|send|"
+    r"forward|cancel|reschedule|change)|"
+    r"(?:i|we)\s+(?:am|are)\s+(?:unable|not\s+able|not\s+allowed)\s+to\s+"
+    r"(?:help|assist|book|schedule|make|create|record|log|note|send|"
+    r"forward|cancel|reschedule|change)|"
+    r"(?:booking|appointments?|messages?|questions?)\s+(?:is|are)\s+"
+    r"(?:not\s+(?:supported|allowed|possible)|unsupported)"
+    r")\b[^.?!]*[.?!]?\s*$",
+    re.I | re.S,
+)
+_NATIVE_REFUSAL_NEGATIVE = re.compile(
+    r"చేయలేను|కుదరదు|సాధ్యం\s*కాదు|"
+    r"नहीं\s+कर\s+(?:सकता|सकती|सकते)|संभव\s+नहीं|"
+    r"முடியாது|"
+    r"ಸಾಧ್ಯವಿಲ್ಲ|ಮಾಡಲಾಗುವುದಿಲ್ಲ|"
+    r"കഴിയില്ല|സാധ്യമല്ല|"
+    r"शकत\s+नाही|शक्य\s+नाही|"
+    r"পারি\s+না|সম্ভব\s+নয়",
+    re.I,
+)
+_NATIVE_ACTION_TOPICS = {
+    "booking": re.compile(
+        r"అపాయింట|బుక|अपॉइंट|बुक|அப்பாயின்ட்|புக்|"
+        r"ಅಪಾಯಿಂಟ್|ಬುಕ್|അപ്പോയിന്റ്|ബുക്ക്|অ্যাপয়েন্ট|বুক",
+        re.I,
+    ),
+    "message": re.compile(
+        r"మెసేజ్|సందేశ|నమోద|मैसेज|संदेश|दर्ज|செய்தி|பதிவு|"
+        r"ಮೆಸೇಜ್|ಸಂದೇಶ|ದಾಖಲ|മെസേജ്|സന്ദേശ|രേഖ|मेसेज|नोंद|"
+        r"মেসেজ|বার্তা|নথিভুক্ত",
+        re.I,
+    ),
+    "question": re.compile(
+        r"ప్రశ్న|सवाल|प्रश्न|கேள்வி|ಪ್ರಶ್ನೆ|ചോദ്യം|প্রশ্ন",
+        re.I,
+    ),
+    "cancel": re.compile(
+        r"క్యాన్సిల్|రద్దు|कैंसिल|रद्द|கேன்சல்|ரத்து|"
+        r"ಕ್ಯಾನ್ಸಲ್|ರದ್ದು|ക്യാൻസൽ|റദ്ദ്|कॅन्सल|বাতিল|ক্যানসেল",
+        re.I,
+    ),
+    "reschedule": re.compile(
+        r"రీషెడ్యూల్|మార్చ|रीशेड्यूल|बदल|மாற்ற|ರೀಶೆಡ್ಯೂಲ್|ಬದಲ|"
+        r"റീഷെഡ്യൂൾ|മാറ്റ|रीशेड्यूल|बदल|রিশিডিউল|পরিবর্তন",
+        re.I,
+    ),
+}
+
+
+def _native_pending_action_refusal(text: str, action: str | None) -> bool:
+    topic = _NATIVE_ACTION_TOPICS.get(action or "")
+    return bool(
+        topic is not None
+        and _NATIVE_REFUSAL_NEGATIVE.search(text or "")
+        and topic.search(text or "")
+    )
+_PENDING_FUTURE_ACTION = {
+    "booking": re.compile(
+        r"\bi(?:'ll| will)\s+(?:book|schedule)\b.{0,45}"
+        r"\b(?:appointment|booking|slot|that|it|you)\b|"
+        r"\bi(?:'m| am)\s+(?:booking|scheduling)\b.{0,45}"
+        r"\b(?:appointment|booking|slot|that|it|you)\b|"
+        r"\b(?:booking|scheduling)\b.{0,45}\bnow\b",
+        re.I | re.S,
+    ),
+    "message": re.compile(
+        r"\bi(?:'ll| will)\s+(?:send|log|record|forward)\b.{0,55}"
+        r"\b(?:message|note|that|it|clinic|doctor|team)\b|"
+        r"\bi(?:'m| am)\s+(?:sending|logging|recording|forwarding)\b"
+        r".{0,55}\b(?:message|note|that|it|clinic|doctor|team)\b|"
+        r"\b(?:sending|logging|recording|forwarding)\b.{0,55}\bnow\b",
+        re.I | re.S,
+    ),
+    "question": re.compile(
+        r"\bi(?:'ll| will)\s+(?:send|log|record|forward)\b.{0,55}"
+        r"\b(?:question|query|that|it|clinic|doctor|team)\b|"
+        r"\bi(?:'m| am)\s+(?:sending|logging|recording|forwarding)\b"
+        r".{0,55}\b(?:question|query|that|it|clinic|doctor|team)\b|"
+        r"\b(?:sending|logging|recording|forwarding)\b.{0,55}\bnow\b",
+        re.I | re.S,
+    ),
+    "cancel": re.compile(
+        r"\bi(?:'ll| will)\s+cancel\b.{0,45}"
+        r"\b(?:appointment|booking|visit|that|it)\b|"
+        r"\bi(?:'m| am)\s+cancell?ing\b.{0,45}"
+        r"\b(?:appointment|booking|visit|that|it)\b|"
+        r"\b(?:canceling|cancelling)\b.{0,45}\bnow\b",
+        re.I | re.S,
+    ),
+    "reschedule": re.compile(
+        r"\bi(?:'ll| will)\s+(?:reschedule|move|change|shift)\b.{0,55}"
+        r"\b(?:appointment|booking|visit|time|that|it|you|to)\b|"
+        r"\bi(?:'m| am)\s+(?:rescheduling|moving|changing|shifting)\b"
+        r".{0,55}\b(?:appointment|booking|visit|time|that|it|you|to)\b|"
+        r"\b(?:rescheduling|moving|changing|shifting)\b.{0,55}\bnow\b",
+        re.I | re.S,
+    ),
+}
+
+
+def _pending_action_claim(text: str, action: str | None) -> bool:
+    """Conservative semantic backstop for unreceipted outcome claims."""
+    if not action or not text or text.rstrip().endswith(("?", "？")):
+        return False
+    explicit_non_result = _EXPLICIT_NON_RESULT.search(text)
+    contrastive_tail = bool(re.search(r"(?:;|\bbut\b|\bhowever\b|\binstead\b)", text, re.I))
+    if explicit_non_result and not contrastive_tail:
+        if action != "cancel" or re.search(
+            r"\b(?:could(?:n't| not)|did(?:n't| not)|failed|unable|not\s+able)\b"
+            r".{0,35}\b(?:cancel|remove|delete|take\s+off)\b",
+            text,
+            re.I | re.S,
+        ):
+            return False
+    promise = _PENDING_FUTURE_ACTION.get(action)
+    if promise is not None and promise.search(text):
+        return True
+    if action == "booking":
+        return bool(
+            _PENDING_BOOKING_TOPIC.search(text)
+            and (
+                _PENDING_BOOKING_OWNERSHIP.search(text)
+                or _PENDING_BOOKING_ENCOUNTER.search(text)
+            )
+        )
+    if action in {"message", "question"}:
+        return bool(
+            _PENDING_MESSAGE_TOPIC.search(text)
+            and _PENDING_MESSAGE_COMPLETION.search(text)
+        )
+    if action == "cancel":
+        return bool(_PENDING_CANCEL_TOPIC.search(text))
+    if action == "reschedule":
+        return bool(_PENDING_RESCHEDULE_TOPIC.search(text))
+    return False
+
+_CONFIRMATION_QUESTION_CUES = {
+    "en": re.compile(
+        r"^\s*(?:would|should|shall|can|could|do|does|did|may|"
+        r"is|are|was|were|has|have|had|will)\b",
+        re.I,
+    ),
+    "te": re.compile(r"(?:చేయనా|చెయ్యనా|చేసేయనా|చేయమంటారా|చేస్తానా)"),
+    "hi": re.compile(r"(?:क्या|कर\s+(?:दूँ|दूं|दू|दें|देंगे))"),
+    "ta": re.compile(r"(?:பண்ணட்டுமா|செய்யட்டுமா|செய்யலாமா|செய்யவா)"),
+    "kn": re.compile(r"(?:ಮಾಡಲಾ|ಮಾಡಬಹುದಾ|ಮಾಡೋಣವಾ)"),
+    "ml": re.compile(r"(?:ചെയ്യട്ടെ|ചെയ്യട്ടേ|ചെയ്യാമോ|ചെയ്യണോ)"),
+    "mr": re.compile(r"(?:करू\s+का|करायचं\s+का|करूया\s+का)"),
+    "bn": re.compile(r"(?:করে\s+দেব|করব|করবো)"),
+}
+
+
+def _is_confirmation_question(text: str, lang_code: str) -> bool:
+    if not (text or "").rstrip().endswith("?"):
+        return False
+    cue = _CONFIRMATION_QUESTION_CUES.get(lang_code)
+    return cue.search(text) is not None if cue is not None else False
+
+
+def _mutation_speech_key(text: str) -> str:
+    """Stable receipt key across stream chunking and punctuation whitespace."""
+    return "".join(
+        char for char in sanitize_for_tts(text).casefold() if char.isalnum()
+    )
+
+
+async def _guard_unverified_action_speech_stream(
+    text,
+    lang_code: str,
+    *,
+    verified_speech: str | None = None,
+    verified_state=None,
+    pending_action: str | None = None,
+    actions: tuple[str, ...] = (
+        "booking", "question", "message", "cancel", "reschedule"
+    ),
+):
+    """Permit mutation-success speech only when backed by a server receipt.
+
+    Model speech is checked and released one sentence at a time. A fresh exact
+    deterministic receipt and a possible replay prefix are the only bounded
+    cases that wait for more text.
+    """
+    state_receipt = (
+        getattr(verified_state, "verified_mutation_speech", None)
+        if verified_state is not None
+        else None
+    )
+    consumed = (
+        getattr(verified_state, "consumed_mutation_receipts", {})
+        if verified_state is not None
+        else {}
+    )
+    consumed_reads = (
+        getattr(verified_state, "consumed_read_receipts", set())
+        if verified_state is not None
+        else set()
+    )
+    verified = sanitize_for_tts(verified_speech or state_receipt or "")
+    read_receipt = sanitize_for_tts(
+        getattr(verified_state, "verified_read_speech", None) or ""
+    ) if verified_state is not None else ""
+    enabled = set(actions)
+    normalized_pending = "booking" if pending_action == "book" else pending_action
+    if normalized_pending is None and verified and verified_state is not None:
+        receipt_action = getattr(verified_state, "verified_mutation_action", None)
+        normalized_pending = "booking" if receipt_action == "book" else receipt_action
+
+    def _failure(action: str) -> str:
+        return (
+            build_booking_failure_text(lang_code)
+            if action == "booking"
+            else build_mutation_failure_text(lang_code, action)
+        )
+
+    def _replace(raw: str, action: str) -> str:
+        leading = raw[: len(raw) - len(raw.lstrip())]
+        return leading + _failure(action)
+
+    def _guard_part(raw: str) -> str:
+        spoken = sanitize_for_tts(raw)
+        if not spoken:
+            return raw
+        speech_key = _mutation_speech_key(spoken)
+        if speech_key and speech_key in consumed:
+            action = consumed[speech_key]
+            logger.error(
+                "consumed_mutation_receipt_replay_blocked action=%s", action
+            )
+            return _replace(raw, action)
+        if speech_key and speech_key in consumed_reads:
+            logger.error("consumed_read_receipt_replay_blocked")
+            return raw[: len(raw) - len(raw.lstrip())]
+        # Confirmation questions are pre-write dialogue, not success claims.
+        if _is_confirmation_question(spoken, lang_code):
+            return raw
+        if (
+            normalized_pending in enabled
+            and (
+                _PENDING_ACTION_REFUSAL.search(spoken)
+                or _native_pending_action_refusal(spoken, normalized_pending)
+            )
+        ):
+            logger.error(
+                "unsupported_pending_action_refusal_blocked action=%s",
+                normalized_pending,
+            )
+            leading = raw[: len(raw) - len(raw.lstrip())]
+            return leading + build_action_continue_text(
+                lang_code, normalized_pending
+            )
+        matched_action = next(
+            (
+                action
+                for action, pattern in _UNVERIFIED_ACTION_SUCCESS
+                if action in enabled and pattern.search(spoken)
+            ),
+            None,
+        )
+        # When a transaction is pending, any mutation-looking assertion belongs
+        # to that transaction.  Classifying by vocabulary first could turn a
+        # failed cancellation sentence containing "scheduled" into a misleading
+        # booking failure response.
+        if normalized_pending in enabled and (
+            matched_action is not None
+            or _UNVERIFIED_GENERIC_SUCCESS.search(spoken)
+            or _pending_action_claim(spoken, normalized_pending)
+        ):
+            logger.error(
+                "unverified_pending_action_claim_blocked action=%s",
+                normalized_pending,
+            )
+            return _replace(raw, normalized_pending)
+        if matched_action is not None:
+            action = matched_action
+            if action in enabled:
+                logger.error(
+                    "unverified_mutation_speech_blocked action=%s", action
+                )
+                return _replace(raw, action)
+        return raw
+
+    # A current server receipt is deliberately checked as one exact utterance.
+    # Deterministic post-tool speech is already a finite string, so this adds no
+    # model-generation wait and prevents partial authorization of a paraphrase.
+    if verified:
+        raw = "".join([chunk async for chunk in text])
+        spoken = sanitize_for_tts(raw)
+        if not spoken:
+            return
+        speech_key = _mutation_speech_key(spoken)
+        if speech_key == _mutation_speech_key(verified):
+            if verified_state is not None:
+                action = getattr(
+                    verified_state, "verified_mutation_action", None
+                )
+                if action:
+                    verified_state.consumed_mutation_receipts[speech_key] = action
+                    verified_state.verified_mutation_speech = None
+                    verified_state.verified_mutation_action = None
+                if speech_key == _mutation_speech_key(
+                    getattr(verified_state, "verified_read_speech", None) or ""
+                ):
+                    verified_state.consumed_read_receipts.add(speech_key)
+                    verified_state.verified_read_speech = None
+            yield raw
+            return
+        if (
+            read_receipt
+            and _mutation_speech_key(read_receipt) == _mutation_speech_key(verified)
+        ):
+            # A deterministic read receipt is the server's complete answer.
+            # Never let a model paraphrase turn its 5 PM into 2:30 PM; replace
+            # any non-exact rendering with the receipt itself and consume it.
+            receipt_key = _mutation_speech_key(read_receipt)
+            logger.error("mismatched_read_receipt_replaced")
+            if verified_state is not None:
+                verified_state.consumed_read_receipts.add(receipt_key)
+                verified_state.verified_read_speech = None
+            leading = raw[: len(raw) - len(raw.lstrip())]
+            yield leading + read_receipt
+            return
+        yield _guard_part(raw)
+        return
+
+    # A consumed receipt can span several sentences. Buffer only while the
+    # normalized text remains a prefix of one; a fresh current receipt above
+    # always wins, so two legitimate identical writes still work.
+    async def _sentence_parts(source):
+        pending = ""
+        async for chunk in source:
+            pending += chunk
+            while True:
+                boundary = _SPEECH_BOUNDARY.search(pending)
+                if boundary is None:
+                    break
+                yield pending[:boundary.end()]
+                pending = pending[boundary.end():]
+        if pending:
+            yield pending
+
+    replay_buffer: list[str] = []
+    replay_candidates = set(consumed) | set(consumed_reads)
+    blocked = False
+    async for raw in _sentence_parts(text):
+        if blocked:
+            continue
+        if replay_candidates:
+            replay_buffer.append(raw)
+            combined = "".join(replay_buffer)
+            combined_key = _mutation_speech_key(combined)
+            matching = {
+                key for key in replay_candidates if key.startswith(combined_key)
+            }
+            if combined_key and combined_key in consumed_reads:
+                logger.error("consumed_read_receipt_replay_blocked")
+                return
+            if combined_key and combined_key in consumed:
+                action = consumed[combined_key]
+                logger.error(
+                    "consumed_mutation_receipt_replay_blocked action=%s", action
+                )
+                yield _replace(combined, action)
+                return
+            if matching:
+                replay_candidates = matching
+                continue
+            replay_candidates.clear()
+            buffered = replay_buffer
+            replay_buffer = []
+            for buffered_raw in buffered:
+                guarded = _guard_part(buffered_raw)
+                yield guarded
+                if guarded != buffered_raw:
+                    blocked = True
+                    break
+            continue
+        guarded = _guard_part(raw)
+        yield guarded
+        blocked = guarded != raw
+    if replay_buffer and not blocked:
+        for buffered_raw in replay_buffer:
+            guarded = _guard_part(buffered_raw)
+            yield guarded
+            if guarded != buffered_raw:
+                break
+
+
+async def _guard_unverified_booking_speech_stream(text, lang_code: str):
+    """Backward-compatible booking-only wrapper used by focused regressions."""
+    async for chunk in _guard_unverified_action_speech_stream(
+        text, lang_code, actions=("booking",)
+    ):
+        yield chunk
+
+
+_OUTPUT_SCRIPT_RANGES = {
+    "devanagari": (0x0900, 0x097F),
+    "bn": (0x0980, 0x09FF),
+    "ta": (0x0B80, 0x0BFF),
+    "te": (0x0C00, 0x0C7F),
+    "kn": (0x0C80, 0x0CFF),
+    "ml": (0x0D00, 0x0D7F),
+}
+_OUTPUT_SCRIPT_FOR_LANGUAGE = {
+    "hi": "devanagari",
+    "mr": "devanagari",
+    "bn": "bn",
+    "ta": "ta",
+    "te": "te",
+    "kn": "kn",
+    "ml": "ml",
+}
+
+_ROMANIZED_LANGUAGE_MARKERS = {
+    "te": frozenset({
+        "andi", "repu", "ivala", "ippudu", "undi", "unnaru", "kavali",
+        "cheppandi", "matladandi", "ledandi", "chesanu", "ayindi",
+        "sare", "avunu", "meeru", "mee", "randi", "parledu", "cheyandi",
+        "samayaniki", "vaccheyandi", "vacheyandi", "ravali", "choostaru",
+        "ayyindhi", "garu", "nenu", "memu", "nuvvu", "naaku", "naku",
+        "meeku", "miku", "vastanu", "vastam", "vastava", "veltanu",
+        "veltam", "veltava", "telusu", "ledu", "kaadu", "bagundi",
+        "enduku", "ekkada", "ela", "enti", "naa", "peru", "malli",
+        "kaluddam", "ardham", "artham", "kaaledu", "kaledu",
+        "avvaledu",
+    }),
+    "hi": frozenset({
+        "ji", "kal", "abhi", "hai", "hain", "aap", "mujhe", "chahiye",
+        "batayiye", "boliye", "aaiye", "aana", "paanch", "baje", "rukiye",
+    }),
+    "ta": frozenset({
+        "nga", "naalai", "irukku", "venum", "sollunga", "pesunga",
+        "aayiduchu", "pannitten", "enna", "seyyanum", "pannanum",
+        "puriyala", "theriyala", "enakku", "kidaichatha",
+    }),
+    "kn": frozenset({
+        "ri", "naale", "ide", "beku", "heli", "maathadi", "madiddene",
+        "agide", "nanage", "gothilla", "gottilla", "arthavagilla",
+        "sikkideya",
+    }),
+    "ml": frozenset({
+        "nale", "naale", "undu", "aanu", "venam", "parayamo",
+        "samsarikkumo", "cheythu", "ayi", "varu", "enikku",
+        "manassilaayilla", "manassilayilla", "manasilayilla", "ariyilla",
+        "kittiyo",
+    }),
+    "mr": frozenset({
+        "udya", "ahe", "ahet", "mala", "tumhi", "sanga", "havi", "kele",
+        "jhali", "majhi", "kadhi", "aahe",
+    }),
+    "bn": frozenset({
+        "kal", "ache", "chai", "bolun", "bolben", "korechi", "hoyeche",
+        "ashben", "panch", "tay", "ami", "bujhte", "bujhi", "bujhlam",
+        "parchi", "parchhi", "amar", "holo",
+    }),
+}
+
+_ROMANIZED_STRONG_MARKERS = frozenset({
+    "andi", "repu", "ivala", "ippudu", "unnaru", "kavali", "cheppandi",
+    "matladandi", "ledandi", "chesanu", "ayindi", "ji", "hain", "mujhe",
+    "chahiye", "batayiye", "boliye", "sare", "avunu", "meeru", "mee",
+    "randi", "parledu", "cheyandi", "nga", "naalai", "irukku", "venum",
+    "samayaniki", "vaccheyandi", "vacheyandi", "ravali", "choostaru",
+    "ayyindhi", "garu",
+    "sollunga", "pesunga", "aayiduchu", "pannitten", "ri", "naale", "beku",
+    "maathadi", "madiddene", "agide", "undu", "aanu", "venam",
+    "parayamo", "samsarikkumo", "cheythu", "udya", "ahet", "tumhi",
+    "sanga", "havi", "jhali", "ache", "bolun", "bolben", "korechi",
+    "hoyeche", "kaaledu", "kaledu", "seyyanum", "pannanum", "puriyala",
+    "theriyala", "gothilla", "gottilla", "arthavagilla",
+    "manassilaayilla", "manassilayilla", "manasilayilla", "ariyilla",
+    "bujhte", "bujhlam", "parchi", "parchhi",
+})
+
+_ROMANIZED_STRONG_STEMS = {
+    "te": re.compile(
+        r"\b(?:samayanik|va?c+h?eyand|vacheyand|raval|choost|ayyindh?|garu|"
+        r"vast(?:anu|am|ava)|velt(?:anu|am|ava)|telus(?:u|aa)|"
+        r"bagund(?:i|hi)|ledu|kaadu|enduku|ekkada|kaluddam|"
+        r"ar[dth]am|kaa?ledu|avvaledu|dorikinda)\w*\b",
+        re.I,
+    ),
+    "hi": re.compile(
+        r"\b(?:aaiy|rukiy|aana|paanch|baje|mera|mujhe|kab)\w*\b", re.I
+    ),
+    "ta": re.compile(
+        r"\b(?:seyyanum|pannanum|puriyala|theriyala|enakku|kidaichatha)\w*\b",
+        re.I,
+    ),
+    "kn": re.compile(
+        r"\b(?:goth?illa|arthavagilla|nanage|sikkideya)\w*\b", re.I
+    ),
+    "ml": re.compile(
+        r"\b(?:varu|manass?ilaa?yilla|manasilayilla|ariyilla|enikku|kittiyo)\w*\b",
+        re.I,
+    ),
+    "mr": re.compile(r"\b(?:majhi|kadhi|aahe)\w*\b", re.I),
+    "bn": re.compile(
+        r"\b(?:ashben|panch|tay|bujhte|bujhlam|parchh?i|amar|holo)\w*\b",
+        re.I,
+    ),
+}
+
+_DEVANAGARI_LANGUAGE_MARKERS = {
+    "hi": (
+        " के ", " में ", " अभी ", " कोई ", " मिली", " है", " हैं",
+        " मुझे ", " आप ", " आपका", " आपकी", " आपके", " चाहिए", "बताइए",
+        " बजे", " आइए",
+    ),
+    "mr": (
+        "च्या", "नोंदींमध्ये", " सध्या ", " कोणतीही ", "सापडली", " नाही",
+        " आहे", " आहेत", " मला ", " तुम्ही ", " तुमचा", " तुमची", " हवी",
+        "सांगा", " उद्या",
+        " वाजता",
+    ),
+}
+_DEVANAGARI_STRONG_MARKERS = {
+    "hi": (
+        " हो गया", " हो गई", " गया है", " गई है", " चुका", " चुकी",
+        " आइए", " रुकिए", " बजे", " कल ", " मेरा", " मेरी", " मेरे",
+        " क्या ", " यह ", " वह ", " मुझे ", " समझ ", " गया",
+        " ठीक है", " प्रतीक्षा ", " करें",
+    ),
+    "mr": (
+        " झाली", " झाले", " आहे", " आहेत", " केले", " केली",
+        " उद्या", " भेटू", " थांबा", " वाजता", " माझा", " माझी",
+        " माझे", " कधी ",
+    ),
+}
+
+_ENGLISH_CLAUSE_WORDS = frozenset({
+    "i", "you", "we", "they", "he", "she", "it", "the", "this", "that",
+    "is", "are", "was", "were", "will", "would", "can", "could", "should",
+    "have", "has", "had", "do", "does", "did", "not", "for", "with", "to",
+    "from", "at", "on", "in", "please", "your", "my", "our", "now",
+})
+_ENGLISH_CLAUSE_PREDICATES = frozenset({
+    "appointment", "available", "booked", "booking", "cancelled", "canceled",
+    "changed", "checked", "checking", "confirmed", "created", "failed",
+    "fixed", "logged", "moved", "recorded", "reserved", "scheduled", "sent",
+    "slot", "successful", "successfully",
+})
+
+# Indic phone speech may legitimately contain clinic loanwords and Latin-script
+# names, but never an English clause.  Keep this list deliberately small: an
+# unknown lowercase Latin word is safer to reject than to let the model drift.
+_LATIN_CLINIC_LOANWORDS = frozenset({
+    "address", "appointment", "booking", "cancel", "clinic", "confirm",
+    "doctor", "dr", "fee", "fees", "message", "next", "number", "patient",
+    "ready", "report", "reschedule", "slot", "sorry", "test", "time",
+    "token", "treatment", "urgent",
+})
+_ENGLISH_NEVER_NAME_WORDS = frozenset({
+    "all", "good", "hello", "hi", "it", "okay", "ok", "please", "right",
+    "sure", "thank", "thanks", "worked", "working", "yes", "you",
+})
+
+
+def _romanized_output_language(text: str) -> str | None:
+    """Classify only high-confidence Latin transliteration, never one loanword."""
+    words = set(re.findall(r"[a-z]+", (text or "").casefold()))
+    if len(words) < 2:
+        return None
+    strong = [
+        code
+        for code, pattern in _ROMANIZED_STRONG_STEMS.items()
+        if pattern.search(text or "")
+    ]
+    if len(strong) == 1:
+        return strong[0]
+    scores = {
+        code: len(words & markers)
+        for code, markers in _ROMANIZED_LANGUAGE_MARKERS.items()
+    }
+    best = max(scores.values(), default=0)
+    # One unambiguous Indic grammar/pronoun marker inside a multiword clause is
+    # sufficient. Requiring two let short, complete transliterated questions
+    # ("mera appointment kab hai?") pass an explicit English lock.
+    if best < 1:
+        return None
+    winners = [code for code, score in scores.items() if score == best]
+    return winners[0] if len(winners) == 1 else None
+
+
+def _devanagari_output_language(text: str) -> str | None:
+    """Separate Hindi from Marathi when their shared script is insufficient."""
+    padded = f" {' '.join((text or '').split())} "
+    strong = [
+        code
+        for code, markers in _DEVANAGARI_STRONG_MARKERS.items()
+        if any(marker in padded for marker in markers)
+    ]
+    if len(strong) == 1:
+        return strong[0]
+    scores = {
+        code: sum(marker in padded for marker in markers)
+        for code, markers in _DEVANAGARI_LANGUAGE_MARKERS.items()
+    }
+    best = max(scores.values(), default=0)
+    if best < 2:
+        return None
+    winners = [code for code, score in scores.items() if score == best]
+    return winners[0] if len(winners) == 1 else None
+
+
+def _has_output_language_drift(text: str, lang_code: str) -> bool:
+    """Detect wrong-script, same-script, and romanized language drift."""
+    counts = {
+        script: sum(
+            start <= ord(char) <= end
+            and unicodedata.category(char).startswith("L")
+            for char in text or ""
+        )
+        for script, (start, end) in _OUTPUT_SCRIPT_RANGES.items()
+    }
+    romanized = _romanized_output_language(text)
+    if lang_code == "en":
+        latin_words = set(re.findall(r"[a-z]+", (text or "").casefold()))
+        return (
+            any(count >= 2 for count in counts.values())
+            or romanized is not None
+            or bool(latin_words & _ROMANIZED_STRONG_MARKERS)
+        )
+
+    expected = _OUTPUT_SCRIPT_FOR_LANGUAGE.get(lang_code)
+    if expected is None:
+        return False
+    if any(count >= 2 for script, count in counts.items() if script != expected):
+        return True
+    if expected == "devanagari" and counts[expected] >= 3:
+        detected = _devanagari_output_language(text)
+        if detected is not None and detected != lang_code:
+            return True
+    if romanized is not None:
+        # Every Indic voice contract is native-script. A full romanized clause
+        # is drift even when it transliterates the currently locked language;
+        # isolated Latin doctor/patient names are handled below.
+        return True
+    raw_latin_words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", text or "")
+    latin_words = [word.casefold() for word in raw_latin_words]
+    # A native prefix must not camouflage a full English clause. Ordinary
+    # clinic loanwords/entities (doctor, appointment, Dr Rao) remain allowed;
+    # a grammatical English clause carries several function words.
+    latin_set = set(latin_words)
+    function_words = len(latin_set & _ENGLISH_CLAUSE_WORDS)
+    english_predicate = bool(latin_set & _ENGLISH_CLAUSE_PREDICATES)
+    predicate_words = len(latin_set & _ENGLISH_CLAUSE_PREDICATES)
+    if len(latin_words) >= 2 and (
+        predicate_words >= 2
+        or function_words >= 2
+        or (function_words >= 1 and english_predicate)
+    ):
+        return True
+    if len(latin_words) >= 2:
+        own_romanized = _ROMANIZED_LANGUAGE_MARKERS.get(lang_code, frozenset())
+        if counts[expected] == 0:
+            previous_was_title = False
+            entity_only = True
+            for raw_word, word in zip(raw_latin_words, latin_words, strict=True):
+                is_title = word in {"dr", "doctor"}
+                is_name = (
+                    word not in _LATIN_CLINIC_LOANWORDS
+                    and (
+                        previous_was_title
+                        or (
+                            raw_word[0].isupper()
+                            and word not in _ENGLISH_NEVER_NAME_WORDS
+                        )
+                    )
+                )
+                if not (is_title or is_name):
+                    entity_only = False
+                    break
+                previous_was_title = is_title
+            if not entity_only:
+                return True
+        previous_was_title = False
+        for raw_word, word in zip(raw_latin_words, latin_words, strict=True):
+            is_title = word in {"dr", "doctor"}
+            is_proper_name = (
+                raw_word[0].isupper()
+                and word not in _ENGLISH_NEVER_NAME_WORDS
+            )
+            if not (
+                word in _LATIN_CLINIC_LOANWORDS
+                or word in own_romanized
+                or (
+                    previous_was_title
+                    and word not in _LATIN_CLINIC_LOANWORDS
+                )
+                or is_proper_name
+            ):
+                return True
+            previous_was_title = is_title
+        return False
+    # A single borrowed word or proper name is not a language switch. A nearly
+    # all-Latin response under an Indic lock is still wrong-language output.
+    if counts[expected] < 3:
+        return bool(latin_words)
+    return False
+
+
+async def _guard_output_language_stream(text, lang_code: str, state=None):
+    """Never send model output outside the active language through TTS."""
+    pending = ""
+    async for chunk in text:
+        pending += chunk
+        while True:
+            boundary = _SPEECH_BOUNDARY.search(pending)
+            if boundary is None:
+                break
+            sentence = pending[:boundary.end()]
+            # The boundary belongs to the sentence we just yielded.  Preserve
+            # following whitespace so TTS does not join two sentences as
+            # ``All right.I ...``.
+            pending = pending[boundary.end():]
+            if _has_output_language_drift(sentence, lang_code):
+                logger.error("output_language_drift_blocked active=%s", lang_code)
+                leading = sentence[: len(sentence) - len(sentence.lstrip())]
+                recovery = (
+                    build_read_failure_text(lang_code)
+                    if getattr(state, "read_answer_owed", False)
+                    else _safe_output_recovery(lang_code)
+                )
+                yield leading + recovery
+                return
+            yield sentence
+    if pending:
+        if _has_output_language_drift(pending, lang_code):
+            logger.error("output_language_drift_blocked active=%s", lang_code)
+            leading = pending[: len(pending) - len(pending.lstrip())]
+            recovery = (
+                build_read_failure_text(lang_code)
+                if getattr(state, "read_answer_owed", False)
+                else _safe_output_recovery(lang_code)
+            )
+            yield leading + recovery
+        else:
+            yield pending
+
+
+async def _guard_output_language_with_verified_receipt(
+    text, lang_code: str, verified_receipt: str | None, state=None
+):
+    """Trust an exact server-rendered receipt, still guard every other output."""
+    if not verified_receipt:
+        async for chunk in _guard_output_language_stream(text, lang_code, state):
+            yield chunk
+        return
+    raw = "".join([chunk async for chunk in text])
+    if _mutation_speech_key(raw) == _mutation_speech_key(verified_receipt):
+        yield raw
+        return
+
+    async def _source():
+        yield raw
+
+    async for chunk in _guard_output_language_stream(_source(), lang_code, state):
+        yield chunk
+
+
+_CHECKING_PROMISE_MARKERS = (
+    "let me check", "i'll check", "i will check", "checking now", "please wait",
+    "i'm checking", "i am checking", "i'll verify", "i will verify",
+    "give me a second", "just a second", "i'll look into", "i will look into",
+    "let me look", "let me see", "give me a moment", "i'll take a look",
+    "i will take a look", "i'm looking that up", "i am looking that up",
+    "checking availability", "let me confirm that", "i'll pull that up",
+    "i will pull that up", "i'll find out", "i will find out", "one moment",
+    "hold on", "i'm pulling up", "i am pulling up", "i'll search",
+    "i will search", "bear with me", "i'll be right back",
+    "i will be right back", "i'm accessing", "i am accessing",
+    "i'm fetching", "i am fetching", "a few seconds", "stay on the line",
+    "while i review", "while i retrieve", "just a moment", "double-check",
+    "i am about to check", "i'm about to check", "i intend to verify",
+    "i can have a look", "i will investigate", "i'll investigate",
+    "let me make sure", "i will make sure", "i'll make sure",
+    "i will cross-check", "i'll cross-check", "i will validate",
+    "i'll validate", "i am going to inspect", "i'm going to inspect",
+    "hang on a moment", "give me half a minute", "taking a look now",
+    "i have to check", "i've got to check", "query the calendar",
+    "one second while i check", "just a sec while i look", "searching now",
+    "చెక్ చేస్తాను", "చూస్తాను", "ఒక్క నిమిషం",
+    "जाँच करती", "देखती हूँ", "एक मिनट", "கொஞ்சம் இருங்க", "பார்க்கிறேன்",
+    "ಒಂದು ನಿಮಿಷ", "ನೋಡುತ್ತೇನೆ", "ഒരു മിനിറ്റ്", "പരിശോധിക്കാം",
+    "एक मिनिट", "तपासते", "এক মিনিট", "দেখছি",
+)
+_CHECKING_PROMISE_RE = re.compile(
+    r"\b(?:"
+    r"(?:i|we)(?:'ll|\s+will|\s+shall|(?:'m|'re|\s+am|\s+are)\s+"
+    r"(?:going|about)\s+to|\s+intend\s+to)\s+|"
+    r"(?:i|we)(?:\s+have|(?:'ve|\s+have)\s+got)\s+to\s+|"
+    r"i(?:'d|\s+would)\s+(?:(?:need|like|have)\s+to\s+)?|"
+    r"(?:i|we)\s+(?:can|could|should|shall|must|may|might|need\s+to|ought\s+to)\s+"
+    r"(?:(?:need|have)\s+to\s+)?|"
+    r"(?:let\s+me|lemme|let\s+us|allow\s+me(?:\s+a\s+moment)?\s+to)\s+)"
+    r"(?:(?:quickly|just|first|currently)\s+|go\s+and\s+|"
+    r"(?:need|have|want|ought)\s+to\s+|"
+    r"take\s+a\s+moment\s+to\s+)*"
+    r"(?:double[-\s]?check|check|verify|fetch|get|query|consult|confirm|review|retrieve|open|"
+    r"investigate|inspect|validate|cross[-\s]?check|make\s+sure|"
+    r"(?:have\s+a\s+)?look(?:\s+into|\s+up)?|"
+    r"find(?:\s+out)?|see\s+(?:what|if|whether|about)|"
+    r"pull(?:\s+(?:that|it|your\s+record|your\s+appointment))?\s+up)\b|"
+    r"\b(?:i|we)(?:'m|'re|\s+am|\s+are)\s+"
+    r"(?:(?:just|first|currently)\s+)?"
+    r"(?:checking|verifying|consulting|confirming|opening|finding|getting|"
+    r"taking\s+a\s+look|"
+    r"seeing\s+(?:if|whether)|"
+    r"looking\s+(?:that|it)\s+up|"
+    r"pulling(?:\s+[^.?!]{0,25})?\s+up|accessing|fetching|searching|"
+    r"retrieving|reviewing)\b|"
+    r"\b(?:that|it|this)\s+is\s+being\s+(?:checked|verified|reviewed)\b|"
+    r"\b(?:checking|searching|querying|verifying|looking)\s+now\b|"
+    r"\b(?:one\s+second|just\s+a?\s*sec(?:ond)?)\s+while\s+(?:i|we)\s+"
+    r"(?:check|look|search|query)\b|"
+    r"^\s*(?:(?:one\s+second|just\s+a?\s*sec(?:ond)?)(?:,?\s+please)?|"
+    r"(?:give|allow)\s+me\s+(?:a|one)\s+sec(?:ond)?|"
+    r"wait\s+(?:a|one)\s+sec(?:ond)?)(?:\s+please)?[.!]?\s*$|"
+    r"\b(?:just\s+)?(?:a|one)\s+moment\b|"
+    r"\b(?:hang|hold)\s+on(?:\s+(?:a|one)\s+moment)?\b|"
+    r"\b(?:bear\s+with\s+me|stay\s+on\s+the\s+line|give\s+me\s+"
+    r"(?:a\s+few\s+seconds|half\s+a\s+minute|a\s+minute|a\s+moment|a\s+beat))\b",
+    re.I,
+)
+_LOCAL_CLARIFICATION_SPEECH = re.compile(
+    r"\b(?:ask(?:\s+you)?\s+for|confirm|clarify|repeat)\b.{0,55}"
+    r"\b(?:your|the\s+patient['â€™]?s|patient)\b.{0,35}"
+    r"\b(?:name|phone|number|date|day|time|choice)\b|"
+    r"\bconfirm\s+(?:if|whether)\b.{0,55}\b(?:works?|suits?|okay|ok)"
+    r"\s+for\s+you\b",
+    re.I | re.S,
+)
+
+
+async def _guard_unbacked_checking_speech_stream(text, lang_code: str, state):
+    """A model may not promise a lookup that it never started.
+
+    Real tool wrappers own their fillers and set a read/mutation latch first.
+    A standalone model-authored checking promise with no such latch is replaced
+    by an explicit non-result, closing the exact "let me check" → silence hole.
+    """
+    def _unbacked(part: str) -> bool:
+        if _LOCAL_CLARIFICATION_SPEECH.search(part):
+            return False
+        raw_folded = " ".join(
+            part.casefold().translate(str.maketrans({"’": "'", "‘": "'"})).split()
+        )
+        folded = sanitize_for_tts(part).casefold().replace("’", "'")
+        promised = any(
+            marker in candidate
+            for candidate in (raw_folded, folded)
+            for marker in _CHECKING_PROMISE_MARKERS
+        ) or any(
+            _CHECKING_PROMISE_RE.search(candidate) is not None
+            for candidate in (raw_folded, folded)
+        )
+        work_started = bool(
+            getattr(state, "read_in_flight_count", 0)
+            or getattr(state, "mutation_in_flight", None)
+            or getattr(state, "booking_lookup_in_flight", False)
+        )
+        return promised and not work_started
+
+    pending = ""
+    async for part in text:
+        pending += part
+        while True:
+            boundary = _SPEECH_BOUNDARY.search(pending)
+            if boundary is None:
+                break
+            sentence = pending[:boundary.end()]
+            pending = pending[boundary.end():]
+            if not _unbacked(sentence):
+                yield sentence
+                continue
+            logger.error(
+                "unbacked_checking_promise_blocked lang=%s", lang_code
+            )
+            leading = sentence[: len(sentence) - len(sentence.lstrip())]
+            yield leading + build_read_failure_text(lang_code)
+            return
+    if pending:
+        if _unbacked(pending):
+            logger.error(
+                "unbacked_checking_promise_blocked lang=%s", lang_code
+            )
+            leading = pending[: len(pending) - len(pending.lstrip())]
+            yield leading + build_read_failure_text(lang_code)
+            return
+        yield pending
+
+
+async def _settle_read_answer_stream(text, state):
+    """Release an owed read reply only after the complete reply is grounded.
+
+    Checking incrementally is unsafe: a matching doctor name can arrive before
+    a later fabricated time, and a real time in sentence two can otherwise
+    launder a false time in sentence one. Non-read replies retain normal
+    streaming; only the short post-read answer is held to this boundary.
+    """
+    terminal_failure = bool(
+        getattr(state, "read_terminal_failure_armed", False)
+    )
+    pre_read_intent = getattr(state, "mutable_read_intent", None)
+    if (
+        not getattr(state, "read_answer_owed", False)
+        and not terminal_failure
+        and not pre_read_intent
+    ):
+        async for chunk in text:
+            yield chunk
+        return
+
+    buffered = [chunk async for chunk in text]
+    raw_heard = "".join(buffered)
+    spoken = sanitize_for_tts(raw_heard).strip()
+    terminal_failure = bool(
+        getattr(state, "read_terminal_failure_armed", False)
+    )
+    if terminal_failure:
+        language = getattr(state, "language", None) or "en"
+        failure = sanitize_for_tts(build_read_failure_text(language)).strip()
+        if (
+            not getattr(state, "read_terminal_failure_delivered", False)
+            and _mutation_speech_key(spoken) == _mutation_speech_key(failure)
+        ):
+            state.read_terminal_failure_delivered = True
+            for safe_chunk in buffered:
+                yield safe_chunk
+        return
+    if pre_read_intent and not getattr(state, "read_answer_owed", False):
+        language = getattr(state, "language", None) or "en"
+        failure = sanitize_for_tts(build_read_failure_text(language)).strip()
+        if not spoken or is_backchannel(spoken):
+            state.mutable_read_intent = None
+            state.mutable_read_utterance = None
+            yield build_read_failure_text(language)
+            return
+        if _mutation_speech_key(spoken) == _mutation_speech_key(failure):
+            state.mutable_read_intent = None
+            state.mutable_read_utterance = None
+            for safe_chunk in buffered:
+                yield safe_chunk
+            return
+        if _mutable_read_assertion(spoken, pre_read_intent):
+            state.mutable_read_intent = None
+            state.mutable_read_utterance = None
+            logger.error(
+                "unverified_mutable_read_claim_blocked intent=%s lang=%s",
+                pre_read_intent,
+                language,
+            )
+            yield build_read_failure_text(language)
+            return
+        for safe_chunk in buffered:
+            yield safe_chunk
+        return
+    # The bounded fallback may have fired while the model was still producing
+    # text. Its deterministic failure is then the terminal answer.
+    if not getattr(state, "read_answer_owed", False):
+        return
+
+    if not spoken or is_backchannel(spoken):
+        return
+    heard = spoken.casefold()
+    verified = sanitize_for_tts(
+        getattr(state, "verified_read_speech", None) or ""
+    ).strip()
+    failure = sanitize_for_tts(
+        build_read_failure_text(getattr(state, "language", None) or "en")
+    ).strip()
+    evidence = tuple(getattr(state, "read_result_evidence", ()) or ())
+    evidence_groups: list[tuple[str, tuple[str, ...]]] = []
+    for group in evidence:
+        kind, separator, values = group.partition("\x1e")
+        if not separator:  # compatibility with pre-tagged in-memory fixtures
+            kind, values = "text", group
+        evidence_groups.append((kind, tuple(values.split("\x1f"))))
+
+    def _variant_hit(variant: str) -> bool:
+        # Do not let ``unavailable`` satisfy server evidence ``available``.
+        return re.search(rf"(?<!\w){re.escape(variant)}(?!\w)", heard) is not None
+
+    evidence_hits = sum(
+        any(_variant_hit(variant) for variant in variants)
+        for _, variants in evidence_groups
+    )
+    language = getattr(state, "language", None) or "en"
+    owed = " ".join(
+        str(getattr(state, "read_owed_utterance", "") or "")
+        .casefold()
+        .split()
+    )
+    evidence_kinds = {kind for kind, _ in evidence_groups}
+    return_query = bool(
+        re.search(
+            r"\b(?:when\s+(?:does|will).{0,30}(?:return|come\s+back)|"
+            r"next\s+available|back\s+when)\b|తిరిగి|वापस|மீண்டும்|"
+            r"ಮತ್ತೆ|തിരികെ|पुन्हा|ফির",
+            owed,
+            re.I,
+        )
+    )
+    sitting_query = bool(
+        re.search(r"\b(?:sitting|consulting)\s+hours?\b|\bschedule\b", owed)
+    )
+    available_query = bool(
+        re.search(
+            r"\b(?:available|availability|free|openings?|slots?|capacity)\b|"
+            r"అందుబాటులో|खाली|उपलब्ध|கிடைக்க|ಲಭ್ಯ|ലഭ്യ|मोकळ|পাওয়া|খালি",
+            owed,
+            re.I,
+        )
+    )
+    capacity_query = bool(
+        re.search(r"\b(?:token\s+|queue\s+)?capacity\b", owed, re.I)
+    )
+    claimed_times = clock_time_mentions(spoken, language)
+    if return_query:
+        selected_time_kinds = {"next_available_time"}
+    elif sitting_query:
+        selected_time_kinds = {"sitting_time"}
+    elif available_query:
+        selected_time_kinds = {"available_time", "time"}
+    else:
+        selected_time_kinds = {
+            "time", "available_time", "sitting_time", "next_available_time"
+        }
+    def _evidence_times(kinds: set[str]) -> set[str]:
+        values: set[str] = set()
+        for kind, variants in evidence_groups:
+            if kind not in kinds or not variants:
+                continue
+            try:
+                canonical = time_cls.fromisoformat(variants[0]).strftime("%H:%M")
+            except ValueError:
+                for variant in variants:
+                    for mention in clock_time_mentions(variant, language):
+                        values.update(mention)
+            else:
+                values.add(canonical)
+        return values
+
+    expected_times = _evidence_times(selected_time_kinds)
+    expected_unavailable_times = _evidence_times({
+        "unavailable_time", "occupied_time", "unpublished_time",
+        "past_time", "unfree_window_time",
+    })
+    negative_time_claim = re.compile(
+        r"\b(?:unavailable|not\s+available|occupied|not\s+(?:a\s+)?bookable|"
+        r"already\s+passed|not\s+free|no\s+free\s+start|cannot\s+be\s+booked)\b",
+        re.I,
+    )
+    grounded_time_claims = bool(claimed_times)
+    grounded_positive_time_values: set[str] = set()
+    grounded_negative_time_values: set[str] = set()
+    # Segment the raw model reply before TTS normalization. The sanitizer
+    # spells clock minutes out and can consume the period after ``P.M.``, which
+    # used to merge "5:30 P.M. 5:45 P.M. is free" into one negative clause and
+    # suppress a fully truthful mixed unavailable/available answer.
+    segment_source = re.sub(
+        r"\b([ap])\.?\s*m\.(?=\s+(?:\d|[A-Z]))",
+        r"\1m" "\x1d",
+        raw_heard,
+        flags=re.I,
+    )
+    segment_source = re.sub(
+        r"\b([ap])\.?\s*m\.?(?=\s|$)",
+        r"\1m",
+        segment_source,
+        flags=re.I,
+    )
+    for raw_segment in re.split(
+        r"\s*(?:[.!?।\n;\x1d]|\bbut\b|\bhowever\b)\s*",
+        segment_source,
+        flags=re.I,
+    ):
+        segment = sanitize_for_tts(raw_segment).strip()
+        mentions = clock_time_mentions(segment, language)
+        if not mentions:
+            continue
+        negative_segment = negative_time_claim.search(segment) is not None
+        expected_for_segment = (
+            expected_unavailable_times if negative_segment else expected_times
+        )
+        if not expected_for_segment or not all(
+            expected_for_segment.intersection(mention) for mention in mentions
+        ):
+            grounded_time_claims = False
+            break
+        grounded_values = {
+            candidate
+            for mention in mentions
+            for candidate in mention
+            if candidate in expected_for_segment
+        }
+        if negative_segment:
+            grounded_negative_time_values.update(grounded_values)
+        else:
+            grounded_positive_time_values.update(grounded_values)
+    requested_time_mentions = clock_time_mentions(owed, language)
+    requested_time_answered = all(
+        bool(
+            expected_unavailable_times.intersection(mention)
+            and grounded_negative_time_values.intersection(mention)
+        )
+        or bool(
+            expected_times.intersection(mention)
+            and grounded_positive_time_values.intersection(mention)
+        )
+        for mention in requested_time_mentions
+        if (
+            expected_unavailable_times.intersection(mention)
+            or expected_times.intersection(mention)
+        )
+    )
+    # Every clock claim must resolve to a time present in this same server
+    # result. A correct fact later in the reply cannot launder an earlier false
+    # one, and a doctor/patient name cannot authorize a made-up time.
+    high_risk_claims_grounded = not claimed_times or grounded_time_claims
+
+    # If a phrase plainly claims a clock but the conservative parser cannot
+    # resolve it (for example "two twenty P.M."), weak name evidence must not
+    # authorize it. Validate each meridiem/fraction segment independently.
+    clock_segments = [
+        match.group(0)
+        for pattern in (
+            re.compile(
+                r"(?:[^\W\d_]+[\s-]+){1,6}[ap]\.?\s*m\.?(?!\w)",
+                re.I | re.UNICODE,
+            ),
+            re.compile(
+                r"\b[^\W\d_]+\s+(?:past|after|to)\s+[^\W\d_]+\b",
+                re.I | re.UNICODE,
+            ),
+            re.compile(r"\bhalf\s+[^\W\d_]+\b", re.I | re.UNICODE),
+        )
+        for match in pattern.finditer(spoken)
+    ]
+    unsupported_clock_claim = any(
+        not clock_time_mentions(segment, language) for segment in clock_segments
+    )
+
+    def _kind_hit(kind: str) -> bool:
+        return any(
+            _variant_hit(variant)
+            for group_kind, variants in evidence_groups
+            if group_kind == kind
+            for variant in variants
+        )
+
+    specialty_families = (
+        ("allergy", ("allergy", "allergist", "immunology", "immunologist")),
+        ("cardiology", ("cardiology", "cardiologist", "heart specialist")),
+        ("dental", ("dental", "dentistry", "dentist", "oral medicine")),
+        ("dermatology", ("dermatology", "dermatologist", "skin specialist")),
+        (
+            "diabetology",
+            ("diabetology", "diabetologist", "diabetes specialist"),
+        ),
+        ("endocrinology", ("endocrinology", "endocrinologist")),
+        (
+            "ent",
+            ("ent", "ear nose throat", "otolaryngology", "otolaryngologist"),
+        ),
+        ("gastroenterology", ("gastroenterology", "gastroenterologist")),
+        (
+            "gynecology",
+            (
+                "gynecology",
+                "gynaecology",
+                "gynecologist",
+                "gynaecologist",
+            ),
+        ),
+        (
+            "nephrology",
+            ("nephrology", "nephrologist", "kidney specialist"),
+        ),
+        ("neurology", ("neurology", "neurologist")),
+        ("oncology", ("oncology", "oncologist", "cancer specialist")),
+        (
+            "ophthalmology",
+            ("ophthalmology", "ophthalmologist", "eye specialist"),
+        ),
+        (
+            "orthopedics",
+            ("orthopedic", "orthopedics", "orthopaedic", "orthopaedics"),
+        ),
+        (
+            "pediatrics",
+            (
+                "pediatric",
+                "pediatrics",
+                "paediatric",
+                "paediatrics",
+                "child specialist",
+            ),
+        ),
+        (
+            "physiotherapy",
+            ("physiotherapy", "physiotherapist", "physical therapist"),
+        ),
+        (
+            "psychiatry",
+            ("psychiatry", "psychiatrist", "mental health specialist"),
+        ),
+        (
+            "pulmonology",
+            ("pulmonology", "pulmonologist", "lung specialist"),
+        ),
+        ("rheumatology", ("rheumatology", "rheumatologist")),
+        ("surgery", ("surgery", "surgeon", "surgical specialist")),
+        ("urology", ("urology", "urologist")),
+    )
+
+    def _phrase_hit(source: str, phrase: str) -> bool:
+        return re.search(
+            rf"(?<!\w){re.escape(phrase.casefold())}(?!\w)",
+            source.casefold(),
+        ) is not None
+
+    def _specialty_family_hits(source: str) -> set[str]:
+        return {
+            family
+            for family, aliases in specialty_families
+            if any(_phrase_hit(source, alias) for alias in aliases)
+        }
+
+    route_specialty_variants = [
+        variant
+        for group_kind, variants in evidence_groups
+        if group_kind == "route_specialization"
+        for variant in variants
+    ]
+    expected_specialty_families = _specialty_family_hits(
+        " ".join(route_specialty_variants)
+    )
+    claimed_specialty_families = _specialty_family_hits(heard)
+    specialty_claim_cue = bool(
+        re.search(
+            r"\b(?:speciali[sz](?:es|ed|ation)?\s+(?:in|as)|"
+            r"specialist|clinic\s+(?:only\s+)?treats?|"
+            r"(?:doctor|dr\.?\s+\w+)\s+is\s+(?:an?\s+)?"
+            r"(?:physician|surgeon|dentist|therapist))\b",
+            heard,
+            re.I,
+        )
+    )
+    specialty_claim_grounded = not route_specialty_variants or (
+        claimed_specialty_families.issubset(expected_specialty_families)
+        and (
+            not specialty_claim_cue
+            or _kind_hit("route_specialization")
+            or bool(claimed_specialty_families)
+        )
+    )
+
+    def _tagged_records(prefix: str) -> dict[int, dict[str, tuple[str, ...]]]:
+        records: dict[int, dict[str, tuple[str, ...]]] = {}
+        pattern = re.compile(rf"{re.escape(prefix)}:(\d+):([a-z_]+)\Z")
+        for group_kind, variants in evidence_groups:
+            match = pattern.fullmatch(group_kind)
+            if match is None:
+                continue
+            records.setdefault(int(match.group(1)), {})[match.group(2)] = variants
+        return records
+
+    def _booking_type_hits(source: str) -> set[str]:
+        hits: set[str] = set()
+        not_token_pattern = re.compile(
+            r"\b(?:not\s+(?:a\s+)?(?:token[-\s]+queue|token\s+booking)|"
+            r"(?:is|was)n['’]?t\s+(?:in\s+)?(?:a\s+|the\s+)?token[-\s]+queue|"
+            r"(?:is|was)\s+not\s+(?:in\s+)?(?:a\s+|the\s+)?token[-\s]+queue|"
+            r"(?:does|did)n['’]?t\s+use\s+(?:a\s+|the\s+)?token[-\s]+queue|"
+            r"(?:does|did)\s+not\s+use\s+(?:a\s+|the\s+)?token[-\s]+queue|"
+            r"no\s+(?:queue\s+)?token(?:\s+(?:was|is))?|"
+            r"without\s+(?:a\s+)?(?:queue\s+)?token)\b",
+            re.I,
+        )
+        not_slot_pattern = re.compile(
+            r"\b(?:no|without)\s+(?:an?\s+)?"
+            r"(?:(?:scheduled|fixed|specific|exact|clock[-\s]+time)\s+)?"
+            r"(?:appointment\s+)?(?:clock\s+)?time\b|"
+            r"\bnot\s+(?:a\s+)?(?:fixed[-\s]+time|time[-\s]+)slot\b|"
+            r"\b(?:does|did)n['’]?t\s+have\s+(?:an?\s+)?"
+            r"(?:scheduled|fixed|specific|exact)\s+(?:appointment\s+)?time\b|"
+            r"\b(?:does|did)\s+not\s+have\s+(?:an?\s+)?"
+            r"(?:scheduled|fixed|specific|exact)\s+(?:appointment\s+)?time\b",
+            re.I,
+        )
+        if not_token_pattern.search(source):
+            hits.add("not_token")
+        if not_slot_pattern.search(source):
+            hits.add("not_slot")
+        # Strip negated spans before looking for positive type claims. Thus
+        # "fixed slot, not a token queue" records one positive and one truthful
+        # negative instead of fabricating a contradictory positive token claim.
+        token_source = not_token_pattern.sub(" ", source)
+        slot_source = not_slot_pattern.sub(" ", source)
+        if re.search(
+            r"\b(?:token[-\s]+queue|queue\s+token|token\s+number|"
+            r"token\s+(?:booking|appointment|\d{1,3})|walk[-\s]+in\s+queue|"
+            r"(?:place|position)\s+in\s+(?:the\s+)?(?:line|queue)|"
+            r"first[-\s]+come\s*,?\s*first[-\s]+served|"
+            r"(?:received|got|have|issued|assigned|given)\s+(?:a\s+)?token)\b",
+            token_source,
+            re.I,
+        ):
+            hits.add("token")
+        if re.search(
+            r"\b(?:fixed[-\s]+time\s+slot|time[-\s]+slot|"
+            r"fixed\s+appointment\s+time|clock[-\s]+time\s+slot|"
+            r"scheduled\s+appointment\s+time)\b|"
+            r"\b(?:appointment|visit)\s+is\s+(?:set\s+)?at\s+"
+            r"(?:breakfast|lunchtime|lunch|noon|midday|dinnertime|dinner)\b|"
+            r"\b(?:appointment|visit)(?:\s+is)?\s+"
+            r"(?:scheduled|set|booked)\s+(?:for|at)\s+"
+            r"(?:breakfast|lunchtime|lunch|noon|midday|dinnertime|dinner)\b|"
+            r"\b(?:an?\s+)?(?:exact|specific|scheduled)\s+appointment\s+time\b",
+            slot_source,
+            re.I,
+        ):
+            hits.add("slot")
+        return hits
+
+    def _field_hit(
+        source: str, field: str, variants: tuple[str, ...]
+    ) -> bool:
+        if field == "time":
+            expected = {
+                candidate
+                for variant in variants
+                for mention in clock_time_mentions(variant, language)
+                for candidate in mention
+            }
+            return any(
+                expected.intersection(mention)
+                for mention in clock_time_mentions(source, language)
+            )
+        if field == "specialization":
+            expected_families = _specialty_family_hits(" ".join(variants))
+            if expected_families.intersection(_specialty_family_hits(source)):
+                return True
+        if field == "booking_type":
+            expected_types = _booking_type_hits(" ".join(variants))
+            claimed_types = _booking_type_hits(source)
+            if "slot" in expected_types and clock_time_mentions(source, language):
+                claimed_types.add("slot")
+            return bool(expected_types.intersection(claimed_types))
+        if field == "token_number":
+            return any(
+                re.search(
+                    rf"\b(?:token|queue)(?:\s+number)?\s+"
+                    rf"{re.escape(variant)}(?!\w)",
+                    source,
+                    re.I,
+                )
+                is not None
+                for variant in variants
+            )
+        return any(_phrase_hit(source, variant) for variant in variants)
+
+    record_source = re.sub(
+        r"\b([ap])\.\s*m\.", r"\1m.", spoken, flags=re.I
+    )
+    record_source = re.sub(
+        r"\bdr\.(?=\s+\w)", "dr", record_source, flags=re.I
+    )
+
+    def _record_sections(
+        records: dict[int, dict[str, tuple[str, ...]]],
+        preferred_anchor: str,
+        *,
+        preserve_semicolons: bool = False,
+    ) -> list[str]:
+        anchor_variants: list[str] = []
+        for field in (
+            preferred_anchor,
+            "doctor" if preferred_anchor == "patient" else "patient",
+        ):
+            variants = sorted(
+                {
+                    variant
+                    for fields in records.values()
+                    for variant in fields.get(field, ())
+                    if variant
+                },
+                key=len,
+                reverse=True,
+            )
+            if any(_phrase_hit(record_source, variant) for variant in variants):
+                anchor_variants = variants
+                break
+        sentences = [
+            section
+            for section in re.split(
+                (
+                    r"\s*(?:[!?।\n]|\.(?=\s|$))\s*"
+                    if preserve_semicolons
+                    else r"\s*(?:[!?।\n;]|\.(?=\s|$))\s*"
+                ),
+                record_source,
+            )
+            if section.strip()
+        ]
+        if not anchor_variants:
+            return sentences
+        anchors = "|".join(re.escape(variant) for variant in anchor_variants)
+        anchor_pattern = re.compile(
+            rf"(?<!\w)(?:{anchors})(?!\w)", re.I
+        )
+        sections: list[str] = []
+        for sentence in sentences:
+            matches = list(anchor_pattern.finditer(sentence))
+            if len(matches) < 2:
+                sections.append(sentence)
+                continue
+            starts = [0, *(match.start() for match in matches[1:])]
+            ends = [*starts[1:], len(sentence)]
+            sections.extend(
+                sentence[start:end].strip()
+                for start, end in zip(starts, ends, strict=True)
+                if sentence[start:end].strip()
+            )
+        return sections
+
+    def _field_identity(
+        field: str, variants: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        if field == "specialization":
+            families = _specialty_family_hits(" ".join(variants))
+            if families:
+                return tuple(sorted(families))
+        if field == "time":
+            times = {
+                candidate
+                for variant in variants
+                for mention in clock_time_mentions(variant, language)
+                for candidate in mention
+            }
+            if times:
+                return tuple(sorted(times))
+        return variants
+
+    def _section_record_compatible(
+        section: str,
+        records: dict[int, dict[str, tuple[str, ...]]],
+        fields: tuple[str, ...],
+    ) -> bool:
+        claim_sets: list[set[int]] = []
+        for field in fields:
+            values: dict[tuple[str, ...], set[int]] = {}
+            for record_id, fields in records.items():
+                variants = fields.get(field)
+                if variants:
+                    values.setdefault(
+                        _field_identity(field, variants), set()
+                    ).add(record_id)
+            claim_sets.extend(
+                record_ids
+                for identity, record_ids in values.items()
+                if any(
+                    _field_hit(section, field, records[record_id][field])
+                    for record_id in record_ids
+                )
+            )
+        return len(claim_sets) < 2 or bool(set.intersection(*claim_sets))
+
+    route_candidates = _tagged_records("route_candidate")
+    route_sections = _record_sections(route_candidates, "doctor")
+    route_candidates_grounded = (
+        all(
+            any(
+                all(
+                    _field_hit(section, field, variants)
+                    for field, variants in fields.items()
+                )
+                for section in route_sections
+            )
+            for fields in route_candidates.values()
+        )
+        and all(
+            _section_record_compatible(
+                section,
+                route_candidates,
+                ("doctor", "specialization"),
+            )
+            for section in route_sections
+        )
+    )
+    booking_records = _tagged_records("booking_record")
+    booking_sections = _record_sections(booking_records, "patient")
+    booking_records_grounded = len(booking_records) < 2 or all(
+        _section_record_compatible(
+            section,
+            booking_records,
+            (
+                "patient", "doctor", "date", "time", "token_number",
+                "booking_type",
+            ),
+        )
+        for section in booking_sections
+    )
+    expected_booking_types = {
+        booking_type
+        for group_kind, variants in evidence_groups
+        if group_kind == "booking_type" or group_kind.endswith(":booking_type")
+        for booking_type in _booking_type_hits(" ".join(variants))
+    }
+    if "token" in expected_booking_types:
+        expected_booking_types.add("not_slot")
+    if "slot" in expected_booking_types:
+        expected_booking_types.add("not_token")
+    claimed_booking_types = _booking_type_hits(spoken)
+    booking_type_claim_grounded = (
+        not claimed_booking_types
+        or not expected_booking_types
+        or claimed_booking_types.issubset(expected_booking_types)
+    )
+    all_bookings_requested = bool(
+        len(booking_records) > 1
+        and re.search(
+            r"\b(?:all|every|both|complete|full)\b.{0,50}"
+            r"\b(?:appointments?|bookings?)\b|"
+            r"\b(?:appointments?|bookings?)\b.{0,50}"
+            r"\b(?:all|every|both|complete|full)\b",
+            owed,
+            re.I,
+        )
+    )
+    all_booking_records_grounded = not all_bookings_requested or all(
+        any(
+            all(
+                _field_hit(section, field, variants)
+                for field, variants in fields.items()
+            )
+            for section in booking_sections
+        )
+        for fields in booking_records.values()
+    )
+    queue_records = _tagged_records("queue_record")
+    queue_sections = _record_sections(
+        queue_records,
+        "patient",
+        preserve_semicolons=True,
+    )
+    queue_record_fields = (
+        "patient",
+        "doctor",
+        "token_number",
+        "now_serving",
+        "people_ahead",
+    )
+    queue_records_grounded = len(queue_records) < 2 or all(
+        _section_record_compatible(
+            section,
+            queue_records,
+            queue_record_fields,
+        )
+        for section in queue_sections
+    )
+    all_queue_results_requested = bool(
+        len(queue_records) > 1
+        and re.search(
+            r"\b(?:all|every|both|complete|full)\b.{0,60}"
+            r"\b(?:tokens?|queues?|statuses?)\b|"
+            r"\b(?:tokens?|queues?|statuses?)\b.{0,60}"
+            r"\b(?:all|every|both|complete|full)\b",
+            owed,
+            re.I,
+        )
+    )
+    all_queue_records_grounded = not all_queue_results_requested or all(
+        any(
+            all(
+                _field_hit(section, field, variants)
+                for field, variants in fields.items()
+                if field != "doctor"
+            )
+            for section in queue_sections
+        )
+        for fields in queue_records.values()
+    )
+    all_specialties_requested = bool(
+        route_specialty_variants
+        and re.search(
+            r"\b(?:which|what|all|every|both|complete|full)\b.{0,40}"
+            r"\b(?:specialties|specialities|specializations|specialisations)\b|"
+            r"\b(?:specialties|specialities|specializations|specialisations)\b"
+            r".{0,40}\b(?:all|every|both|complete|full)\b",
+            owed,
+            re.I,
+        )
+    )
+    all_route_specialties_grounded = not all_specialties_requested or all(
+        _field_hit(spoken, "specialization", variants)
+        for group_kind, variants in evidence_groups
+        if group_kind == "route_specialization"
+    )
+    clarification_variants = [
+        variant
+        for group_kind, variants in evidence_groups
+        if group_kind == "route_clarification"
+        for variant in variants
+    ]
+    route_clarification_grounded = not clarification_variants or any(
+        _mutation_speech_key(spoken) == _mutation_speech_key(variant)
+        for variant in clarification_variants
+    )
+    bookings_empty_variants = [
+        variant
+        for group_kind, variants in evidence_groups
+        if group_kind == "bookings_empty"
+        for variant in variants
+    ]
+    bookings_empty_grounded = not bookings_empty_variants or any(
+        _mutation_speech_key(spoken) == _mutation_speech_key(variant)
+        for variant in bookings_empty_variants
+    )
+
+    named_doctor_claim = bool(
+        re.search(
+            r"\b(?i:dr\.?|doctor)\s+[A-Z][\w'-]+|"
+            r"(?:డాక్టర్|डॉक्टर|மருத்துவர்|ಡಾಕ್ಟರ್|ഡോക്ടർ)\s+\S+",
+            spoken,
+        )
+        or re.search(
+            r"\b(?i:with|doctor\s+is)\s+(?:(?i:dr)\.?\s+)?"
+            r"[A-Z][\w'-]+",
+            spoken,
+        )
+        or re.search(
+            r"(?:^|[.!?]\s+)(?!(?:It|He|She|This|That|There)\b)"
+            r"[A-Z][A-Za-z'-]+\s+is\s+"
+            r"(?:available|unavailable|on\s+leave|sitting|free)\b",
+            spoken,
+        )
+    )
+    doctor_claim_grounded = not (
+        named_doctor_claim and not _kind_hit("doctor")
+    )
+    doctor_titles = (
+        r"dr\.?|doctor|డాక్టర్|डॉक्टर|மருத்துவர்|ಡಾಕ್ಟರ್|"
+        r"ഡോക്ടർ|डॉक्टर|ডাক্তার"
+    )
+
+    def _entity_head(variant: str, *, titles: str | None = None) -> str:
+        value = variant.strip().casefold()
+        if titles is not None:
+            value = re.sub(rf"^(?:{titles})\s+", "", value, flags=re.I)
+        if not value:
+            return ""
+        head = value.split(maxsplit=1)[0].strip(".,:;!?-'\"")
+        return re.sub(r"['’]s\Z", "", head)
+
+    expected_doctor_heads = {
+        _entity_head(variant, titles=doctor_titles)
+        for group_kind, variants in evidence_groups
+        if group_kind == "doctor" or group_kind.endswith(":doctor")
+        for variant in variants
+    }
+    ignored_entity_heads = {
+        "a", "an", "the", "is", "not", "was", "has", "will", "can", "does"
+    }
+    claimed_doctor_heads = {
+        _entity_head(match.group("name"))
+        for match in re.finditer(
+            rf"(?<!\w)(?:{doctor_titles})\s+"
+            r"(?P<name>[^\W\d_][\w'-]*)(?!\w)",
+            spoken,
+            re.I | re.UNICODE,
+        )
+        if match.group("name").casefold() not in ignored_entity_heads
+    }
+    # A title is not required to invent a provider.  Once one grounded doctor
+    # appears, phrases such as ``your provider is Patel`` or ``you can see
+    # Patel too`` used to inherit that doctor's evidence and leak the new name.
+    # Extract only role/encounter-shaped proper names here; a blanket capitalized
+    # word scan would mistake dates and ordinary sentence starts for people.
+    doctor_name_claim_patterns = (
+        re.compile(
+            r"\b(?i:provider|physician|clinician|specialist|surgeon|dentist|"
+            r"therapist)\s+(?i:is|was|will\s+be|would\s+be)\s+"
+            r"(?:(?i:also)\s+)?(?:(?i:dr)\.?\s+)?"
+            r"(?P<name>[A-Z][A-Za-z'-]*)(?!\w)"
+        ),
+        re.compile(
+            r"\b(?i:you|the\s+patient|the\s+caller)\s+"
+            r"(?i:can|could|will|would|may|should)\s+"
+            r"(?:(?i:also)\s+)?"
+            r"(?i:see|consult|visit|meet|be\s+seen\s+by|be\s+treated\s+by)\s+"
+            r"(?:(?i:dr)\.?\s+)?(?P<name>[A-Z][A-Za-z'-]*)(?!\w)"
+        ),
+        re.compile(
+            r"\b(?P<name>[A-Z][A-Za-z'-]*)(?!\w)\s+"
+            r"(?i:can|could|will|would|may|should|is\s+going\s+to)\s+"
+            r"(?:(?i:also)\s+)?"
+            r"(?i:see|treat|consult|examine|attend\s+to)\s+"
+            r"(?i:you|the\s+patient|the\s+caller)\b"
+        ),
+        re.compile(
+            r"\b(?P<name>[A-Z][A-Za-z'-]*)(?!\w)\s+"
+            r"(?i:is|was|will\s+be|would\s+be)\s+"
+            r"(?:(?i:also)\s+)?(?i:your|the)\s+"
+            r"(?i:provider|physician|clinician|specialist|surgeon|dentist|"
+            r"therapist)\b"
+        ),
+    )
+    claimed_doctor_heads.update(
+        _entity_head(match.group("name"))
+        for pattern in doctor_name_claim_patterns
+        for match in pattern.finditer(spoken)
+    )
+    doctor_entities_grounded = claimed_doctor_heads.issubset(
+        expected_doctor_heads
+    )
+
+    named_patient_claim = bool(
+        re.search(
+            r"(?:^|[.!?]\s+)[A-Z][A-Za-z'-]+(?:,|\s+has\b|\s+holds\b)",
+            spoken,
+        )
+        or re.search(
+            r"\b(?i:appointment|booking)\s+(?i:for|under)\s+"
+            r"[A-Z][A-Za-z'-]+|"
+            r"\b(?i:booked\s+under|patient)\s+[A-Z][A-Za-z'-]+",
+            spoken,
+        )
+    )
+    patient_claim_grounded = not (
+        named_patient_claim and not _kind_hit("patient")
+    )
+    expected_patient_heads = {
+        _entity_head(variant)
+        for group_kind, variants in evidence_groups
+        if group_kind == "patient" or group_kind.endswith(":patient")
+        for variant in variants
+    }
+    claimed_patient_heads = {
+        _entity_head(match.group("name"))
+        for match in re.finditer(
+            r"\b(?:under|booked\s+under|patient)\s+"
+            r"(?P<name>[^\W\d_][\w'-]*)(?!\w)",
+            spoken,
+            re.I | re.UNICODE,
+        )
+        if match.group("name").casefold() not in ignored_entity_heads
+    }
+    # Pronouns and ownership verbs can carry the same fabricated patient name
+    # without repeating ``appointment under ...``.  Bind those contextual
+    # identity claims to the patient names returned by this exact read.
+    patient_name_claim_patterns = (
+        re.compile(
+            r"\b(?i:this|it|the\s+appointment|the\s+booking|the\s+visit|"
+            r"the\s+slot)\s+(?i:is|was|will\s+be|would\s+be)\s+"
+            r"(?:(?i:also)\s+)?(?i:for|held\s+by|assigned\s+to)\s+"
+            r"(?P<name>[A-Z][A-Za-z'-]*)(?!\w)"
+        ),
+        re.compile(
+            r"\b(?P<name>[A-Z][A-Za-z'-]*)(?!\w)\s+"
+            r"(?:(?i:also)\s+)?(?i:has|holds|owns)\s+"
+            r"(?i:this|the|an?)\s+(?i:booking|appointment|visit|slot)\b"
+        ),
+        re.compile(
+            r"\b(?i:patient|holder|patient\s+name|booking\s+name)\s+"
+            r"(?i:is|was|will\s+be|would\s+be)\s+"
+            r"(?P<name>[A-Z][A-Za-z'-]*)(?!\w)"
+        ),
+        re.compile(
+            r"\b(?i:booking|appointment|visit|slot)\s+"
+            r"(?i:belongs\s+to|is\s+held\s+by|is\s+for)\s+"
+            r"(?P<name>[A-Z][A-Za-z'-]*)(?!\w)"
+        ),
+    )
+    claimed_patient_heads.update(
+        _entity_head(match.group("name"))
+        for pattern in patient_name_claim_patterns
+        for match in pattern.finditer(spoken)
+    )
+    patient_entities_grounded = claimed_patient_heads.issubset(
+        expected_patient_heads
+    )
+
+    month_names = (
+        "january|jan|february|feb|march|mar|april|apr|may|june|jun|"
+        "july|jul|august|aug|september|sept|sep|october|oct|november|nov|"
+        "december|dec"
+    )
+    date_number_words = (
+        r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|"
+        r"twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|"
+        r"nineteen|twenty(?:[ -](?:one|two|three|four|five|six|seven|"
+        r"eight|nine))?|thirty(?:[ -]one)?|first|second|third|fourth|fifth|"
+        r"sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|"
+        r"fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|"
+        r"twenty(?:[ -](?:first|second|third|fourth|fifth|sixth|seventh|"
+        r"eighth|ninth))|thirty[ -]first)(?:st|nd|rd|th)?"
+    )
+    relative_or_weekday = (
+        r"today|tomorrow|day\s+after\s+tomorrow|"
+        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday"
+    )
+    explicit_date_claim = bool(
+        re.search(
+            rf"\b\d{{4}}-\d{{1,2}}-\d{{1,2}}\b|"
+            rf"\b\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}}\b|"
+            rf"\b(?:\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{month_names})|"
+            rf"(?:{month_names})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?|"
+            rf"{date_number_words}\s+(?:{month_names})|"
+            rf"(?:{month_names})\s+{date_number_words}|"
+            rf"{relative_or_weekday})\b",
+            heard,
+            re.I,
+        )
+    )
+    date_kinds = {"date", "next_available_date", "leave_through"}
+    date_claim_pattern = re.compile(
+        rf"\b\d{{4}}-\d{{1,2}}-\d{{1,2}}\b|"
+        rf"\b\d{{1,2}}[./-]\d{{1,2}}[./-]\d{{2,4}}\b|"
+        rf"\b(?:\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{month_names})|"
+        rf"(?:{month_names})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?|"
+        rf"{date_number_words}\s+(?:{month_names})|"
+        rf"(?:{month_names})\s+{date_number_words}|"
+        rf"{relative_or_weekday})\b",
+        re.I,
+    )
+    claimed_dates = [
+        re.sub(r"(?<=\d)(?:st|nd|rd|th)\b", "", match.group(0), flags=re.I)
+        for match in date_claim_pattern.finditer(spoken)
+    ]
+    date_claim_grounded = not explicit_date_claim or all(
+        any(
+            _phrase_hit(claim, variant)
+            for group_kind, variants in evidence_groups
+            if group_kind in date_kinds or group_kind.endswith(":date")
+            for variant in variants
+        )
+        for claim in claimed_dates
+    )
+    return_claim = bool(
+        re.search(
+            r"\b(?:returns?|comes?\s+back|back\s+on|next\s+available|"
+            r"bookable\s+again)\b|తిరిగి|अगली\s+बार|वापस|மீண்டும்|"
+            r"ಮತ್ತೆ|തിരികെ|पुन्हा|ফির(?:বেন|ে)",
+            heard,
+            re.I,
+        )
+    )
+    return_date_claim_grounded = not (
+        return_claim
+        and "next_available_date" in {kind for kind, _ in evidence_groups}
+        and not _kind_hit("next_available_date")
+    )
+
+    required_kind_sets: list[set[str]] = []
+    when_cues = {
+        "te": r"ఎప్పుడు",
+        "hi": r"कब",
+        "ta": r"எப்போது",
+        "kn": r"ಯಾವಾಗ",
+        "ml": r"എപ്പോൾ|എപ്പോള്",
+        "mr": r"कधी",
+        "bn": r"কখন",
+    }
+    date_cues = {
+        "te": r"తేదీ|ఏ\s*రోజు",
+        "hi": r"तारीख|कौन\s*से?\s*दिन",
+        "ta": r"தேதி|எந்த\s*நாள்",
+        "kn": r"ದಿನಾಂಕ|ಯಾವ\s*ದಿನ",
+        "ml": r"തീയതി|ഏത്\s*ദിവസം",
+        "mr": r"तारीख|कोणत्या?\s*दिवशी?",
+        "bn": r"তারিখ|কোন\s*দিন",
+    }
+    doctor_cues = {
+        "te": r"ఏ\s*డాక్టర్|ఎవరు",
+        "hi": r"कौन\s*से?\s*डॉक्टर|कौन",
+        "ta": r"எந்த\s*மருத்துவர்|யார்",
+        "kn": r"ಯಾವ\s*ಡಾಕ್ಟರ್|ಯಾರು",
+        "ml": r"ഏത്\s*ഡോക്ടർ|ആരാണ്",
+        "mr": r"कोणते?\s*डॉक्टर|कोण",
+        "bn": r"কোন\s*ডাক্তার|কে",
+    }
+    ahead_cues = {
+        "te": r"ముందు|ఎంత\s*మంది",
+        "hi": r"आगे|कितने\s*मरीज",
+        "ta": r"முன்னால்|எத்தனை\s*பேர்",
+        "kn": r"ಮುಂದೆ|ಎಷ್ಟು\s*ಜನ",
+        "ml": r"മുന്നിൽ|എത്ര\s*പേർ",
+        "mr": r"पुढे|किती\s*रुग्ण",
+        "bn": r"সামনে|কতজন",
+    }
+    serving_cues = {
+        "te": r"నడుస్తోంది|ఇప్పుడు\s*ఏ\s*టోకెన్",
+        "hi": r"चल\s*रहा|अभी\s*कौन\s*सा\s*टोकन",
+        "ta": r"இப்போது\s*எந்த\s*டோக்கன்|நடக்கிறது",
+        "kn": r"ಈಗ\s*ಯಾವ\s*ಟೋಕನ್|ನಡೆಯುತ್ತಿದೆ",
+        "ml": r"ഇപ്പോൾ\s*ഏത്\s*ടോക്കൺ|വിളിക്കുന്നത്",
+        "mr": r"सध्या\s*कोणते?\s*टोकन|चालू\s*आहे",
+        "bn": r"এখন\s*কোন\s*টোকেন|চলছে",
+    }
+    own_token_cues = {
+        "te": r"నా\s*టోకెన్",
+        "hi": r"मेरा\s*टोकन",
+        "ta": r"என்\s*டோக்கன்",
+        "kn": r"ನನ್ನ\s*ಟೋಕನ್",
+        "ml": r"എന്റെ\s*ടോക്കൺ",
+        "mr": r"माझ[ेा]\s*टोकन",
+        "bn": r"আমার\s*টোকেন",
+    }
+    availability_cues = {
+        "te": r"అందుబాటులో|ఖాళీ|స్లాట్",
+        "hi": r"उपलब्ध|खाली|स्लॉट",
+        "ta": r"கிடைக்க|காலி|ஸ்லாட்",
+        "kn": r"ಲಭ್ಯ|ಖಾಲಿ|ಸ್ಲಾಟ್",
+        "ml": r"ലഭ്യ|ഒഴിഞ്ഞ|സ്ലോട്ട്",
+        "mr": r"उपलब्ध|मोकळ|स्लॉट",
+        "bn": r"পাওয়া|খালি|স্লট",
+    }
+    return_cues = {
+        "te": r"తిరిగి|మళ్లీ\s*ఎప్పుడు",
+        "hi": r"वापस|फिर\s*कब",
+        "ta": r"மீண்டும்|திரும்ப",
+        "kn": r"ಮತ್ತೆ|ಹಿಂತಿರುಗ",
+        "ml": r"തിരികെ|വീണ്ടും",
+        "mr": r"पुन्हा|परत",
+        "bn": r"ফির|আবার",
+    }
+    native_when = bool(
+        cue := when_cues.get(language)
+    ) and re.search(cue, owed) is not None
+    if (
+        (
+            re.search(
+                r"\b(?:what|which)\s+time\b|\bwhen\b|\bat\s+what\s+time\b",
+                owed,
+            )
+            or native_when
+        )
+        and expected_times
+        and not return_query
+    ):
+        required_kind_sets.append({"time"})
+    if (
+        (
+            re.search(r"\b(?:what|which)\s+date\b|\bwhich\s+day\b|\bwhen\b", owed)
+            or native_when
+            or (
+                (cue := date_cues.get(language)) is not None
+                and re.search(cue, owed) is not None
+            )
+        )
+        and "date" in evidence_kinds
+        and not return_query
+    ):
+        required_kind_sets.append({"date"})
+    if (
+        (
+            re.search(
+                r"\b(?:which\s+doctor|who\s+(?:is|am)\s+i\s+(?:with|seeing))\b",
+                owed,
+            )
+            or (
+                (cue := doctor_cues.get(language)) is not None
+                and re.search(cue, owed) is not None
+            )
+        )
+        and "doctor" in evidence_kinds
+    ):
+        required_kind_sets.append({"doctor"})
+    if (
+        (
+            re.search(r"\b(?:ahead|before\s+(?:me|us))\b", owed)
+            or (
+                (cue := ahead_cues.get(language)) is not None
+                and re.search(cue, owed) is not None
+            )
+        )
+        and "people_ahead" in evidence_kinds
+    ):
+        required_kind_sets.append({"people_ahead"})
+    if (
+        (
+            re.search(
+                r"\b(?:now\s+serving|serving\s+now|being\s+served|current\s+token)\b",
+                owed,
+            )
+            or (
+                (cue := serving_cues.get(language)) is not None
+                and re.search(cue, owed) is not None
+            )
+        )
+        and "now_serving" in evidence_kinds
+    ):
+        required_kind_sets.append({"now_serving"})
+    if (
+        (
+            re.search(r"\b(?:my|our)\s+(?:token|queue\s+number)\b", owed)
+            or (
+                (cue := own_token_cues.get(language)) is not None
+                and re.search(cue, owed) is not None
+            )
+        )
+        and evidence_kinds.intersection(
+            {"your_token", "token_number", "new_token_number"}
+        )
+    ):
+        required_kind_sets.append(
+            {"your_token", "token_number", "new_token_number"}
+        )
+    if (
+        re.search(
+            r"\b(?:(?:has|is|did)\s+(?:the\s+)?queue\s+"
+            r"(?:started|running|active)|queue\s+(?:started|running)\s+yet)\b",
+            owed,
+        )
+        and evidence_kinds.intersection({"now_serving", "queue_not_started"})
+    ):
+        required_kind_sets.append({"queue_state"})
+    if (
+        re.search(
+            r"\b(?:when\s+will\s+(?:my|our)\s+turn|how\s+long|wait\s+time|"
+            r"when\s+will\s+i\s+be\s+(?:called|seen))\b",
+            owed,
+        )
+        and evidence_kinds.intersection(
+            {"people_ahead", "now_serving", "queue_not_started"}
+        )
+    ):
+        required_kind_sets.append(
+            {"people_ahead", "now_serving", "queue_not_started"}
+        )
+    if (
+        (
+            re.search(
+                r"\b(?:available|availability|free|openings?|slots?|capacity|"
+                r"seeing\s+patients?|sit(?:ting|s)?)\b",
+                owed,
+            )
+            or (
+                (cue := availability_cues.get(language)) is not None
+                and re.search(cue, owed) is not None
+            )
+        )
+        and "availability" in evidence_kinds
+    ):
+        required_kind_sets.append({"availability"})
+    if capacity_query and evidence_kinds.intersection(
+        {"availability", "availability_state", "queue_capacity_remaining"}
+    ):
+        required_kind_sets.append({"queue_capacity_state"})
+    if (
+        (
+            re.search(
+                r"\b(?:when\s+(?:does|will).{0,30}(?:return|come\s+back)|"
+                r"next\s+available|back\s+when)\b",
+                owed,
+            )
+            or (
+                (cue := return_cues.get(language)) is not None
+                and re.search(cue, owed) is not None
+            )
+        )
+        and "next_available_date" in evidence_kinds
+    ):
+        required_kind_sets.append({"next_available_date"})
+    number_words = {
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+        "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+        "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+        "fourteen": 14, "fifteen": 15, "sixteen": 16,
+        "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+        "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+        "seventy": 70, "eighty": 80, "ninety": 90,
+    }
+
+    def _number(value: str) -> int | None:
+        normalized = "".join(
+            str(unicodedata.digit(char)) if char.isdecimal() else char
+            for char in value.casefold().strip()
+        )
+        if normalized.isdigit():
+            return int(normalized)
+        if normalized in number_words:
+            return number_words[normalized]
+        parts = normalized.replace("-", " ").split()
+        if (
+            len(parts) == 2
+            and number_words.get(parts[0], 0) in range(20, 100, 10)
+            and number_words.get(parts[1], 0) in range(1, 10)
+        ):
+            return number_words[parts[0]] + number_words[parts[1]]
+        return None
+
+    def _expected_numbers(*kinds: str) -> set[int]:
+        return {
+            parsed
+            for group_kind, variants in evidence_groups
+            if group_kind in kinds
+            for variant in variants
+            if (parsed := _number(variant)) is not None
+        }
+
+    token_word = (
+        r"(?:\d{1,3}|zero|one|two|three|four|five|six|seven|eight|nine|"
+        r"ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|"
+        r"eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|"
+        r"eighty|ninety)(?:[ -](?:one|two|three|four|five|six|seven|"
+        r"eight|nine))?)"
+    )
+    token_claims: list[tuple[str, int]] = []
+    for kind, pattern in (
+        (
+            "your",
+            rf"\b(?:your\s+(?:token|queue)(?:\s+number)?(?:\s+is)?|"
+            rf"(?:token|queue)\s+number)\s*(?P<n>{token_word})"
+            rf"(?:\s+is\s+yours)?\b",
+        ),
+        (
+            "serving",
+            rf"\b(?:(?:they\s+are\s+)?(?:now\s+)?serving"
+            rf"(?:\s+(?:token|number))?\s+(?P<n>{token_word})(?:\s+now)?|"
+            rf"token\s+(?P<n2>{token_word})\s+is\s+(?:now\s+)?"
+            rf"(?:being\s+)?served)\b",
+        ),
+        (
+            "ahead",
+            rf"\b(?P<n>{token_word})\s+(?:(?:people|patients?)\s+)?"
+            rf"(?:(?:are\s+)?ahead|(?:are\s+)?before\s+you)\b",
+        ),
+    ):
+        token_claims.extend(
+            (kind, parsed)
+            for match in re.finditer(pattern, heard, re.I)
+            if (
+                parsed := _number(
+                    match.groupdict().get("n")
+                    or match.groupdict().get("n2")
+                    or ""
+                )
+            )
+            is not None
+        )
+
+    availability_groups = [
+        variant
+        for kind, variants in evidence_groups
+        if kind in {
+            "availability", "free_now", "sitting_hours", "status",
+            "availability_state", "queue_capacity", "queue_capacity_remaining",
+        }
+        for variant in variants
+    ]
+    negative_availability = re.compile(
+        r"\b(?:unavailable|not\s+available|"
+        r"(?:is|are|was|were)n['’]?t\s+available|"
+        r"no\s+(?:(?:token|queue)\s+)?capacity|"
+        r"no\s+(?:openings?|slots?|availability)|"
+        r"fully\s+booked|closed|occupied|not\s+(?:a\s+)?bookable|"
+        r"already\s+passed|not\s+free|no\s+free\s+start|"
+        r"timing.{0,50}\bnot\s+confirmed|schedule\s+not\s+published|"
+        r"on\s+leave|no\s+sessions|finished\s+(?:the\s+)?final\s+session|"
+        r"finished.{0,30}for\s+today|(?:date\s+)?is\s+in\s+the\s+past|"
+        r"(?:in\s+the\s+)?past\s+date|"
+        r"schedule\s+(?:is\s+)?not\s+configured|doctor\s+not\s+found|"
+        r"does\s+not\s+sit|is\s+not\s+seeing\s+patients?)\b|"
+        r"అందుబాటులో\s*లే|उपलब्ध\s*नहीं|கிடைக்க(?:வில்லை|ாது)|"
+        r"ಲಭ್ಯವಿಲ್ಲ|ലഭ്യമല്ല|उपलब्ध\s*नाही|পাওয়া\s*যা(?:বে\s*না|য়নি)",
+        re.I,
+    )
+    positive_availability = re.compile(
+        r"\b(?:available|free|capacity\s+remains|has\s+(?:token\s+)?capacity|"
+        r"openings?\s+(?:are\s+)?open|"
+        r"has\s+appointments?|is\s+seeing\s+patients?|sits?)\b|"
+        r"అందుబాటులో|उपलब्ध|கிடைக்க|ಲಭ್ಯ|ലഭ്യ|उपलब्ध|পাওয়া\s*যা(?:বে|য়)",
+        re.I,
+    )
+    spoken_negative_availability = bool(negative_availability.search(heard))
+    spoken_positive_availability = bool(positive_availability.search(heard))
+    expected_negative_availability = any(
+        negative_availability.search(value) for value in availability_groups
+    )
+    expected_positive_availability = bool(expected_times) or any(
+        positive_availability.search(value)
+        and not negative_availability.search(value)
+        for value in availability_groups
+    )
+    spoken_capacity_remaining = bool(
+        re.search(
+            r"\b(?:capacity\s+remains|has\s+(?:token\s+)?capacity|"
+            r"(?:token|queue)\s+capacity\s+(?:is\s+)?available)\b",
+            heard,
+            re.I,
+        )
+    )
+    spoken_no_capacity = bool(
+        re.search(
+            r"\b(?:there\s+(?:is|are)\s+)?no\s+"
+            r"(?:(?:token|queue)\s+)?capacity\b|"
+            r"\b(?:(?:token|queue)\s+)?capacity\s+"
+            r"(?:is\s+)?(?:unavailable|full|exhausted)\b",
+            heard,
+            re.I,
+        )
+    )
+    expected_capacity_remaining = (
+        "queue_capacity_remaining" in evidence_kinds
+    )
+    expected_no_capacity = any(
+        re.search(r"\b(?:fully\s+booked|no\s+slots?\s+available)\b", value, re.I)
+        for value in availability_groups
+    )
+    capacity_claim_grounded = (
+        (not spoken_capacity_remaining or expected_capacity_remaining)
+        and (not spoken_no_capacity or expected_no_capacity)
+    )
+    availability_claim_grounded = not (
+        (spoken_negative_availability and not expected_negative_availability)
+        or (
+            spoken_positive_availability
+            and not spoken_negative_availability
+            and expected_negative_availability
+            and not expected_positive_availability
+        )
+    )
+    claimed_unavailability_reasons = {
+        kind
+        for kind, pattern in {
+            "occupied_time": r"\boccupied\b",
+            "unpublished_time": r"\bnot\s+(?:a\s+)?bookable(?:\s+appointment)?\s+start\b",
+            "past_time": r"\balready\s+passed\b",
+            "unfree_window_time": r"\b(?:requested\s+window\s+is\s+not\s+free|no\s+free\s+start)\b",
+        }.items()
+        if re.search(pattern, heard, re.I)
+    }
+    unavailable_reason_grounded = all(
+        kind in evidence_kinds for kind in claimed_unavailability_reasons
+    )
+    token_claims_grounded = all(
+        value
+        in (
+            _expected_numbers("your_token", "token_number", "new_token_number")
+            if kind == "your"
+            else _expected_numbers("now_serving")
+            if kind == "serving"
+            else _expected_numbers("people_ahead")
+        )
+        for kind, value in token_claims
+    )
+    grounded_token_claims = bool(token_claims) and token_claims_grounded
+    queue_not_started_claim = bool(
+        re.search(
+            r"\b(?:queue\s+(?:has\s+)?not\s+started|queue\s+hasn['’]?t\s+started|"
+            r"not\s+started\s+yet)\b|క్యూ\s+ఇంకా\s+ప్రారంభం\s+కాలేదు|"
+            r"कतार\s+अभी\s+शुरू\s+नहीं\s+हुई|வரிசை\s+இன்னும்\s+தொடங்கவில்லை|"
+            r"ಸರತಿ\s+ಇನ್ನೂ\s+ಪ್ರಾರಂಭವಾಗಿಲ್ಲ|ക്യൂ\s+ഇതുവരെ\s+തുടങ്ങിയിട്ടില്ല|"
+            r"रांग\s+अजून\s+सुरू\s+झालेली\s+नाही|সারি\s+এখনও\s+শুরু\s+হয়নি",
+            heard,
+            re.I,
+        )
+    )
+    grounded_queue_not_started = bool(
+        queue_not_started_claim and _kind_hit("queue_not_started")
+    )
+    queue_started_claim = bool(
+        re.search(
+            r"\b(?:queue\s+(?:has\s+)?started|queue\s+is\s+(?:running|active|"
+            r"underway)|now\s+serving|being\s+served)\b",
+            heard,
+            re.I,
+        )
+    )
+    expected_queue_not_started = "queue_not_started" in evidence_kinds
+    expected_queue_started = "now_serving" in evidence_kinds
+    queue_state_claim_grounded = not (
+        (queue_not_started_claim and not expected_queue_not_started)
+        or (queue_started_claim and not expected_queue_started)
+    )
+
+    queue_result = "queue_status" in evidence_kinds
+    queue_eta_claim = bool(
+        re.search(
+            rf"\b(?:in|about|around|within|take|wait(?:ing)?(?:\s+for)?|"
+            rf"called\s+in|seen\s+in)\s+(?:{token_word})\s+"
+            r"(?:minutes?|mins?|hours?|hrs?)\b|"
+            rf"\b(?:{token_word})\s+(?:minutes?|mins?|hours?|hrs?)\b"
+            r".{0,30}\b(?:wait|turn|called|seen|ready)\b",
+            heard,
+            re.I | re.S,
+        )
+    )
+    rank_words = {
+        "next": 0,
+        "first": 0,
+        "second": 1,
+        "third": 2,
+        "fourth": 3,
+        "fifth": 4,
+        "sixth": 5,
+        "seventh": 6,
+        "eighth": 7,
+        "ninth": 8,
+        "tenth": 9,
+        "eleventh": 10,
+        "twelfth": 11,
+        "thirteenth": 12,
+        "fourteenth": 13,
+        "fifteenth": 14,
+        "sixteenth": 15,
+        "seventeenth": 16,
+        "eighteenth": 17,
+        "nineteenth": 18,
+        "twentieth": 19,
+    }
+    rank_value = "|".join(
+        (*rank_words, token_word.removeprefix("(?:").removesuffix(")"))
+    )
+    claimed_ranks: list[int] = []
+    for pattern in (
+        rf"\b(?:you(?:'re| are)|your\s+position\s+is)\s+"
+        rf"(?P<rank>{rank_value})"
+        rf"(?:\s+in\s+(?:the\s+)?(?:line|queue))?\b",
+        rf"\b(?:(?:you(?:'re| are)|your\s+position\s+is)\s+)?"
+        rf"(?:number|position)\s+(?P<rank>{rank_value})\s+"
+        rf"in\s+(?:the\s+)?(?:line|queue)\b",
+    ):
+        for match in re.finditer(pattern, heard, re.I):
+            value = match.group("rank").casefold()
+            position = rank_words.get(value)
+            if position is None:
+                parsed = _number(value)
+                position = max(0, parsed - 1) if parsed is not None else None
+            if position is not None:
+                claimed_ranks.append(position)
+    expected_ahead = _expected_numbers("people_ahead")
+    queue_rank_claim_grounded = all(rank in expected_ahead for rank in claimed_ranks)
+    unsupported_queue_quantity_claim = bool(
+        queue_result
+        and re.search(
+            r"\b(?:dozens?|scores?|hundreds?|thousands?|many|several|"
+            r"countless)\b(?:\s+of)?(?:\s+(?:people|patients?))?\s+"
+            r"(?:are\s+)?ahead(?:\s+of\s+you)?\b",
+            heard,
+            re.I,
+        )
+    )
+    queue_estimates_grounded = not queue_result or (
+        not queue_eta_claim
+        and not unsupported_queue_quantity_claim
+        and queue_rank_claim_grounded
+    )
+
+    claimed_time_values = {
+        candidate for mention in claimed_times for candidate in mention
+    }
+    all_times_requested = bool(
+        expected_times
+        and (
+            re.search(
+                r"\b(?:all|every|both|complete|full)\b.{0,50}"
+                r"\b(?:hours?|times?|slots?|sessions?|availability)\b|"
+                r"\bwhat\s+are\b.{0,50}\b(?:hours?|times?|slots?|sessions?)\b",
+                owed,
+                re.I,
+            )
+            or re.search(
+                r"\b(?:hours?|times?|slots?|sessions?|availability)\b.{0,50}"
+                r"\b(?:all|every|both|complete|full)\b",
+                owed,
+                re.I,
+            )
+        )
+    )
+    all_expected_times_grounded = (
+        not all_times_requested or expected_times.issubset(claimed_time_values)
+    )
+
+    def _required_kind_grounded(kind: str) -> bool:
+        if kind == "time":
+            return grounded_time_claims
+        if kind == "availability":
+            return (
+                (spoken_negative_availability or spoken_positive_availability)
+                and availability_claim_grounded
+            )
+        if kind == "queue_capacity_state":
+            return (
+                (spoken_capacity_remaining or spoken_no_capacity)
+                and capacity_claim_grounded
+            )
+        if kind == "queue_not_started":
+            return grounded_queue_not_started
+        if kind == "queue_state":
+            return queue_state_claim_grounded and (
+                grounded_queue_not_started
+                or any(claim_kind == "serving" for claim_kind, _ in token_claims)
+            )
+        token_kind = {
+            "your_token": "your",
+            "token_number": "your",
+            "new_token_number": "your",
+            "now_serving": "serving",
+            "people_ahead": "ahead",
+        }.get(kind)
+        if token_kind is not None:
+            expected = (
+                _expected_numbers("your_token", "token_number", "new_token_number")
+                if token_kind == "your"
+                else _expected_numbers("now_serving")
+                if token_kind == "serving"
+                else _expected_numbers("people_ahead")
+            )
+            return any(
+                claim_kind == token_kind and value in expected
+                for claim_kind, value in token_claims
+            )
+        return _kind_hit(kind)
+
+    required_read_facts_grounded = all(
+        any(_required_kind_grounded(kind) for kind in alternatives)
+        for alternatives in required_kind_sets
+    )
+    typed_claims_grounded = all(
+        (
+            high_risk_claims_grounded,
+            requested_time_answered,
+            not unsupported_clock_claim,
+            doctor_claim_grounded,
+            doctor_entities_grounded,
+            patient_claim_grounded,
+            patient_entities_grounded,
+            specialty_claim_grounded,
+            route_candidates_grounded,
+            booking_records_grounded,
+            booking_type_claim_grounded,
+            all_booking_records_grounded,
+            queue_records_grounded,
+            all_queue_records_grounded,
+            all_route_specialties_grounded,
+            route_clarification_grounded,
+            bookings_empty_grounded,
+            date_claim_grounded,
+            return_date_claim_grounded,
+            token_claims_grounded,
+            availability_claim_grounded,
+            capacity_claim_grounded,
+            unavailable_reason_grounded,
+            all_expected_times_grounded,
+            queue_state_claim_grounded,
+            queue_estimates_grounded,
+            required_read_facts_grounded,
+        )
+    )
+    exact_verified = bool(
+        verified
+        and _mutation_speech_key(heard) == _mutation_speech_key(verified)
+    )
+    exact_failure = (
+        _mutation_speech_key(spoken) == _mutation_speech_key(failure)
+    )
+    evidence_grounded = bool(
+        evidence
+        and typed_claims_grounded
+        and (
+            evidence_hits >= 1
+            or grounded_time_claims
+            or grounded_token_claims
+            or grounded_queue_not_started
+        )
+    )
+    if not (exact_verified or exact_failure or evidence_grounded):
+        return
+
+    state.read_answer_owed = False
+    state.read_owed_utterance = None
+    state.read_result_evidence = ()
+    fallback = getattr(state, "read_fallback_task", None)
+    if isinstance(fallback, asyncio.Task) and not fallback.done():
+        fallback.cancel()
+    state.read_fallback_task = None
+    state.verified_read_speech = None
+    for safe_chunk in buffered:
+        yield safe_chunk
 
 
 async def _end_call_with_notice(ctx, reason: str, t_answer: float | None = None) -> None:
@@ -1034,34 +4524,24 @@ KNOWN_CALLER_NO_NAME_EXTRA = (
 )
 
 REBOOK_PROMPT_EXTRA = (
-    "\n\nTHIS IS A CASCADE-REBOOK CALL (doctor went on leave; the patient's "
-    "booking on {cancelled_date} with {doctor} was cancelled by the clinic). "
-    "The greeting already apologised and offered to rebook.\n"
-    "YOU ALREADY KNOW THIS PATIENT: name={patient}, phone=the number you "
-    "dialed, doctor={doctor}. NEVER ask who they are, NEVER ask their health "
-    "problem, NEVER restart the new-patient flow — this overrides the booking "
-    "flow steps above. If their reply is unclear or mumbled, simply repeat "
-    "your question once: 'వేరే రోజు బుక్ చేయమంటారా అండి, లేక ఇప్పటికి వద్దా?'\n"
-    "If they ask about their PREVIOUS booking ('when was my appointment?'): "
-    "answer from THIS context — it was on {cancelled_date} with {doctor} and "
-    "the clinic cancelled it for the leave. NEVER say they have no booking; "
-    "find_my_bookings will show it with status=cancelled_by_clinic.\n"
-    "- If they want to rebook: ask which day suits them, then check_availability "
-    "for the same doctor (skip leave days), assign_token, confirm_booking with "
-    "the same patient name and phone. Keep it to two short sentences per turn.\n"
-    "- If they ask WHEN the doctor will be back/available: do NOT guess and do "
-    "NOT hang up — call check_availability for the next few days until one is "
-    "free, then offer that day: 'డాక్టర్ గారు ___ నుండి ఉంటారు. ఆ రోజు బుక్ "
-    "చేయమంటారా?'\n"
-    "- If the doctor's next days are also on leave, offer the nearest available "
-    "day, or another suitable doctor if they prefer.\n"
-    "- If they DO NOT want to rebook (say no, 'cancel it', or they'll call "
-    "later themselves): their booking is ALREADY cancelled — there is nothing "
-    "more to cancel, NEVER say they have no booking. Say 'మీ అపాయింట్‌మెంట్ "
-    "ఇప్పటికే క్యాన్సిల్ అయింది అండి', call decline_rebook (stops further "
-    "calls from the clinic), thank them, then end_call.\n"
-    "- Only when the patient has clearly FINISHED (declined politely or said "
-    "bye, with NO open question): apologise once more, thank them, then end_call."
+    "\n\n<call_mode kind='cascade_rebook'>\n"
+    "The doctor went on leave, so the clinic cancelled this patient's booking "
+    "on {cancelled_date} with {doctor}. The prepared opening already apologised "
+    "and offered to rebook; never repeat it.\n"
+    "Known patient data: name={patient}; doctor={doctor}; use only the verified "
+    "dialled number. Never restart new-patient intake or ask the health problem.\n"
+    "If asked about the previous booking, state the exact cancelled date and "
+    "doctor from this context and that the clinic cancelled it for leave.\n"
+    "If they want to rebook, ask their preferred day/time, check_availability "
+    "for the same doctor, then call confirm_booking only after their one clear "
+    "confirmation. The booking tool obtains its own internal hold.\n"
+    "If asked when the doctor returns, call get_doctor_return_availability; "
+    "never loop, guess, or derive a return date. Offer only a returned date.\n"
+    "If they decline, say in the ACTIVE LANGUAGE that the old appointment is "
+    "already cancelled, call decline_rebook, thank them, and end_call.\n"
+    "URGENT NOW overrides this entire block: call request_human_transfer immediately.\n"
+    "Keep each reply to two short sentences in the ACTIVE LANGUAGE.\n"
+    "</call_mode>"
 )
 
 REMINDER_PROMPT_EXTRA = (
@@ -1072,6 +4552,7 @@ REMINDER_PROMPT_EXTRA = (
     "time='{time}' />\n"
     "The private_context is for execution only and MUST NEVER be spoken, quoted, "
     "paraphrased as fields, or read character by character.\n"
+    "URGENT NOW overrides this entire block: call request_human_transfer immediately.\n"
     "If attending: one warm acknowledgement, then stop. If unable to attend: ask "
     "the preferred new day/time and atomically move this appointment. If they "
     "explicitly want cancellation, cancel this appointment. Announce an outcome "
@@ -1081,90 +4562,58 @@ REMINDER_PROMPT_EXTRA = (
 )
 
 NEXT_VISIT_PROMPT_EXTRA = (
-    "\n\nTHIS IS A TREATMENT FOLLOW-UP CALL. You already know this patient — never "
-    "ask who they are or restart the new-patient flow.\n"
-    "DOCTOR IS ALREADY KNOWN: this follow-up is for {doctor}, the same doctor who "
-    "treated this patient. NEVER ask the patient which doctor, NEVER call "
-    "route_to_doctor — the visit is with {doctor}. Use {doctor} directly for "
-    "check_availability and the booking.\n"
-    "1) Your OPENING line already asked the doctor's question (\"{message}\"). Do "
-    "NOT ask it again — just listen to their answer and respond warmly in one line.\n"
-    "2) BOOKING — offer it however they answer. The doctor has asked this patient "
-    "to come back around the date below, so tell them so and offer to book, whether "
-    "their answer is fine (\"అంతా బాగానే ఉంది\") or they report a problem. "
-    "On agreement, FIRST ask what time of day suits them (\"ఏ టైమ్ వీలవుతుందండి?\") — "
-    "NEVER pick a time yourself; the patient chooses the time, you check it with "
-    "check_availability. Then assign a slot with {doctor} within 2 days of that date "
-    "and confirm in one breath.\n"
+    "\n\n<call_mode kind='next_visit_book'>\n"
+    "This is a treatment follow-up for known patient {patient} with {doctor}. "
+    "The prepared opening already asked the doctor's question; listen to the "
+    "answer and never ask it again. Never restart new-patient intake or reroute.\n"
+    "URGENT NOW overrides this entire block: call request_human_transfer immediately; "
+    "do not offer a routine booking or message first.\n"
+    "For non-urgent pain, discomfort, or a problem, give no medical opinion. "
+    "Restate the concern and call take_message before saying it was recorded for the clinic. "
+    "Only after that write succeeds may you say 'I will inform the doctor'; STILL offer the visit.\n"
+    "Never say the appointment will fix anything, and never say it can wait. "
+    "If they say no, accept it. If they clearly decline the follow-up visit, call followup_visit_declined "
+    "with their words, acknowledge without arguing, and do not offer or book. "
+    "A vague 'later' or 'maybe' is not a decline.\n"
+    "Offer the doctor-requested follow-up visit. On agreement, ask what time suits "
+    "them, check_availability for {doctor} within two days of the target, and call "
+    "confirm_booking after the one confirmation. Never pick a time yourself.\n"
     "{target_date}"
-    "3) You are a MESSENGER, not a doctor: give NO medical advice, NO diagnosis, NO "
-    "triage. IF the patient reports ANY problem, pain, or discomfort: say warmly "
-    "'I will inform the doctor and they will get back to you as soon as possible' — "
-    "and STILL offer the visit the doctor asked for, because a patient in trouble is "
-    "the one who most needs the appointment held. Booking a visit is not medical "
-    "advice; deciding what is wrong or how urgent it is would be, so do neither. "
-    "Never say the appointment will fix anything, never say it can wait. If they say "
-    "no, accept it in one line and leave the message with the doctor. (Supersedes "
-    "Vinay 2026-07-03's no-booking-after-a-problem rule, on his 2026-08-04 "
-    "instruction: the doctor reads the report afterwards and may pull them in "
-    "sooner, and there must be a booking to move.)\n"
-    "4) BOOKING — the patient is ALREADY on record, so keep it tight (this OVERRIDES "
-    "the normal new-patient details flow):\n"
-    "   - The patient's name is '{patient}'. Do NOT ask their name, do NOT ask their "
-    "age, do NOT read details back. Pass patient_name='{patient}' to confirm_booking; "
-    "it does NOT need age for an existing patient — book on their phone-on-record.\n"
-    "   - Do NOT mention, check, or read out any OTHER appointment they already have. "
-    "This call is ONLY about the follow-up visit — never say 'you already have an "
-    "appointment on <date>'.\n"
-    "   - {doctor} is an APPOINTMENT (time-slot) doctor: confirm ONLY the date and "
-    "time. NEVER say a token or queue number — tokens are meaningless for an "
-    "appointment doctor.\n"
-    "5) ONCE BOOKED — confirm_booking returned success=true — the follow-up is DONE. "
-    "You have ALREADY booked this visit. NEVER offer to book again, NEVER ask 'shall I "
-    "book', NEVER call assign_token or confirm_booking a second time (it will be "
-    "rejected as a duplicate). Just give the ONE confirmation, and when they "
-    "acknowledge, say a short goodbye and end_call. Remember what you have already "
-    "done in this call.\n"
-    "Keep every reply to two short sentences."
+    "Use patient_name={patient} and the verified number; do not ask name or age and "
+    "do not expose any other appointment. This is a time-slot visit: say date/time, "
+    "never a token. After success=true, it is closed: never offer or book it again.\n"
+    "Keep each reply to two short sentences in the ACTIVE LANGUAGE.\n"
+    "</call_mode>"
 )
 
 DOCTOR_ADVICE_PROMPT_EXTRA = (
-    "\n\nTHIS IS A DOCTOR-ADVICE RELAY CALL. The doctor reviewed the patient's "
-    "concern and wrote a message. RELAY it warmly and faithfully in the clinic's "
-    "language — do NOT add, interpret, or invent any medical content of your own "
-    "(RULE 7). The doctor's message: \"{message}\".\n"
-    "The patient's name is '{patient}' and the doctor is {doctor}. Do NOT ask "
-    "their name or age — they are already on record.\n"
-    "After relaying, ask if they have more concerns. Offer a visit ONLY if the "
-    "doctor's message itself asks them to come in, or a date is given below, or "
-    "the patient explicitly asks — never push one otherwise. If they report a "
-    "NEW problem, say 'I will inform the doctor and get back to you as soon as "
-    "possible' and do NOT offer a visit.\n"
+    "\n\n<call_mode kind='doctor_advice'>\n"
+    "The doctor reviewed this known patient's concern. Relay only the verified "
+    "doctor message faithfully in the ACTIVE LANGUAGE; do not add, interpret, "
+    "diagnose, or invent: {message}\n"
+    "Known patient={patient}; doctor={doctor}. Do not ask name or age.\n"
+    "URGENT NOW overrides this entire block: call request_human_transfer immediately.\n"
+    "For a non-urgent new concern, restate it and call take_message before saying "
+    "it was recorded for the clinic; do NOT offer a visit for that new concern and "
+    "never push one otherwise. Offer a visit only if the doctor message/date asks "
+    "for one or the patient explicitly requests one.\n"
     "{target_date}"
-    "IF such a date is given above, the doctor has changed when they want to see this "
-    "patient, and your job is to MOVE any visit they already have — never to add "
-    "a second one:\n"
-    "   - FIRST call find_my_bookings, before offering anything.\n"
-    "   - If they already have an upcoming booking with {doctor}: tell them the "
-    "doctor wants to see them on the new date instead, ask what time suits them "
-    "(NEVER pick a time yourself), check it with check_availability, then call "
-    "reschedule_booking with that booking's token_id. Do NOT call confirm_booking "
-    "— that would leave them holding two appointments.\n"
-    "   - Only if they have NO upcoming booking do you book a new one with "
-    "confirm_booking, passing patient_name='{patient}'.\n"
-    "   - Either way stay within 2 days of the date.\n"
-    "   - Once the move or the booking has succeeded, it is DONE: give ONE "
-    "confirmation and never offer again.\n"
-    "Two short sentences per reply."
+    "When a target date exists, verify identity, call find_my_bookings, and move "
+    "an existing visit with reschedule_booking after checking the patient's chosen "
+    "time. Only if none exists may confirm_booking create one. Stay within two "
+    "days of the target. After success, the action is closed and must not repeat.\n"
+    "Keep each reply to two short sentences in the ACTIVE LANGUAGE.\n"
+    "</call_mode>"
 )
 
 QUESTION_ANSWER_PROMPT_EXTRA = (
     "\n\nTHIS IS A QUESTION-ANSWER CALLBACK. On an earlier call this person "
     "asked the clinic something you could not answer; the clinic checked with "
     "the doctor and wrote the answer. Your OPENING already spoke that answer. "
+    "URGENT NOW overrides this entire block: call request_human_transfer immediately. "
     "Do NOT repeat it unless they ask you to, and NEVER add, guess, or extend "
-    "it — if they ask something the answer does not cover, say you will check "
-    "with the clinic and call log_clinic_question. No medical opinions "
+    "it. If they ask something the answer does not cover, call "
+    "log_clinic_question silently and only after success say the clinic will check. No medical opinions "
     "(RULE 7). Offer a booking ONLY if they ask for one. When they have "
     "nothing more, say a short goodbye and end_call. Two short sentences per "
     "reply."
@@ -2130,7 +5579,9 @@ def compose_clinic_instructions(
     strings regardless of which side is asking.
     """
     return (
-        build_grounded_prompt(
+        build_date_table(today)
+        + get_lines(language).brevity
+        + build_grounded_prompt(
             clinic_name=(clinic_name or "").strip(),
             doctors=doctors or [],
             emergency_contact=(emergency_contact or "").strip(),
@@ -2139,9 +5590,8 @@ def compose_clinic_instructions(
             clinic_address=(clinic_address or None),
             faq=faq,
             recording_active=bool(recording_active),
+            call_type="runtime",
         )
-        + build_date_table(today)
-        + get_lines(language).brevity
     )
 
 
@@ -2509,6 +5959,91 @@ def _is_bare_noon_request(text: str) -> bool:
     return any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", value) for word in _NOON_WORDS)
 
 
+def _explicit_clock_time(text: str, language: str = "en") -> str | None:
+    """Backward-compatible singleton view of the caller clock parser."""
+    candidates = explicit_clock_times(text, language)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _caller_clock_candidates(text: str, language: str) -> tuple[str, ...]:
+    """Parse the active register plus English loan-word clock forms safely."""
+    parsed = explicit_clock_times(text, language)
+    english = explicit_clock_times(text, "en") if language != "en" else ()
+    nonempty = {item for item in (parsed, english) if item}
+    return next(iter(nonempty)) if len(nonempty) == 1 else ()
+
+
+def _caller_date_receipt(
+    text: str, *, today: date_cls, language: str
+) -> str | None:
+    """Parse one caller-authored date across the active/English register."""
+    parsed = explicit_booking_date(text, today, language)
+    english = (
+        explicit_booking_date(text, today, "en") if language != "en" else None
+    )
+    candidates = {item for item in (parsed, english) if item}
+    return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+_CALLER_NAME_PATTERNS = (
+    re.compile(r"\b(?:my name is|this is)\s+([^,.;?!]+)", re.I),
+    re.compile(r"(?:నా పేరు)\s+([^,.;?!]+)", re.I),
+    re.compile(r"(?:मेरा नाम)\s+([^,.;?!]+)", re.I),
+    re.compile(r"(?:என் பெயர்)\s+([^,.;?!]+)", re.I),
+    re.compile(r"(?:ನನ್ನ ಹೆಸರು)\s+([^,.;?!]+)", re.I),
+    re.compile(r"(?:എന്റെ പേര്)\s+([^,.;?!]+)", re.I),
+    re.compile(r"(?:माझ(?:ं|े) नाव)\s+([^,.;?!]+)", re.I),
+    re.compile(r"(?:আমার নাম)\s+([^,.;?!]+)", re.I),
+)
+_NAME_TRAILING_DETAILS = re.compile(
+    r"\b(?:and\s+)?(?:i am|i'm|age|aged|years? old|for|book|appointment)\b.*$",
+    re.I,
+)
+
+
+def _caller_stated_patient_name(text: str) -> str | None:
+    """Extract only an explicitly introduced name; never guess from free text."""
+    for pattern in _CALLER_NAME_PATTERNS:
+        match = pattern.search(text or "")
+        if not match:
+            continue
+        candidate = _NAME_TRAILING_DETAILS.sub("", match.group(1)).strip(" -'\"")
+        candidate = " ".join(candidate.split())
+        if 1 <= len(candidate.split()) <= 5 and 2 <= len(candidate) <= 80:
+            return candidate
+    return None
+
+
+def _name_receipt_key(value: str | None) -> str:
+    return re.sub(r"[^\w]+", "", (value or "").casefold(), flags=re.UNICODE)
+
+
+def _canonical_receipt_time(value: str | None) -> time_cls | None:
+    if not value:
+        return None
+    try:
+        return time_cls.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _reservation_key(
+    doctor_id,
+    branch_id,
+    booking_date: date_cls,
+    booking_type: str,
+    appointment_time: time_cls | None,
+) -> str:
+    if booking_type == "token":
+        return f"token:{doctor_id}:{branch_id}:{booking_date.isoformat()}"
+    if appointment_time is None:
+        raise ValueError("appointment_time required for a slot reservation")
+    return (
+        f"slot:{doctor_id}:{branch_id}:{booking_date.isoformat()}:"
+        f"{appointment_time.strftime('%H%M')}"
+    )
+
+
 # Deterministic caller-authorization vocabulary. These checks run at the tool
 # boundary; they are intentionally narrower than conversational intent routing.
 # Read-only questions and negated actions are rejected before these terms are
@@ -2522,13 +6057,18 @@ _BOOKING_AUTH_TERMS = (
 )
 _AFFIRMATIVE_REPLIES = {
     'yes', 'yes please', 'yeah', 'yep', 'ok', 'okay', 'sure', 'confirm',
-    'go ahead', 'do it', 'okay do it', 'ok do it',
+    'go ahead', 'go for it', 'do it', 'please do', 'that would be helpful',
+    'okay do it', 'ok do it',
     # Bare agreement, which is what people actually say. "సరే" / "అలాగే" alone
     # were missing, so a Telugu caller agreeing was not recognised at all.
     'అవును', 'అవునండి', 'సరే', 'సరేనండి', 'అలాగే', 'ఓకే',
     'సరే చేయండి', 'చేసేయండి', 'ఓకే చేయండి',
     'हाँ', 'हां', 'जी हाँ', 'जी', 'ठीक है', 'कर दीजिए',
     'ஆம்', 'ஆமாம்', 'சரி', 'ಹೌದು', 'ಸರಿ', 'हो', 'बरं',
+    'അതെ', 'ശരി', 'ചെയ്യൂ', 'হ্যাঁ', 'হ্যা', 'ঠিক আছে', 'করুন',
+    # Direct imperatives are unambiguous answers to the one pending fallback
+    # question; requiring a separate yes loses the clinic message.
+    'చేయండి', 'करो', 'कर दो', 'செய்யுங்கள்', 'ಮಾಡಿ', 'करा', 'করে দিন',
     # ROMANISED. Soniox returns Hindi in Latin letters on a real call, so the
     # native-script entries above never matched a single spoken "yes": the
     # caller said "haan", the guard saw no affirmation, the model re-asked, and
@@ -2537,7 +6077,8 @@ _AFFIRMATIVE_REPLIES = {
     'haan', 'han', 'ha', 'haa', 'ji', 'jee', 'ji haan', 'ji han',
     'theek hai', 'thik hai', 'kar dijiye', 'kar do', 'bilkul',
     'avunu', 'sare', 'sarey', 'sari', 'alage', 'cheyyandi',
-    'aama', 'aamaam', 'houdu', 'ho', 'bara',
+    'aama', 'aamaam', 'houdu', 'ho', 'bara', 'athe', 'sheri', 'cheyyu',
+    'hyan', 'thik ache', 'korun',
 }
 _CANCEL_AUTH_TERMS = (
     'remove the appointment', 'క్యాన్సిల్', 'రద్దు', 'కాన్సిల్',
@@ -2580,15 +6121,35 @@ def _caller_authorized_booking(text: str) -> bool:
         r'\b(?:did you|have you|was it|is it)\s+(?:already\s+)?book', low
     ):
         return False
+    if re.search(
+        r'\b(?:how|when|where|why)\s+(?:do|can|could|should|would)\s+'
+        r'(?:i|we|you)\b[^.?!]{0,45}\bbook\b',
+        low,
+    ):
+        return False
+    if re.search(
+        r'\b(?:may|might)\s+(?:i\s+)?book\b|'
+        r'\bcan\s+i\b[^.?!]{0,35}\bbook\b[^.?!]{0,25}\blater\b',
+        low,
+    ):
+        return False
     english_action = (
         re.search(r'\bbook\b', low) is not None
+        or re.search(
+            r'\b(?:want|need|would like)\b[^.?!]{0,30}\b'
+            r'(?:appointment|slot)\b',
+            low,
+        ) is not None
         or re.search(
             r'\bconfirm\s+(?:(?:my|the|this|that|our)\s+)?'
             r'(?:booking|appointment|slot|it)\b',
             low,
         ) is not None
     )
-    non_english_or_phrase = any(term in low for term in _BOOKING_AUTH_TERMS)
+    non_english_or_phrase = (
+        any(term in low for term in _BOOKING_AUTH_TERMS)
+        or re.search(r'\bappointment\s+kavali\b', low) is not None
+    )
     return english_action or non_english_or_phrase
 
 
@@ -2596,8 +6157,15 @@ def _caller_authorized_booking(text: str) -> bool:
 _NEGATION_TERMS = (
     'no', 'not', "don't", 'dont', 'do not', 'never', 'cancel that', 'wait',
     'వద్దు', 'లేదు', 'కాదు', 'नहीं', 'नही', 'मत', 'இல்லை', 'ಇಲ್ಲ', 'नको',
+    'വേണ്ട', 'ഇല്ല', 'না', 'নয়',
     # Romanised, for the same reason as the affirmations above.
-    'nahi', 'nahin', 'nako', 'vaddu', 'ledu', 'kadu', 'venda', 'beda',
+    'nahi', 'nahin', 'nako', 'vaddu', 'ledu', 'kadu', 'venda', 'vendaa',
+    'illa', 'beda',
+    # Explicit withdrawals override an opening "yes/okay/sure".
+    'leave it', 'skip it', 'forget it', 'call the clinic myself',
+    'call clinic myself', 'contact the clinic myself',
+    'వద్దులే', 'ఉండనివ్వండి', 'रहने दो', 'छोड़ दो', 'வேண்டாம்',
+    'ಬೇಡ', 'ಬಿಟ್ಟುಬಿಡಿ', 'राहू द्या', 'सोडा', 'থাক', 'বাদ দিন',
 )
 
 
@@ -2606,8 +6174,10 @@ _NEGATION_TERMS = (
 _OUTRIGHT_REFUSALS = frozenset({
     'no', 'nope', 'no thanks', 'no thank you', 'not now', 'dont', "don't",
     'do not', 'cancel that', 'wait', 'leave it', 'forget it',
-    'nahi', 'nahin', 'nahi ji', 'nako', 'vaddu', 'ledu', 'venda', 'beda',
+    'nahi', 'nahin', 'nahi ji', 'nako', 'vaddu', 'ledu', 'venda', 'vendaa',
+    'illa', 'beda',
     'नहीं', 'नही', 'नको', 'వద్దు', 'లేదు', 'இல்லை', 'ಇಲ್ಲ',
+    'വേണ്ട', 'ഇല്ല', 'না', 'নয়',
 })
 
 
@@ -2637,6 +6207,28 @@ def _caller_refused_outright(text: str) -> bool:
     return norm in {_normalised_utterance(r) for r in _OUTRIGHT_REFUSALS}
 
 
+def _caller_withdrew_reschedule(text: str) -> bool:
+    """Recognize a whole-turn reschedule withdrawal without eating corrections."""
+    if _caller_refused_outright(text):
+        return True
+    norm = _normalised_utterance(text)
+    return bool(
+        re.fullmatch(
+            r"(?:actually\s+)?(?:please\s+)?(?:i\s+)?"
+            r"(?:do\s+not|don\s+t|dont|never)\s+(?:want\s+to\s+)?"
+            r"(?:reschedule|change|move|shift)"
+            r"(?:\s+(?:it|this|that|the\s+appointment|my\s+appointment|"
+            r"the\s+booking|my\s+booking))?",
+            norm,
+        )
+        or re.fullmatch(
+            r"(?:actually\s+)?(?:please\s+)?(?:never\s+mind|leave\s+it|"
+            r"keep\s+it\s+as\s+it\s+is)",
+            norm,
+        )
+    )
+
+
 def _caller_declined(text: str) -> bool:
     """Did the caller say NO to the question just asked?
 
@@ -2647,6 +6239,11 @@ def _caller_declined(text: str) -> bool:
     today" must never authorize a write.
     """
     norm = _normalised_utterance(text)
+    if not norm:
+        return False
+    # Idiomatic agreement, not refusal. Keep scanning the remainder so
+    # "no problem, actually don't book" is still vetoed.
+    norm = re.sub(r'^no\s+(?:problem|worries)\s*', '', norm).strip()
     if not norm:
         return False
     padded = f' {norm} '
@@ -2684,6 +6281,423 @@ def _caller_affirmed(text: str) -> bool:
     )
 
 
+_PENDING_MESSAGE_ACTION_TERMS = (
+    "log it", "record it", "send the message", "tell the clinic",
+    "let the clinic know", "take a message", "leave a message",
+    "నమోదు చేయండి", "మెసేజ్ పెట్టండి", "క్లినిక్ కి చెప్పండి",
+    "క్లినిక్‌కు చెప్పండి", "दर्ज कर दो", "दर्ज कीजिए", "संदेश भेज दो",
+    "क्लिनिक को बता दो", "பதிவு செய்யுங்கள்", "மெசேஜ் அனுப்புங்கள்",
+    "கிளினிக்கிடம் சொல்லுங்கள்", "ದಾಖಲಿಸಿ", "ಸಂದೇಶ ಕಳುಹಿಸಿ",
+    "ಕ್ಲಿನಿಕ್‌ಗೆ ತಿಳಿಸಿ", "രേഖപ്പെടുത്തൂ", "സന്ദേശം അയക്കൂ",
+    "ക്ലിനിക്കിനോട് പറയൂ", "नोंद करा", "संदेश पाठवा", "क्लिनिकला सांगा",
+    "নথিভুক্ত করুন", "বার্তা পাঠান", "ক্লিনিককে বলুন",
+)
+
+
+def _caller_authorized_pending_message(text: str) -> bool:
+    """Consent to persist the exact server-built failed-booking snapshot."""
+    if _caller_declined(text):
+        return False
+    if _caller_affirmed(text):
+        return True
+    norm = _normalised_utterance(text)
+    if not norm:
+        return False
+    polite_request = re.match(
+        r"^(?:can|could|would|will)\s+you\s+(?:please\s+)?(.+)$",
+        norm,
+    )
+    if polite_request:
+        direct = polite_request.group(1).strip()
+        return any(
+            direct == _normalised_utterance(term)
+            for term in _PENDING_MESSAGE_ACTION_TERMS
+        )
+    if "?" in (text or ""):
+        return False
+    if re.match(
+        r"^(?:what|why|how|when|did|have|has|should|would|could|can|may|"
+        r"i will|i'll)\b",
+        norm,
+    ) or re.search(r"\b(?:myself|already)\b", norm):
+        return False
+    direct = re.sub(r"^(?:please|kindly)\s+", "", norm).strip()
+    return any(
+        direct == _normalised_utterance(term)
+        for term in _PENDING_MESSAGE_ACTION_TERMS
+    )
+
+
+_URGENT_NEGATIONS = (
+    "not urgent", "isn't urgent", "isnt urgent", "no urgency",
+    "not an emergency", "not emergency",
+)
+_URGENT_TERMS = (
+    "urgent", "urgently", "emergency", "immediately", "right away",
+    "as soon as possible", "అర్జెంట్", "తక్షణం", "तुरंत", "ज़रूरी",
+    "அவசரம்", "உடனே", "ತುರ್ತು", "ತಕ್ಷಣ", "അടിയന്തിര", "ഉടൻ",
+    "तातडीचे", "लगेच", "জরুরি", "এখনই",
+)
+
+
+def _caller_marked_urgent(text: str) -> bool:
+    norm = _normalised_utterance(text)
+    if any(term in norm for term in _URGENT_NEGATIONS):
+        return False
+    return any(_normalised_utterance(term) in norm for term in _URGENT_TERMS)
+
+
+def _caller_relay_kind(text: str) -> str | None:
+    """Classify caller-authored content without trusting a model tool argument."""
+    raw = (text or "").strip()
+    norm = _normalised_utterance(raw)
+    if not norm or _caller_affirmed(raw) or is_backchannel(raw):
+        return None
+    if (
+        _caller_authorized_booking(raw)
+        or _caller_authorized_cancellation(raw)
+        or _caller_authorized_reschedule(raw)
+        or _explicit_language_request(raw)
+    ):
+        return None
+    if re.search(
+        r"\b(?:tell|inform|notify|message|send|leave|pass)\b.{0,45}"
+        r"\b(?:clinic|doctor|dr|reception|front\s+desk|them|him|her)\b|"
+        r"\b(?:call\s+me\s+back|callback|complaint)\b",
+        norm,
+        re.I,
+    ):
+        return "message"
+    if "?" in raw or re.match(
+        r"^(?:what|why|how|when|where|who|which|does|do|is|are|can|could|"
+        r"would|will|has|have)\b",
+        norm,
+        re.I,
+    ):
+        return "question"
+    # Non-English STT often omits punctuation and a reliable cross-language
+    # interrogative parser would be less safe than retaining the exact words.
+    # The destination tool still checks its own scope; only the content is
+    # shared so a later yes cannot be replaced with invented text.
+    return "content"
+
+
+_DIRECT_RELAY_TARGET = (
+    r"(?:the\s+)?(?:clinic|doctor|dr|reception|front\s+desk)"
+)
+
+
+def _caller_direct_relay_request(text: str) -> tuple[str, bool] | None:
+    """Return ``(kind, references_prior_text)`` for an explicit relay command.
+
+    This is deliberately narrower than general relay-content classification:
+    only a caller-directed imperative or polite ``you`` request can authorize
+    a durable write. Mentions, threats, and ``I will tell the clinic`` do not.
+    """
+    raw = (text or "").strip()
+    norm = _normalised_utterance(raw)
+    if not norm or _caller_refused_outright(raw):
+        return None
+    polite = re.fullmatch(
+        r"(?:can|could|would|will) you (?:please )?(.+)", norm
+    )
+    body = polite.group(1) if polite else re.sub(
+        r"^(?:please|kindly)\s+", "", norm
+    )
+    if not polite and re.match(r"^(?:i|we)\b", body):
+        return None
+
+    reference = re.fullmatch(
+        rf"(?:log|record|note|send|pass|forward|leave|take)\s+"
+        rf"(?:this|that|my|the|a)\s+(question|message|note)"
+        rf"(?:\s+(?:to|for|with)\s+{_DIRECT_RELAY_TARGET})?",
+        body,
+    )
+    if reference:
+        kind = "question" if reference.group(1) == "question" else "message"
+        return kind, True
+    reference = re.fullmatch(
+        rf"(?:tell|ask|inform|notify|message)\s+{_DIRECT_RELAY_TARGET}\s+"
+        r"(?:this|that|my|the|a)\s+(question|message|note)",
+        body,
+    )
+    if reference:
+        kind = "question" if reference.group(1) == "question" else "message"
+        return kind, True
+    if any(
+        body == _normalised_utterance(term)
+        for term in _PENDING_MESSAGE_ACTION_TERMS
+    ):
+        return "message", True
+    reference = re.fullmatch(
+        rf"(?:send|pass|forward|leave|take)\s+(?:this|that|it)\s+"
+        rf"(?:to|for|with)\s+{_DIRECT_RELAY_TARGET}",
+        body,
+    )
+    if reference:
+        return "message", True
+
+    direct = re.match(
+        rf"^(ask|tell|inform|notify|message)\s+{_DIRECT_RELAY_TARGET}\b\s*(.*)$",
+        body,
+    )
+    if direct:
+        remainder = direct.group(2).strip()
+        kind = (
+            "message"
+            if re.match(r"^ask\s+(?:the\s+)?(?:doctor|dr)\b", body)
+            else (
+                "question"
+                if direct.group(1) == "ask" or re.search(r"\bquestion\b", body)
+                else "message"
+            )
+        )
+        return kind, not remainder or remainder in {"this", "that", "it"}
+    direct = re.match(
+        rf"^(log|record|note|send|pass|forward|leave|take)\b(.{{0,160}})"
+        rf"\b(?:to|for|with)\s+{_DIRECT_RELAY_TARGET}\b(.*)$",
+        body,
+    )
+    if direct:
+        kind = "question" if re.search(r"\bquestion\b", body) else "message"
+        return kind, False
+    return None
+
+
+def _caller_direct_relay_payload(text: str) -> str | None:
+    """Extract caller content after a recognized directive, preserving words."""
+    raw = (text or "").strip()
+    body = re.sub(
+        r"^\s*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|"
+        r"(?:please|kindly)\s+)",
+        "",
+        raw,
+        flags=re.I,
+    )
+    target = (
+        r"(?:the\s+)?(?:clinic|reception|front\s+desk|"
+        r"doctor(?:\s+(?!(?:this|that|it|if|whether|i|we|my|our|the|"
+        r"please|to|can|could|should|would|will|have|has|do|does|is|are)\b)"
+        r"[A-Za-z][\w.'-]*)?|"
+        r"dr\.?(?:\s+(?!(?:this|that|it|if|whether|i|we|my|our|the|"
+        r"please|to|can|could|should|would|will|have|has|do|does|is|are)\b)"
+        r"[A-Za-z][\w.'-]*)?)"
+    )
+    match = re.match(
+        rf"^(?:ask|tell|inform|notify|message)\s+{target}\s+(.+?)\s*$",
+        body,
+        re.I | re.S,
+    )
+    if match:
+        payload = match.group(1).strip()
+        payload = re.sub(r"^that\s+", "", payload, flags=re.I).strip()
+        return payload or None
+    match = re.match(
+        rf"^(?:log|record|note|send|pass|forward|leave|take)\s+(.+?)\s+"
+        rf"(?:to|for|with)\s+{target}\s*$",
+        body,
+        re.I | re.S,
+    )
+    if match:
+        return match.group(1).strip() or None
+    return None
+
+
+_CRITICAL_ESCALATION = re.compile(
+    r"\b(?:cannot|can['â€™]?t|unable\s+to|hard\s+to)\s+(?:breathe|breath)|"
+    r"\b(?:severe|crushing|sudden)\s+chest\s+pain\b|"
+    r"\b(?:unconscious|not\s+breathing|heavy\s+bleeding|stroke|suicid(?:e|al))\b",
+    re.I,
+)
+_EXPLICIT_HUMAN_REQUEST = re.compile(
+    r"\b(?:speak|talk|connect|transfer|put\s+me\s+through)\b.{0,45}"
+    r"\b(?:human|person|receptionist|staff|someone\s+at\s+the\s+clinic)\b",
+    re.I | re.S,
+)
+_HUMAN_TRANSFER_NEGATION = re.compile(
+    r"\b(?:do\s+not|don['â€™]?t|never)\s+(?:want\s+to\s+)?"
+    r"(?:speak|talk|connect|transfer|be\s+transferred)\b|"
+    r"\b(?:no|not)\s+(?:human|person|receptionist|transfer)\b",
+    re.I | re.S,
+)
+_CRITICAL_ESCALATION_NEGATION = re.compile(
+    r"\b(?:i\s+)?can\s+breathe\b|"
+    r"\b(?:not|never)\s+(?:suicidal|unconscious|bleeding)\b|"
+    r"\bchest\s+pain\b.{0,20}\b(?:is\s+)?(?:not\s+severe|mild)\b",
+    re.I | re.S,
+)
+
+
+def _caller_escalation_priority(text: str) -> str | None:
+    """High-confidence cases that must reach escalation before relay writes."""
+    raw = text or ""
+    if (
+        _CRITICAL_ESCALATION.search(raw)
+        and not _CRITICAL_ESCALATION_NEGATION.search(raw)
+    ):
+        return "urgent"
+    if (
+        _EXPLICIT_HUMAN_REQUEST.search(raw)
+        and not _HUMAN_TRANSFER_NEGATION.search(raw)
+    ):
+        return "human"
+    return None
+
+
+_MUTABLE_APPOINTMENT_WORDS = re.compile(
+    r"\b(?:appointment|booking|visit)\b|"
+    r"అపాయింట్|బుకింగ్|अपॉइंट|बुकिंग|அப்பாயின்ட்|புக்கிங்|"
+    r"ಅಪಾಯಿಂಟ್|ಬುಕಿಂಗ್|അപ്പോയിന്റ്|ബുക്കിംഗ്|अपॉइंट|बुकिंग|"
+    r"অ্যাপয়েন্ট|বুকিং",
+    re.I,
+)
+_MUTABLE_AVAILABILITY_WORDS = re.compile(
+    r"\b(?:available|availability|free|openings?|slots?|"
+    r"sitting\s+hours?|consulting\s+hours?|doctor\s+schedule|"
+    r"schedule)\b|"
+    r"అందుబాటులో|ఖాళీ|షెడ్యూల్|उपलब्ध|खाली|शेड्यूल|"
+    r"கிடைக்க|காலி|அட்டவணை|ಲಭ್ಯ|ಖಾಲಿ|ವೇಳಾಪಟ್ಟಿ|"
+    r"ലഭ്യ|ഒഴിഞ്ഞ|സമയം|उपलब्ध|मोकळ|वेळापत्रक|"
+    r"পাওয়া|খালি|সময়সূচি",
+    re.I,
+)
+_MUTABLE_QUEUE_WORDS = re.compile(
+    r"\b(?:queue|token|now\s+serving|people\s+ahead|patients?\s+ahead|"
+    r"my\s+turn|wait\s+time)\b|"
+    r"క్యూ|టోకెన్|క్యూలో|कतार|टोकन|வரிசை|டோக்கன்|"
+    r"ಸರತಿ|ಟೋಕನ್|ക്യൂ|ടോക്കൺ|रांग|टोकन|সারি|টোকেন",
+    re.I,
+)
+_MUTABLE_READ_QUERY_CUES = re.compile(
+    r"\b(?:when|what|which|where|who|do\s+i|did\s+i|have\s+i|"
+    r"has\s+my|is\s+my|was\s+my|tell\s+me|check|find|look\s+up|"
+    r"details?|status|record|calendar)\b|"
+    r"ఎప్పుడు|ఏమి|చెప్పండి|చూడండి|कब|क्या|बताइए|जाँच|"
+    r"எப்போது|என்ன|சொல்லுங்கள்|ಯಾವಾಗ|ಏನು|ಹೇಳಿ|"
+    r"എപ്പോൾ|എന്ത്|പറയൂ|कधी|काय|सांगा|কখন|কি|বলুন",
+    re.I,
+)
+
+
+def _caller_mutable_read_intent(text: str) -> str | None:
+    """Classify mutable clinic facts before the model can omit their tool."""
+    raw = (text or "").strip()
+    if not raw or any(
+        guard(raw)
+        for guard in (
+            _caller_authorized_booking,
+            _caller_authorized_cancellation,
+            _caller_authorized_reschedule,
+        )
+    ):
+        return None
+    if _MUTABLE_QUEUE_WORDS.search(raw):
+        return "queue"
+    if _MUTABLE_AVAILABILITY_WORDS.search(raw):
+        return "availability"
+    if (
+        _MUTABLE_APPOINTMENT_WORDS.search(raw)
+        and ("?" in raw or _MUTABLE_READ_QUERY_CUES.search(raw))
+    ):
+        return "booking"
+    if re.search(
+        r"\b(?:clinic|appointment|booking)\s+(?:record|calendar|system)\b|"
+        r"\b(?:record|calendar|system)\b.{0,35}"
+        r"\b(?:appointment|booking|visit)\b",
+        raw,
+        re.I,
+    ):
+        return "records"
+    return None
+
+
+def _caller_abandoned_mutable_read(text: str) -> bool:
+    """Recognize an explicit decision to drop the pending lookup."""
+    norm = _normalised_utterance(text)
+    return bool(
+        norm
+        and re.fullmatch(
+            r"(?:no\s+)?(?:never\s*mind|nevermind|forget\s+it|leave\s+it|"
+            r"skip\s+it|do\s+not\s+check|don\s+t\s+check|dont\s+check|"
+            r"no\s+need\s+to\s+check)",
+            norm,
+        )
+    )
+
+
+_MUTABLE_READ_CLARIFICATION = re.compile(
+    r"^\s*(?:please\s+)?(?:tell|give|provide|repeat|confirm|say|specify|"
+    r"choose)\b.{0,80}\b(?:name|doctor|date|day|time|phone|number|"
+    r"appointment|booking)\b[.!]?\s*$",
+    re.I | re.S,
+)
+_MUTABLE_DATE_CLAIM = re.compile(
+    r"\b\d{4}-\d{1,2}-\d{1,2}\b|"
+    r"\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b|"
+    r"\b(?:today|tomorrow|monday|tuesday|wednesday|thursday|friday|"
+    r"saturday|sunday)\b|"
+    r"\b(?:january|february|march|april|may|june|july|august|"
+    r"september|october|november|december)\b",
+    re.I,
+)
+_MUTABLE_BOOKING_ASSERTION = re.compile(
+    r"\b(?:appointment|booking|visit)\b.{0,55}"
+    r"\b(?:is|was|has|have|at|on|with|under|booked|confirmed|"
+    r"scheduled|cancelled|canceled|found|exists?|does\s+not|no)\b|"
+    r"\b(?:you|your)\b.{0,35}\b(?:have|has|booked|confirmed|"
+    r"scheduled)\b.{0,35}\b(?:appointment|booking|visit)\b|"
+    r"అపాయింట్.{0,45}(?:ఉంది|బుక్|కన్ఫర్మ్|రద్దు)|"
+    r"अपॉइंट.{0,45}(?:है|बुक|कन्फर्म|रद्द)|"
+    r"அப்பாயின்ட்.{0,45}(?:உள்ளது|புக்|உறுதி)|"
+    r"ಅಪಾಯಿಂಟ್.{0,45}(?:ಇದೆ|ಬುಕ್|ದೃಢ)|"
+    r"അപ്പോയിന്റ്.{0,45}(?:ഉണ്ട്|ബുക്ക്|സ്ഥിര)|"
+    r"अपॉइंट.{0,45}(?:आहे|बुक|निश्चित)|"
+    r"অ্যাপয়েন্ট.{0,45}(?:আছে|বুক|নিশ্চিত)",
+    re.I | re.S,
+)
+_MUTABLE_AVAILABILITY_ASSERTION = re.compile(
+    r"\b(?:available|unavailable|free|fully\s+booked|no\s+slots?|"
+    r"openings?|schedule|sits?|sitting\s+hours?|on\s+leave|"
+    r"open|closed)\b|"
+    r"అందుబాటులో|ఖాళీ|షెడ్యూల్|ఉన్నారు|ఉండరు|"
+    r"उपलब्ध|खाली|शेड्यूल|छुट्टी|கிடைக்க|காலி|அட்டவணை|"
+    r"ಲಭ್ಯ|ಖಾಲಿ|ವೇಳಾಪಟ್ಟಿ|ലഭ്യ|ഒഴിഞ്ഞ|उपलब्ध|मोकळ|"
+    r"वेळापत्रक|পাওয়া|খালি|সময়সূচি",
+    re.I,
+)
+
+
+def _mutable_read_assertion(text: str, intent: str) -> bool:
+    """Reject only factual assertions; prerequisite questions stay audible."""
+    spoken = sanitize_for_tts(text).strip()
+    if not spoken or spoken.rstrip().endswith(("?", "？")):
+        return False
+    if _MUTABLE_READ_CLARIFICATION.search(spoken):
+        return False
+    has_clock = bool(clock_time_mentions(spoken, "en"))
+    has_date = _MUTABLE_DATE_CLAIM.search(spoken) is not None
+    if intent == "booking":
+        return bool(
+            has_clock
+            or has_date
+            or _MUTABLE_BOOKING_ASSERTION.search(spoken)
+        )
+    if intent == "availability":
+        return bool(
+            has_clock
+            or has_date
+            or _MUTABLE_AVAILABILITY_ASSERTION.search(spoken)
+        )
+    if intent == "queue":
+        return _MUTABLE_QUEUE_WORDS.search(spoken) is not None
+    return bool(
+        has_clock
+        or has_date
+        or _MUTABLE_BOOKING_ASSERTION.search(spoken)
+        or _MUTABLE_AVAILABILITY_ASSERTION.search(spoken)
+    )
+
+
 
 def _caller_authorized_cancellation(text: str) -> bool:
     raw = (text or '').casefold()
@@ -2695,6 +6709,13 @@ def _caller_authorized_cancellation(text: str) -> bool:
         return False
     if re.search(
         r'\b(?:did you|have you|was it|is it)\s+(?:already\s+)?cancel',
+        raw,
+    ):
+        return False
+    if re.search(
+        r'\b(?:how|when|where|why)\s+(?:do|can|could|should|would)\s+'
+        r'(?:i|we|you)\b[^.?!]{0,45}\bcancel\b|'
+        r'\bcan\s+i\b[^.?!]{0,35}\bcancel\b[^.?!]{0,25}\blater\b',
         raw,
     ):
         return False
@@ -2765,6 +6786,16 @@ def _caller_authorized_reschedule(text: str) -> bool:
         return False
     if re.search(r'\bwhat (?:is|are).*\breschedul(?:e|ing)\b', raw):
         return False
+    if re.search(
+        r'\b(?:how|when|where|why)\s+(?:do|can|could|should|would)\s+'
+        r'(?:i|we|you)\b[^.?!]{0,55}\b'
+        r'(?:reschedule|move|change|shift)\b|'
+        r'\b(?:may|might|maybe)\b[^.?!]{0,35}\b'
+        r'(?:reschedule|move|change|shift)\b|'
+        r'\b(?:reschedule|move|change|shift)\b[^.?!]{0,35}\blater\b',
+        raw,
+    ):
+        return False
     low = _normalised_utterance(text)
     # A PHRASE LIST CANNOT COVER ENGLISH. The list held "move the appointment"
     # but not "move MY appointment", so the commonest way to ask was not a
@@ -2776,6 +6807,11 @@ def _caller_authorized_reschedule(text: str) -> bool:
         or re.search(
             r'\b(?:move|change|shift|push)\b[^.?!]{0,40}?'
             r'\b(?:appointment|booking|slot|token|timing|time|it)\b',
+            raw,
+        ) is not None
+        or re.search(
+            r'\b(?:appointment|booking|slot|token)\b[^.?!]{0,30}?'
+            r'\b(?:move|change|shift)\b(?:\s+chey\w*)?',
             raw,
         ) is not None
     )
@@ -2804,16 +6840,15 @@ def _explicit_language_request(text: str) -> str | None:
     low = ' '.join((text or '').casefold().strip().split())
     if not low:
         return None
-    # A caller asking whether a doctor/staff member speaks a language is a
-    # clinic question, not an instruction to change this receptionist.
-    if any(role in low for role in ('doctor', 'nurse', 'staff', 'receptionist')):
-        return None
+    command_low = low.strip(" \t\r\n.,!?;:…।")
 
     aliases = {
         'te': ('telugu', 'telgu', 'తెలుగు', 'तेलुगु'),
         'en': (
             'english', 'inglish', 'ఇంగ్లీష్', 'अंग्रेज़ी', 'अंग्रेजी',
-            'ஆங்கிலம்', 'ಇಂಗ್ಲಿಷ್',
+            'ஆங்கிலம்', 'ஆங்கிலத்தில்', 'ಇಂಗ್ಲಿಷ್', 'ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ',
+            'ഇംഗ്ലീഷ്', 'ഇംഗ്ലീഷിൽ', 'ইংরেজি', 'ইংরেজিতে', 'इंग्रजी',
+            'इंग्रजीत', 'ఇంగ్లీష్‌లో',
         ),
         'hi': ('hindi', 'హిందీ', 'हिंदी', 'हिन्दी'),
         'ta': ('tamil', 'తమిళం', 'தமிழ்'),
@@ -2823,24 +6858,237 @@ def _explicit_language_request(text: str) -> str | None:
         'bn': ('bengali', 'bangla', 'বাংলা'),
     }
 
+    aliases['ta'] += ('தமிழில்',)
+    aliases['ml'] += ('മലയാളത്തിൽ',)
+
     def _has_alias(alias: str) -> bool:
         if alias.isascii():
             return re.search(rf'\b{re.escape(alias)}\b', low) is not None
         return alias in low
 
+    native_negations = (
+        'కాదు', 'వద్దు',
+        'नहीं', 'नही', 'मत',
+        'வேண்டாம்', 'இல்லை',
+        'ಬೇಡ', 'ಬೇಡಿ', 'ಅಲ್ಲ',
+        'വേണ്ട', 'അല്ല',
+        'नको', 'नाही', 'नका',
+        'না', 'নয়', 'নয়',
+    )
+
+    def _has_language_alias(value: str) -> bool:
+        return any(
+            (
+                re.search(rf'\b{re.escape(term)}\b', value) is not None
+                if term.isascii()
+                else term in value
+            )
+            for terms in aliases.values()
+            for term in terms
+        )
+
+    # The final imperative clause wins over earlier complaint/context clauses:
+    # "Why are you speaking Telugu? Speak English." and "You switched to
+    # Telugu. Go back to English." are explicit repairs, not two competing
+    # positive mentions. STT punctuation is optional at the outer boundary.
+    command_clauses = [
+        clause.strip(" \t\r\n.,!?;:…।")
+        for clause in re.split(r"[.!?;:…।]+", low)
+        if clause.strip(" \t\r\n.,!?;:…।")
+    ]
+    for clause in reversed(command_clauses):
+        command_targets: list[str] = []
+        for target_code, terms in aliases.items():
+            for term in terms:
+                escaped = re.escape(term)
+                boundary = r"\b" if term.isascii() else ""
+                alias_expr = rf"{boundary}{escaped}{boundary}"
+                if re.fullmatch(
+                    rf"(?:please\s+)?(?:(?:speak|talk|reply|respond|answer|"
+                    rf"continue|stay|use)(?:\s+(?:in|with))?|"
+                    rf"continue\s+using|keep\s+it\s+in)\s+{alias_expr}"
+                    rf"(?:\s+only)?"
+                    rf"(?:\s+please)?|"
+                    rf"(?:please\s+)?(?:switch|change|go\s+back)"
+                    rf"(?:\s+(?:the\s+)?language)?\s+to\s+{alias_expr}"
+                    rf"(?:\s+please)?|"
+                    rf"(?:in|only)\s+{alias_expr}(?:\s+please)?|"
+                    rf"{alias_expr}\s+(?:only|please|from\s+now\s+on)|"
+                    rf"(?:keep\s+it|stick\s+to|continue\s+in|speak\s+in|"
+                    rf"talk\s+in|stay\s+in|go\s+back\s+to)\s+{alias_expr}"
+                    rf"(?:\s+please)?",
+                    clause,
+                    re.I,
+                ):
+                    command_targets.append(target_code)
+                    break
+        if len(set(command_targets)) == 1:
+            return command_targets[0]
+        if command_targets:
+            break
+
+    # A language can describe an artifact without selecting the language of
+    # this call: "prescription in English", "send the report in Hindi", and
+    # "write the medicine name in Tamil" are content requests. Require a
+    # speech/conversation anchor before such a turn may reconfigure STT/TTS.
+    artifact_request = re.search(
+        r"\b(?:prescriptions?|reports?|documents?|medicine(?:\s+names?)?|"
+        r"medications?|certificates?|letters?|forms?|files?|records?|notes?|"
+        r"summaries?|labels?|receipts?|invoices?|emails?|messages?)\b",
+        low,
+        re.I,
+    ) is not None
+    spoken_language_command = False
+    if artifact_request:
+        for terms in aliases.values():
+            for term in terms:
+                escaped = re.escape(term)
+                boundary = r"\b" if term.isascii() else ""
+                alias_expr = rf"{boundary}{escaped}{boundary}"
+                if re.search(
+                    rf"\b(?:speak|talk|reply|respond|answer|continue|stay)\b"
+                    rf".{{0,48}}{alias_expr}|"
+                    rf"{alias_expr}.{{0,36}}\b(?:spoken\s+language|voice|"
+                    rf"call|conversation)\b",
+                    low,
+                    re.I,
+                ):
+                    spoken_language_command = True
+                    break
+            if spoken_language_command:
+                break
+        if not spoken_language_command:
+            return None
+
+    # A caller asking whether a doctor/staff member speaks a language is a
+    # clinic question, not an instruction to change this receptionist. This is
+    # deliberately after the final-command parser so "the doctor used Telugu;
+    # speak English" still repairs the agent's language.
+    if any(role in low for role in ('doctor', 'nurse', 'staff', 'receptionist')):
+        return None
+
+    def _alias_mention_polarity(alias: str) -> tuple[bool, bool]:
+        pattern = (
+            rf'\b{re.escape(alias)}\b' if alias.isascii() else re.escape(alias)
+        )
+        positive = False
+        negative = False
+        for match in re.finditer(pattern, low):
+            prefix = low[max(0, match.start() - 40):match.start()]
+            prefix = re.split(
+                r'[,.;!?]|\b(?:and|but|then)\b', prefix, flags=re.I
+            )[-1].strip(" ,;:")
+            suffix = low[match.end():match.end() + 24]
+            negated_before = re.search(
+                r"(?:^|\b)(?:no|not|never|do\s+not|don't|dont|cannot|"
+                r"can't|cant|stop|no\s+more)"
+                r"(?:[\s,;:]+[^\s,;:]+){0,5}[\s,;:]*$",
+                prefix,
+                re.I,
+            )
+            # In "English, not Telugu", ``not`` belongs to Telugu. Do not
+            # also negate English merely because the contrast follows it.
+            if negated_before and _has_language_alias(negated_before.group(0)):
+                negated_before = None
+            negated_after = re.match(
+                r"^\s*(?:[?.,;!]\s*)?(?:no|not|never|please\s+no)\b",
+                suffix,
+                re.I,
+            )
+            if negated_after:
+                after_negation = suffix[negated_after.end():]
+                if _has_language_alias(
+                    re.split(r'[,.;!?]', after_negation, maxsplit=1)[0]
+                ):
+                    negated_after = None
+            native_clause = re.split(
+                r'[,.;!?]|\b(?:and|but|then)\b', suffix, maxsplit=1, flags=re.I
+            )[0][:40]
+            native_negation_at = min(
+                (
+                    native_clause.find(term)
+                    for term in native_negations
+                    if term in native_clause
+                ),
+                default=-1,
+            )
+            native_negated_after = (
+                native_negation_at >= 0
+                and not _has_language_alias(
+                    native_clause[:native_negation_at]
+                )
+            )
+            negative_relation = bool(
+                re.search(r"\b(?:instead\s+of|rather\s+than|than)\s*$", prefix, re.I)
+            )
+            if (
+                negated_before
+                or negated_after
+                or native_negated_after
+                or negative_relation
+            ):
+                negative = True
+            else:
+                positive = True
+        return positive, negative
+
+    polarity = {
+        code: [
+            _alias_mention_polarity(term)
+            for term in terms
+            if _has_alias(term)
+        ]
+        for code, terms in aliases.items()
+    }
+
     matches = [
         code
-        for code, terms in aliases.items()
-        if any(_has_alias(term) for term in terms)
+        for code, mentions in polarity.items()
+        if any(positive for positive, _ in mentions)
     ]
+    negated_codes = {
+        code
+        for code, mentions in polarity.items()
+        if any(negative for _, negative in mentions)
+    }
     if len(matches) != 1:
         return None
     code = matches[0]
-    if any(low == term for term in aliases[code]):
+    if any(command_low == term for term in aliases[code]):
         return code
 
-    words = re.findall(r'[^\W_]+', low, flags=re.UNICODE)
+    # Short, unambiguous language choices are hard-lock requests even without
+    # the verb "switch": "English only", "in Hindi", "stick to Tamil".
+    # Keep the grammar anchored to the whole turn so a clinic question such as
+    # "is the prescription in English?" remains a question, not a switch.
+    matched_aliases = [term for term in aliases[code] if _has_alias(term)]
+    for alias in matched_aliases:
+        escaped = re.escape(alias)
+        boundary = r"\b" if alias.isascii() else ""
+        alias_expr = rf"{boundary}{escaped}{boundary}"
+        if re.fullmatch(
+            rf"(?:in|only)\s+{alias_expr}(?:\s+please)?|"
+            rf"{alias_expr}\s+(?:only|please|from\s+now\s+on)|"
+            rf"(?:keep\s+it|stick\s+to|continue\s+in|speak\s+in|talk\s+in|"
+            rf"stay\s+in|go\s+back\s+to)"
+            rf"\s+{alias_expr}(?:\s+please)?",
+            command_low,
+            re.I,
+        ):
+            return code
+
+    words = re.findall(r'[^\W_]+', command_low, flags=re.UNICODE)
     if len(words) == 1:
+        return code
+    if (
+        negated_codes
+        and code not in negated_codes
+        and len(words) <= 9
+        and not any(
+            noun in low
+            for noun in ("prescription", "report", "medicine", "document")
+        )
+    ):
         return code
 
     request_cues = (
@@ -2848,7 +7096,8 @@ def _explicit_language_request(text: str) -> str | None:
         'do you know',
         'please', 'pls', 'kindly', 'speak', 'talk in', 'switch',
         'change language', 'reply in', 'respond in', 'continue in',
-        'use ', 'prefer ', 'matlad', 'maatlad', 'cheppandi', 'baat',
+        'use ', 'prefer ', 'want ', 'instead of', 'rather ', 'no more ',
+        'matlad', 'maatlad', 'cheppandi', 'baat',
         'bolo', 'boliye', 'pesu', 'pesunga', 'matadi', 'mathadi',
         'samsar', 'parayu', 'bola', 'bolaa', 'bolun', 'bolben',
         'kotha bol', 'మాట్లాడ', 'చెప్పండి', 'बात', 'बोल', 'பேச',
@@ -3652,9 +7901,11 @@ _CLARIFICATION_FAILURE_MARKERS = (
 
 
 def _inferred_call_failure(transcript: str | None) -> str | None:
-    '''Classify an unresolved clarification loop for monitoring.'''
+    '''Classify deterministic transcript failures for monitoring.'''
     if not transcript:
         return None
+    if has_unresolved_check(transcript):
+        return 'unresolved_check'
     agent_text = '\n'.join(
         line[7:] for line in transcript.splitlines() if line.startswith('agent: ')
     ).casefold()
@@ -3739,6 +7990,10 @@ class VachanamAgent(Agent):
         # current turn's transcript (dedicated session), consumed by route_to_doctor.
         self._prefetch_route: asyncio.Task | None = None
         self._prefetch_complaint = ""
+        # Keep fire-and-forget notifications alive until they finish. asyncio's
+        # loop holds only weak task references; an unreferenced urgent-message
+        # alert can otherwise disappear after the caller already heard success.
+        self._background_tasks: set[asyncio.Task] = set()
         # Cached native-script pronunciations, applied at the TTS boundary only.
         # Empty until primed, and staying empty simply speaks the Latin name.
         self._name_sub = None
@@ -3888,6 +8143,56 @@ class VachanamAgent(Agent):
             logger.warning("pronunciation_install_failed: %s", str(e)[:140])
             self._name_sub, self._name_hold = None, None
 
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        """Expose only the model's explicit patient-speech envelope.
+
+        Tool calls and usage metadata pass through unchanged. Any free-form text
+        outside ``<speak>`` is private execution text and is never sent to TTS.
+        """
+        source = Agent.default.llm_node(self, chat_ctx, tools, model_settings)
+        if asyncio.iscoroutine(source):
+            source = await source
+        envelope = _SpeechEnvelope()
+        raw_text_seen = False
+        tool_seen = False
+
+        async for chunk in source:
+            if isinstance(chunk, str):
+                raw_text_seen = raw_text_seen or bool(chunk.strip())
+                for speech in envelope.feed(chunk):
+                    yield speech
+                continue
+
+            delta = getattr(chunk, "delta", None)
+            content = getattr(delta, "content", None) if delta is not None else None
+            calls = list(getattr(delta, "tool_calls", None) or []) if delta else []
+            tool_seen = tool_seen or bool(calls)
+            if content is None:
+                yield chunk
+                continue
+
+            raw_text_seen = raw_text_seen or bool(content.strip())
+            speech_parts = envelope.feed(content)
+            if speech_parts:
+                for index, speech in enumerate(speech_parts):
+                    safe_delta = delta.model_copy(update={
+                        "content": speech,
+                        "tool_calls": calls if index == 0 else [],
+                    })
+                    yield chunk.model_copy(update={"delta": safe_delta})
+            elif calls or getattr(delta, "role", None) is not None:
+                safe_delta = delta.model_copy(update={"content": None})
+                yield chunk.model_copy(update={"delta": safe_delta})
+
+        for speech in envelope.finish():
+            yield speech
+        if raw_text_seen and not envelope.seen and not tool_seen:
+            logger.error(
+                "model_speech_envelope_missing session=%s",
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            yield _safe_output_recovery(self._lang_code)
+
     async def tts_node(self, text, model_settings):
         """Space out LONG digit runs (5+) before they reach TTS. A joined
         number like "9666444428" is read by the te/en TTS as an Indian
@@ -3913,7 +8218,35 @@ class VachanamAgent(Agent):
                     _trace.mark_guard_first_out()
                 yield chunk
 
-        safe_text = _stamp_out(_guard_internal_speech_stream(_stamp_in(text)))
+        # Check promises must be inspected before private-reasoning cleanup.
+        # Otherwise text such as "I should verify that" can be erased by the
+        # internal-speech filter and leave the caller in unexplained silence.
+        safe_text = _guard_unbacked_checking_speech_stream(
+            _stamp_in(text), self._lang_code, self._state
+        )
+        safe_text = _guard_internal_speech_stream(safe_text, self._lang_code)
+        verified_receipt = (
+            self._state.verified_mutation_speech
+            or self._state.verified_read_speech
+        )
+        pending_action = (
+            self._state.mutation_in_flight
+            or self._state.pending_confirmation
+            or ("cancel" if self._state.caller_asked_to_cancel else None)
+            or ("reschedule" if self._state.caller_asked_to_reschedule else None)
+            or ("booking" if self._state.caller_asked_to_book else None)
+            or self._state.relay_snapshot_kind
+        )
+        safe_text = _guard_unverified_action_speech_stream(
+            safe_text,
+            self._lang_code,
+            verified_speech=verified_receipt,
+            verified_state=self._state,
+            pending_action=pending_action,
+        )
+        safe_text = _guard_output_language_with_verified_receipt(
+            safe_text, self._lang_code, verified_receipt, self._state
+        )
         # A completed booking is a closed transaction. If the model drifts back
         # to stale history, stop both the false "it failed" claim and a second
         # confirmation question at the final patient-facing boundary. A real
@@ -3926,6 +8259,10 @@ class VachanamAgent(Agent):
             safe_text = _guard_closed_booking_speech_stream(
                 safe_text, self._lang_code
             )
+        # Stamp the first chunk that actually leaves every safety boundary. The
+        # previous placement under-reported language/mutation buffering latency.
+        safe_text = _settle_read_answer_stream(safe_text, self._state)
+        safe_text = _stamp_out(safe_text)
         expressive_text = _filter_soniox_expression_stream(safe_text)
         # Native-script doctor names/roles (cached per clinic+language) so the
         # voice does not flip to an English accent mid-sentence.
@@ -4043,6 +8380,27 @@ class VachanamAgent(Agent):
         # lone "hello" is too short for that guard anyway.
         utterance = self._message_text(new_message).strip()
         self._state.last_user_utterance = utterance
+        original_lookup = (
+            self._state.booking_lookup_utterance
+            or self._state.read_owed_utterance
+            or ""
+        )
+        repeated_lookup = bool(original_lookup) and (
+            _normalised_utterance(utterance)
+            == _normalised_utterance(original_lookup)
+        )
+        if (
+            self._state.booking_lookup_in_flight
+            or self._state.read_in_flight_count > 0
+            or self._state.read_answer_owed
+        ) and (
+            is_lone_hello(utterance) or repeated_lookup
+        ):
+            # The caller is checking whether the line is alive or repeating the
+            # same question during a slow DB read. Do not interrupt the tool or
+            # replace its pending answer with another "are you there?" loop.
+            logger.info("booking_lookup_probe_consumed")
+            raise StopResponse()
         _cancel_deferred_clarification(self._state, "next_turn_committed")
 
         # A newly committed caller turn supersedes any response still being
@@ -4056,16 +8414,16 @@ class VachanamAgent(Agent):
         except Exception as e:  # noqa: BLE001 — never drop a real caller turn
             logger.warning("supersede_pending_reply_failed: %s", e)
 
-        # The model may ask the required confirmation itself, before a tool
-        # guard has had a chance to arm `pending_confirmation`. Record that
-        # audible question now. Otherwise a plain "yes" goes back through an
-        # unconstrained model turn and it can ask "shall I book?" again.
-        if (
-            self._state.pending_confirmation is None
-            and not self._state.token_confirmed
-            and self._last_assistant_requested_booking_confirmation()
-        ):
-            self._state.pending_confirmation = 'book'
+        # A direct read failure is terminal only for the caller turn that
+        # triggered it. The old generation was just interrupted above; reopen
+        # TTS now so this newly committed turn can receive a normal answer.
+        self._state.read_terminal_failure_armed = False
+        self._state.read_terminal_failure_delivered = False
+
+        # A model-authored question is not a transaction receipt. Only the
+        # deterministic question queued by the mutation wrapper arms the
+        # snapshot consumed below; otherwise an unrelated later "yes" could
+        # authorize a write the caller never heard described.
 
         # A standalone listening acknowledgement after a completed statement
         # is not a new question. Letting it reach the model made it restate the
@@ -4117,6 +8475,114 @@ class VachanamAgent(Agent):
                 ),
             )
 
+        # Caller-authored transaction receipts. Natural number words and native
+        # dayparts are parsed before Gemini; bare one-to-eleven keeps both
+        # AM/PM candidates until the exact confirmation question narrows it.
+        try:
+            from zoneinfo import ZoneInfo
+
+            today_local = datetime_cls.now(ZoneInfo(self._timezone_name)).date()
+        except Exception:  # noqa: BLE001 - timezone fallback is deterministic
+            today_local = date_cls.today()
+        receipt_language = self._state.language or self._lang_code
+        requested_language = _explicit_language_request(utterance)
+        caller_times = _caller_clock_candidates(utterance, receipt_language)
+        caller_date = _caller_date_receipt(
+            utterance, today=today_local, language=receipt_language
+        )
+        reschedule_turn = bool(
+            self._state.caller_asked_to_reschedule
+            or _caller_authorized_reschedule(utterance)
+        )
+        cancellation_turn = bool(
+            self._state.caller_asked_to_cancel
+            or _caller_authorized_cancellation(utterance)
+        )
+        if reschedule_turn:
+            if caller_times:
+                self._state.caller_reschedule_times = caller_times
+            if caller_date:
+                self._state.caller_reschedule_date = caller_date
+        elif cancellation_turn:
+            if caller_times:
+                self._state.caller_existing_times = caller_times
+            if caller_date:
+                self._state.caller_existing_date = caller_date
+        else:
+            if caller_times:
+                self._state.caller_booking_times = caller_times
+                self._state.caller_booking_time = (
+                    caller_times[0] if len(caller_times) == 1 else None
+                )
+            if caller_date:
+                self._state.caller_booking_date = caller_date
+
+        stated_patient_name = _caller_stated_patient_name(utterance)
+        if stated_patient_name:
+            self._state.caller_patient_name = stated_patient_name
+
+        escalation_priority = _caller_escalation_priority(utterance)
+        direct_relay_request = (
+            None
+            if escalation_priority
+            else _caller_direct_relay_request(utterance)
+        )
+        direct_relay_missing_text = False
+        relay_kind = _caller_relay_kind(utterance)
+        if escalation_priority:
+            self._state.relay_snapshot_text = None
+            self._state.relay_snapshot_kind = None
+            turn_ctx.add_message(
+                role="system",
+                content=(
+                    "Deterministic escalation priority: do not log a message or "
+                    "question and do not continue a routine booking. Call "
+                    "request_human_transfer now."
+                ),
+            )
+        elif _caller_refused_outright(utterance):
+            self._state.relay_snapshot_text = None
+            self._state.relay_snapshot_kind = None
+        elif direct_relay_request:
+            direct_kind, references_prior = direct_relay_request
+            if references_prior:
+                snapshot = (self._state.relay_snapshot_text or "").strip()
+                snapshot_kind = self._state.relay_snapshot_kind
+                compatible = bool(snapshot) and snapshot_kind in {
+                    direct_kind,
+                    "content",
+                }
+                if compatible:
+                    # Preserve the previous finalized caller words. The relay
+                    # command is authorization, never the persisted payload.
+                    self._state.relay_snapshot_kind = direct_kind
+                else:
+                    self._state.relay_snapshot_text = None
+                    self._state.relay_snapshot_kind = None
+                    direct_relay_missing_text = True
+            else:
+                payload = _caller_direct_relay_payload(utterance)
+                if payload:
+                    self._state.relay_snapshot_text = payload
+                    self._state.relay_snapshot_kind = direct_kind
+                else:
+                    self._state.relay_snapshot_text = None
+                    self._state.relay_snapshot_kind = None
+                    direct_relay_missing_text = True
+        elif _caller_affirmed(utterance) or is_backchannel(utterance):
+            # Preserve one prior caller-authored content turn so a restatement
+            # followed by yes can still commit those exact words.
+            pass
+        elif requested_language:
+            # A language repair neither authorizes nor replaces relay content.
+            pass
+        elif relay_kind:
+            self._state.relay_snapshot_text = utterance
+            self._state.relay_snapshot_kind = relay_kind
+        else:
+            self._state.relay_snapshot_text = None
+            self._state.relay_snapshot_kind = None
+
         # Remember consent instead of re-deriving it every turn. "book me an
         # appointment tomorrow at 10" is authorization for the booking that
         # follows, and answering "vinay, 28" two turns later does not withdraw
@@ -4124,8 +8590,31 @@ class VachanamAgent(Agent):
         # who had never asked, and made the agent ask again (Vinay, prod
         # 2026-08-07). A flat no clears it; nothing else does.
         if utterance:
-            if _caller_refused_outright(utterance):
+            declined_turn = _caller_refused_outright(utterance)
+            affirmed_turn = _caller_affirmed(utterance)
+            if _caller_abandoned_mutable_read(utterance):
+                self._state.mutable_read_intent = None
+                self._state.mutable_read_utterance = None
+            correction_turn = bool(
+                re.search(
+                    r"\b(?:but|instead|other|actually|rather|change|make\s+it)\b",
+                    utterance,
+                    re.I,
+                )
+            )
+            if declined_turn:
                 self._state.caller_asked_to_book = False
+                self._state.caller_booking_times = ()
+                self._state.caller_booking_date = None
+                self._state.caller_booking_time = None
+                self._state.booking_confirmation_granted = False
+                self._state.cancellation_confirmation_granted = False
+                self._state.booking_confirmation_snapshot.clear()
+                self._state.cancellation_confirmation_snapshot.clear()
+                self._state.caller_reschedule_times = ()
+                self._state.caller_reschedule_date = None
+                self._state.caller_existing_times = ()
+                self._state.caller_existing_date = None
                 self._state.caller_asked_to_reschedule = False
                 self._state.caller_asked_to_cancel = False
                 self._state.pending_confirmation = None
@@ -4135,15 +8624,72 @@ class VachanamAgent(Agent):
             else:
                 if _caller_authorized_booking(utterance):
                     self._state.caller_asked_to_book = True
+                    self._state.mutable_read_intent = None
+                    self._state.mutable_read_utterance = None
                 if _caller_authorized_reschedule(utterance):
                     self._state.caller_asked_to_reschedule = True
+                    self._state.mutable_read_intent = None
+                    self._state.mutable_read_utterance = None
                 if _caller_authorized_cancellation(utterance):
                     self._state.caller_asked_to_cancel = True
+                    self._state.mutable_read_intent = None
+                    self._state.mutable_read_utterance = None
                 if (
                     self._state.pending_confirmation == 'book'
-                    and _caller_affirmed(utterance)
+                    and self._state.booking_confirmation_snapshot
                 ):
-                    self._state.caller_asked_to_book = True
+                    confirmed = self._state.booking_confirmation_snapshot
+                    confirmed_time = str(
+                        confirmed.get("appointment_time") or ""
+                    ) or None
+                    confirmed_date = str(
+                        confirmed.get("booking_date") or ""
+                    ) or None
+                    selection_changed = bool(
+                        correction_turn
+                        or (caller_date and caller_date != confirmed_date)
+                        or (
+                            caller_times
+                            and confirmed_time not in caller_times
+                        )
+                    )
+                    if affirmed_turn and not selection_changed:
+                        self._state.caller_asked_to_book = True
+                        self._state.booking_confirmation_granted = True
+                        self._state.caller_booking_times = (
+                            (confirmed_time,) if confirmed_time else ()
+                        )
+                        self._state.caller_booking_time = confirmed_time
+                        self._state.caller_booking_date = confirmed_date
+                        self._state.caller_patient_name = str(
+                            confirmed.get("patient_name") or ""
+                        ) or self._state.caller_patient_name
+                    else:
+                        self._state.booking_confirmation_granted = False
+                        self._state.booking_confirmation_snapshot.clear()
+                        self._state.pending_confirmation = None
+                if (
+                    self._state.pending_confirmation == 'cancel'
+                    and self._state.cancellation_confirmation_snapshot
+                ):
+                    confirmed = self._state.cancellation_confirmation_snapshot
+                    confirmed_time = str(confirmed.get("time") or "") or None
+                    confirmed_date = str(confirmed.get("date") or "") or None
+                    selection_changed = bool(
+                        correction_turn
+                        or (caller_date and caller_date != confirmed_date)
+                        or (
+                            caller_times
+                            and confirmed_time not in caller_times
+                        )
+                    )
+                    if affirmed_turn and not selection_changed:
+                        self._state.caller_asked_to_cancel = True
+                        self._state.cancellation_confirmation_granted = True
+                    else:
+                        self._state.cancellation_confirmation_granted = False
+                        self._state.cancellation_confirmation_snapshot.clear()
+                        self._state.pending_confirmation = None
 
         # Keep this instruction current until the write succeeds. The model
         # sometimes asked confirmation too early, together with name/age; its
@@ -4152,7 +8698,7 @@ class VachanamAgent(Agent):
         # confirmation again. Consent remains valid while details are filled.
         if (
             self._state.pending_confirmation == 'book'
-            and self._state.caller_asked_to_book
+            and self._state.booking_confirmation_granted
         ):
             turn_ctx.add_message(
                 role='system',
@@ -4163,10 +8709,155 @@ class VachanamAgent(Agent):
                     'immediately. Do not ask any confirmation question again.'
                 ),
             )
+            snapshot = self._state.booking_confirmation_snapshot
+            required = (
+                "patient_name",
+                "doctor_id",
+                "booking_date",
+                "booking_type",
+            )
+            snapshot_ready = bool(snapshot) and all(
+                snapshot.get(field) for field in required
+            ) and (
+                snapshot.get("booking_type") == "token"
+                or bool(snapshot.get("appointment_time"))
+            )
+            if snapshot_ready:
+                # The exact server-built confirmation was already heard and
+                # accepted. Waiting for Gemini to choose the same tool again
+                # let it refuse or omit the write after a clear YES. Execute
+                # the bound transaction directly; confirm_booking still owns
+                # every consent, identity, hold, calendar, and receipt guard.
+                if requested_language:
+                    try:
+                        self._handoff_explicit_language(
+                            turn_ctx, requested_language
+                        )
+                    except Exception as exc:
+                        logger.error('language_request_handoff_failed: %s', exc)
+                        self._state.explicit_language_lock = requested_language
+                        self._sync_runtime_language(requested_language)
+                context = _DeterministicMutationContext(self.session)
+                context.disallow_interruptions()
+                confirm_kwargs = {
+                    "doctor_id": str(snapshot["doctor_id"]),
+                    "patient_name": str(snapshot["patient_name"]),
+                    "booking_date": str(snapshot["booking_date"]),
+                    "appointment_time": (
+                        str(snapshot["appointment_time"])
+                        if snapshot.get("appointment_time")
+                        else None
+                    ),
+                }
+                # Optional fields are included only when the first, validated
+                # confirmation call supplied them. This keeps old snapshots
+                # compatible while preserving family/clinical details exactly.
+                for field in (
+                    "complaint",
+                    "followup_consent",
+                    "patient_age",
+                    "patient_gender",
+                    "different_person",
+                ):
+                    if field in snapshot:
+                        confirm_kwargs[field] = snapshot[field]
+                try:
+                    result = await self.confirm_booking(
+                        context,
+                        **confirm_kwargs,
+                    )
+                except StopResponse:
+                    raise
+                except ToolError as exc:
+                    logger.error(
+                        "deterministic_confirmed_booking_rejected error=%s",
+                        type(exc).__name__,
+                    )
+                    await _say_deterministic_once(
+                        self.session,
+                        build_booking_failure_text(
+                            self._state.language or self._lang_code
+                        ),
+                        allow_interruptions=False,
+                    )
+                    raise StopResponse() from exc
+                if not result.get("success"):
+                    unavailable = result.get("reason") in {
+                        "booking_system_unavailable",
+                        "booking_failed",
+                    } or result.get("error") == "booking_failed"
+                    builder = (
+                        build_booking_unavailable_text
+                        if unavailable
+                        else build_booking_failure_text
+                    )
+                    await _say_deterministic_once(
+                        self.session,
+                        builder(self._state.language or self._lang_code),
+                        allow_interruptions=False,
+                    )
+                raise StopResponse()
+
+        # A calendar/service failure asks one concrete follow-up question. A
+        # caller's next yes must mean "record that exact failed booking request",
+        # not leave the model guessing what its own question referred to.
+        if self._state.pending_clinic_message:
+            if _caller_authorized_pending_message(utterance):
+                # An explicit switch in the same consent turn takes precedence
+                # over every reply, including this deterministic acknowledgement.
+                # Apply it before writing so "yes, switch to English" cannot be
+                # answered in the old language.
+                if requested_language:
+                    try:
+                        self._handoff_explicit_language(
+                            turn_ctx, requested_language
+                        )
+                    except Exception as exc:
+                        logger.error('language_request_handoff_failed: %s', exc)
+                        self._state.explicit_language_lock = requested_language
+                        self._sync_runtime_language(requested_language)
+                # This is deterministic consent to a server-built snapshot.
+                # Persist it directly; routing the yes back through Gemini can
+                # omit/refuse the tool call—the exact production loss this
+                # fallback exists to prevent. take_message owns commit-gated
+                # acknowledgement/failure speech and raises StopResponse.
+                result = await self.take_message(
+                    _DeterministicMutationContext(self.session),
+                    self._state.pending_clinic_message,
+                )
+                if result.get("logged"):
+                    raise StopResponse()
+                return
+            if requested_language and not _caller_declined(utterance):
+                # A language-only turn answers neither yes nor no. Preserve the
+                # exact snapshot and repeat the still-owed offer in the new
+                # language instead of silently discarding it.
+                offer = build_booking_unavailable_text(requested_language)
+                try:
+                    switched = self._handoff_explicit_language(
+                        turn_ctx,
+                        requested_language,
+                        after_switch_speech=offer,
+                    )
+                    if not switched:
+                        self.session.say(sanitize_for_tts(offer))
+                    raise StopResponse()
+                except StopResponse:
+                    raise
+                except Exception as exc:
+                    logger.error('language_request_handoff_failed: %s', exc)
+                    self._state.explicit_language_lock = requested_language
+                    self._sync_runtime_language(requested_language)
+                    self.session.say(sanitize_for_tts(offer))
+                    raise StopResponse()
+            else:
+                # This fallback is a one-question offer. Any other answer
+                # expires it so an unrelated "yes" later in the call cannot
+                # resurrect and log stale booking details.
+                self._state.pending_clinic_message = None
 
         # Language selection is infrastructure state, not a creative LLM choice.
         # Switch the active prompt/STT/TTS agent before generating any reply.
-        requested_language = _explicit_language_request(utterance)
         if requested_language:
             try:
                 if self._handoff_explicit_language(turn_ctx, requested_language):
@@ -4178,30 +8869,36 @@ class VachanamAgent(Agent):
                 self._sync_runtime_language(requested_language)
 
         # A saved preference is a startup hint, not permission to ignore the
-        # language the caller is actually speaking now. Unique native scripts
-        # are deterministic; correct the full pipeline before any model reply.
+        # language the caller is actually speaking now. Every automatic switch
+        # uses the SAME two-complete-turn threshold; one quoted/mis-transcribed
+        # phrase must never flip the whole call mid-conversation.
         detected_language = _dominant_native_language(utterance)
         clearly_english = _clearly_english_utterance(utterance)
+        if self._state.explicit_language_lock:
+            # Mixed-language content and STT script guesses must not undo the
+            # caller's explicit choice. Only the request path above may move it.
+            detected_language = None
+            clearly_english = False
+        candidate_language = None
         if self._lang_code != 'en' and clearly_english:
-            if self._state.language_candidate == 'en':
+            candidate_language = 'en'
+        elif detected_language and detected_language != self._lang_code:
+            candidate_language = detected_language
+
+        if candidate_language:
+            if self._state.language_candidate == candidate_language:
                 self._state.language_candidate_turns += 1
             else:
-                self._state.language_candidate = 'en'
+                self._state.language_candidate = candidate_language
                 self._state.language_candidate_turns = 1
             if self._state.language_candidate_turns >= 2:
-                detected_language = 'en'
+                detected_language = candidate_language
                 self._state.language_candidate = None
                 self._state.language_candidate_turns = 0
             else:
-                # Phonetic English in an Indic script must not immediately
-                # count as that script and erase the first English turn.
                 detected_language = None
-        elif detected_language:
-            self._state.language_candidate = None
-            self._state.language_candidate_turns = 0
-        elif len(re.findall(r'[A-Za-z]+', utterance)) >= 3:
-            # A complete Latin-script turn that is not clearly English is
-            # probably romanised Telugu/Hindi/etc.; it breaks the streak.
+        elif detected_language == self._lang_code or len(utterance.split()) >= 3:
+            # A complete active-language or unclassified turn breaks the streak.
             self._state.language_candidate = None
             self._state.language_candidate_turns = 0
         explicit_doctor_id = _explicit_roster_doctor_id(
@@ -4245,6 +8942,8 @@ class VachanamAgent(Agent):
             None
             if incomplete_fragment
             or doctor_scope_context is not None
+            or direct_relay_request is not None
+            or escalation_priority is not None
             or _caller_authorized_booking(utterance)
             or _caller_authorized_reschedule(utterance)
             or _caller_authorized_cancellation(utterance)
@@ -4274,7 +8973,6 @@ class VachanamAgent(Agent):
         # that handle even when agent_state still reports "listening", otherwise
         # both the speculative and grounded answer can be queued.
         if any((
-            incomplete_fragment,
             control_token_request,
             reminder_policy_question,
             faq_match is not None,
@@ -4284,12 +8982,57 @@ class VachanamAgent(Agent):
             roster_question,
             legal_threat,
             hostile_or_frustrated,
+            direct_relay_request is not None,
+            escalation_priority is not None,
         )):
+            self._state.mutable_read_intent = None
+            self._state.mutable_read_utterance = None
             try:
                 self.session.interrupt()
                 logger.info("speculative_reply_cancelled deterministic_turn=True")
             except Exception:
                 pass
+
+        if escalation_priority:
+            self._state.transfer_requested = True
+            result = await self.request_human_transfer(
+                _DeterministicMutationContext(self.session),
+                escalation_priority,
+            )
+            if not result.get("success"):
+                await _say_deterministic_once(
+                    self.session,
+                    build_transfer_failure_text(
+                        self._state.language or self._lang_code,
+                        result.get("emergency_contact") or self._transfer_to,
+                        urgent=escalation_priority == "urgent",
+                    ),
+                    allow_interruptions=False,
+                )
+            raise StopResponse()
+
+        if direct_relay_request:
+            self._state.mutable_read_intent = None
+            self._state.mutable_read_utterance = None
+            direct_kind, _references_prior = direct_relay_request
+            if direct_relay_missing_text:
+                await _say_deterministic_once(
+                    self.session,
+                    build_relay_content_request_text(
+                        self._lang_code, direct_kind
+                    ),
+                    allow_interruptions=True,
+                )
+                raise StopResponse()
+            context = _DeterministicMutationContext(self.session)
+            if direct_kind == "question":
+                await self.log_clinic_question(context, utterance)
+            else:
+                await self.take_message(context, utterance)
+            # Test/simulation sessions do not take the direct-speech
+            # StopResponse path, but a handled durable request must still never
+            # fall through to a contradictory model refusal.
+            raise StopResponse()
 
         if detected_language and detected_language != self._lang_code:
             deterministic_speech = None
@@ -4431,6 +9174,25 @@ class VachanamAgent(Agent):
                 allow_interruptions=True,
             )
             raise StopResponse()
+
+        mutable_read_intent = _caller_mutable_read_intent(utterance)
+        if mutable_read_intent:
+            self._state.mutable_read_intent = mutable_read_intent
+            self._state.mutable_read_utterance = utterance
+        active_mutable_read = self._state.mutable_read_intent
+        if active_mutable_read:
+            turn_ctx.add_message(
+                role="system",
+                content=(
+                    "Deterministic mutable-read boundary: the caller still has "
+                    f"an unresolved live {active_mutable_read} lookup. Use the "
+                    "authoritative "
+                    "read tool before asserting any appointment, date, time, "
+                    "availability, schedule, token, or queue fact. If a required "
+                    "identity, doctor, or date is missing, ask only for that "
+                    "prerequisite. Never guess and never answer from chat history."
+                ),
+            )
 
         try:
             if is_lone_hello(self._message_text(new_message)):
@@ -4705,8 +9467,15 @@ class VachanamAgent(Agent):
         except Exception:
             pass
 
-    def _handoff_explicit_language(self, turn_ctx, code: str) -> bool:
+    def _handoff_explicit_language(
+        self,
+        turn_ctx,
+        code: str,
+        *,
+        after_switch_speech: str | None = None,
+    ) -> bool:
         '''Switch the active pipeline without waiting for the LLM to call a tool.'''
+        self._state.explicit_language_lock = code
         self._sync_runtime_language(code)
         if code == self._lang_code or self._agent_factory is None:
             return False
@@ -4717,11 +9486,19 @@ class VachanamAgent(Agent):
         if carried is not None and _SWITCH_DRIFT_GUARD:
             _append_switch_drift_guard(carried, code)
         new_agent = self._agent_factory(code, chat_ctx=carried)
+        if after_switch_speech:
+            switch_ack = getattr(new_agent, "_switch_ack", None) or get_switch_ack(code)
+            new_agent._switch_ack = f"{switch_ack} {after_switch_speech}".strip()
+            # Cached frames contain only the short language acknowledgement.
+            # Do not replay them when this handoff also owes a substantive line.
+            new_agent._switch_ack_frames = None
         try:
             cached = _SWITCH_ACK_CLIPS.get(code)
             cache_tts = getattr(new_agent, '_tts_override', None)
             cache_voice = getattr(getattr(cache_tts, '_opts', None), 'voice', None)
             if (
+                not after_switch_speech
+                and
                 cached
                 and cache_voice
                 == _resolve_soniox_voice(settings.soniox_tts_default_voice)
@@ -4759,6 +9536,9 @@ class VachanamAgent(Agent):
     ) -> bool:
         '''Correct a stale saved language without dropping the current turn.'''
         self._sync_runtime_language(code)
+        # Once two complete turns establish a language, hold it just as firmly
+        # as an explicit switch. Only the explicit request path may replace it.
+        self._state.explicit_language_lock = code
         if code == self._lang_code or self._agent_factory is None:
             return False
         try:
@@ -4942,6 +9722,9 @@ class VachanamAgent(Agent):
             return None
         raw = value.strip().upper().replace('.', '')
         raw = re.sub(r'\s+', ' ', raw)
+        # A zero-padded HH:MM value is already the tool contract's canonical
+        # 24-hour representation. Never reinterpret explicit 05:00 as 5 PM.
+        canonical_24h = re.fullmatch(r"\d{2}:\d{2}(?::\d{2})?", raw) is not None
         for fmt in ('%I:%M %p', '%I:%M%p', '%I %p', '%I%p'):
             try:
                 return datetime_cls.strptime(raw, fmt).time()
@@ -4960,11 +9743,25 @@ class VachanamAgent(Agent):
                 raise ToolError(f"Invalid time '{value}'. Use HH:MM (24h).") from None
         # Unmarked clinic times always mean the one natural occurrence inside
         # the 09:00-21:00 service day: 9-11 morning, 12 noon, 1-8 evening.
-        if 1 <= parsed.hour <= 8:
+        if not canonical_24h and 1 <= parsed.hour <= 8:
             return parsed.replace(hour=parsed.hour + 12)
         return parsed
 
+    def _booking_type_for_doctor(self, doctor_id: UUID) -> str:
+        """Return the active roster's booking style for a resolved doctor."""
+        return next(
+            (
+                str(doctor.booking_type)
+                for doctor in self._doctor_contexts
+                if str(getattr(doctor, "id", "")) == str(doctor_id)
+            ),
+            # Production resolution comes from this roster. A missing entry is
+            # defensive/test-only; default to the stricter clock-slot binding.
+            "appointment",
+        )
+
     @function_tool()
+    @_tracks_read
     async def route_to_doctor(self, context: RunContext, complaint: str) -> dict:
         """Match the patient's stated health complaint to the right doctor.
         Call once the patient has described their problem. Pass the complaint
@@ -5008,6 +9805,7 @@ class VachanamAgent(Agent):
         return result
 
     @function_tool()
+    @_tracks_read
     async def check_availability(
         self,
         context: RunContext,
@@ -5027,13 +9825,40 @@ class VachanamAgent(Agent):
             self._state.booking_for_other = True
         _say_wait_filler(context)  # slow: DB + calendar availability scan
         resolved = await self._resolve_doctor_id(doctor_id)
+        booking_type = self._booking_type_for_doctor(resolved)
+        parsed_date = self._parse_date(booking_date)
+        parsed_start = self._parse_time(query_start)
+        parsed_end = self._parse_time(query_end)
+        if booking_type != "token" and self._calendar is None:
+            patient = (
+                self._state.caller_patient_name
+                or self._state.patient_name
+                or "caller"
+            )
+            self._arm_failed_booking_message(
+                patient, resolved, parsed_date, parsed_start
+            )
+            spoken = self._speak_booking_failure(context, unavailable=True)
+            result = {
+                "success": False,
+                "reason": "booking_system_unavailable",
+                "availability": None,
+                "instruction": (
+                    "The slot calendar is disconnected. No slot was checked, "
+                    "held, or booked. Offer to record the exact request for "
+                    "the clinic. Never claim availability or success."
+                ),
+            }
+            if spoken:
+                raise StopResponse()
+            return result
         availability = await check_availability(
             doctor_id=resolved,
             branch_id=self._state.branch_id,
-            booking_date=self._parse_date(booking_date),
+            booking_date=parsed_date,
             db=self._db,
-            query_start=self._parse_time(query_start),
-            query_end=self._parse_time(query_end),
+            query_start=parsed_start,
+            query_end=parsed_end,
             # Availability is capacity only. Existing bookings are fetched by
             # find_my_bookings; mixing them into this answer made a family
             # member's booking sound like the requested doctor/time was full.
@@ -5132,6 +9957,7 @@ class VachanamAgent(Agent):
         return None
 
     @function_tool()
+    @_tracks_read
     async def get_doctor_return_availability(
         self,
         context: RunContext,
@@ -5199,6 +10025,7 @@ class VachanamAgent(Agent):
         }
 
     @function_tool()
+    @_tracks_read
     async def get_doctor_schedule(
         self,
         context: RunContext,
@@ -5385,18 +10212,88 @@ class VachanamAgent(Agent):
             }
         # assign_token is a Redis INCR — fast; a filler here is just noise (#429).
         resolved = await self._resolve_doctor_id(doctor_id)
+        booking_type = self._booking_type_for_doctor(resolved)
         parsed_date = self._parse_date(booking_date)
-        parsed_time = self._parse_time(appointment_time)
+        parsed_time = (
+            None
+            if booking_type == "token"
+            else self._parse_time(appointment_time)
+        )
+        if booking_type != "token" and self._calendar is None:
+            patient = (
+                self._state.caller_patient_name
+                or self._state.patient_name
+                or "caller"
+            )
+            self._arm_failed_booking_message(
+                patient, resolved, parsed_date, parsed_time
+            )
+            spoken = self._speak_booking_failure(context, unavailable=True)
+            result = {
+                "success": False,
+                "reason": "booking_system_unavailable",
+                "instruction": (
+                    "The slot calendar is disconnected. Nothing was held or "
+                    "booked; offer the already-prepared clinic message."
+                ),
+            }
+            if spoken:
+                raise StopResponse()
+            return result
+        caller_date = self._state.caller_booking_date
+        if caller_date and parsed_date.isoformat() != caller_date:
+            logger.error(
+                "booking_hold_date_mismatch caller=%s tool=%s session=%s",
+                caller_date,
+                parsed_date.isoformat(),
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            return await self._reject_booking_selection_mismatch(
+                context,
+                expected_date=caller_date,
+                received_date=parsed_date.isoformat(),
+            )
+        caller_times = (
+            () if booking_type == "token" else self._state.caller_booking_times
+        )
+        if (
+            booking_type != "token"
+            and not caller_times
+            and self._state.caller_booking_time
+        ):
+            caller_times = (self._state.caller_booking_time,)
+        if booking_type != "token" and parsed_time is None and len(caller_times) == 1:
+            parsed_time = _canonical_receipt_time(caller_times[0])
+            appointment_time = caller_times[0]
+        parsed_clock = parsed_time.strftime("%H:%M") if parsed_time else None
+        if caller_times and parsed_clock not in caller_times:
+            logger.error(
+                "booking_hold_time_mismatch caller=%s tool=%s session=%s",
+                caller_times,
+                parsed_clock,
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            return await self._reject_booking_selection_mismatch(
+                context,
+                expected_times=caller_times,
+                received_time=parsed_clock,
+            )
+        if booking_type != "token" and parsed_time is None:
+            raise ToolError(
+                "An exact appointment time is still missing. Ask for the hour "
+                "and minute, then check availability before reserving it."
+            )
 
         # Tool retries and mid-flow time changes must be idempotent. Previously
         # a repeated assign INCRed the same slot twice, saw its own first hold as
         # "full", and overwrote the only key shutdown knew how to release.
         held_key = self._state.token_redis_key or ""
-        target_key = (
-            f"slot:{resolved}:{self._state.branch_id}:{parsed_date}:"
-            f"{parsed_time.strftime('%H%M')}"
-            if parsed_time is not None
-            else f"token:{resolved}:{self._state.branch_id}:{parsed_date}"
+        target_key = _reservation_key(
+            resolved,
+            self._state.branch_id,
+            parsed_date,
+            booking_type,
+            parsed_time,
         )
         if self._state.token_held and not self._state.token_confirmed and held_key:
             if held_key == target_key:
@@ -5450,6 +10347,10 @@ class VachanamAgent(Agent):
                         "say a token or queue number."
                     ),
                 }
+        if not result.get("success"):
+            self._state.booking_confirmation_granted = False
+            self._state.booking_confirmation_snapshot.clear()
+            self._state.pending_confirmation = None
         return result
 
     @function_tool()
@@ -5482,9 +10383,11 @@ class VachanamAgent(Agent):
         # before made bookings hard-fail with "token_number Field required".
         token_number: int | None = None,
     ) -> dict:
-        """Finalize the booking AFTER the patient explicitly confirms. Writes the
-        token to the database and creates the calendar event. patient_name is the
-        PATIENT being seen (may differ from the caller — family bookings);
+        """Finalize the booking AFTER the patient explicitly confirms. A time-slot
+        booking succeeds only when both its database row and required calendar
+        event succeed; a token-queue booking does not require a per-patient
+        calendar event. patient_name is the PATIENT being seen (may differ from
+        the caller — family bookings);
         The verified incoming caller number is always used; no override exists.
         patient_gender: 'male' | 'female' | 'other' if known.
         different_person: True when the caller books for a different family
@@ -5499,10 +10402,41 @@ class VachanamAgent(Agent):
         # yes is accepted only after an audible booking-confirmation question.
         self._state.quality_intent = 'booking'
         utterance = self._state.last_user_utterance
+        declined = utterance is not None and _caller_declined(utterance)
+        final_booking_consent = (
+            not declined and self._state.booking_confirmation_granted
+        )
+        if declined:
+            # Any explicit refusal/withdrawal ends THIS transaction. A prior
+            # sticky yes must never outrank the caller's latest "don't book".
+            self._state.pending_confirmation = None
+            self._state.caller_asked_to_book = False
+            self._state.booking_confirmation_granted = False
+            self._state.booking_confirmation_snapshot.clear()
+            self._state.caller_booking_times = ()
+            self._state.caller_booking_date = None
+            self._state.caller_booking_time = None
+            held_key = self._state.token_redis_key or ""
+            self._clear_hold()
+            if held_key:
+                try:
+                    await asyncio.wait_for(
+                        self._release_hold({"redis_key": held_key}), timeout=1.0
+                    )
+                except Exception as exc:  # noqa: BLE001 â€” refusal still wins
+                    logger.warning("declined_booking_hold_release_failed: %s", exc)
+            return {
+                "success": False,
+                "reason": "caller_declined",
+                "instruction": (
+                    "The caller declined or withdrew this booking. Do not book, "
+                    "do not ask for confirmation again, and do not claim success."
+                ),
+            }
         if (
             self._state.token_confirmed
             and utterance is not None
-            and not self._state.caller_asked_to_book
+            and not final_booking_consent
         ):
             logger.warning(
                 "booking_confirm_blocked_closed_transaction session=%s",
@@ -5521,73 +10455,29 @@ class VachanamAgent(Agent):
                     "caller's current question."
                 ),
             }
-        # Once we have DEMANDED the confirmation question (pending_confirmation
-        # armed), the MODEL decides whether the caller agreed — it is the only
-        # component here fluent in seven languages and both scripts. Matching
-        # the answer against a phrase list cannot work for the same reason
-        # matching the QUESTION could not (see _awaiting_confirmation): the
-        # guard tells the model to ask "in the active language", and the caller
-        # then answers in that language, in whatever script the STT emits. The
-        # list held no romanised Hindi at all, so "haan" was not a yes and the
-        # caller was asked to confirm until he hung up (Vinay, prod 2026-08-07).
-        # A bare "no" is the one answer we still decide ourselves, because
-        # getting it wrong writes to the database.
-        declined = utterance is not None and _caller_refused_outright(utterance)
-        if declined:
-            # A refusal ends THIS question. Left armed, a flag raised for a
-            # question already answered "no" would still be standing later in
-            # the call and could authorize a booking nobody agreed to.
-            self._state.pending_confirmation = None
-        if utterance is not None and not (
-            _caller_authorized_booking(utterance)
-            or (
-                not declined
-                and (
-                    # Consent given earlier in this call and never withdrawn.
-                    # This is what makes the confirmation question asked ONCE:
-                    # the guard stops rejecting, so it never emits the
-                    # ToolError that ordered the model to ask again. The
-                    # question still gets asked — the prompt asks for it — but
-                    # nothing can now force a second one.
-                    self._state.caller_asked_to_book
-                    or self._last_assistant_requested_booking_confirmation()
+        if final_booking_consent:
+            snapshot = self._state.booking_confirmation_snapshot
+            if not snapshot:
+                self._state.booking_confirmation_granted = False
+                raise ToolError(
+                    "No server-built booking confirmation was spoken. Do not book; "
+                    "start the exact confirmation step."
                 )
-            )
-        ):
-            logger.warning(
-                'booking_blocked_no_caller_authorization session=%s',
-                _privacy_safe_session_id(self._state.session_id),
-            )
-            # Arm the affirm path BEFORE we demand the question, so the next
-            # "yes" authorizes regardless of how the model phrases it or which
-            # language it phrases it in (see _awaiting_confirmation).
-            self._state.pending_confirmation = 'book'
-            # This text reaches the MODEL, and whatever it says here the caller
-            # hears. The old wording ("wait for an explicit booking request")
-            # made it refuse out loud — "you haven't explicitly told to book
-            # appointment, without that i can't book" — and, because it then
-            # never ASKED, the caller's yes could never satisfy the affirm path
-            # below. Guard blocks -> no question -> no valid yes -> guard blocks:
-            # 12 rejections in one real call (Vinay, 2026-08-03). So the message
-            # now drives the QUESTION that unblocks it, and forbids narrating
-            # the rule.
-            raise ToolError(
-                'Not authorized YET — you have not asked the caller to confirm. '
-                'Do NOT tell the caller anything about permission or rules. '
-                'Ask exactly one short question now, naming doctor, time and '
-                'date: "Shall I book it?" (in the active language). When they '
-                'agree, call confirm_booking again immediately.'
-            )
-
-        # Authorized: disarm, so this yes cannot also authorize some later
-        # mutation the caller was never asked about.
-        self._state.pending_confirmation = None
-
-        _protect_mutation(context)
-        _say_wait_filler(context)  # slow: DB write + Google Calendar create
-
-        # iter1 #11/#19: bound the untrusted, LLM-supplied free-text/numeric
-        # fields at the tool boundary (mirror the walk-in desk Field limits).
+            # The second tool call is transport only. Rebind every field before
+            # parsing or validation so omitted or hostile model arguments cannot
+            # contradict what the caller audibly confirmed.
+            patient_name = str(snapshot["patient_name"])
+            doctor_id = str(snapshot["doctor_id"])
+            booking_date = str(snapshot["booking_date"])
+            appointment_time = snapshot.get("appointment_time")
+            complaint = str(snapshot.get("complaint") or "")
+            followup_consent = bool(snapshot.get("followup_consent", True))
+            patient_age = snapshot.get("patient_age")
+            patient_gender = snapshot.get("patient_gender")
+            different_person = bool(snapshot.get("different_person", False))
+        # Bound all model-supplied fields before constructing the one audible
+        # confirmation. The snapshot queued below—not a prompt instruction—is
+        # the transaction receipt consumed by the following caller turn.
         patient_name = (patient_name or "").strip()
         if not patient_name:
             raise ToolError("patient_name is required.")
@@ -5605,60 +10495,235 @@ class VachanamAgent(Agent):
                 f"patient_age out of range ({MIN_PATIENT_AGE}-{MAX_PATIENT_AGE})."
             )
 
-        # Caller ID is the authorization boundary. Family members remain
-        # separate patient rows but share the verified incoming phone number.
         _guard_human_booking(self._state)
-        # From here the booking is UNDERWAY — the call may not end until it
-        # finishes or the caller calls it off (Vinay 2026-08-08).
-        # mutation_in_flight = "book" is owned by @_tracks_mutation.
         phone, _ = _require_caller_phone(self._state)
-
         resolved = await self._resolve_doctor_id(doctor_id)
+        booking_type = self._booking_type_for_doctor(resolved)
         parsed_date = self._parse_date(booking_date)
-        parsed_time = self._parse_time(appointment_time)
+        parsed_time = (
+            None
+            if booking_type == "token"
+            else self._parse_time(appointment_time)
+        )
+        caller_date = self._state.caller_booking_date
+        caller_times = (
+            () if booking_type == "token" else self._state.caller_booking_times
+        )
+        if (
+            booking_type != "token"
+            and not caller_times
+            and self._state.caller_booking_time
+        ):
+            caller_times = (self._state.caller_booking_time,)
+        if parsed_time is None and len(caller_times) == 1:
+            parsed_time = _canonical_receipt_time(caller_times[0])
+        parsed_clock = parsed_time.strftime("%H:%M") if parsed_time else None
+        if caller_date and parsed_date.isoformat() != caller_date:
+            logger.error(
+                "booking_confirm_date_mismatch caller=%s tool=%s session=%s",
+                caller_date,
+                parsed_date.isoformat(),
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            return await self._reject_booking_selection_mismatch(
+                context,
+                expected_date=caller_date,
+                received_date=parsed_date.isoformat(),
+            )
+        # Before the question, a nearest verified option may legitimately differ
+        # from the caller's first preference. The exact deterministic question
+        # makes that change audible. After the question, only its snapshot wins.
+        if final_booking_consent and caller_times and parsed_clock not in caller_times:
+            return await self._reject_booking_selection_mismatch(
+                context,
+                expected_times=caller_times,
+                received_time=parsed_clock,
+            )
+        if booking_type != "token" and parsed_time is None:
+            raise ToolError(
+                "An exact appointment time is missing. Ask for the exact hour "
+                "and minute, check availability, then retry confirmation."
+            )
+        caller_name = self._state.caller_patient_name
+        if caller_name and _name_receipt_key(caller_name) != _name_receipt_key(patient_name):
+            logger.error(
+                "booking_patient_name_mismatch session=%s",
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            raise ToolError(
+                "The patient name does not match the name the caller stated. "
+                "Do not book. Ask the caller to repeat the patient's exact name."
+            )
 
-        # B2: the confirm time MUST match the atomically-held slot. state
-        # .token_redis_key encodes the held slot as slot:<doc>:<branch>:<date>:
-        # <HHMM> — the only slot the Redis gate actually protected. Two hazards
-        # the DB re-count alone can't close:
-        #   (A) the LLM omits appointment_time at confirm -> a slot doctor would
-        #       be written with appointment_time=NULL (no reminder, calendar
-        #       defaults to 12:00, queue shows no time). Inherit the held time.
-        #   (B) the LLM confirms a DIFFERENT time than it held -> the atomic gate
-        #       protected the OLD time; the new time is guarded only by a TOCTOU
-        #       re-count that two concurrent callers can both pass. Release the
-        #       stale hold (RULE 3) and re-acquire the new time atomically.
-        held_key = self._state.token_redis_key or ""
-        if self._state.token_held and held_key.startswith("slot:"):
-            held_hhmm = held_key.rsplit(":", 1)[-1]  # 'HHMM'
-            held_time = None
-            if len(held_hhmm) == 4 and held_hhmm.isdigit():
-                held_time = time_cls(int(held_hhmm[:2]), int(held_hhmm[2:]))
-            if parsed_time is None and held_time is not None:
-                # (A) adopt the held slot's time as the confirm time.
-                parsed_time = held_time
-                appointment_time = held_time.strftime("%H:%M")
-            elif (
-                parsed_time is not None
-                and held_time is not None
-                and parsed_time != held_time
-            ):
-                # (B) confirm time drifted off the hold — re-gate atomically.
-                await self._release_hold({"redis_key": held_key})
-                self._clear_hold()
-                rehold = await assign_token(
-                    doctor_id=resolved,
-                    branch_id=self._state.branch_id,
-                    booking_date=parsed_date,
-                    db=self._db,
-                    appointment_time=parsed_time,
+        doctor_name = next(
+            (
+                str(doctor.name)
+                for doctor in self._doctor_contexts
+                if str(getattr(doctor, "id", "")) == str(resolved)
+            ),
+            None,
+        )
+        if not doctor_name:
+            raise ToolError("The selected doctor is not in the active clinic roster.")
+
+        if booking_type != "token" and self._calendar is None:
+            self._arm_failed_booking_message(
+                patient_name, resolved, parsed_date, parsed_time
+            )
+            self._state.booking_confirmation_granted = False
+            self._state.booking_confirmation_snapshot.clear()
+            self._state.pending_confirmation = None
+            held_key = self._state.token_redis_key or ""
+            self._clear_hold()
+            spoken = self._speak_booking_failure(context, unavailable=True)
+            if held_key:
+                try:
+                    await asyncio.wait_for(
+                        self._release_hold({"redis_key": held_key}), timeout=1.0
+                    )
+                except Exception as exc:  # noqa: BLE001 - speech already queued
+                    logger.warning("calendar_down_hold_release_failed: %s", exc)
+            result = {
+                "success": False,
+                "reason": "booking_system_unavailable",
+                "instruction": (
+                    "The slot calendar is disconnected. No appointment was "
+                    "created. Offer the prepared clinic message once."
+                ),
+            }
+            if spoken:
+                raise StopResponse()
+            return result
+
+        if not final_booking_consent:
+            question = build_booking_confirmation_question(
+                self._state.language or self._lang_code,
+                booking_type=booking_type,
+                patient_name=patient_name,
+                doctor_name=doctor_name,
+                date_=parsed_date,
+                time_=parsed_time,
+            )
+            if not question:
+                raise ToolError(
+                    "The booking details are incomplete; collect the exact "
+                    "patient, doctor, date and required time."
                 )
-                if not rehold.get("success"):
-                    return rehold  # slot full / past / off-grid — surfaced to LLM
-                self._state.token_held = True
-                self._state.token_confirmed = False  # B4: fresh hold, fresh state
-                self._state.token_number = rehold["token_number"]
-                self._state.token_redis_key = rehold.get("redis_key")
+            snapshot = {
+                "patient_name": patient_name,
+                "doctor_id": str(resolved),
+                "doctor_name": doctor_name,
+                "booking_date": parsed_date.isoformat(),
+                "appointment_time": parsed_clock,
+                "booking_type": booking_type,
+                "followup_consent": bool(followup_consent),
+            }
+            if complaint:
+                snapshot["complaint"] = complaint
+            if patient_age is not None:
+                snapshot["patient_age"] = patient_age
+            if patient_gender is not None:
+                snapshot["patient_gender"] = patient_gender
+            if different_person:
+                snapshot["different_person"] = True
+            sess = getattr(context, "session", None)
+            if not isinstance(sess, AgentSession):
+                raise ToolError(
+                    "Ask the exact booking confirmation question returned by "
+                    "the booking policy before retrying."
+                )
+            speech_handle = sess.say(sanitize_for_tts(question))
+            wait_for_playout = getattr(speech_handle, "wait_for_playout", None)
+            if not callable(wait_for_playout):
+                raise ToolError(
+                    "The confirmation question could not be verified as played. "
+                    "Do not book."
+                )
+            try:
+                await asyncio.wait_for(wait_for_playout(), timeout=15.0)
+            except Exception as exc:
+                logger.warning("booking_confirmation_playout_failed: %s", exc)
+                self._state.booking_confirmation_snapshot.clear()
+                self._state.pending_confirmation = None
+                raise StopResponse() from exc
+            if bool(getattr(speech_handle, "interrupted", False)):
+                logger.warning("booking_confirmation_playout_interrupted")
+                self._state.booking_confirmation_snapshot.clear()
+                self._state.pending_confirmation = None
+                self._state.booking_confirmation_granted = False
+                raise StopResponse()
+            self._state.booking_confirmation_snapshot = snapshot
+            self._state.pending_confirmation = "book"
+            self._state.caller_asked_to_book = True
+            self._state.booking_confirmation_granted = False
+            logger.info(
+                "deterministic_booking_confirmation_queued session=%s",
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            raise StopResponse()
+
+        # The caller confirmed this exact spoken snapshot. Model arguments on
+        # the second call are merely transport and cannot change any party,
+        # doctor, date or time.
+        patient_name = str(snapshot["patient_name"])
+        resolved = UUID(str(snapshot["doctor_id"]))
+        doctor_name = str(snapshot["doctor_name"])
+        booking_type = str(snapshot["booking_type"])
+        parsed_date = date_cls.fromisoformat(str(snapshot["booking_date"]))
+        parsed_time = _canonical_receipt_time(snapshot.get("appointment_time"))
+        appointment_time = parsed_time.strftime("%H:%M") if parsed_time else None
+        self._state.pending_confirmation = None
+
+        _protect_mutation(context)
+        _say_wait_filler(context)  # slow: DB write + Google Calendar create
+
+        # The whole Redis reservation tuple is authoritative: doctor, branch,
+        # date and (for slots) time. Reading only the trailing HHMM previously
+        # let a hold for Dr A/Aug 28 authorize Dr B/Aug 29 at the same time.
+        held_key = self._state.token_redis_key or ""
+        expected_key = _reservation_key(
+            resolved,
+            self._state.branch_id,
+            parsed_date,
+            booking_type,
+            parsed_time,
+        )
+        if self._state.token_held and held_key != expected_key:
+            logger.error(
+                "booking_hold_identity_mismatch held=%s expected=%s session=%s",
+                held_key,
+                expected_key,
+                _privacy_safe_session_id(self._state.session_id),
+            )
+            try:
+                await asyncio.wait_for(
+                    self._release_hold({"redis_key": held_key}), timeout=1.0
+                )
+            except Exception as exc:  # noqa: BLE001 - re-gate still required
+                logger.warning("stale_booking_hold_release_failed: %s", exc)
+            self._clear_hold()
+            rehold = await assign_token(
+                doctor_id=resolved,
+                branch_id=self._state.branch_id,
+                booking_date=parsed_date,
+                db=self._db,
+                appointment_time=parsed_time,
+            )
+            if not rehold.get("success"):
+                return rehold
+            if rehold.get("redis_key") != expected_key:
+                await self._release_hold(rehold)
+                return await self._reject_booking_selection_mismatch(
+                    context,
+                    expected_date=parsed_date.isoformat(),
+                    received_date=None,
+                )
+            self._state.token_held = True
+            self._state.token_confirmed = False
+            self._state.verified_mutation_speech = None
+            self._state.verified_mutation_action = None
+            self._state.token_number = rehold["token_number"]
+            self._state.token_redis_key = rehold.get("redis_key")
 
         # RULE 2 (race-proof): if the LLM skipped assign_token there is no
         # server-side hold, and confirm_booking's DB re-count is TOCTOU under
@@ -5676,8 +10741,22 @@ class VachanamAgent(Agent):
             )
             if not held.get("success"):
                 return held  # full / past_slot / outside_hours — surfaced to LLM
+            if held.get("redis_key") != expected_key:
+                await self._release_hold(held)
+                logger.critical(
+                    "booking_hold_key_unexpected returned=%s expected=%s",
+                    held.get("redis_key"),
+                    expected_key,
+                )
+                return await self._reject_booking_selection_mismatch(
+                    context,
+                    expected_date=parsed_date.isoformat(),
+                    received_date=None,
+                )
             self._state.token_held = True
             self._state.token_confirmed = False  # B4: fresh hold -> fresh latch
+            self._state.verified_mutation_speech = None
+            self._state.verified_mutation_action = None
             self._state.token_number = held["token_number"]
             self._state.token_redis_key = held.get("redis_key")
         # The number reserved by assign_token (held server-side) is the truth —
@@ -5694,7 +10773,7 @@ class VachanamAgent(Agent):
                 booking_date=parsed_date,
                 token_number=token_number,
                 followup_consent=followup_consent,
-                appointment_time=self._parse_time(appointment_time),
+                appointment_time=parsed_time,
                 source="voice",
                 db=self._db,
                 calendar_service=self._calendar,
@@ -5708,16 +10787,62 @@ class VachanamAgent(Agent):
             )
         except Exception as e:
             logger.error("confirm_booking_failed: %s", e)
+            # Queue the owed answer before cleanup. Redis/rollback can also be
+            # degraded during an outage; neither may recreate the post-filler
+            # silence that triggered this safety path.
+            self._arm_failed_booking_message(
+                patient_name, resolved, parsed_date, parsed_time
+            )
+            spoken = self._speak_booking_failure(context, unavailable=True)
+            failed_hold_key = self._state.token_redis_key or ""
+            self._clear_hold()
+            self._state.token_confirmed = False
+            self._state.pending_confirmation = None
+            self._state.caller_asked_to_book = False
+            self._state.booking_confirmation_granted = False
+            self._state.booking_confirmation_snapshot.clear()
+            self._state.caller_booking_times = ()
+            self._state.caller_booking_date = None
+            self._state.verified_mutation_speech = None
+            self._state.verified_mutation_action = None
             # Recover the session so a same-call retry works (e.g. the rare
             # unique-index race backstop poisons the transaction).
             try:
-                await self._db.rollback()
-            except Exception:
-                pass
-            return {"success": False, "error": "booking_failed"}
+                await asyncio.wait_for(self._db.rollback(), timeout=1.0)
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning("booking_failure_rollback_timeout: %s", cleanup_error)
+            try:
+                await asyncio.wait_for(
+                    self._release_hold({"redis_key": failed_hold_key}),
+                    timeout=1.0,
+                )
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning("booking_failure_hold_release_timeout: %s", cleanup_error)
+            if spoken:
+                raise StopResponse()
+            return {
+                "success": False,
+                "error": "booking_failed",
+                "instruction": (
+                    "The booking did NOT complete and no appointment was created. "
+                    "Say that plainly and offer to log a clinic message. Never say "
+                    "booked, confirmed, reserved, or give an appointment time."
+                ),
+            }
         if result.get("success"):
             self._state.token_confirmed = True
+            # The Redis hold is now represented by the committed booking.
+            # Forget the in-flight handle before any deterministic speech can
+            # raise StopResponse; shutdown cleanup must never DECR a successful
+            # slot and reopen it to another caller.
+            self._clear_hold()
             self._state.any_booking_confirmed = True
+            self._state.caller_booking_times = ()
+            self._state.caller_booking_date = None
+            self._state.caller_booking_time = None
+            self._state.booking_confirmation_granted = False
+            self._state.booking_confirmation_snapshot.clear()
+            self._state.pending_clinic_message = None
             # Consent is spent. A SECOND booking on this call — the other
             # family member — is a new decision and gets its own confirmation
             # question. Cleared here rather than at authorization above so a
@@ -5752,6 +10877,28 @@ class VachanamAgent(Agent):
                 await self._complete_followup_task("rebooked_on_call")
             # The database and calendar already committed the exact outcome.
             # Speak it directly and remove the redundant post-tool LLM pass.
+            confirmed_doctor_name = next(
+                (
+                    str(doctor.name)
+                    for doctor in self._doctor_contexts
+                    if str(getattr(doctor, "id", "")) == str(resolved)
+                ),
+                None,
+            )
+            if self._state.last_confirmed_token_id is not None:
+                self._state.verified_booking_choices[
+                    str(self._state.last_confirmed_token_id)
+                ] = {
+                    "token_id": str(self._state.last_confirmed_token_id),
+                    "patient_name": patient_name,
+                    "doctor": confirmed_doctor_name,
+                    "doctor_id": str(resolved),
+                    "date": parsed_date.isoformat(),
+                    "time": parsed_time.strftime("%H:%M") if parsed_time else None,
+                    "token_number": token_number,
+                    "booking_type": booking_type,
+                    "status": "confirmed",
+                }
             if self._speak_deterministic_confirm(
                 context,
                 (
@@ -5762,8 +10909,42 @@ class VachanamAgent(Agent):
                 token=token_number,
                 date_=parsed_date,
                 time_=parsed_time,
+                patient_name=patient_name,
+                doctor_name=confirmed_doctor_name,
             ):
                 raise StopResponse()
+        elif (
+            result.get("reason") == "booking_system_unavailable"
+            or result.get("error") == "booking_failed"
+        ):
+            # Calendar/service failures are a terminal, verified NON-result.
+            # Never give the model a chance to turn them into a fake success.
+            self._arm_failed_booking_message(
+                patient_name, resolved, parsed_date, parsed_time
+            )
+            spoken = self._speak_booking_failure(context, unavailable=True)
+            failed_hold_key = self._state.token_redis_key or ""
+            self._clear_hold()
+            self._state.token_confirmed = False
+            self._state.pending_confirmation = None
+            self._state.caller_asked_to_book = False
+            self._state.booking_confirmation_granted = False
+            self._state.verified_mutation_speech = None
+            self._state.verified_mutation_action = None
+            try:
+                await asyncio.wait_for(
+                    self._release_hold({"redis_key": failed_hold_key}),
+                    timeout=1.0,
+                )
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning("booking_failure_hold_release_timeout: %s", cleanup_error)
+            if spoken:
+                raise StopResponse()
+            result["instruction"] = (
+                "The booking did NOT complete and no appointment was created. "
+                "Say that plainly and offer to log a clinic message. Never say "
+                "booked, confirmed, reserved, or give an appointment time."
+            )
         elif result.get("reason") == "already_booked":
             # The duplicate guard cannot tell "this patient booked last week"
             # from "this patient booked ten seconds ago, on this call". When it
@@ -5796,7 +10977,166 @@ class VachanamAgent(Agent):
                         "ask if they need anything else."
                     ),
                 }
+        if not result.get("success"):
+            self._state.booking_confirmation_granted = False
+            self._state.booking_confirmation_snapshot.clear()
+            self._state.pending_confirmation = None
         return result
+
+    def _arm_failed_booking_message(
+        self,
+        patient_name: str,
+        doctor_id,
+        _booking_date: date_cls | None,
+        _appointment_time: time_cls | None,
+    ) -> None:
+        """Keep a caller-bound failed request ready for an approved message.
+
+        Date/time arguments originate in model tool JSON and are deliberately
+        ignored here. Only deterministic receipts parsed from the caller's own
+        turn may enter the durable clinic message.
+        """
+        doctor_name = next(
+            (
+                str(doctor.name)
+                for doctor in self._doctor_contexts
+                if str(getattr(doctor, "id", "")) == str(doctor_id)
+            ),
+            f"doctor {doctor_id}",
+        )
+        receipt_date = self._state.caller_booking_date
+        caller_times = self._state.caller_booking_times
+        if not caller_times and self._state.caller_booking_time:
+            caller_times = (self._state.caller_booking_time,)
+        receipt_time = caller_times[0] if len(caller_times) == 1 else None
+        when = f" on {receipt_date}" if receipt_date else ""
+        if receipt_time is not None:
+            when += f" at {receipt_time}"
+        self._state.pending_clinic_message = (
+            f"Booking request for {patient_name} with {doctor_name}{when}. "
+            "The voice booking system was temporarily unavailable; no appointment "
+            "was created."
+        )
+
+    def _arm_failed_reschedule_message(self, choice: dict) -> None:
+        """Snapshot an unavailable reschedule from caller + verified booking data."""
+        receipt_date = self._state.caller_reschedule_date
+        caller_times = self._state.caller_reschedule_times
+        receipt_time = caller_times[0] if len(caller_times) == 1 else None
+        destination = f" to {receipt_date}" if receipt_date else ""
+        if receipt_time is not None:
+            destination += f" at {receipt_time}"
+        patient_name = str(choice.get("patient_name") or "caller")
+        doctor_name = str(choice.get("doctor") or "the selected doctor")
+        self._state.pending_clinic_message = (
+            f"Reschedule request for {patient_name}'s verified appointment with "
+            f"{doctor_name}{destination}. The voice booking system was temporarily "
+            "unavailable; the appointment was not moved."
+        )
+
+    def _speak_booking_failure(
+        self, context: RunContext, *, unavailable: bool = False
+    ) -> bool:
+        """Speak a failed write directly; false success is never model-authored."""
+        try:
+            sess = getattr(context, "session", None)
+            if not isinstance(sess, AgentSession):
+                return False
+            lang = self._state.language or self._lang_code
+            builder = (
+                build_booking_unavailable_text
+                if unavailable
+                else build_booking_failure_text
+            )
+            sess.say(sanitize_for_tts(builder(lang)))
+            logger.warning("deterministic_booking_failure_spoken lang=%s", lang)
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("deterministic_booking_failure_failed: %s", exc)
+            return False
+
+    async def _reject_booking_selection_mismatch(
+        self,
+        context: RunContext,
+        *,
+        expected_times: tuple[str, ...] = (),
+        received_time: str | None = None,
+        expected_date: str | None = None,
+        received_date: str | None = None,
+    ) -> dict:
+        """Fail closed when a model/tool changes a caller-selected date/time."""
+        # The wait filler may already be playing. Queue a truthful answer before
+        # Redis cleanup so a degraded dependency cannot leave the caller silent.
+        spoken = self._speak_booking_failure(context)
+        held_key = self._state.token_redis_key or ""
+        self._clear_hold()
+        self._state.token_confirmed = False
+        self._state.pending_confirmation = None
+        self._state.caller_asked_to_book = False
+        self._state.caller_booking_times = ()
+        self._state.caller_booking_date = None
+        self._state.caller_booking_time = None
+        self._state.booking_confirmation_granted = False
+        self._state.booking_confirmation_snapshot.clear()
+        self._state.verified_mutation_speech = None
+        self._state.verified_mutation_action = None
+        if held_key:
+            try:
+                await asyncio.wait_for(
+                    self._release_hold({"redis_key": held_key}), timeout=1.0
+                )
+            except Exception as exc:  # noqa: BLE001 — speech already queued
+                logger.warning("booking_time_mismatch_hold_release_failed: %s", exc)
+        result = {
+            "success": False,
+            "reason": "caller_selection_mismatch",
+            "caller_times": list(expected_times),
+            "received_time": received_time,
+            "caller_date": expected_date,
+            "received_date": received_date,
+            "instruction": (
+                "No appointment was created. The proposed date or time did not "
+                "match the caller-confirmed selection. Never say booked, held, "
+                "or confirmed. Ask for the exact date and time again."
+            ),
+        }
+        if spoken:
+            raise StopResponse()
+        return result
+
+    async def _reject_booking_time_mismatch(
+        self,
+        context: RunContext,
+        *,
+        expected_time: time_cls,
+        received_time: time_cls,
+    ) -> dict:
+        """Compatibility wrapper for focused legacy time-mismatch tests."""
+        return await self._reject_booking_selection_mismatch(
+            context,
+            expected_times=(expected_time.strftime("%H:%M"),),
+            received_time=received_time.strftime("%H:%M"),
+        )
+
+    def _speak_mutation_failure(self, context: RunContext, action: str) -> bool:
+        """Speak a verified non-result without allowing an LLM paraphrase."""
+        try:
+            sess = getattr(context, "session", None)
+            if not isinstance(sess, AgentSession):
+                return False
+            lang = self._state.language or self._lang_code
+            sess.say(sanitize_for_tts(build_mutation_failure_text(lang, action)))
+            logger.warning(
+                "deterministic_mutation_failure_spoken action=%s lang=%s",
+                action,
+                lang,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "deterministic_mutation_failure_failed action=%s: %s", action, exc
+            )
+            return False
 
     def _speak_deterministic_confirm(
         self,
@@ -5806,6 +11146,8 @@ class VachanamAgent(Agent):
         token: int | None = None,
         date_=None,
         time_=None,
+        patient_name: str | None = None,
+        doctor_name: str | None = None,
     ) -> bool:
         """Queue a verified mutation outcome without another LLM generation.
 
@@ -5820,11 +11162,26 @@ class VachanamAgent(Agent):
                 return False
             lang = self._state.language or self._lang_code
             text = build_confirm_text(
-                lang, kind, token=token, date_=date_, time_=time_
+                lang,
+                kind,
+                token=token,
+                date_=date_,
+                time_=time_,
+                patient_name=patient_name,
+                doctor_name=doctor_name,
             )
             if not text:
                 return False
-            sess.say(sanitize_for_tts(text))
+            speech = sanitize_for_tts(text)
+            self._state.verified_mutation_speech = speech
+            self._state.verified_mutation_action = (
+                "booking"
+                if kind.startswith("booked_")
+                else "reschedule"
+                if kind.startswith("resched_")
+                else "cancel"
+            )
+            sess.say(speech)
             # Every verified mutation reaches a natural wrap-up. Booking speech
             # already asks "anything else?"; if the caller answers, the speaking
             # event clears this latch and the conversation continues. If they do
@@ -5920,6 +11277,8 @@ class VachanamAgent(Agent):
         }
 
     @function_tool()
+    @_tracks_read
+    @_tracks_booking_lookup
     async def find_my_bookings(self, context: RunContext) -> dict:
         """Look up the caller's bookings: upcoming confirmed ones AND recently
         clinic-cancelled ones (doctor leave). Matches by the number they are
@@ -5936,6 +11295,7 @@ class VachanamAgent(Agent):
         # Caller is on the existing-booking track (reschedule/cancel) — suppress
         # the #279 upfront existing-booking surface so it doesn't flag the very
         # booking being moved (FIXLOG #281).
+        _protect_mutation(context)  # pin lookup + its owed database answer
         _say_wait_filler(context)  # slow: booking lookup (#361 dead air; silent-minute 07-20)
         self._state.existing_booking_intent = True
         rows = await find_bookings_by_phone(self._state.branch_id, phone, self._db)
@@ -5951,8 +11311,7 @@ class VachanamAgent(Agent):
             # One relevant booking: pre-select its doctor so later tools never
             # hit "Unknown doctor" (reschedules skip route_to_doctor entirely).
             self._state.doctor_id = rows_single[0][1].id
-        return {
-            "bookings": [
+        bookings = [
                 {
                     "token_id": str(t.id),
                     "patient_name": p.name,
@@ -5966,9 +11325,43 @@ class VachanamAgent(Agent):
                 }
                 for t, d, p in rows
             ]
+        self._state.verified_booking_choices = {
+            booking["token_id"]: dict(booking) for booking in bookings
         }
+        # A pure "when is my appointment?" lookup has no creative work. Read
+        # the verified database row directly so conversation memory can never
+        # replace 5:00 with 2:30. Mutation flows still receive the structured
+        # rows and continue normally.
+        pure_lookup = not (
+            self._state.caller_asked_to_book
+            or self._state.caller_asked_to_reschedule
+            or self._state.caller_asked_to_cancel
+        )
+        if pure_lookup:
+            try:
+                sess = getattr(context, "session", None)
+                if isinstance(sess, AgentSession):
+                    lang = self._state.language or self._lang_code
+                    speech = " ".join(
+                        build_booking_lookup_text(lang, booking)
+                        for booking in bookings
+                    ) if bookings else build_no_booking_found_text(lang)
+                    self._state.verified_read_speech = sanitize_for_tts(speech)
+                    sess.say(sanitize_for_tts(speech))
+                    logger.info(
+                        "deterministic_booking_lookup_spoken found=%s lang=%s",
+                        bool(bookings),
+                        lang,
+                    )
+                    raise StopResponse()
+            except StopResponse:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("deterministic_booking_lookup_failed: %s", exc)
+        return {"bookings": bookings}
 
     @function_tool()
+    @_tracks_read
     async def get_queue_status(self, context: RunContext) -> dict:
         """Live queue position for the caller's TODAY token-queue booking.
         Use when the caller asks when their turn comes, which token is
@@ -5995,6 +11388,7 @@ class VachanamAgent(Agent):
         return result
 
     @function_tool()
+    @_tracks_mutation("question")
     async def log_clinic_question(self, context: RunContext, question: str) -> dict:
         """Log a clinic-information question the CLINIC FAQ could not answer
         (fees, timings, facilities, services...). Call this when the caller asks
@@ -6006,6 +11400,51 @@ class VachanamAgent(Agent):
         those are take_message or the HUMAN TRANSFER rule (#352)."""
         from backend.models.schema import ClinicQuestion, Patient
 
+        caller_question = (self._state.last_user_utterance or "").strip()
+        if caller_question:
+            if _caller_escalation_priority(caller_question):
+                raise ToolError(
+                    "Urgent or explicit human requests must use "
+                    "request_human_transfer, never clinic-question logging."
+                )
+            direct_relay = _caller_direct_relay_request(caller_question)
+            if direct_relay and direct_relay[0] != "question":
+                raise ToolError(
+                    "The caller authorized a clinic message, not a question. "
+                    "Use take_message with the exact caller-authored words."
+                )
+            if direct_relay:
+                snapshot = (self._state.relay_snapshot_text or "").strip()
+                if not snapshot:
+                    snapshot = _caller_direct_relay_payload(caller_question) or ""
+                if not snapshot or (
+                    self._state.relay_snapshot_kind not in {None, "question"}
+                ):
+                    raise ToolError(
+                        "No exact caller-authored clinic question precedes this "
+                        "command. Ask for the question in one complete sentence."
+                    )
+                caller_question = snapshot
+            # Persist the caller's finalized words, never a model paraphrase.
+            # A bare yes/ack has no standalone question content and must be
+            # restated rather than letting Gemini invent what gets stored.
+            if _caller_affirmed(caller_question) or is_backchannel(caller_question):
+                snapshot = (self._state.relay_snapshot_text or "").strip()
+                if (
+                    not snapshot
+                    or self._state.relay_snapshot_kind == "message"
+                ):
+                    raise ToolError(
+                        "No exact caller-authored clinic question is bound to "
+                        "that yes. Ask for the question in one complete sentence."
+                    )
+                caller_question = snapshot
+            elif self._state.relay_snapshot_kind == "message":
+                raise ToolError(
+                    "This is relay content for the clinic, not an unknown clinic "
+                    "fact. Use take_message with the caller's exact words."
+                )
+            question = caller_question
         q = " ".join((question or "").split())[:300]
         if not q:
             return {"logged": False}
@@ -6015,10 +11454,13 @@ class VachanamAgent(Agent):
         # stored answer and stop this tool turn before any INSERT.
         faq_match = find_faq_match(q, self._faq_rows)
         if faq_match is not None:
+            self._state.relay_snapshot_text = None
+            self._state.relay_snapshot_kind = None
             speech = await _naturalize_faq_match(faq_match, self._lang_code)
             try:
                 sess = getattr(context, "session", None)
                 if isinstance(sess, AgentSession):
+                    self._state.verified_read_speech = sanitize_for_tts(speech)
                     await sess.say(sanitize_for_tts(speech), allow_interruptions=True)
                     logger.info("clinic_question_resolved_from_faq intent=%s", faq_match.intent)
                     raise StopResponse()
@@ -6032,20 +11474,24 @@ class VachanamAgent(Agent):
                 "faq_answer": faq_match.answer,
                 "instruction": "Answer this verified FAQ naturally; do not say it was logged.",
             }
+        _protect_mutation(context)
         try:
             # Identity is stored so the doctor's answer can be CALLED BACK
             # (2026-08-02) — same lookup take_message uses; a miss just means
             # the dashboard shows "Unknown caller" and the number from SIP.
             patient_id = None
-            if self._state.patient_phone:
+            verified_patient_ids = self._state.verified_patient_ids
+            if self._state.patient_phone and len(verified_patient_ids) == 1:
+                verified_patient_id = next(iter(verified_patient_ids))
                 _pat = (
                     await self._db.execute(
                         select(Patient.id).where(
                             and_(
+                                Patient.id == verified_patient_id,
                                 Patient.branch_id == self._state.branch_id,
                                 Patient.phone == self._state.patient_phone,
                             )
-                        ).limit(1)
+                        )
                     )
                 ).first()
                 if _pat is not None:
@@ -6060,12 +11506,23 @@ class VachanamAgent(Agent):
             await self._db.commit()
         except Exception as e:  # noqa: BLE001 — logging must never break the call
             logger.warning("clinic_question_log_failed: %s", e)
+            spoken = self._speak_mutation_failure(context, "question")
             try:
-                await self._db.rollback()
-            except Exception:
-                pass
-            return {"logged": False}
+                await asyncio.wait_for(self._db.rollback(), timeout=1.0)
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning("clinic_question_rollback_timeout: %s", cleanup_error)
+            if spoken:
+                raise StopResponse()
+            return {
+                "logged": False,
+                "next": (
+                    "Tell the caller the question was not recorded and suggest "
+                    "calling the clinic directly. Never say it was logged."
+                ),
+            }
         self._state.question_logged = True
+        self._state.relay_snapshot_text = None
+        self._state.relay_snapshot_kind = None
         # RULE 10: the success path was silent, so a "did the tool even run?"
         # question could only be answered from the database (2026-08-02).
         logger.info(
@@ -6076,24 +11533,25 @@ class VachanamAgent(Agent):
         # A second Gemini pass added ~0.9s in the 2026-08-10 sandbox call and
         # could contradict the successful write. Speak the verified result
         # directly, just like booking/cancel/reschedule confirmations.
-        if settings.voice_deterministic_confirm:
-            try:
-                sess = getattr(context, "session", None)
-                if isinstance(sess, AgentSession):
-                    lang = self._state.language or self._lang_code
-                    sess.say(sanitize_for_tts(build_clinic_question_ack(lang)))
-                    logger.info(
-                        "deterministic_clinic_question_ack_spoken lang=%s", lang
-                    )
-                    raise StopResponse()
-            except StopResponse:
-                raise
-            except Exception as exc:  # noqa: BLE001 — logged result still wins
-                logger.warning("deterministic_clinic_question_ack_failed: %s", exc)
+        try:
+            sess = getattr(context, "session", None)
+            if isinstance(sess, AgentSession):
+                lang = self._state.language or self._lang_code
+                speech = sanitize_for_tts(build_clinic_question_ack(lang))
+                self._state.verified_mutation_speech = speech
+                self._state.verified_mutation_action = "question"
+                sess.say(speech)
+                logger.info("deterministic_clinic_question_ack_spoken lang=%s", lang)
+                raise StopResponse()
+        except StopResponse:
+            raise
+        except Exception as exc:  # noqa: BLE001 — logged result still wins
+            logger.warning("deterministic_clinic_question_ack_failed: %s", exc)
         return {"logged": True, "next": "Tell the caller the clinic will check "
                 "with the doctor and get back to them."}
 
     @function_tool()
+    @_tracks_mutation("message")
     async def take_message(
         self, context: RunContext, message: str, urgent: bool = False
     ) -> dict:
@@ -6103,25 +11561,90 @@ class VachanamAgent(Agent):
         doctor). NOT for bookings and NOT for clinic-info questions
         (log_clinic_question). Set urgent=true when the caller expresses
         urgency. Restate the message back in one line BEFORE calling this so
-        it is accurate. Only after this returns success may you say the
-        clinic has the message and will call back."""
+        it is accurate. A failed booking request may use this only after the
+        deterministic calendar-failure offer and caller consent. Only after
+        success may you say it was recorded for the clinic. Promise a callback
+        only when the caller requested one and the workflow guarantees it."""
         from backend.models.schema import Patient, PatientMessage
 
+        pending_booking_message = self._state.pending_clinic_message
+        using_pending_booking_message = bool(
+            pending_booking_message
+            and _caller_authorized_pending_message(
+                self._state.last_user_utterance or ""
+            )
+        )
+        if using_pending_booking_message:
+            # The snapshot was constructed from server-bound booking fields at
+            # the verified failure boundary. Never let a model paraphrase swap
+            # its patient/doctor/date/time after the caller consents.
+            message = pending_booking_message
+            urgent = False
+        else:
+            caller_message = (self._state.last_user_utterance or "").strip()
+            if caller_message:
+                if _caller_escalation_priority(caller_message):
+                    raise ToolError(
+                        "Urgent or explicit human requests must use "
+                        "request_human_transfer, never routine message logging."
+                    )
+                direct_relay = _caller_direct_relay_request(caller_message)
+                if direct_relay and direct_relay[0] != "message":
+                    raise ToolError(
+                        "The caller authorized a clinic question, not a message. "
+                        "Use log_clinic_question with their exact words."
+                    )
+                if direct_relay:
+                    snapshot = (self._state.relay_snapshot_text or "").strip()
+                    if not snapshot:
+                        snapshot = _caller_direct_relay_payload(caller_message) or ""
+                    if not snapshot or (
+                        self._state.relay_snapshot_kind not in {None, "message"}
+                    ):
+                        raise ToolError(
+                            "No exact caller-authored clinic message precedes this "
+                            "command. Ask for the message in one complete sentence."
+                        )
+                    caller_message = snapshot
+                if _caller_affirmed(caller_message) or is_backchannel(caller_message):
+                    snapshot = (self._state.relay_snapshot_text or "").strip()
+                    if (
+                        not snapshot
+                        or self._state.relay_snapshot_kind == "question"
+                    ):
+                        raise ToolError(
+                            "No exact caller-authored clinic message is bound to "
+                            "that yes. Ask for the message in one complete sentence."
+                        )
+                    caller_message = snapshot
+                elif self._state.relay_snapshot_kind == "question":
+                    raise ToolError(
+                        "This is an unanswered clinic-information question. Use "
+                        "log_clinic_question with the caller's exact words."
+                    )
+                # The finalized STT turn is the receipt. Never store a model's
+                # semantically different rewrite of what the caller said.
+                message = caller_message
+                urgent = _caller_marked_urgent(caller_message)
         msg = " ".join((message or "").split())[:500]
         if not msg:
             return {"logged": False}
+        _protect_mutation(context)
         try:
             patient_id = None
             patient_name = self._state.patient_name  # name given during THIS call
-            if self._state.patient_phone:
+            verified_patient_ids = self._state.verified_patient_ids
+            if self._state.patient_phone and len(verified_patient_ids) == 1:
+                verified_patient_id = next(iter(verified_patient_ids))
                 _pat = (
                     await self._db.execute(
                         select(Patient.id, Patient.name).where(
                             and_(
+                                Patient.id == verified_patient_id,
                                 Patient.branch_id == self._state.branch_id,
                                 Patient.phone == self._state.patient_phone,
                             )
-                        ).limit(1)
+                        )
                     )
                 ).first()
                 if _pat is not None:
@@ -6137,28 +11660,70 @@ class VachanamAgent(Agent):
             await self._db.commit()
         except Exception as e:  # noqa: BLE001 — message-taking must never break the call
             logger.warning("take_message_failed: %s", e)
+            spoken = self._speak_mutation_failure(context, "message")
             try:
-                await self._db.rollback()
-            except Exception:
-                pass
-            return {"logged": False, "next": "Apologise briefly and suggest "
-                    "they call the clinic directly."}
+                await asyncio.wait_for(self._db.rollback(), timeout=1.0)
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning("take_message_rollback_timeout: %s", cleanup_error)
+            if spoken:
+                raise StopResponse()
+            return {
+                "logged": False,
+                "next": (
+                    "Tell the caller the message was not recorded and suggest "
+                    "calling the clinic directly. Never say it was logged or sent."
+                ),
+            }
+        if using_pending_booking_message:
+            # Clear only after the durable write. A database failure leaves the
+            # exact snapshot available for one explicit retry.
+            self._state.pending_clinic_message = None
         if urgent:
             # RULE 4/8: the alert email is a notification — best-effort, never
-            # blocks or fails the message write it follows.
-            try:
-                from backend.services.support_email import notify_clinic_message
+            # blocks the committed acknowledgement it follows. A slow email API
+            # once left callers in silence after the DB already had the message.
+            async def _send_urgent_alert() -> None:
+                try:
+                    from backend.services.support_email import notify_clinic_message
 
-                await notify_clinic_message(
-                    self._state.branch_id,
-                    caller_name=patient_name,
-                    caller_last4=(self._state.patient_phone or "")[-4:] or None,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("urgent_message_alert_failed: %s", e)
+                    await notify_clinic_message(
+                        self._state.branch_id,
+                        caller_name=patient_name,
+                        caller_last4=(self._state.patient_phone or "")[-4:] or None,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("urgent_message_alert_failed: %s", e)
+
+            alert_task = asyncio.create_task(_send_urgent_alert())
+            background_tasks = getattr(self, "_background_tasks", None)
+            if background_tasks is not None:
+                background_tasks.add(alert_task)
+                alert_task.add_done_callback(background_tasks.discard)
         self._state.message_taken = True
-        return {"logged": True, "next": "Tell the caller their message is with "
-                "the clinic and they will get a call back."}
+        self._state.relay_snapshot_text = None
+        self._state.relay_snapshot_kind = None
+        try:
+            sess = getattr(context, "session", None)
+            if isinstance(sess, AgentSession):
+                lang = self._state.language or self._lang_code
+                speech = sanitize_for_tts(build_clinic_message_ack(lang))
+                self._state.verified_mutation_speech = speech
+                self._state.verified_mutation_action = "message"
+                sess.say(speech)
+                logger.info("deterministic_clinic_message_ack_spoken lang=%s", lang)
+                raise StopResponse()
+        except StopResponse:
+            raise
+        except Exception as exc:  # noqa: BLE001 — logged result still wins
+            logger.warning("deterministic_clinic_message_ack_failed: %s", exc)
+        return {
+            "logged": True,
+            "next": (
+                "Tell the caller the message was recorded for the clinic. "
+                "Do not promise a callback unless one was explicitly requested "
+                "and the workflow guarantees it."
+            ),
+        }
 
     @function_tool()
     async def followup_visit_declined(self, context: RunContext, reason: str = "") -> dict:
@@ -6203,7 +11768,31 @@ class VachanamAgent(Agent):
                 f"'{language}' is not supported. Supported codes: {supported}. "
                 "Apologise briefly and continue in the current language."
             )
+        # The model is never an authority to change the caller's voice/STT
+        # pipeline.  A tool call is accepted only when the finalized caller
+        # turn itself contains the same explicit request.  This also prevents a
+        # hallucinated switch from overwriting an earlier hard language lock.
+        requested = _explicit_language_request(
+            self._state.last_user_utterance or ""
+        )
+        if requested != code:
+            logger.error(
+                "language_switch_blocked_without_caller_request requested=%s "
+                "tool=%s locked=%s",
+                requested,
+                code,
+                self._state.explicit_language_lock,
+            )
+            raise ToolError(
+                "The caller did not explicitly request this language in their "
+                "latest turn. Keep the current hard language lock and answer "
+                "their actual request; do not mention this internal guard."
+            )
         if code == self._lang_code:
+            # Saying "switch to English" while already on the English pipeline
+            # is still an explicit choice and must create the durable call lock.
+            self._state.explicit_language_lock = code
+            self._sync_runtime_language(code)
             return {"success": True, "already_speaking": code}
         if self._agent_factory is None:
             # Defensive: factory is always wired in the entrypoint; without it a
@@ -6235,6 +11824,7 @@ class VachanamAgent(Agent):
                 pass
         self._state.preferred_language = code
         self._state.language = code
+        self._state.explicit_language_lock = code
         _t_db = _perf.monotonic()
         # Spoken fillers must match the new language immediately. The CACHED
         # PCM clips are still the OLD language's audio — drop them NOW or
@@ -6409,10 +11999,9 @@ class VachanamAgent(Agent):
         # agreement; reschedule kept a phrase list and kept the bug.
         #
         # What is left is the one thing worth deciding deterministically: a flat
-        # refusal. _caller_refused_outright is EXACT-match over a multilingual
-        # set, so it does not care about script and cannot fire on "no problem,
-        # move it". Everything else is the model's call — it is the only part of
-        # this system fluent in seven languages and two scripts.
+        # refusal or a whole-turn "don't move it" withdrawal. The narrow matcher
+        # cannot fire on corrections such as "not tomorrow, Friday" or on Hindi
+        # "nahi nahi kar dijiye". Everything else is the model's call.
         #
         # Safe to drop the gate here specifically: a reschedule MOVES a booking
         # and the patient keeps a slot either way, the old one is released only
@@ -6420,7 +12009,7 @@ class VachanamAgent(Agent):
         # from find_my_bookings under the caller's own phone (RULE 1 + the
         # identity gate). cancel_booking is destructive and KEEPS its
         # positive-yes requirement — that asymmetry is deliberate.
-        if utterance is not None and _caller_refused_outright(utterance):
+        if utterance is not None and _caller_withdrew_reschedule(utterance):
             self._state.pending_confirmation = None
             self._state.caller_asked_to_reschedule = False
             logger.warning(
@@ -6434,6 +12023,81 @@ class VachanamAgent(Agent):
         self._state.pending_confirmation = None
         _guard_human_booking(self._state)
         _require_verified_identity(self._state)
+        choice = self._state.verified_booking_choices.get(str(old_token_id))
+        if not choice or choice.get("status") != "confirmed":
+            raise ToolError(
+                "old_token_id was not returned as confirmed by the latest "
+                "find_my_bookings lookup. Run that lookup again; never guess."
+            )
+        confirmed_choices = [
+            booking
+            for booking in self._state.verified_booking_choices.values()
+            if booking.get("status") == "confirmed"
+        ]
+        if len(confirmed_choices) > 1:
+            doctor_matches = [
+                booking
+                for booking in confirmed_choices
+                if self._state.doctor_id is not None
+                and str(booking.get("doctor_id")) == str(self._state.doctor_id)
+            ]
+            if len(doctor_matches) != 1 or doctor_matches[0]["token_id"] != str(
+                old_token_id
+            ):
+                raise ToolError(
+                    "Several verified appointments could be moved. Ask which "
+                    "doctor/date/time appointment they mean, run "
+                    "find_my_bookings again if needed, and do not choose an id."
+                )
+
+        parsed_new_date = self._parse_date(new_date)
+        caller_new_date = self._state.caller_reschedule_date
+        if caller_new_date and parsed_new_date.isoformat() != caller_new_date:
+            raise ToolError(
+                "The new date does not match the caller's stated date. Do not "
+                "reschedule; ask them to repeat the exact destination date."
+            )
+        booking_type = str(choice.get("booking_type") or "appointment")
+        caller_new_times = (
+            () if booking_type == "token" else self._state.caller_reschedule_times
+        )
+        parsed_new_time = (
+            None if booking_type == "token" else self._parse_time(new_time)
+        )
+        if booking_type != "token":
+            if len(caller_new_times) > 1:
+                raise ToolError(
+                    "The caller's new time is still AM/PM ambiguous. Ask one "
+                    "morning-or-evening clarification before rescheduling."
+                )
+            if parsed_new_time is None and len(caller_new_times) == 1:
+                parsed_new_time = _canonical_receipt_time(caller_new_times[0])
+            parsed_clock = (
+                parsed_new_time.strftime("%H:%M") if parsed_new_time else None
+            )
+            if not caller_new_times or parsed_clock != caller_new_times[0]:
+                raise ToolError(
+                    "The new time does not match an exact caller-authored time. "
+                    "Do not reschedule; ask for the exact hour and minute."
+                )
+            new_time = parsed_clock
+        else:
+            new_time = None
+        new_date = parsed_new_date.isoformat()
+        if booking_type != "token" and self._calendar is None:
+            self._arm_failed_reschedule_message(choice)
+            spoken = self._speak_booking_failure(context, unavailable=True)
+            result = {
+                "success": False,
+                "reason": "booking_system_unavailable",
+                "instruction": (
+                    "The slot calendar is disconnected. The existing appointment "
+                    "was not moved. Offer the prepared exact clinic message once."
+                ),
+            }
+            if spoken:
+                raise StopResponse()
+            return result
         # mutation_in_flight = "reschedule" is owned by @_tracks_mutation.
         # Slowest mutation (cancel + rebook + two calendar writes, ~6-9s live).
         # Cover the beat with a filler and pin the handle so a mid-write
@@ -6443,13 +12107,29 @@ class VachanamAgent(Agent):
         result = await self._do_reschedule(old_token_id, new_date, new_time)
         if result.get("success"):
             resolved_time = self._parse_time(result.get("new_time"))
+            self._state.caller_reschedule_times = ()
+            self._state.caller_reschedule_date = None
             if self._speak_deterministic_confirm(
                 context,
                 "resched_slot" if resolved_time is not None else "resched_token",
                 token=result.get("new_token_number"),
                 date_=date_cls.fromisoformat(result["new_date"]),
                 time_=resolved_time,
+                patient_name=str(choice.get("patient_name") or "") or None,
+                doctor_name=str(choice.get("doctor") or "") or None,
             ):
+                raise StopResponse()
+        elif (
+            result.get("reason") == "booking_system_unavailable"
+            or result.get("error") == "booking_failed"
+        ):
+            self._arm_failed_reschedule_message(choice)
+            spoken = self._speak_booking_failure(context, unavailable=True)
+            result["instruction"] = (
+                "The appointment was not moved because the booking system is "
+                "temporarily unavailable. Offer the prepared clinic message."
+            )
+            if spoken:
                 raise StopResponse()
         return result
 
@@ -6792,6 +12472,13 @@ class VachanamAgent(Agent):
         for reschedules PREFER the reschedule_booking tool (atomic). If you do
         cancel manually for a reschedule, the NEW booking must already be
         confirmed."""
+        if reason != "cancel":
+            logger.warning("model_cancel_reason_ignored")
+        # This public model tool is caller cancellation only. Reschedule uses
+        # the private _do_cancel path after its replacement is confirmed. A
+        # model-controlled reason must never suppress the deterministic caller
+        # receipt or select a weaker mutation branch.
+        reason = "cancel"
         utterance = self._state.last_user_utterance
         self._state.quality_intent = 'cancellation'
         accidental = (
@@ -6804,37 +12491,16 @@ class VachanamAgent(Agent):
         # the word "cancel", and the question no longer has to match one of
         # five hardcoded phrases. Both were true before, which is why the
         # reschedule flow asked twice and this one would have too.
-        declined = utterance is not None and _caller_refused_outright(utterance)
+        declined = utterance is not None and _caller_declined(utterance)
         if declined:
             self._state.pending_confirmation = None
-        if utterance is not None and not (
-            accidental
-            or _caller_authorized_cancellation(utterance)
-            or (
-                _caller_affirmed(utterance)
-                and not declined
-                and (
-                    self._state.caller_asked_to_cancel
-                    or self._last_assistant_requested_cancellation()
-                )
-            )
-        ):
-            logger.warning(
-                'cancellation_blocked_no_caller_authorization session=%s',
-                _privacy_safe_session_id(self._state.session_id),
-            )
-            self._state.pending_confirmation = 'cancel'
-            # Same deadlock as confirm_booking. NOTE the asymmetry that stays:
-            # a cancellation is destructive, so the caller must still agree to
-            # THIS booking by name — the question just has to be asked.
+            self._state.caller_asked_to_cancel = False
+            self._state.cancellation_confirmation_granted = False
+            self._state.cancellation_confirmation_snapshot.clear()
             raise ToolError(
-                'Not authorized YET — you have not asked the caller to confirm '
-                'the cancellation. Do NOT mention permission or rules. Ask one '
-                'short question naming the doctor, time and date of the booking '
-                'you would cancel: "Shall I cancel it?" (in the active '
-                'language). On agreement, call cancel_booking again immediately.'
+                'The caller declined or withdrew the cancellation. Do NOT '
+                'cancel anything and do not ask for confirmation again.'
             )
-        self._state.pending_confirmation = None
         if accidental:
             if self._state.last_confirmed_token_id is None:
                 raise ToolError(
@@ -6850,6 +12516,121 @@ class VachanamAgent(Agent):
                 )
         _guard_human_booking(self._state)
         _require_verified_identity(self._state)
+        cancellation_choice = None
+        if not accidental:
+            if self._state.cancellation_confirmation_granted:
+                cancellation_choice = self._state.cancellation_confirmation_snapshot
+                if not cancellation_choice:
+                    self._state.cancellation_confirmation_granted = False
+                    raise ToolError(
+                        "No server-built cancellation confirmation was spoken. "
+                        "Run find_my_bookings and start confirmation again."
+                    )
+                token_id = str(cancellation_choice["token_id"])
+            else:
+                confirmed_choices = [
+                    dict(choice)
+                    for choice in self._state.verified_booking_choices.values()
+                    if choice.get("status") == "confirmed"
+                ]
+                candidates = confirmed_choices
+                caller_date = self._state.caller_existing_date
+                caller_times = self._state.caller_existing_times
+                if caller_date:
+                    candidates = [
+                        choice for choice in candidates
+                        if str(choice.get("date") or "") == caller_date
+                    ]
+                if caller_times:
+                    candidates = [
+                        choice for choice in candidates
+                        if str(choice.get("time") or "") in caller_times
+                    ]
+                if self._state.doctor_id is not None:
+                    doctor_candidates = [
+                        choice for choice in candidates
+                        if str(choice.get("doctor_id") or "")
+                        == str(self._state.doctor_id)
+                    ]
+                    if doctor_candidates:
+                        candidates = doctor_candidates
+                has_caller_selector = bool(
+                    caller_date
+                    or caller_times
+                    or self._state.doctor_id is not None
+                )
+                if len(candidates) == 1:
+                    cancellation_choice = candidates[0]
+                    selected_id = str(cancellation_choice["token_id"])
+                    if selected_id != str(token_id):
+                        logger.warning(
+                            "cancel_target_rebound requested=%s selected=%s",
+                            str(token_id)[-8:],
+                            selected_id[-8:],
+                        )
+                    token_id = selected_id
+                elif has_caller_selector:
+                    raise ToolError(
+                        "The caller's doctor/date/time selection does not map "
+                        "to exactly one verified booking. Ask which appointment "
+                        "they mean; do not choose an id."
+                    )
+                elif len(confirmed_choices) == 1:
+                    cancellation_choice = confirmed_choices[0]
+                    token_id = str(cancellation_choice["token_id"])
+                else:
+                    raise ToolError(
+                        "Several or no confirmed bookings were returned by the "
+                        "latest verified lookup. Ask for doctor/date/time and "
+                        "never choose a booking id from model memory."
+                    )
+                question = build_cancellation_confirmation_question(
+                    self._state.language or self._lang_code,
+                    cancellation_choice,
+                )
+                if not question:
+                    raise ToolError(
+                        "The verified booking is missing patient, doctor, date or "
+                        "time/token details. Do not cancel it."
+                    )
+                sess = getattr(context, "session", None)
+                if not isinstance(sess, AgentSession):
+                    raise ToolError(
+                        "Ask the exact cancellation confirmation question before "
+                        "retrying this tool."
+                    )
+                speech_handle = sess.say(sanitize_for_tts(question))
+                wait_for_playout = getattr(speech_handle, "wait_for_playout", None)
+                if not callable(wait_for_playout):
+                    raise ToolError(
+                        "The cancellation question could not be verified as "
+                        "played. Do not cancel."
+                    )
+                try:
+                    await asyncio.wait_for(wait_for_playout(), timeout=15.0)
+                except Exception as exc:
+                    logger.warning("cancellation_confirmation_playout_failed: %s", exc)
+                    self._state.cancellation_confirmation_snapshot.clear()
+                    self._state.pending_confirmation = None
+                    raise StopResponse() from exc
+                if bool(getattr(speech_handle, "interrupted", False)):
+                    logger.warning("cancellation_confirmation_playout_interrupted")
+                    self._state.cancellation_confirmation_snapshot.clear()
+                    self._state.pending_confirmation = None
+                    self._state.cancellation_confirmation_granted = False
+                    raise StopResponse()
+                self._state.cancellation_confirmation_snapshot = dict(
+                    cancellation_choice
+                )
+                self._state.pending_confirmation = "cancel"
+                self._state.caller_asked_to_cancel = True
+                self._state.cancellation_confirmation_granted = False
+                logger.info(
+                    "deterministic_cancellation_confirmation_queued session=%s",
+                    _privacy_safe_session_id(self._state.session_id),
+                )
+                raise StopResponse()
+        self._state.pending_confirmation = None
         # mutation_in_flight = "cancel" is owned by @_tracks_mutation.
         # HARD GUARD: a reschedule may only cancel after the replacement is
         # CONFIRMED. The LLM once treated assign_token as "booked", cancelled
@@ -6872,12 +12653,30 @@ class VachanamAgent(Agent):
             else reason
         )
         result = await self._do_cancel(token_id, reason=cancel_reason)
+        if result.get("success"):
+            self._state.cancellation_confirmation_granted = False
+            self._state.caller_asked_to_cancel = False
+            spoken_choice = dict(cancellation_choice or {})
+            self._state.cancellation_confirmation_snapshot.clear()
+            self._state.caller_existing_times = ()
+            self._state.caller_existing_date = None
         if (
             result.get("success")
             and reason == "cancel"
-            and self._speak_deterministic_confirm(context, "cancelled")
+            and self._speak_deterministic_confirm(
+                context,
+                "cancelled",
+                patient_name=spoken_choice.get("patient_name"),
+                doctor_name=(
+                    spoken_choice.get("doctor")
+                    or spoken_choice.get("doctor_name")
+                ),
+            )
         ):
             raise StopResponse()
+        if not result.get("success"):
+            self._state.cancellation_confirmation_granted = False
+            self._state.cancellation_confirmation_snapshot.clear()
         return result
 
     def _clear_hold(self) -> None:
@@ -7355,20 +13154,38 @@ class VachanamAgent(Agent):
         human/person, or on their THIRD ask for the doctor (never deflect a
         third time). On failure, follow the returned `next` instruction —
         never leave the caller without a path to a human."""
+        async def _failed(error: str) -> dict:
+            result = {
+                "success": False,
+                "error": error,
+                "emergency_contact": self._transfer_to or None,
+                "next": (
+                    "The deterministic failure line has already been spoken. "
+                    "Offer take_message if the caller wants to record exact words; "
+                    "when an emergency contact is present it was read digit by digit."
+                ),
+            }
+            sess = getattr(context, "session", None)
+            if isinstance(sess, AgentSession):
+                await _say_deterministic_once(
+                    sess,
+                    build_transfer_failure_text(
+                        self._state.language or self._lang_code,
+                        self._transfer_to or None,
+                        urgent=(reason or "").strip().casefold().startswith("urgent"),
+                    ),
+                    allow_interruptions=False,
+                )
+                raise StopResponse()
+            return result
+
         room = self._room
         if room is None or not self._transfer_to:
-            return {"success": False, "error": "transfer_unavailable",
-                    "next": "Apologise that you cannot connect the call right "
-                            "now, offer to take a message with take_message, "
-                            "and suggest they visit or call the clinic directly."}
+            return await _failed("transfer_unavailable")
         participant_identity = next(iter(room.remote_participants), None)
         if participant_identity is None:
-            return {"success": False, "error": "no_participant"}
-        logger.info(
-            "human_transfer_requested reason=%s to=...%s",
-            reason[:60],
-            self._transfer_to[-4:],
-        )
+            return await _failed("no_participant")
+        logger.info("human_transfer_requested to=...%s", self._transfer_to[-4:])
         self._state.transfer_requested = True  # quality signal (CallLog)
         # SIP REFER immediately removes the caller from this room. Speak and
         # finish the deterministic notice first; otherwise the first thing an
@@ -7405,13 +13222,9 @@ class VachanamAgent(Agent):
             return {"success": True}
         except Exception as e:
             logger.error("transfer_failed: %s", e)
-            # The line to a human broke — hand the caller the number itself so
-            # they can dial directly (spoken digit-by-digit by the TTS layer).
-            return {"success": False, "error": "transfer_failed",
-                    "emergency_contact": self._transfer_to,
-                    "next": "Say the connection did not go through, give this "
-                            "emergency number aloud digit by digit, and offer "
-                            "to also take a message with take_message."}
+            # The line to a human broke. The deterministic failure path speaks
+            # the configured number itself; it cannot be omitted by the model.
+            return await _failed("transfer_failed")
 
 
 # A reminder's `reminder_sent` is flipped True the moment the AGENT JOINS THE
@@ -7550,6 +13363,12 @@ async def _reminder_retry_on_dial_fail(meta: dict) -> None:
             row.reminder_30m_dial_attempts = attempts
             if attempts <= _REMINDER_MAX_DIAL_ATTEMPTS:
                 row.reminder_sent = False
+            else:
+                # Terminalize the row even when the voice worker's failure
+                # update wins the scheduler's post-dispatch CAS. Leaving an
+                # exhausted row unsent makes every later tick dispatch it
+                # again forever despite the attempt cap.
+                row.reminder_sent = True
             await _db.commit()
         if attempts > _REMINDER_MAX_DIAL_ATTEMPTS:
             logger.warning(
@@ -7786,6 +13605,37 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             meta = json.loads(ctx.job.metadata)
         except json.JSONDecodeError:
             pass
+    # The scheduler owns a global, privacy-safe handset claim before it creates
+    # this dispatch. Consume the opaque claim here (never expose it to the LLM),
+    # renew it for the whole call, and release only our exact ownership token.
+    # Register before hydration so every early failure also hands the lock back.
+    _outbound_lock_key = str(meta.pop("outbound_lock_key", "") or "")
+    _outbound_lock_owner = str(meta.pop("outbound_lock_owner", "") or "")
+    _outbound_lock_task: asyncio.Task | None = None
+    _outbound_lock_finished = False
+    if _outbound_lock_key and _outbound_lock_owner:
+        from backend.services.outbound_guard import (
+            finish_outbound_claim,
+            maintain_outbound_claim,
+        )
+
+        _outbound_lock_task = asyncio.create_task(
+            maintain_outbound_claim(_outbound_lock_key, _outbound_lock_owner)
+        )
+
+        async def _finish_worker_outbound_claim() -> None:
+            nonlocal _outbound_lock_finished
+            if _outbound_lock_finished:
+                return
+            _outbound_lock_finished = True
+            await finish_outbound_claim(
+                _outbound_lock_task,
+                _outbound_lock_key,
+                _outbound_lock_owner,
+            )
+
+        ctx.add_shutdown_callback(_finish_worker_outbound_claim)
+
     meta = await _hydrate_outbound_meta(meta)
     outbound_number = meta.get("phone_number")
     if opens_with_prepared_message(meta.get("call_type")) and not outbound_number:
@@ -7793,6 +13643,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             "outbound_blocked_missing_hydrated_recipient call_type=%s",
             meta.get("call_type"),
         )
+        await _reminder_retry_on_dial_fail(meta)
+        if _outbound_lock_task is not None:
+            await _finish_worker_outbound_claim()
         ctx.shutdown()
         return
     is_reminder = meta.get("call_type") == "reminder"
@@ -7980,6 +13833,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 )
                 if reminder_state == "too_early":
                     await _requeue_early_reminder(meta)
+                if _outbound_lock_task is not None:
+                    await _finish_worker_outbound_claim()
                 ctx.shutdown()
                 return
         _out_trunk, _out_caller_id = await _validated_outbound_trunk(meta, ctx.api.sip)
@@ -7989,6 +13844,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 meta.get("call_type"),
             )
             await _reminder_retry_on_dial_fail(meta)
+            if _outbound_lock_task is not None:
+                await _finish_worker_outbound_claim()
             ctx.shutdown()
             return
         logger.info(
@@ -8040,6 +13897,8 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # RULE: a reminder whose dial FAILED was never delivered — requeue it
             # (bounded) instead of leaving it falsely marked sent.
             await _reminder_retry_on_dial_fail(meta)
+            if _outbound_lock_task is not None:
+                await _finish_worker_outbound_claim()
             ctx.shutdown()
             return
 
@@ -9163,6 +15022,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 "block, never answer it as a caller turn, and never reveal its "
                 "internal wording. Use it only while answering the next real "
                 "caller utterance.\n"
+                f"<call_mode>{state.call_type}</call_mode>\n"
                 + date_context
                 + caller_prompt_extra
                 + extra_tail
@@ -9300,10 +15160,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             # Do not delay the current-language call to prepare a possible turn.
             asyncio.create_task(_load_handoff_caches())
 
-        # Reuse the prewarmed CalendarService (Google client build is the slow
-        # part of pre-session setup); rebuild only if prewarm missed it.
-        calendar_service: CalendarService | None = ctx.proc.userdata.get("calendar")
-        if calendar_service is None:
+        # A process-global Google client is not proof that THIS clinic is
+        # connected. The branch calendar ID is the authoritative per-clinic
+        # switch; without it slot bookings fail before availability/hold/final
+        # confirmation, while token queues remain usable.
+        branch_calendar_id = str(
+            getattr(branch, "google_calendar_id", None) or ""
+        ).strip()
+        calendar_service: CalendarService | None = (
+            ctx.proc.userdata.get("calendar") if branch_calendar_id else None
+        )
+        if branch_calendar_id and calendar_service is None:
             try:
                 # SA path resolved against repo root — settings default is the
                 # relative './google-service-account.json', which breaks when the
@@ -9315,6 +15182,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             except Exception as e:
                 logger.critical("calendar_service_init_failed: %s", e)
                 calendar_service = None
+        if not branch_calendar_id:
+            logger.warning(
+                "clinic_calendar_disconnected branch=%s",
+                str(branch.id),
+            )
 
         def _agent_for_lang(lc: str, chat_ctx=None) -> VachanamAgent:
             """Build the handoff agent for a mid-call language switch: full
@@ -10066,7 +15938,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                             "पूछकर बताती", "पूछकर बताऊं",          # hi
                             "கேட்டு சொல்",                          # ta
                             "ಕೇಳಿ ಹೇಳ",                             # kn
+                            "ഡോക്ടറോട് ചോദിച്ച് പറയാം",             # ml
                             "विचारून सांगते",                        # mr
+                            "ডাক্তারকে জিজ্ঞেস করে বলব",             # bn
                             "check with the doctor", "ask the doctor",  # en
                         )
                         _MSG_PROMISES = (
@@ -10486,6 +16360,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     if not _sil["linecheck"] and (
                         a_state in ("thinking", "speaking", "initializing")
                         or u_state == "speaking"
+                        or state.read_in_flight_count > 0
+                        or state.read_answer_owed
+                        or state.mutation_in_flight is not None
                     ):
                         _sil["last_user"] = now
                         _sil["prompts"] = 0

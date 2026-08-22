@@ -111,10 +111,9 @@ def test_the_guard_accepts_anything_that_is_not_a_refusal(tool):
         f"{tool} still requires the answer to match a phrase list; a caller "
         f"answering in an unlisted language or script can never authorize it"
     )
-    assert "_caller_refused_outright" in src, (
-        f"{tool} vetoes on a 'contains a negation' test; that is the same "
-        f"brittleness in the other direction"
-    )
+    assert "_caller_declined" in src
+    assert "booking_confirmation_granted" in src
+    assert "booking_confirmation_snapshot" in src
 
 
 def test_reschedule_does_not_gate_on_recognition_at_all():
@@ -126,7 +125,7 @@ def test_reschedule_does_not_gate_on_recognition_at_all():
         if not line.lstrip().startswith("#")
     )
     assert "_caller_authorized_reschedule" not in gate
-    assert "_caller_refused_outright" in gate, "a flat no must still stop it"
+    assert "_caller_withdrew_reschedule" in gate, "a flat no must still stop it"
 
 
 @pytest.mark.parametrize("tool", ["confirm_booking"])
@@ -183,5 +182,8 @@ def test_the_veto_is_exact_not_substring():
 def test_cancellation_still_demands_a_positive_yes():
     """Deliberate asymmetry: cancelling is destructive, so silence or an
     ambiguous reply must not do it. This one keeps requiring an affirmation."""
-    src = _src("cancel_booking")
-    assert "_caller_affirmed" in src
+    cancel = _src("cancel_booking")
+    turn = _src("on_user_turn_completed")
+    assert "cancellation_confirmation_granted" in cancel
+    assert "cancellation_confirmation_snapshot" in cancel
+    assert "_caller_affirmed(utterance)" in turn

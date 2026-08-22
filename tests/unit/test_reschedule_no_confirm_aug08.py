@@ -28,6 +28,7 @@ from agent.livekit_minimal.agent import (
     VachanamAgent,
     _caller_authorized_reschedule,
     _caller_refused_outright,
+    _caller_withdrew_reschedule,
 )
 
 SRC = inspect.getsource(VachanamAgent.reschedule_booking)
@@ -59,8 +60,8 @@ def test_the_phrase_list_no_longer_gates_the_write():
     assert "caller_asked_to_reschedule or" not in GATE
 
 
-def test_only_a_flat_refusal_still_blocks():
-    assert "_caller_refused_outright" in GATE
+def test_only_a_whole_turn_withdrawal_still_blocks():
+    assert "_caller_withdrew_reschedule" in GATE
 
 
 # ── the phrasings that were broken in production ─────────────────────────────
@@ -106,6 +107,24 @@ def test_a_no_inside_a_yes_does_not_stop_it():
         assert not _caller_refused_outright(said), said
 
 
+def test_whole_turn_withdrawals_block_without_eating_corrections():
+    for said in (
+        "I don't want to reschedule",
+        "I do not want to move my appointment",
+        "never mind",
+        "keep it as it is",
+        "actually leave it",
+    ):
+        assert _caller_withdrew_reschedule(said), said
+    for said in (
+        "nahi nahi kar dijiye",
+        "not tomorrow, Friday",
+        "not urgent, move it to Friday",
+        "I don't want tomorrow; move it to Friday",
+    ):
+        assert not _caller_withdrew_reschedule(said), said
+
+
 def test_cancel_keeps_its_confirmation():
     """Deliberate asymmetry. A wrongly-moved appointment still leaves the
     patient with a slot; a wrongly-cancelled one does not."""
@@ -117,7 +136,7 @@ def test_cancel_keeps_its_confirmation():
 def test_the_prompt_does_not_ask_either():
     """Removing the guard's re-ask is not enough if the prompt still tells it
     to confirm — that would be one question instead of none."""
-    from agent.prompts.grounded_prompt import build_grounded_prompt
+    from agent.prompts.system_prompt import build_system_prompt
 
-    src = inspect.getsource(build_grounded_prompt)
-    assert "Never ask them to confirm a reschedule" in src
+    prompt = build_system_prompt("Test", [], "", "clinic", language="en")
+    assert "Never ask them to confirm a reschedule" in prompt

@@ -123,6 +123,47 @@ async def test_stream_guard_drops_tool_reasoning_before_patient_answer():
     assert out == "Which day would you like to visit?"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "speech",
+    (
+        "Please tell me the patient's name.",
+        "What is the patient's name?",
+        "Is the patient booking for themselves?",
+        "The patient has an appointment at five.",
+    ),
+)
+async def test_stream_guard_preserves_patient_facing_patient_phrases(speech):
+    async def chunks():
+        for start in range(0, len(speech), 2):
+            yield speech[start:start + 2]
+
+    out = "".join([part async for part in _guard_internal_speech_stream(chunks())])
+    assert out == speech
+    assert sanitize_for_tts(speech)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trace",
+    (
+        "The patient asked for a 5 PM slot. Which day should I check?",
+        "The caller is asking about availability. Which doctor do you mean?",
+        "This user provided a date. Which doctor would you like?",
+    ),
+)
+async def test_stream_guard_still_strips_precise_patient_meta_clauses(trace):
+    async def chunks():
+        for start in range(0, len(trace), 3):
+            yield trace[start:start + 3]
+
+    out = "".join([part async for part in _guard_internal_speech_stream(chunks())])
+    assert out.startswith("Which ")
+    assert "patient asked" not in out.casefold()
+    assert "caller is asking" not in out.casefold()
+    assert "user provided" not in out.casefold()
+
+
 def test_whole_text_sanitizer_drops_meta_reasoning():
     raw = (
         "The user requested Friday. I should call check_availability. "

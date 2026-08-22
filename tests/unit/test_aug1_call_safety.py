@@ -18,10 +18,11 @@ from agent.session_state import SessionState
 from livekit.agents.llm import ChatContext
 
 
-def _agent(state):
+def _agent(state, *, calendar_service=None, doctor_contexts=None):
     return VachanamAgent(
         instructions='test', state=state, db=None, room=None,
-        calendar_service=None, meta_service=MetaService(), transfer_to='',
+        calendar_service=calendar_service, meta_service=MetaService(), transfer_to='',
+        doctor_contexts=doctor_contexts,
     )
 
 
@@ -113,28 +114,41 @@ def test_bare_yes_requires_previous_audible_booking_question():
 
 
 @pytest.mark.asyncio
-async def test_availability_question_cannot_call_confirm_booking():
+async def test_availability_question_cannot_call_confirm_booking(monkeypatch):
     from livekit.agents import ToolError
+    from agent.livekit_minimal import agent as agent_mod
 
+    doctor_id = uuid4()
     state = SessionState(
         branch_id=uuid4(), patient_phone='+919999999999',
         last_user_utterance='మార్నింగ్ 10:00కి ఉంటారా?',
     )
-    agent = _agent(state)
+    agent = _agent(
+        state,
+        calendar_service=object(),
+        doctor_contexts=[
+            SimpleNamespace(
+                id=doctor_id, name='Dr Test', booking_type='appointment'
+            )
+        ],
+    )
+    core = AsyncMock(return_value={'success': True})
+    monkeypatch.setattr(agent_mod, 'confirm_booking', core)
     # The INVARIANT is that asking "are you free at 10?" cannot write a booking.
     # The message changed 2026-08-03 (it now drives the confirmation question
     # instead of refusing aloud), so match on what must stay true, not on the
     # old sentence.
     with pytest.raises(ToolError) as blocked:
         await agent.confirm_booking(
-            context=None, doctor_id=str(uuid4()), patient_name='Caller',
+            context=None, doctor_id=str(doctor_id), patient_name='Caller',
             complaint='dental', booking_date='2026-08-04',
             appointment_time='10:00',
         )
     text = str(blocked.value)
-    assert 'Not authorized YET' in text
-    # ...and it must tell the model to ASK, since refusing was the deadlock.
-    assert 'Shall I book it?' in text
+    assert 'exact booking confirmation question' in text
+    core.assert_not_awaited()
+    assert state.booking_confirmation_snapshot == {}
+    assert state.token_confirmed is False
 
 
 @pytest.mark.asyncio

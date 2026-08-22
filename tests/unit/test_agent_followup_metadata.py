@@ -1,11 +1,13 @@
 import agent.livekit_minimal.agent as ag
 
 
-def test_prompt_extras_relay_only_and_promise_doctor():
+def test_prompt_extras_relay_only_and_record_patient_concern():
     assert "relay" in ag.DOCTOR_ADVICE_PROMPT_EXTRA.lower()
     assert "{message}" in ag.DOCTOR_ADVICE_PROMPT_EXTRA
+    assert "call take_message" in ag.NEXT_VISIT_PROMPT_EXTRA.lower()
     assert "inform the doctor" in ag.NEXT_VISIT_PROMPT_EXTRA.lower()
-    assert "{message}" in ag.NEXT_VISIT_PROMPT_EXTRA
+    assert "still offer the visit" in ag.NEXT_VISIT_PROMPT_EXTRA.lower()
+    assert "prepared opening already asked" in ag.NEXT_VISIT_PROMPT_EXTRA.lower()
 
 
 def test_followup_metadata_helper_excludes_private_notes():

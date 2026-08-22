@@ -91,7 +91,9 @@ def test_the_turn_handler_records_each_request(field, fn):
 def test_a_flat_refusal_withdraws_all_three():
     """One "no" ends the whole negotiation, not just the booking half."""
     src = _src("on_user_turn_completed")
-    block = src.split("_caller_refused_outright(utterance)")[1].split("else:")[0]
+    block = src.split(
+        "declined_turn = _caller_refused_outright(utterance)", 1
+    )[1].split("else:", 1)[0]
     for field in (
         "caller_asked_to_book", "caller_asked_to_reschedule", "caller_asked_to_cancel"
     ):
@@ -102,7 +104,9 @@ def test_recording_consent_is_not_mutually_exclusive():
     """A caller can say "cancel the 10am and book me at 11" in one breath. An
     if/elif chain would record only the first and re-block the other."""
     src = _src("on_user_turn_completed")
-    after = src.split("_caller_refused_outright(utterance)")[1]
+    after = src.split(
+        "declined_turn = _caller_refused_outright(utterance)", 1
+    )[1]
     body = after.split("else:")[1] if "else:" in after else after
     assert body.count("if _caller_authorized") == 3, (
         "the three intents are recorded as an elif chain; a single utterance "
@@ -128,8 +132,11 @@ def test_cancel_accepts_remembered_consent():
 def test_cancel_still_requires_a_positive_yes():
     """The deliberate asymmetry. Booking on a shrug is recoverable; silently
     cancelling a real appointment is not."""
-    src = _src("cancel_booking")
-    assert "_caller_affirmed(utterance)" in src
+    cancel = _src("cancel_booking")
+    turn = _src("on_user_turn_completed")
+    assert "cancellation_confirmation_granted" in cancel
+    assert "cancellation_confirmation_snapshot" in cancel
+    assert "_caller_affirmed(utterance)" in turn
 
 
 def test_reschedule_does_not_require_a_positive_yes():
@@ -146,8 +153,10 @@ def test_reschedule_does_not_require_a_positive_yes():
 @pytest.mark.parametrize("tool", ["cancel_booking"])
 def test_a_refusal_is_checked_before_remembered_consent(tool):
     src = _src(tool)
-    assert "_caller_refused_outright" in src
-    assert src.index("not declined") < src.index("caller_asked_to_")
+    assert "_caller_declined" in src
+    assert src.index("if declined:") < src.index(
+        "if self._state.cancellation_confirmation_granted:"
+    )
 
 
 # ── consent is spent, not permanent ──────────────────────────────────────────
@@ -163,13 +172,14 @@ def test_a_completed_cancellation_spends_its_consent():
     assert "caller_asked_to_cancel = False" in src
 
 
-def test_all_three_mutations_now_share_one_shape():
-    """The bug was one mutation being fixed and its siblings left behind."""
-    for tool, field in (
-        ("confirm_booking", "caller_asked_to_book"),
-        ("reschedule_booking", "caller_asked_to_reschedule"),
-        ("cancel_booking", "caller_asked_to_cancel"),
-    ):
-        src = _src(tool)
-        assert field in src, f"{tool} was left on the old per-utterance check"
-        assert "_caller_refused_outright" in src, f"{tool} has no refusal veto"
+def test_each_mutation_uses_its_deliberate_consent_shape():
+    """Booking/cancel use snapshots; reschedule uses its narrow withdrawal veto."""
+    booking = _src("confirm_booking")
+    reschedule = _src("reschedule_booking")
+    cancel = _src("cancel_booking")
+
+    assert "booking_confirmation_granted" in booking
+    assert "booking_confirmation_snapshot" in booking
+    assert "_caller_withdrew_reschedule" in reschedule
+    assert "cancellation_confirmation_granted" in cancel
+    assert "cancellation_confirmation_snapshot" in cancel

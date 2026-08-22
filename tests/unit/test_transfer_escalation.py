@@ -21,16 +21,16 @@ def _prompt():
 
 
 def test_prompt_urgent_transfers_immediately():
-    p = _prompt()
+    p = " ".join(_prompt().split())
     assert "URGENT NOW" in p
-    assert 'request_human_transfer(reason="urgent") immediately' in p
+    assert 'request_human_transfer(reason="urgent") silently and immediately' in p
     # RULE 7: intent-based, never keyword triage.
     assert "never a keyword list" in p
 
 
 def test_prompt_third_ask_always_transfers():
-    p = _prompt()
-    assert "offer help at most TWICE" in p
+    p = " ".join(_prompt().split())
+    assert "offer receptionist help at most TWICE" in p
     assert "3rd ask" in p
     assert "3rd ask transfers" in p
 
@@ -89,7 +89,7 @@ def test_every_call_language_has_urgent_and_routine_transfer_notices():
 
 
 @pytest.mark.asyncio
-async def test_urgent_notice_finishes_before_sip_transfer(monkeypatch):
+async def test_urgent_notice_finishes_before_sip_transfer(monkeypatch, caplog):
     events = []
 
     class _Speech:
@@ -136,10 +136,14 @@ async def test_urgent_notice_finishes_before_sip_transfer(monkeypatch):
     monkeypatch.setattr(
         "agent.livekit_minimal.agent.api.LiveKitAPI", lambda: _LiveKit()
     )
+    sensitive_reason = "urgent PRIVACY_TRANSFER_SENTINEL chest symptoms"
+    caplog.set_level("INFO", logger="vachanam-agent")
 
-    out = await agent.request_human_transfer(None, reason="urgent")
+    out = await agent.request_human_transfer(None, reason=sensitive_reason)
 
     assert out["success"] is True
+    assert "human_transfer_requested" in caplog.text
+    assert sensitive_reason not in caplog.text
     assert events[0][0] == "say"
     assert events[0][1] == get_transfer_notice("te", urgent=True)
     assert events[0][2]["allow_interruptions"] is False

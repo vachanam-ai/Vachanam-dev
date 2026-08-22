@@ -592,9 +592,6 @@ async def check_availability(
         return _ret(blocked)
 
     if doctor.booking_type == "token":
-        redis_key = f"token:{doctor_id}:{branch_id}:{booking_date}"
-        async with _redis() as r:
-            redis_current = int(await r.get(redis_key) or 0)
         # DB confirmed count closes the Redis-restart hole for the token path
         # too (slot path already did this — FIXLOG #14). After an Upstash
         # eviction the key reads 0 while N tokens are confirmed in the DB;
@@ -611,18 +608,6 @@ async def check_availability(
                 )
             )
         ).scalar_one()
-        db_max_number = (
-            await db.execute(
-                select(func.max(Token.token_number)).where(
-                    and_(
-                        Token.branch_id == branch_id,
-                        Token.doctor_id == doctor_id,
-                        Token.date == booking_date,
-                        Token.appointment_time.is_(None),
-                    )
-                )
-            )
-        ).scalar_one_or_none() or 0
         limit = schedule.token_limit or 50
         # CAPACITY = CONFIRMED seats, not the monotonic counter. A token that was
         # cancelled or rescheduled away frees its SEAT (the day can be rebooked),
@@ -637,11 +622,11 @@ async def check_availability(
             )
         # The NEXT queue number is the monotonic counter+1 (unique, never reused);
         # it can sit above the seat count after cancellations — that is correct.
-        next_number = max(redis_current, db_max_number) + 1
         return _ret(
             f"Doctor has {db_confirmed} patients booked on {booking_date.strftime('%d %B')}. "
             f"Published sitting sessions: {sessions_as_text(schedule.sessions)}. "
-            f"You will be token number {next_number}."
+            "Capacity remains, but no token is reserved or assigned until the "
+            "booking write succeeds."
         )
 
     # Appointment type — compute available ranges
@@ -1284,8 +1269,8 @@ async def confirm_booking(
                         f"but the booking name is '{patient_name}' — a "
                         "different person (family/friend) on the same number. "
                         "SILENTLY retry this SAME confirm_booking with "
-                        "different_person=true (include patient_age — ask for "
-                        "it first if you don't have it). NEVER voice these "
+                        "different_person=true. Include patient_age only when "
+                        "the caller volunteered it; age is optional. NEVER voice these "
                         "mechanics or say 'different person' to the caller. "
                         "Only if the caller earlier said this booking is for "
                         f"THEMSELVES, retry with patient_name='{patient.name}' "
@@ -1297,19 +1282,9 @@ async def confirm_booking(
         # name-matched record so real family members don't collapse together.
         patient = next((p for p in same_phone if p.name.strip().lower() == wanted), None)
     if not patient:
-        # FIRST-TIME patient: details are MANDATORY (Vinay 2026-06-12). The
-        # prompt alone was skipped sometimes — enforce at the tool boundary.
-        if patient_age is None:
-            return {
-                "success": False,
-                "reason": "missing_patient_details",
-                "instruction": (
-                    f"'{patient_name}' is a first-time patient — name and age "
-                    "are mandatory. Ask the patient's age (and gender if not "
-                    "obvious from the name), then call confirm_booking again "
-                    "with patient_age set."
-                ),
-            }
+        # Age/gender are useful but optional. A caller who declines must still
+        # be able to book; enforcing age here contradicted the live prompt and
+        # caused an ask/refuse/retry loop for first-time patients.
         patient = Patient(
             branch_id=branch_id,
             name=patient_name,
@@ -1810,20 +1785,32 @@ def _normalize_name(name: str | None) -> str:
     name matches the stored one across STT/politeness noise ('Mr. Ravi Kumar
     garu' → 'ravi kumar')."""
     n = " ".join((name or "").lower().split())
+    # Keep the documented ``Mr. Ravi`` form equivalent to ``Mr Ravi`` before
+    # the existing honorific removal below.
+    n = re.sub(r"\b(mr|mrs|ms|dr|sri|smt)\.(?=\s|$)", r"\1", n)
     for token in ("mr", "mrs", "ms", "dr", "sri", "smt", "garu", "gaaru", "ji", "sir", "madam"):
         n = n.replace(f"{token} ", " ").replace(f" {token}", " ")
     return " ".join(n.split())
 
 
 def _names_overlap(a: str, b: str) -> bool:
-    """Bidirectional containment + shared-name-part overlap of two ALREADY
-    normalized names. Tolerates a first-name-only vs full name, and word-order
-    / partial-STT differences."""
+    """Match two normalized names without accepting a surname as identity.
+
+    A caller may give just the first token of a stored full name. Two full
+    names may use a different token order, but a merely shared token is not
+    enough to authorize access.
+    """
     if not a or not b:
         return False
-    if a == b or a in b or b in a:
+    if a == b:
         return True
-    return bool(set(a.split()) & set(b.split()))
+    a_tokens = a.split()
+    b_tokens = b.split()
+    if len(a_tokens) == 1 and len(b_tokens) > 1:
+        return a_tokens[0] == b_tokens[0]
+    if len(b_tokens) == 1 and len(a_tokens) > 1:
+        return b_tokens[0] == a_tokens[0]
+    return len(a_tokens) == len(b_tokens) and sorted(a_tokens) == sorted(b_tokens)
 
 
 _romanize_cache: dict[str, str] = {}

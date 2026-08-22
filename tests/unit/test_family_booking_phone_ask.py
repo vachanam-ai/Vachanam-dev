@@ -22,7 +22,7 @@ def test_no_whose_number_question_remains():
 
 def test_one_confirmation_rule_survives():
     p = _prompt()
-    assert "EXACTLY ONE yes-question" in p
+    assert "exactly one natural yes-question" in p.lower()
 
 
 def test_multiple_family_members_explicitly_allowed():

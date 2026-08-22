@@ -179,6 +179,32 @@ async def test_dial_retry_is_bounded_by_attempt_cap(db, redis):
 
 
 @pytest.mark.asyncio
+async def test_attempt_cap_terminalizes_when_dial_failure_wins_mark_race(db, redis):
+    """An exhausted row must stop even if it was still unsent at failure time."""
+    from agent.livekit_minimal.agent import (
+        _REMINDER_MAX_DIAL_ATTEMPTS,
+        _reminder_retry_on_dial_fail,
+    )
+
+    tok = await _seed_in_window(db)
+    tok.reminder_sent = False
+    tok.reminder_30m_dial_attempts = _REMINDER_MAX_DIAL_ATTEMPTS
+    await db.commit()
+
+    await _reminder_retry_on_dial_fail(
+        {
+            "call_type": "reminder",
+            "token_id": str(tok.id),
+            "branch_id": str(tok.branch_id),
+        }
+    )
+
+    await db.refresh(tok)
+    assert tok.reminder_30m_dial_attempts == _REMINDER_MAX_DIAL_ATTEMPTS + 1
+    assert tok.reminder_sent is True
+
+
+@pytest.mark.asyncio
 async def test_failed_dial_after_appointment_never_requeues(db, redis):
     from agent.livekit_minimal.agent import _reminder_retry_on_dial_fail
 
