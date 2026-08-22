@@ -982,8 +982,11 @@ async def test_token_capacity_sitting_hours_are_not_bookable_clock_slots():
             "28 August is in the past.",
         ),
         (
-            "Doctor's schedule is not configured. Please call the clinic directly.",
-            "The doctor's schedule is not configured.",
+            "Doctor's schedule is not configured, so timing is not confirmed yet. "
+            "Do not claim availability. "
+            "Offer to record the caller's preferred date and time for the clinic.",
+            "The doctor's timing is not confirmed yet. I can record your "
+            "preferred date and time for the clinic.",
         ),
         ("Doctor not found.", "Doctor not found."),
     ),

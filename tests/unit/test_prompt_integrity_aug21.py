@@ -356,6 +356,20 @@ def test_native_requests_to_switch_to_english_are_deterministic(utterance):
 @pytest.mark.parametrize(
     ("utterance", "expected"),
     (
+        ("అంటే మీరు స్పీకింగ్ ఇంగ్లీష్?", "en"),
+        ("మీరు స్పీకింగ్ హిందీ?", "hi"),
+        ("Are you speaking English?", "en"),
+    ),
+)
+def test_capability_question_immediately_switches_without_confirmation(
+    utterance, expected
+):
+    assert _explicit_language_request(utterance) == expected
+
+
+@pytest.mark.parametrize(
+    ("utterance", "expected"),
+    (
         ("తెలుగు వద్దు, ఇంగ్లీష్‌లో మాట్లాడండి", "en"),
         ("ఇంగ్లీష్ వద్దు, తెలుగులో మాట్లాడండి", "te"),
         ("हिंदी नहीं, अंग्रेज़ी में बात कीजिए", "en"),

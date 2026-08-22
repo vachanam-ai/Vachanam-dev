@@ -90,6 +90,18 @@ def test_native_script_detection_and_roster_intent(text, language):
     assert _is_doctor_roster_question(text)
 
 
+@pytest.mark.parametrize(
+    'text',
+    (
+        'evarevaru doctors vunnaru',
+        'evaru evaru doctors unnaru',
+        'doctors evaru vunnaro cheppandi',
+    ),
+)
+def test_romanized_telugu_roster_from_venkateshwara_call(text):
+    assert _is_doctor_roster_question(text)
+
+
 def test_short_native_noise_does_not_force_language_handoff():
     assert _dominant_native_language('ఆ') is None
     assert _dominant_native_language('ஹ்ம்') is None

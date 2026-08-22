@@ -631,7 +631,11 @@ async def check_availability(
 
     # Appointment type — compute available ranges
     if not schedule.sessions or not doctor.slot_duration_minutes:
-        return _ret("Doctor's schedule is not configured. Please call the clinic directly.")
+        return _ret(
+            "Doctor's schedule is not configured, so timing is not confirmed yet. "
+            "Do not claim availability. "
+            "Offer to record the caller's preferred date and time for the clinic."
+        )
 
     # Generate each session independently. A slot can never bridge a lunch or
     # evening break between two published sessions.
@@ -914,7 +918,8 @@ async def assign_token(
                 "reason": "schedule_not_configured",
                 "instruction": (
                     f"{doctor.name}'s working hours are not configured — do NOT "
-                    "book a time. Ask the patient to call the clinic directly."
+                    "book a time or claim availability. Offer to record the "
+                    "caller's preferred date and time for the clinic."
                 ),
             }
 

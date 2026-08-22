@@ -73,6 +73,9 @@ async def test_direct_read_failure_is_terminal_before_late_model_speech(
 
     failure = build_read_failure_text("en")
     assert session.said == [(failure, {})]
+    assert state.pending_clinic_message is not None
+    assert "When is Dr Rao available?" in state.pending_clinic_message
+    assert "no booking or other action was confirmed" in state.pending_clinic_message
     assert await _spoken(failure, width, state) == failure
     assert await _spoken(
         "Dr Rao is available at 5 PM. Your appointment is booked.",
@@ -117,11 +120,13 @@ async def test_empty_reply_fallback_suppresses_generation_that_finishes_late(
     owner = SimpleNamespace(_state=state, _lang_code="en")
     context = SimpleNamespace(session=session)
     fallback_release = asyncio.Event()
+    fallback_delays = []
     model_started = asyncio.Event()
     model_release = asyncio.Event()
     real_sleep = asyncio.sleep
 
     async def controlled_sleep(_seconds):
+        fallback_delays.append(_seconds)
         await fallback_release.wait()
 
     monkeypatch.setattr(agent_mod, "AgentSession", _Session)
@@ -132,6 +137,9 @@ async def test_empty_reply_fallback_suppresses_generation_that_finishes_late(
         return {"doctor": "Dr Rao", "time": "17:00"}
 
     await successful_read(owner, context)
+    await real_sleep(0)
+    assert fallback_delays == [agent_mod._READ_RESULT_SPEECH_GRACE_SECONDS]
+    assert fallback_delays[0] >= 8.0
 
     async def late_model_source():
         model_started.set()
@@ -153,6 +161,8 @@ async def test_empty_reply_fallback_suppresses_generation_that_finishes_late(
 
     failure = build_read_failure_text("en")
     assert session.said == [(failure, {})]
+    assert state.pending_clinic_message is not None
+    assert "When is Dr Rao available?" in state.pending_clinic_message
     assert await _spoken(failure, width, state) == failure
     model_release.set()
     assert await late_model == ""

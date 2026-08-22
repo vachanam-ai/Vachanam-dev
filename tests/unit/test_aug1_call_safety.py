@@ -11,6 +11,7 @@ from agent.livekit_minimal.agent import (
     _caller_authorized_reschedule,
     _caller_rejected_accidental_booking,
     _explicit_language_request,
+    _persist_call_language,
 )
 from agent.services.tts_sanitizer import sanitize_for_tts
 from agent.services.meta_stub import MetaService
@@ -65,6 +66,35 @@ def test_accidental_booking_rejection_and_language_request():
     assert _explicit_language_request('తెలుగులో మాట్లాడండి') == 'te'
     assert _explicit_language_request('Can you speak English?') == 'en'
     assert _explicit_language_request('English doctor ఉన్నారా?') is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_language_is_persisted_for_the_next_call(monkeypatch):
+    from agent.livekit_minimal import agent as agent_mod
+
+    state = SessionState(
+        branch_id=uuid4(),
+        patient_phone='+919876543210',
+        language='en',
+        preferred_language='en',
+    )
+    preference_db = object()
+
+    class _PreferenceSession:
+        async def __aenter__(self):
+            return preference_db
+
+        async def __aexit__(self, *_args):
+            return False
+
+    save = AsyncMock()
+    monkeypatch.setattr(agent_mod, 'AsyncSessionLocal', _PreferenceSession)
+    monkeypatch.setattr(agent_mod, 'set_preferred_language', save)
+
+    assert await _persist_call_language(state, 'en') is True
+    save.assert_awaited_once_with(
+        state.branch_id, state.patient_phone, 'en', preference_db
+    )
 
 
 @pytest.mark.asyncio

@@ -531,6 +531,13 @@ try:
 except ValueError:
     _READ_TOOL_TIMEOUT_SECONDS = 15.0
 
+# A successful read is buffered until its complete, grounded answer passes the
+# speech guards. Three seconds was shorter than a real Telugu generation at
+# Sri Venkateshwara, so the liveness fallback raced a correct availability
+# answer and then falsely announced a tool failure. Keep the fallback, but
+# give the grounded response enough time to finish first.
+_READ_RESULT_SPEECH_GRACE_SECONDS = 8.0
+
 
 def _read_result_evidence(result, lang_code: str = "en") -> tuple[str, ...]:
     """Extract compact patient-facing facts from a structured read result."""
@@ -794,7 +801,12 @@ def _read_result_evidence(result, lang_code: str = "en") -> tuple[str, ...]:
             (" is in the past", ("date is in the past", "past date")),
             (
                 "schedule is not configured",
-                ("schedule not configured", "schedule is not configured"),
+                (
+                    "schedule not configured",
+                    "schedule is not configured",
+                    "timing not confirmed",
+                    "not confirmed yet",
+                ),
             ),
             ("doctor not found", ("doctor not found",)),
             ("closed bookings for today", ("bookings closed", "closed for today")),
@@ -1004,6 +1016,19 @@ def _read_tool_matches_intent(intent: str | None, tool_name: str) -> bool:
     return tool_name in _MUTABLE_READ_TOOLS.get(intent, frozenset())
 
 
+def _arm_failed_read_message(state: SessionState, utterance: str | None) -> None:
+    """Make the spoken clinic-message offer actionable on the caller's yes."""
+    if state.pending_clinic_message:
+        return
+    request = " ".join((utterance or "").split()).strip()[:350]
+    if not request:
+        request = "The caller's requested check"
+    state.pending_clinic_message = (
+        f"Caller asked: {request}. The automated check could not be completed; "
+        "no booking or other action was confirmed."
+    )
+
+
 def _tracks_read(fn):
     """Keep every slow read visible, bounded, and patient-facing on failure."""
     @wraps(fn)
@@ -1050,11 +1075,14 @@ def _tracks_read(fn):
                 async def _settle_empty_model_reply() -> None:
                     this_task = asyncio.current_task()
                     try:
-                        await asyncio.sleep(3.0)
+                        await asyncio.sleep(_READ_RESULT_SPEECH_GRACE_SECONDS)
                         if not self._state.read_answer_owed:
                             return
                         language = self._state.language or getattr(
                             self, "_lang_code", "en"
+                        )
+                        _arm_failed_read_message(
+                            self._state, self._state.read_owed_utterance
                         )
                         self._state.read_answer_owed = False
                         self._state.read_owed_utterance = None
@@ -1107,6 +1135,12 @@ def _tracks_read(fn):
                 self._state.mutable_read_intent = None
                 self._state.mutable_read_utterance = None
             language = self._state.language or getattr(self, "_lang_code", "en")
+            _arm_failed_read_message(
+                self._state,
+                self._state.read_owed_utterance
+                or pending_utterance
+                or self._state.last_user_utterance,
+            )
             speech = sanitize_for_tts(build_read_failure_text(language))
             context = args[0] if args else kwargs.get("context")
             session = getattr(context, "session", None)
@@ -1133,8 +1167,9 @@ def _tracks_read(fn):
                 "success": False,
                 "error": "read_failed",
                 "instruction": (
-                    "Say the check could not be completed and ask the caller "
-                    "to retry or call the clinic. Do not invent an answer."
+                    "Say the check could not be completed, ask the caller to "
+                    "retry, and offer to record a clinic message. Do not invent "
+                    "an answer."
                 ),
             }
         finally:
@@ -7095,14 +7130,14 @@ def _explicit_language_request(text: str) -> str | None:
     request_cues = (
         'can you', 'could you', 'would you', 'will you', 'do you speak',
         'do you know',
-        'please', 'pls', 'kindly', 'speak', 'talk in', 'switch',
+        'please', 'pls', 'kindly', 'speak', 'speaking', 'talk in', 'switch',
         'change language', 'reply in', 'respond in', 'continue in',
         'use ', 'prefer ', 'want ', 'instead of', 'rather ', 'no more ',
         'matlad', 'maatlad', 'cheppandi', 'baat',
         'bolo', 'boliye', 'pesu', 'pesunga', 'matadi', 'mathadi',
         'samsar', 'parayu', 'bola', 'bolaa', 'bolun', 'bolben',
         'kotha bol', 'మాట్లాడ', 'చెప్పండి', 'बात', 'बोल', 'பேச',
-        'ಮಾತನಾಡ', 'സംസാര', 'बोला', 'বল', 'কথা',
+        'ಮಾತನಾಡ', 'സംസാര', 'बोला', 'বল', 'কথা', 'స్పీకింగ్',
     )
     locatives = (
         ' lo', ' lo ', ' mein', ' me ', ' la', ' dalli', ' alli',
@@ -7117,7 +7152,7 @@ def _explicit_language_request(text: str) -> str | None:
     # remains a mere mention.
     second_person = any(term in low for term in (
         'aapko', 'aap ko', 'aap ', 'tumko', 'tumhe',
-        'आपको', 'आप ', 'तुमको', 'तुम्हें', 'మీకు',
+        'आपको', 'आप ', 'तुमको', 'तुम्हें', 'మీకు', 'మీరు',
     ))
     language_ability = any(term in low for term in (
         'aata hai', 'aati hai', 'aate hain', 'bolna aata', 'samajh aata',
@@ -7243,6 +7278,16 @@ def _clearly_english_utterance(text: str) -> bool:
 _ROSTER_PATTERNS = (
     re.compile(r'\b(?:who|what|which)\b.{0,50}\bdoctors?\b', re.I),
     re.compile(r'\b(?:list|tell me).{0,35}\bdoctors?\b', re.I),
+    # Romanized Telugu from the production call: "evarevaru doctors
+    # vunnaru". STT can preserve the Latin script on a Telugu pipeline.
+    re.compile(
+        r'\b(?:evaru[\s-]*evaru|evarevaru|evaru)\b.{0,35}\bdoctors?\b',
+        re.I,
+    ),
+    re.compile(
+        r'\bdoctors?\b.{0,35}\b(?:unnaru|vunnaru|unnaro|vunnaro)\b',
+        re.I,
+    ),
     re.compile(r'(?:ఎవరెవరు|ఎవరు).{0,35}డాక్ట', re.I),
     re.compile(r'(?:ఏ|ఎంతమంది).{0,20}డాక్ట', re.I),
     re.compile(r'డాక్ట.{0,35}(?:ఎవరెవరు|ఎవరు)', re.I),
@@ -7914,6 +7959,21 @@ def _inferred_call_failure(transcript: str | None) -> str | None:
         agent_text.count(marker.casefold()) for marker in _CLARIFICATION_FAILURE_MARKERS
     )
     return 'repeated_clarification' if clarification_count >= 2 else None
+
+
+async def _persist_call_language(state: SessionState, code: str) -> bool:
+    """Durably save the call's chosen language using an independent session."""
+    if not state.patient_phone or not state.branch_id:
+        return False
+    try:
+        async with AsyncSessionLocal() as preference_db:
+            await set_preferred_language(
+                state.branch_id, state.patient_phone, code, preference_db
+            )
+        return True
+    except Exception as exc:  # noqa: BLE001 — language switching must stay live
+        logger.warning("language_preference_persist_failed: %s", exc)
+        return False
 
 
 class VachanamAgent(Agent):
@@ -9478,6 +9538,11 @@ class VachanamAgent(Agent):
         '''Switch the active pipeline without waiting for the LLM to call a tool.'''
         self._state.explicit_language_lock = code
         self._sync_runtime_language(code)
+        persist_task = asyncio.create_task(
+            _persist_call_language(self._state, code)
+        )
+        self._background_tasks.add(persist_task)
+        persist_task.add_done_callback(self._background_tasks.discard)
         if code == self._lang_code or self._agent_factory is None:
             return False
         try:
@@ -9513,18 +9578,6 @@ class VachanamAgent(Agent):
             self._lang_code, code, str(self._state.branch_id),
         )
 
-        async def _persist() -> None:
-            if not self._state.patient_phone:
-                return
-            try:
-                async with AsyncSessionLocal() as pdb:
-                    await set_preferred_language(
-                        self._state.branch_id, self._state.patient_phone, code, pdb
-                    )
-            except Exception as exc:
-                logger.warning('language_request_persist_failed: %s', exc)
-
-        asyncio.create_task(_persist())
         return True
 
     def _handoff_detected_language(
@@ -9558,18 +9611,11 @@ class VachanamAgent(Agent):
             _privacy_safe_session_id(self._state.session_id),
         )
 
-        async def _persist_detected() -> None:
-            if not self._state.patient_phone:
-                return
-            try:
-                async with AsyncSessionLocal() as pdb:
-                    await set_preferred_language(
-                        self._state.branch_id, self._state.patient_phone, code, pdb
-                    )
-            except Exception as exc:
-                logger.warning('detected_language_persist_failed: %s', exc)
-
-        asyncio.create_task(_persist_detected())
+        persist_task = asyncio.create_task(
+            _persist_call_language(self._state, code)
+        )
+        self._background_tasks.add(persist_task)
+        persist_task.add_done_callback(self._background_tasks.discard)
         return True
 
     def _established_doctor_or(self, passed: UUID) -> UUID:
@@ -15754,6 +15800,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 )
                     finally:
                         await r.aclose()
+                # The call state is the final authority after a language
+                # handoff. Repair any best-effort mid-call write before the
+                # worker closes so the caller's next call starts in the same
+                # explicitly chosen language.
+                if state.explicit_language_lock:
+                    await _persist_call_language(
+                        state, state.explicit_language_lock
+                    )
                 # Call log — analytics + minute metering (Rule 9: last-4 only).
                 # B14: compute duration OUTSIDE both try blocks. It used to be
                 # assigned inside the CallLog try (after an import + a
